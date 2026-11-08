@@ -14,7 +14,9 @@ import json
 import os
 import time
 
-from tatolab.stream import Input, Output, Packets, Records, log, node
+import numpy
+
+from tatolab.stream import Channels, Input, Output, Packets, Records, State, Stateful, log, node
 
 #: A payload no msgpack decoder reads: `0xc1` is the one type byte msgpack never
 #: uses, then every byte value once, so an encode or decode anywhere between
@@ -42,7 +44,7 @@ class ReportsItsOwnProcessSourceConfig:
     label: str = "unlabelled"
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class ReportsItsOwnProcessSource:
     """Stamps every message with the pid it was produced in."""
 
@@ -59,7 +61,7 @@ class ReportsItsOwnProcessSource:
         ctx.outputs.write(self.frames_to_downstream, {"produced_in_pid": os.getpid()})
 
 
-@node
+@node.process
 class ReportsUpstreamProcessSink:
     """Announces the pid a message was produced in, alongside its own."""
 
@@ -81,7 +83,7 @@ class ReportsUpstreamProcessSink:
             report("SINK_PID", {"sink_pid": os.getpid(), "upstream_pid": upstream_pid})
 
 
-@node
+@node.process
 class ReportsItsOwnProcessRecordsSink:
     """Announces its own process at setup, downstream of a native built-in.
 
@@ -99,7 +101,7 @@ class ReportsItsOwnProcessRecordsSink:
         ctx.inputs.read("records_from_upstream")
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class WritesRawMessagePayloadSource:
     """Writes `RAW_MESSAGE_PAYLOAD_BYTES` every tick, after reporting once what
     handing `write` a dict raised."""
@@ -129,7 +131,7 @@ class WritesRawMessagePayloadSource:
         ctx.outputs.write("raw_messages_to_downstream", RAW_MESSAGE_PAYLOAD_BYTES)
 
 
-@node
+@node.process
 class ReportsTheRawMessagePayloadItReadSink:
     """Reports the first payload it reads, as hex, with its type and its own pid."""
 
@@ -153,7 +155,7 @@ class ReportsTheRawMessagePayloadItReadSink:
         )
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class DiesAbruptlyProbe:
     """Takes its own process down mid-run, the way a segfaulting native call
     inside a user callback would."""
@@ -172,7 +174,7 @@ class DiesAbruptlyProbe:
             os._exit(1)
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class SleepsThroughItsOwnShutdownProbe:
     """Parks in `process()` far past the ladder's one-second budget.
 
@@ -194,7 +196,7 @@ class SleepsThroughItsOwnShutdownProbe:
         report("SLEEPER_TORE_DOWN")
 
 
-@node(execution="continuous", interval_ms=50)
+@node.process(execution="continuous", interval_ms=50)
 class ForksAWorkerThatOutlivesItProbe:
     """Starts a worker of its own the way `os.system("sleep 60 &")` does.
 
@@ -216,7 +218,7 @@ class ForksAWorkerThatOutlivesItProbe:
             report("WORKER_PID", {"worker_pid": self.worker_pid, "helper_pid": os.getpid()})
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class SleepsThroughItsOwnSetupProbe:
     """Parks in `setup()`, so shutdown finds it still registering.
 
@@ -234,3 +236,153 @@ class SleepsThroughItsOwnSetupProbe:
     def teardown(self, ctx) -> None:
         report("INTERRUPTED_SETUP_TORE_DOWN")
 
+
+
+#: How many reads of the function node island a sink makes before it reports them.
+FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING = 20
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheFunctionNodeValuesItReadSink:
+    """Reads the value a function node island feeds `brightness`, and reports
+    the values of its first reads with its own pid."""
+
+    def __init__(self) -> None:
+        self.values_read: "list[float]" = []
+        self.sample_rates_read: "set[int]" = set()
+        self.reported_its_start = False
+
+    brightness = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        if not self.reported_its_start:
+            self.reported_its_start = True
+            report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
+        if len(self.values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+            return
+        block = ctx.inputs.read(self.brightness)
+        if block is None:
+            return
+        self.sample_rates_read.add(block.sample_rate)
+        self.values_read.append(float(numpy.from_dlpack(block)[0][0]))
+        if len(self.values_read) == FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+            report(
+                "FUNCTION_NODE_VALUES_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "values": self.values_read,
+                    "sample_rates": sorted(self.sample_rates_read),
+                },
+            )
+
+
+@node.function
+def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
+    """Never returns: a compiled call no thread can pre-empt, which only the watchdog ends."""
+    climbing = start
+    while climbing > 0.0:
+        climbing = climbing + 1.0
+    return climbing
+
+
+@dataclasses.dataclass(frozen=True)
+class CallsCountedSoFar:
+    calls: float = 0.0
+
+
+@node.function
+def CountsItsOwnCalls(  # noqa: N802
+    step: float = 1.0, *, previous: State[CallsCountedSoFar]
+) -> Stateful[float, CallsCountedSoFar]:
+    """The number of times it has been called, carried between calls in its state."""
+    calls = previous.calls + step
+    return calls, CallsCountedSoFar(calls)
+
+
+#: The count at which a sink whose count started fresh takes its own helper down.
+COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES = 20.0
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty:
+    """Reports the first count it reads with its own pid, and takes its own
+    helper down once a count that started at one reaches twenty. A count it
+    first reads above one was carried over, so it reads on without dying."""
+
+    def __init__(self) -> None:
+        self.first_count_read: "float | None" = None
+
+    count = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        block = ctx.inputs.read(self.count)
+        if block is None:
+            return
+        count_read = float(numpy.from_dlpack(block)[0][0])
+        if self.first_count_read is None:
+            self.first_count_read = count_read
+            report("FIRST_COUNT_READ", {"pid": os.getpid(), "count": count_read})
+        if self.first_count_read <= 1.0 and count_read >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES:
+            report("FRESH_COUNT_SINK_ABOUT_TO_DIE", {"pid": os.getpid(), "count": count_read})
+            os._exit(1)
+
+
+#: The stream milliseconds between the steps of the stepped LFO stream.
+STEPPED_LFO_STEP_MS = 100
+
+#: Steps of the stepped LFO stream a sink reads before it reports them.
+STEPPED_LFO_STEPS_REPORTED = 12
+
+
+@node.process(execution="continuous", interval_ms=STEPPED_LFO_STEP_MS)
+class ReportsTheLfoValueOfEachStepSink:
+    """Reads the value an `Lfo` island evaluates to at each step, and reports
+    the first `STEPPED_LFO_STEPS_REPORTED` with their step indices."""
+
+    def __init__(self) -> None:
+        self.value_read_at_each_step: "dict[int, float]" = {}
+
+    wave = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        step_index = ctx.stream_clock.step_index
+        if step_index in self.value_read_at_each_step:
+            return
+        if len(self.value_read_at_each_step) >= STEPPED_LFO_STEPS_REPORTED:
+            return
+        block = ctx.inputs.read(self.wave)
+        if block is None:
+            return
+        self.value_read_at_each_step[step_index] = float(numpy.from_dlpack(block)[0][0])
+        if len(self.value_read_at_each_step) == STEPPED_LFO_STEPS_REPORTED:
+            report(
+                "STEPPED_LFO_VALUES_READ",
+                {
+                    "pid": os.getpid(),
+                    "steps": [[step, value] for step, value in sorted(self.value_read_at_each_step.items())],
+                },
+            )
+
+
+#: How many counts a sink of a counter several readers read reads before it reports them.
+COUNTS_READ_IN_ORDER_BEFORE_REPORTING = 20
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheCountsItReadInOrderSink:
+    """Reads every count written on `count`, in order, and reports the first
+    `COUNTS_READ_IN_ORDER_BEFORE_REPORTING` with its own pid."""
+
+    def __init__(self) -> None:
+        self.counts_read: "list[float]" = []
+
+    count = Input(Channels, delivery="ordered")
+
+    def process(self, ctx) -> None:
+        while len(self.counts_read) < COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
+            block = ctx.inputs.read(self.count)
+            if block is None:
+                return
+            self.counts_read.append(float(numpy.from_dlpack(block)[0][0]))
+            if len(self.counts_read) == COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
+                report("COUNTS_READ_IN_ORDER", {"pid": os.getpid(), "counts": self.counts_read})

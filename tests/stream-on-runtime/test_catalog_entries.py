@@ -77,6 +77,11 @@ def test_declared_replaced_refused_and_read_downstream(
     ]
     assert keeping_type["outputs"][0]["catalog_entry"] == DECLARED_RENDERING
 
+    assert {(node["name"], node["kind"]) for node in graph["nodes"]} == {
+        (node["name"], "process") for node in graph["nodes"]
+    }, "every `@node.process` class renders its kind on its graph node"
+    assert keeping_type["kind"] == "process" and "language" not in keeping_type
+
     assert "records" in refusal and "codec" in refusal, (
         f"a refused entry names the port and the field hang refused: {refusal!r}"
     )

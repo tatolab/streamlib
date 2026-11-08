@@ -11,7 +11,7 @@
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
 //! `run_project` loads an empty stream — and the tests that run a project's
-//! stream function end to end are gated on `hardware-tests`.
+//! graph document end to end are gated on `hardware-tests`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,6 +32,7 @@ use streamlib::sdk::runtime::{
     StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordsInTheStateDirectory,
     StreamRenameOutcome,
 };
+use uuid::Uuid;
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
 use crate::mcp::tests::{first_text_block_json, tool_call_result};
@@ -52,11 +53,10 @@ fn register_the_stream_tools_test_source_once() {
     REGISTERED.call_once(|| PROCESSOR_REGISTRY.register::<StreamToolsTestSource::Processor>());
 }
 
-/// The graph a stream function named `stream_id` compiles to: one
-/// [`StreamToolsTestSource`] named `source`.
-fn the_graph_of_a_function_named(stream_id: &str) -> Value {
+/// The graph of a stream named `stream_name`: one [`StreamToolsTestSource`] named `source`.
+fn the_graph_of_a_stream_named(stream_name: &str) -> Value {
     json!({
-        "stream": stream_id,
+        "stream": stream_name,
         "nodes": [{
             "name": "source",
             "type": StreamToolsTestSource::processor_class_import_path().as_str(),
@@ -85,95 +85,100 @@ fn write_an_executable_script_from_a_child_process(path: &Path, script: &str) {
     assert!(script_writer.wait().expect("the shell exits").success());
 }
 
-/// A compile script printing `document`, or, asked for every stream, the
-/// answer an every-stream compile gives with `document` its only stream.
-fn a_compile_script_printing(document: &Value) -> String {
-    let every_stream_document = match document.get("stream_function") {
-        Some(stream_function) => {
-            let mut one_stream = json!({ "stream_function": stream_function, "description": null });
-            for answer_key in ["stream_graph", "failed_because"] {
-                if let Some(answer) = document.get(answer_key) {
-                    one_stream[answer_key] = answer.clone();
-                }
-            }
-            json!({ "project_directory": document["project_directory"], "streams": [one_stream] })
-        }
-        None => document.clone(),
-    };
-    format!(
-        "#!/bin/sh\ncase \" $* \" in\n*' --every-stream '*) cat <<'COMPILED'\n\
-         {every_stream_document}\nCOMPILED\n;;\n*) cat <<'COMPILED'\n{document}\nCOMPILED\n;;\nesac\n"
-    )
-}
+/// A venv interpreter that answers the runtime's probe and runs nothing else.
+const STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE: &str = "#!/bin/sh\nexit 0\n";
 
-/// A project whose `.venv/bin/python` prints `graph` as its compile.
-struct ProjectWhosePythonPrintsAGraph {
+/// The name every test project's `tatolab-project.json` gives it.
+const TEST_PROJECT_NAME: &str = "rig";
+
+/// A project of its own UUID whose streams are the graph documents under `streams/`, and
+/// whose `.venv/bin/python` answers the runtime's probe.
+struct ProjectWithGraphDocuments {
     _project_directory_removed_on_drop: tempfile::TempDir,
     /// The project directory with its symlinks resolved, as the runtime records
     /// it: macOS's temporary directory is a symlink.
     resolved_project_directory: PathBuf,
+    project: Uuid,
 }
 
-impl ProjectWhosePythonPrintsAGraph {
-    /// A project holding a `stream.py` whose compile prints `graph`.
-    fn compiling(graph: Value) -> Self {
+impl ProjectWithGraphDocuments {
+    /// A project with a venv holding one graph document, `graph`'s, named after its `stream`.
+    fn holding(graph: Value) -> Self {
+        let project = Self::with_no_venv();
+        std::fs::create_dir_all(project.interpreter().parent().expect("the venv's bin"))
+            .expect("the venv's bin directory");
+        write_an_executable_script_from_a_child_process(
+            &project.interpreter(),
+            STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE,
+        );
+        project.write_the_graph_document(graph);
+        project
+    }
+
+    /// A project with no venv and no graph document.
+    fn with_no_venv() -> Self {
         let project_directory = tempfile::tempdir().expect("a project directory");
         let resolved_project_directory = std::fs::canonicalize(project_directory.path())
             .expect("the project directory resolves");
         let project = Self {
             _project_directory_removed_on_drop: project_directory,
             resolved_project_directory,
+            project: Uuid::new_v4(),
         };
-        std::fs::create_dir_all(project.path().join(".venv").join("bin"))
-            .expect("the venv's bin directory");
-        std::fs::write(project.path().join("stream.py"), "").expect("the project's stream.py");
-        project.compile_to(graph);
+        std::fs::write(
+            project.path().join("pyproject.toml"),
+            "[project]\nname = \"project\"\n",
+        )
+        .expect("the project's pyproject.toml");
+        std::fs::write(
+            project.path().join("tatolab-project.json"),
+            json!({ "project": project.project, "name": TEST_PROJECT_NAME, "dependencies": [] })
+                .to_string(),
+        )
+        .expect("the project's tatolab-project.json");
         project
     }
 
-    /// From now on, the compile prints `graph` as the function `stream:<graph's
-    /// stream>` of this project.
-    fn compile_to(&self, graph: Value) {
-        let function = graph["stream"]
+    /// Write `graph` as the graph document of the stream its `stream` names, holding that
+    /// stream's asset UUID.
+    fn write_the_graph_document(&self, graph: Value) {
+        let stream_name = graph["stream"]
             .as_str()
-            .expect("the graph names its function")
+            .expect("the graph names its stream")
             .to_string();
-        let compile_document = json!({
-            "stream_graph": graph,
-            "project_directory": self.path(),
-            "stream_function": self.location_of(&function).stream_function,
-        });
-        write_an_executable_script_from_a_child_process(
-            &self.interpreter(),
-            &a_compile_script_printing(&compile_document),
+        let mut document = graph;
+        document["asset"] = json!(self.stream_asset_of(&stream_name));
+        self.write_the_graph_document_text(&stream_name, &document.to_string());
+    }
+
+    /// Write the graph document of the stream `stream_name` holding its asset UUID and a
+    /// `nodes` that is no list, which does not load as a graph.
+    fn write_an_unloadable_graph_document(&self, stream_name: &str) {
+        self.write_the_graph_document_text(
+            stream_name,
+            &json!({ "asset": self.stream_asset_of(stream_name), "nodes": "not a list" })
+                .to_string(),
         );
     }
 
-    /// From now on, the compile answers that `stream.py` did not import,
-    /// printing `traceback`.
-    fn fail_to_import_printing(&self, traceback: &str) {
-        let compile_document = json!({
-            "project_directory": self.path(),
-            "import_failed_because": traceback,
-        });
-        write_an_executable_script_from_a_child_process(
-            &self.interpreter(),
-            &a_compile_script_printing(&compile_document),
-        );
+    fn write_the_graph_document_text(&self, stream_name: &str, document: &str) {
+        let streams_directory = self.path().join("streams");
+        std::fs::create_dir_all(&streams_directory).expect("the streams directory");
+        std::fs::write(
+            streams_directory.join(format!("{stream_name}.graph.json")),
+            document,
+        )
+        .expect("the graph document");
     }
 
-    /// From now on, the compile answers that the function `function` of
-    /// `stream.py` raised, printing `traceback`.
-    fn raise_in_the_function_printing(&self, function: &str, traceback: &str) {
-        let compile_document = json!({
-            "project_directory": self.path(),
-            "stream_function": self.location_of(function).stream_function,
-            "failed_because": traceback,
-        });
-        write_an_executable_script_from_a_child_process(
-            &self.interpreter(),
-            &a_compile_script_printing(&compile_document),
-        );
+    /// Remove the graph document of the stream `stream_name`.
+    fn remove_the_graph_document(&self, stream_name: &str) {
+        std::fs::remove_file(
+            self.path()
+                .join("streams")
+                .join(format!("{stream_name}.graph.json")),
+        )
+        .expect("the graph document is removed");
     }
 
     fn path(&self) -> &Path {
@@ -184,17 +189,33 @@ impl ProjectWhosePythonPrintsAGraph {
         self.path().join(".venv").join("bin").join("python")
     }
 
-    /// The location of this project's stream function `function`, in `stream.py`.
-    fn location_of(&self, function: &str) -> StreamLocation {
+    /// The stream asset UUID of this project's stream `stream_name`.
+    fn stream_asset_of(&self, stream_name: &str) -> Uuid {
+        Uuid::new_v5(&self.project, stream_name.as_bytes())
+    }
+
+    /// Where this project's stream `stream_name` lives.
+    fn location_of(&self, stream_name: &str) -> StreamLocation {
         StreamLocation {
             project_directory: self.path().to_path_buf(),
-            stream_function: format!("stream:{function}"),
+            project: self.project,
+            stream_asset: self.stream_asset_of(stream_name),
         }
     }
 
-    /// The stream id the location of this project's `function` computes to.
-    fn stream_id_of(&self, function: &str) -> String {
-        self.location_of(function).stream_id()
+    /// The location of this project's stream `stream_name` as the local API states it.
+    fn location_on_the_wire_of(&self, stream_name: &str) -> Value {
+        json!({
+            "project_directory": self.path(),
+            "project": self.project,
+            "stream_asset": self.stream_asset_of(stream_name),
+        })
+    }
+
+    /// The stream id a first run records this project's stream `stream_name` under.
+    fn stream_id_of(&self, stream_name: &str) -> String {
+        self.location_of(stream_name)
+            .stream_id_named(TEST_PROJECT_NAME, stream_name)
     }
 
     fn stream_environment(&self) -> StreamEnvironment {
@@ -254,39 +275,40 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         }
     }
 
-    /// Load `project`'s function `function` as its library host would, not
-    /// started, under the id its location computes to, which it returns.
+    /// Load `project`'s stream `stream_name` as its library host would, not started, under
+    /// the id its location computes to, which it returns.
     fn a_stream_its_host_loaded_without_its_start(
         &self,
-        project: &ProjectWhosePythonPrintsAGraph,
-        function: &str,
+        project: &ProjectWithGraphDocuments,
+        stream_name: &str,
     ) -> String {
-        let stream_id = project.stream_id_of(function);
+        let stream_id = project.stream_id_of(stream_name);
         self.engine
             .load_stream_from_graph_snapshot(
-                &GraphSnapshot::from_graph_document(the_graph_of_a_function_named(function))
+                &GraphSnapshot::from_graph_document(the_graph_of_a_stream_named(stream_name))
                     .expect("the graph parses"),
                 OptionsForLoadingOneStream::in_stream_environment(project.stream_environment())
-                    .with_display_name(function)
-                    .at_stream_location(project.location_of(function)),
+                    .with_display_name(stream_name)
+                    .at_stream_location(stream_id.clone(), project.location_of(stream_name)),
             )
             .expect("the host loads its stream");
         stream_id
     }
 
-    /// Record `project`'s function `function`, stopped when `stopped` says so,
-    /// and not loaded; returns its id.
+    /// Record `project`'s stream `stream_name` with its graph document, stopped when
+    /// `stopped` says so, and not loaded; returns its id.
     fn a_stream_recorded_and_not_loaded(
         &self,
-        project: &ProjectWhosePythonPrintsAGraph,
-        function: &str,
+        project: &ProjectWithGraphDocuments,
+        stream_name: &str,
         stopped: bool,
     ) -> String {
+        project.write_the_graph_document(the_graph_of_a_stream_named(stream_name));
         let mut record = StreamRecord::of_a_running_stream(
-            project.location_of(function),
-            function,
+            project.stream_id_of(stream_name),
+            project.location_of(stream_name),
+            stream_name,
             &project.stream_environment(),
-            the_graph_of_a_function_named(function),
         );
         record.stopped = stopped;
         self.stream_records()
@@ -332,7 +354,7 @@ async fn tool_call_over_the_connection(
 const ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS: &str = "R-empty-1";
 
 /// A runtime whose `run_project` loads an empty stream under the project
-/// folder's name, standing in for an id, without compiling or starting it — a
+/// folder's name, standing in for an id, without reading or starting it — a
 /// GPU-free stand-in for the engine's own run — answering
 /// [`ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS`], and hands every other call to the engine.
 struct AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
@@ -430,11 +452,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     ) -> Result<streamlib::sdk::runtime::StreamAction> {
         self.engine.cancel_stream_action(action_id)
     }
-    fn list_project_streams(
+    fn forget_the_stream_of_a_deleted_stream_asset(
         &self,
-        project_directory: &std::path::Path,
-    ) -> Result<streamlib::sdk::runtime::ProjectStreamsListing> {
-        self.engine.list_project_streams(project_directory)
+        project: Uuid,
+        stream_asset: Uuid,
+    ) -> Result<Option<String>> {
+        self.engine
+            .forget_the_stream_of_a_deleted_stream_asset(project, stream_asset)
     }
     fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
         OperationsOnTheStreamsLoadedInThisRuntime::stop_stream(self.engine.as_ref(), stream_id)
@@ -656,7 +680,7 @@ async fn logs_reads_a_projects_records_by_stream_paged_by_its_cursor() {
 #[tokio::test(flavor = "multi_thread")]
 async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_exactly() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
     let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
     let waiting = engine.a_stream_recorded_and_not_loaded(&project, "waiting", false);
@@ -671,12 +695,7 @@ async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_ex
     )
     .expect("list_streams answers");
 
-    let location_of = |function: &str| {
-        json!({
-            "project_directory": project.path(),
-            "stream_function": format!("stream:{function}"),
-        })
-    };
+    let location_of = |stream_name: &str| project.location_on_the_wire_of(stream_name);
     let mut expected_streams = vec![
         json!({ "stream": live, "display_name": "live", "location": location_of("live"), "state": "running", "node_count": 1, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null }),
         json!({ "stream": parked, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null }),
@@ -717,7 +736,7 @@ async fn list_streams_lists_each_stream_by_id_and_every_tool_resolves_that_id_ex
 #[tokio::test(flavor = "multi_thread")]
 async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
     let graph = first_text_block_json(
         &tool_call_result(
@@ -774,7 +793,7 @@ async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_stream_clock_scale_refuses_a_stream_with_no_clock_running() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
 
     let not_started = tool_answer(
@@ -812,7 +831,7 @@ async fn set_stream_clock_scale_refuses_a_stream_with_no_clock_running() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_start_and_remove_project_queue_actions_on_the_streams_the_runtime_holds() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
     let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
     let call = |tool_name: &'static str, arguments: Value| {
@@ -889,7 +908,7 @@ async fn stop_start_and_remove_project_queue_actions_on_the_streams_the_runtime_
 #[tokio::test(flavor = "multi_thread")]
 async fn rename_stream_shows_a_stream_under_a_new_display_name_and_records_a_recorded_one() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
     let parked = engine.a_stream_recorded_and_not_loaded(&project, "parked", true);
     let call = |tool_name: &'static str, arguments: Value| {
@@ -971,7 +990,7 @@ async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed(
             "project_directory": "/home/someone/hello",
             "interpreter": "/home/someone/hello/.venv/bin/python",
             "stream_function": null,
-            "graph": the_graph_of_a_function_named("main"),
+            "graph": the_graph_of_a_stream_named("main"),
             "stopped": false,
             "failed_because": null,
             "runtime_crashes_in_a_row_implicating_it": 0,
@@ -1032,7 +1051,7 @@ async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed(
 #[tokio::test(flavor = "multi_thread")]
 async fn a_start_or_run_needing_a_venv_on_a_runtime_given_no_uv_records_it_failed_saying_so() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("gone"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("gone"));
     let gone = engine.a_stream_recorded_and_not_loaded(&project, "gone", true);
     std::fs::remove_file(project.interpreter()).expect("the interpreter goes");
 
@@ -1068,8 +1087,8 @@ async fn a_start_or_run_needing_a_venv_on_a_runtime_given_no_uv_records_it_faile
         "{gone_failed_because}"
     );
 
-    let project_with_no_venv = tempfile::tempdir().expect("a project directory");
-    std::fs::write(project_with_no_venv.path().join("stream.py"), "").unwrap();
+    let project_with_no_venv = ProjectWithGraphDocuments::with_no_venv();
+    project_with_no_venv.write_the_graph_document(the_graph_of_a_stream_named("main"));
     let run = the_run_of_the_project_once_finished(
         &engine.operations_on_the_loaded_streams(),
         project_with_no_venv.path(),
@@ -1092,14 +1111,13 @@ async fn a_start_or_run_needing_a_venv_on_a_runtime_given_no_uv_records_it_faile
     assert!(engine.engine.ids_of_the_loaded_streams().is_empty());
 }
 
-/// A run whose function raises finishes done with the stream failed, listed
-/// failed with its traceback under the id its location computes to.
+/// A run whose graph document does not load finishes done with the stream failed, listed
+/// failed naming the document under the id its location computes to.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_run_whose_function_raises_records_the_stream_failed_with_its_traceback() {
+async fn a_run_whose_graph_document_does_not_load_records_the_stream_failed_naming_it() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
-    project.raise_in_the_function_printing("camera", "ValueError: bad wiring");
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+    project.write_an_unloadable_graph_document("camera");
     let camera_stream_id = project.stream_id_of("camera");
 
     let run = the_run_of_the_project_once_finished(
@@ -1123,51 +1141,51 @@ async fn a_run_whose_function_raises_records_the_stream_failed_with_its_tracebac
     )
     .await;
     assert_eq!(listing["state"], "failed");
-    assert_eq!(listing["failed_because"], "ValueError: bad wiring");
+    assert!(
+        listing["failed_because"]
+            .as_str()
+            .is_some_and(|why| why.contains("`streams/camera.graph.json` does not load")),
+        "{listing}"
+    );
     assert_eq!(
         listing["location"],
-        json!({
-            "project_directory": project.path(),
-            "stream_function": "stream:camera",
-        })
+        project.location_on_the_wire_of("camera")
     );
 }
 
-/// A run whose `stream.py` does not import records the project failed under
-/// `<folder>-<hash>`, shown under the folder's name.
+/// A run of a folder holding no `tatolab-project.json` fails its action saying so, and
+/// records no stream.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_run_whose_entry_does_not_import_records_the_project_failed_under_its_folder() {
+async fn a_run_of_a_folder_that_is_no_project_fails_its_action_saying_why() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
-    project.fail_to_import_printing("SyntaxError: invalid syntax");
-    let project_location =
-        StreamLocation::of_a_project_that_gave_no_stream(project.path().to_path_buf());
+    let no_project = tempfile::tempdir().expect("a folder");
 
     let run = the_run_of_the_project_once_finished(
         &engine.operations_on_the_loaded_streams(),
-        project.path(),
+        no_project.path(),
     )
     .await;
 
-    assert_eq!(run["state"], "done", "{run}");
-    let stream = the_listing_of(
-        &engine.operations_on_the_loaded_streams(),
-        &project_location.stream_id(),
-    )
-    .await;
-    assert_eq!(
-        stream["display_name"],
-        project
-            .path()
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .as_ref()
+    assert_eq!(run["state"], "failed", "{run}");
+    assert!(
+        run["failed_because"]
+            .as_str()
+            .is_some_and(|why| why.contains("is not a project: it holds no tatolab-project.json")),
+        "{run}"
     );
-    assert_eq!(stream["state"], "failed");
-    assert_eq!(stream["failed_because"], "SyntaxError: invalid syntax");
-    assert_eq!(stream["location"]["stream_function"], "");
+    assert_eq!(run["streams"], json!([]), "{run}");
+    assert_eq!(
+        tool_answer(
+            &tool_call_result(
+                engine.operations_on_the_loaded_streams(),
+                "list_streams",
+                json!({}),
+            )
+            .await,
+        )
+        .unwrap(),
+        json!({ "streams": [] })
+    );
 }
 
 /// `describe_stream_action`'s answer for the run of `project_directory` that
@@ -1277,11 +1295,13 @@ async fn the_stream_action_once(
     }
 }
 
-/// A project directory holding only a venv whose compile gives `stream:main`
-/// the graph `graph`, so `create_project` writes every file of a new project.
-fn a_directory_for_create_project_compiling(graph: Value) -> ProjectWhosePythonPrintsAGraph {
-    let project = ProjectWhosePythonPrintsAGraph::compiling(graph);
-    std::fs::remove_file(project.path().join("stream.py")).unwrap();
+/// A project directory holding only a venv, so `create_project` writes every file of a
+/// new project.
+fn a_directory_for_create_project() -> ProjectWithGraphDocuments {
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    std::fs::remove_dir_all(project.path().join("streams")).unwrap();
+    std::fs::remove_file(project.path().join("tatolab-project.json")).unwrap();
+    std::fs::remove_file(project.path().join("pyproject.toml")).unwrap();
     project
 }
 
@@ -1307,14 +1327,15 @@ async fn create_project_in(
     (queued, finished)
 }
 
-/// `create_project` in a named directory writes a new project's files and runs its
-/// `stream:main` under the folder's name, answering the stream's id before it runs.
+/// `create_project` in a named directory writes a new project's files and loads its
+/// `streams/main.graph.json` under the folder's name, answering the stream's id before it
+/// runs.
 #[tokio::test(flavor = "multi_thread")]
 async fn create_project_in_a_directory_writes_the_project_and_runs_its_stream_under_the_folders_name()
  {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
-    let project = a_directory_for_create_project_compiling(the_graph_of_a_function_named("main"));
+    let project = a_directory_for_create_project();
     let folder_name = project
         .path()
         .file_name()
@@ -1325,7 +1346,10 @@ async fn create_project_in_a_directory_writes_the_project_and_runs_its_stream_un
     let (queued, finished) =
         create_project_in(operations_on_the_loaded_streams, project.path()).await;
 
-    let stream_id = project.stream_id_of("main");
+    let stream_id = queued["stream"]
+        .as_str()
+        .expect("the stream's id")
+        .to_string();
     assert_eq!(
         queued,
         json!({
@@ -1335,12 +1359,17 @@ async fn create_project_in_a_directory_writes_the_project_and_runs_its_stream_un
         })
     );
     assert_eq!(finished["state"], "done", "{finished}");
+    let [created_stream] = finished["streams"].as_array().unwrap().as_slice() else {
+        panic!("the create took in one stream: {finished}");
+    };
     assert_eq!(
-        finished["streams"],
-        json!([{ "stream": stream_id, "display_name": folder_name, "state": "running" }])
+        (&created_stream["stream"], &created_stream["display_name"]),
+        (&json!(stream_id), &json!(folder_name)),
+        "{finished}"
     );
     for file_a_new_project_starts_with in [
-        "stream.py",
+        "tatolab-project.json",
+        "streams/main.graph.json",
         "pyproject.toml",
         ".python-version",
         ".gitignore",
@@ -1370,8 +1399,13 @@ async fn create_project_over_a_file_a_new_project_starts_with_fails_its_action_w
  {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
-    let project = a_directory_for_create_project_compiling(the_graph_of_a_function_named("main"));
-    std::fs::write(project.path().join("stream.py"), "# the user's own\n").unwrap();
+    let project = a_directory_for_create_project();
+    std::fs::create_dir_all(project.path().join("streams")).unwrap();
+    std::fs::write(
+        project.path().join("streams/main.graph.json"),
+        "# the user's own\n",
+    )
+    .unwrap();
 
     let (_queued, finished) =
         create_project_in(operations_on_the_loaded_streams, project.path()).await;
@@ -1380,47 +1414,13 @@ async fn create_project_over_a_file_a_new_project_starts_with_fails_its_action_w
     assert!(
         finished["failed_because"]
             .as_str()
-            .is_some_and(|why| why.contains("already has stream.py")),
+            .is_some_and(|why| why.contains("already has streams/main.graph.json")),
         "{finished}"
     );
     assert!(!project.path().join("pyproject.toml").exists());
     assert_eq!(
-        std::fs::read_to_string(project.path().join("stream.py")).unwrap(),
+        std::fs::read_to_string(project.path().join("streams/main.graph.json")).unwrap(),
         "# the user's own\n"
-    );
-}
-
-/// `create_project` whose stream raises answers a failed stream, never a refusal.
-#[tokio::test(flavor = "multi_thread")]
-async fn create_project_whose_stream_raises_records_it_failed_under_the_folders_name() {
-    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
-    let project = a_directory_for_create_project_compiling(the_graph_of_a_function_named("main"));
-    project.raise_in_the_function_printing("main", "ValueError: no camera");
-    let folder_name = project
-        .path()
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
-
-    let (queued, finished) =
-        create_project_in(operations_on_the_loaded_streams, project.path()).await;
-
-    assert_eq!(finished["state"], "done", "{finished}");
-    assert_eq!(
-        finished["streams"],
-        json!([{ "stream": queued["stream"], "display_name": folder_name, "state": "failed" }])
-    );
-    let record = engine
-        .current_record_of(queued["stream"].as_str().unwrap())
-        .expect("the failed stream is recorded");
-    assert!(
-        record
-            .failed_because
-            .as_deref()
-            .is_some_and(|why| why.contains("ValueError: no camera")),
-        "{record:?}"
     );
 }
 
@@ -1441,20 +1441,15 @@ async fn create_project_with_a_relative_directory_is_refused() {
     assert!(!Path::new("a-relative-project").exists());
 }
 
-/// `run_project` answers its action at once; the action is followed to `done` with the
-/// project failed under its folder, and `list_project_streams` says why its entry did not
-/// import.
+/// `run_project` answers its action at once, and the action is followed to `done` with the
+/// stream of the graph document that does not load failed.
 #[tokio::test(flavor = "multi_thread")]
-async fn run_project_queues_a_run_followed_by_describe_stream_action_and_list_project_streams() {
+async fn run_project_queues_a_run_followed_by_describe_stream_action() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
-    let project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
-    project.fail_to_import_printing("SyntaxError: invalid syntax");
-    std::fs::write(project.path().join("stream.py"), "").unwrap();
-    let project_directory = std::fs::canonicalize(project.path()).unwrap();
-    let project_stream_id =
-        StreamLocation::of_a_project_that_gave_no_stream(project_directory.clone()).stream_id();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+    project.write_an_unloadable_graph_document("camera");
+    let project_directory = project.path().to_path_buf();
 
     let queued = tool_answer(
         &tool_call_result(
@@ -1482,47 +1477,36 @@ async fn run_project_queues_a_run_followed_by_describe_stream_action_and_list_pr
             "state": "done",
             "step": null,
             "streams": [{
-                "stream": project_stream_id,
-                "display_name": project_directory.file_name().unwrap().to_string_lossy(),
+                "stream": project.stream_id_of("camera"),
+                "display_name": "camera",
                 "state": "failed",
             }],
             "failed_because": null,
         })
     );
-    let project_streams = tool_answer(
-        &tool_call_result(
-            Arc::clone(operations_on_the_loaded_streams),
-            "list_project_streams",
-            json!({ "project_directory": project.path() }),
-        )
-        .await,
-    )
-    .expect("a project run once is listed");
-    assert_eq!(
-        project_streams,
-        json!({
-            "project_directory": project_directory,
-            "action": null,
-            "step": null,
-            "streams": [],
-            "import_failed_because": "SyntaxError: invalid syntax",
-        })
-    );
 }
 
-/// A run cancelled while its compile runs answers `in_progress`, has the compile killed and
-/// ends `cancelled` with no stream taken in; a second cancel is refused, the action finished.
+/// A run cancelled while the runtime's uv makes its venv answers `in_progress`, has uv
+/// killed and ends `cancelled` with its stream never loaded; a second cancel is refused,
+/// the action finished.
 #[tokio::test(flavor = "multi_thread")]
-async fn cancel_stream_action_stops_a_running_compile_and_the_action_ends_cancelled() {
+async fn cancel_stream_action_stops_a_running_venv_sync_and_the_action_ends_cancelled() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
-    let project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+    let project = ProjectWithGraphDocuments::with_no_venv();
+    project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
+    let uv_directory = tempfile::tempdir().expect("a directory for the runtime unit's uv");
+    let uv_that_never_finishes = uv_directory.path().join("uv");
     write_an_executable_script_from_a_child_process(
-        &project.interpreter(),
-        "#!/bin/sh\ncase \" $* \" in\n*' --every-stream '*) exec sleep 30 ;;\nesac\n",
+        &uv_that_never_finishes,
+        "#!/bin/sh
+exec sleep 30
+",
     );
-    std::fs::write(project.path().join("stream.py"), "").unwrap();
+    engine
+        .engine
+        .set_runtime_unit_uv_executable(uv_that_never_finishes)
+        .expect("the runtime is handed its uv");
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
@@ -1537,7 +1521,7 @@ async fn cancel_stream_action_stops_a_running_compile_and_the_action_ends_cancel
         .expect("the action's id")
         .to_string();
     the_stream_action_once(operations_on_the_loaded_streams, &action, |described| {
-        described["step"] == "compiling"
+        described["step"] == "making_the_venv"
     })
     .await;
     let asked_at = std::time::Instant::now();
@@ -1561,12 +1545,21 @@ async fn cancel_stream_action_stops_a_running_compile_and_the_action_ends_cancel
             &finished["streams"],
             &finished["failed_because"]
         ),
-        (&json!("cancelled"), &Value::Null, &json!([]), &Value::Null),
+        (
+            &json!("cancelled"),
+            &Value::Null,
+            &json!([{
+                "stream": project.stream_id_of("camera"),
+                "display_name": "camera",
+                "state": null,
+            }]),
+            &Value::Null
+        ),
         "{finished}"
     );
     assert!(
         asked_at.elapsed() < Duration::from_secs(10),
-        "the compile was waited for, not killed"
+        "the sync was waited for, not killed"
     );
     let again = tool_answer(
         &tool_call_result(
@@ -1580,13 +1573,12 @@ async fn cancel_stream_action_stops_a_running_compile_and_the_action_ends_cancel
     assert!(again.contains("is already cancelled"), "{again}");
 }
 
-/// An action the runtime never queued, and a project it never ran, are refused saying so.
+/// An action the runtime never queued, and a relative project directory, are refused
+/// saying so.
 #[tokio::test(flavor = "multi_thread")]
-async fn describe_stream_action_and_list_project_streams_refuse_what_the_runtime_never_held() {
+async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_hold() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
-    let project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
 
     let never_queued = tool_answer(
         &tool_call_result(
@@ -1600,19 +1592,6 @@ async fn describe_stream_action_and_list_project_streams_refuse_what_the_runtime
     assert!(
         never_queued.contains("the stream action `Rgone-7` is not held"),
         "{never_queued}"
-    );
-    let never_run = tool_answer(
-        &tool_call_result(
-            Arc::clone(operations_on_the_loaded_streams),
-            "list_project_streams",
-            json!({ "project_directory": project.path() }),
-        )
-        .await,
-    )
-    .unwrap_err();
-    assert!(
-        never_run.contains("is not loaded: `run_project` loads it"),
-        "{never_run}"
     );
     let relative = tool_answer(
         &tool_call_result(
@@ -1643,8 +1622,7 @@ async fn describe_stream_action_and_list_project_streams_refuse_what_the_runtime
 )]
 async fn a_run_project_end_to_end_outlives_its_connection_through_stop_start_and_remove() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
     let camera_stream_id = project.stream_id_of("camera");
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
@@ -1721,8 +1699,8 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_start_and
 
 /// `tatolab dev`'s reload: a run of a project replaces its recorded stream under
 /// the same id and another load, whichever connection carries it; a bad save
-/// records the stream failed and unloads it; a `stream.py` defining another
-/// function loads it under its own id and fails the one it no longer defines;
+/// records the stream failed and unloads it; a graph document of another stream
+/// loads it under its own id, and a run once a document is gone forgets its stream;
 /// and closing every connection unloads nothing.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
@@ -1731,8 +1709,7 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_start_and
 )]
 async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("camera"));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let first_connection = rmcp_client_over_the_upgraded_stream(&served).await;
     let other_connection = rmcp_client_over_the_upgraded_stream(&served).await;
@@ -1754,7 +1731,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     .await;
     let first_load = stream_tag_loaded_as_camera();
 
-    project.raise_in_the_function_printing("camera", "SyntaxError: invalid syntax");
+    project.write_an_unloadable_graph_document("camera");
     let bad_save = the_run_over_the_connection_once_finished(
         &first_connection,
         &operations_on_the_loaded_streams,
@@ -1766,16 +1743,17 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
         "failed",
         "{bad_save}"
     );
-    assert_eq!(
-        the_listing_of(&operations_on_the_loaded_streams, &camera_stream_id).await["failed_because"],
-        "SyntaxError: invalid syntax"
+    assert!(
+        the_listing_of(&operations_on_the_loaded_streams, &camera_stream_id).await["failed_because"]
+            .as_str()
+            .is_some_and(|why| why.contains("does not load")),
     );
     assert!(
         engine.engine.ids_of_the_loaded_streams().is_empty(),
         "a bad save unloads the running stream"
     );
 
-    project.compile_to(the_graph_of_a_function_named("camera"));
+    project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
     let replaced = the_run_over_the_connection_once_finished(
         &other_connection,
         &operations_on_the_loaded_streams,
@@ -1787,7 +1765,8 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     assert_eq!(replaced["state"], "running");
     assert_ne!(stream_tag_loaded_as_camera(), first_load);
 
-    project.compile_to(the_graph_of_a_function_named("studio"));
+    project.remove_the_graph_document("camera");
+    project.write_the_graph_document(the_graph_of_a_stream_named("studio"));
     the_run_over_the_connection_once_finished(
         &first_connection,
         &operations_on_the_loaded_streams,
@@ -1799,8 +1778,13 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
         engine.engine.ids_of_the_loaded_streams(),
         std::slice::from_ref(&studio_stream_id)
     );
-    let camera_listing = the_listing_of(&operations_on_the_loaded_streams, &camera_stream_id).await;
-    assert_eq!(camera_listing["state"], "failed", "{camera_listing}");
+    let listed_ids: Vec<String> = engine
+        .engine
+        .list_streams()
+        .into_iter()
+        .map(|listing| listing.stream_id)
+        .collect();
+    assert_eq!(listed_ids, std::slice::from_ref(&studio_stream_id));
 
     drop(other_connection);
     drop(first_connection);

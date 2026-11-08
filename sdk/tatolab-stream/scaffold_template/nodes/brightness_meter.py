@@ -20,7 +20,7 @@ from tatolab.stream import (
 BRIGHTNESS_REPORT_INTERVAL_NS = 1_000_000_000
 
 
-@node
+@node.process
 class BrightnessMeter:
     """Logs the mean brightness of the frames it sees, once a second."""
 

@@ -20,6 +20,7 @@ members = [
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux and macOS)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux; absent on macOS, its dlpack module on both)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
+    "sdk/tatolab-module-sdk-macros", # `#[function_node]` and `#[derive(FunctionNodeRecord)]`, which `tatolab-module-sdk`'s `function-node` feature re-exports
     "sdk/tatolab-module-sdk", # engine-free: the module host table a module's native half reaches its node's ports through, and the safe Rust over it
     "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends; hosts no engine
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
@@ -140,16 +141,6 @@ vulkanalia-vma = { package = "tatolab-vulkanalia-vma", path = "vendor/tatolab-vu
 
 # SPIR-V reflection for descriptor-set-layout validation in the compute-kernel RHI.
 rspirv-reflect = "0.9.0"
-
-# The engine's runtime GLSL compiler. `build-from-source` is not a preference:
-# it forbids the build script's system-library probe, so the wheel can never
-# link a `libshaderc.so` that happens to sit on the build machine. The crate
-# carries shaderc, glslang, SPIRV-Tools and SPIRV-Headers as sources and links
-# `libshaderc_combined.a`, which is what lets a kernel author need no shader
-# toolchain at all. Pinned exact: the compiler version is part of the
-# compilation cache key, and a silent minor bump would change emitted SPIR-V
-# under a key that did not move.
-shaderc = { version = "=0.10.1", features = ["build-from-source"] }
 
 # DLPack v0.8 + v1.0 `#[repr(C)]` ABI mirrors for cross-framework
 # zero-copy tensor handoff (PyTorch / JAX / NumPy `from_dlpack`).

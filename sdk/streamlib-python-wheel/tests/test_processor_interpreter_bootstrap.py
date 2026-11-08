@@ -43,7 +43,7 @@ DESCRIBED_NODES_SOURCE = '''
 from tatolab.stream import AudioWindowContract, Channels, Input, Output, Packets, node
 
 
-@node(scheduling="high")
+@node.process(scheduling="high")
 class WindowedRelay:
     """Relays each audio window as a frame."""
 
@@ -61,14 +61,14 @@ class WindowedRelay:
     def process(self, ctx) -> None: ...
 
 
-@node(execution="continuous", interval_ms=20, description="ticks on its own")
+@node.process(execution="continuous", interval_ms=20, description="ticks on its own")
 class Ticker:
     ticks_to_downstream = Output(Packets)
 
     def process(self, ctx) -> None: ...
 
 
-@node(execution="manual", paced_by_real_time=True, description="captures on its own")
+@node.process(execution="manual", paced_by_real_time=True, description="captures on its own")
 class LiveCapture:
     frames_to_downstream = Output(Packets)
 
@@ -175,6 +175,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                 "import_path": "described_nodes:WindowedRelay",
                 "short_name": "WindowedRelay",
                 "description": "Relays each audio window as a frame.",
+                "kind": "process",
                 "execution": {"mode": "reactive", "interval_ms": 0},
                 "scheduling_priority": "high",
                 "paced_by_real_time": False,
@@ -282,7 +283,7 @@ def test_a_module_that_logs_at_import_is_described_with_its_records_on_stderr(
         log.info("module imported", phase="import")
 
 
-        @node(execution="reactive")
+        @node.process(execution="reactive")
         class LoggingAtImport:
             frames_from_upstream = Input(Packets, delivery="newest")
 
@@ -309,7 +310,7 @@ def test_an_unstamped_class_is_refused_naming_it(project_directory: Path):
     assert refused_import_paths_in(described_document(described)) == ["described_nodes:Unstamped"]
     assert (
         "cannot describe described_nodes:Unstamped: the class `Unstamped` carries no "
-        "`@node` declaration"
+        "`@node.process` declaration"
     ) in described.stderr
 
 
@@ -377,7 +378,7 @@ def test_what_a_module_prints_at_import_reaches_stderr_and_never_the_document(
         subprocess.run([sys.executable, "-c", "print('printed by a child at import')"], check=True)
 
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Noisy:
             noise_to_downstream = Output(Packets)
 
@@ -422,7 +423,7 @@ def test_a_describe_exits_once_its_document_is_out_whatever_a_module_left_runnin
         atexit.register(time.sleep, 30)
 
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Lingering:
             nothing_to_downstream = Output(Packets)
 
@@ -573,7 +574,7 @@ def test_a_class_stamped_by_hand_without_every_stamp_is_refused_and_the_rest_des
     ] == ["described_nodes:Ticker"]
     assert (
         "cannot describe hand_stamped_nodes:HandStamped: the class `HandStamped` carries no "
-        "`__tatolab_node_execution__`"
+        "`__tatolab_node_kind__`"
     ) in described.stderr
 
 
@@ -821,7 +822,7 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
         )
 
 
-        @node(
+        @node.process(
             execution="manual",
             description=",".join(
                 name for name in BESIDE_THE_BOOTSTRAP if importlib.util.find_spec(name)
@@ -862,13 +863,3 @@ def test_importing_the_bootstrap_leaves_the_import_path_alone():
     assert importing.returncode == 0, importing.stderr
 
 
-def test_a_continuous_deadline_steps_one_interval_on_its_grid():
-    next_deadline = processor_interpreter_bootstrap.next_continuous_deadline_stream_ns
-    assert next_deadline(1_000, 100, 1_050) == 1_100
-    assert next_deadline(1_000, 100, 900) == 1_100
-
-
-def test_an_overrun_skips_to_the_next_deadline_after_now_on_the_same_grid():
-    next_deadline = processor_interpreter_bootstrap.next_continuous_deadline_stream_ns
-    assert next_deadline(1_000, 100, 1_350) == 1_400
-    assert next_deadline(1_000, 100, 1_400) == 1_500

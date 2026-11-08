@@ -102,10 +102,11 @@ enum TatolabVerb {
     #[command(
         long_about = "Create a project in DIRECTORY, or with none in a folder <adjective>-<noun> \
                       the runtime draws under ~/streams, and queue its load: the runtime writes \
-                      stream.py, nodes/, pyproject.toml, .python-version and .gitignore — one \
-                      @stream wiring the sample animation through a GPU effect, with a meter \
-                      on a fan-out — then makes its \
-                      .venv and loads the stream under the folder's name. A DIRECTORY already \
+                      tatolab-project.json, streams/main.graph.json, nodes/, pyproject.toml, \
+                      .python-version and .gitignore — one stream wiring the sample animation \
+                      through a GPU effect, with a meter on a fan-out — commits it as the \
+                      project's first revision, then makes its .venv and loads the stream \
+                      under the folder's name. A DIRECTORY already \
                       holding one of those files fails the action with nothing written. Needs \
                       the runtime running."
     )]
@@ -117,12 +118,12 @@ enum TatolabVerb {
     #[command(
         long_about = "Queue a load of the project on its stream action queue and return at once: \
                       once the project's earlier actions have run, the runtime makes its .venv \
-                      when it does not run, compiles every @stream in its stream.py, and loads \
-                      each as its own stream, recorded so it runs across the runtime's restarts \
+                      when it does not run, reads every graph document in the project outside its hidden folders, and \
+                      loads each as its own stream, recorded so it runs across the runtime's restarts \
                       until `tatolab stop` or `tatolab rm`. Loading the project again replaces \
-                      each stream under the same id. A stream whose code fails is recorded \
-                      failed, with its traceback in the project's log, until a load of the fixed \
-                      code replaces it or `tatolab start` retries it. Prints `<action> queued: \
+                      each stream under the same id. A stream whose graph document fails to \
+                      read or load is recorded failed, with why in the project's log, until a \
+                      load of the fixed document replaces it or `tatolab start` retries it. Prints `<action> queued: \
                       load of <project>` and how to follow it with `tatolab logs -f`; \
                       `tatolab streams` shows each stream `preparing` until the load has run. \
                       Exits 0 once queued, and 1 only when the request is refused or no runtime \
@@ -136,10 +137,10 @@ enum TatolabVerb {
     /// Queue a load of this project, follow its log, and queue another on every saved edit.
     #[command(
         long_about = "`run`, then the project's log followed — each record under the project's \
-                      folder name — plus a watch on the project's .py files and pyproject.toml: each settled save \
-                      queues another load, which replaces each stream. A save whose code fails \
-                      records its stream failed, with the traceback in the log, until a save \
-                      that loads. Ctrl-C ends dev and leaves the streams loaded. When the runtime \
+                      folder name — plus a watch on the project's .py files, graph documents, \
+                      tatolab-project.json and pyproject.toml: each settled save queues another \
+                      load, which replaces each stream. A save whose stream fails to load \
+                      records it failed, with why in the log, until a save that loads. Ctrl-C ends dev and leaves the streams loaded. When the runtime \
                       goes away, dev says so, waits for it, and follows the log again as the \
                       restarted runtime re-loads the project from its records."
     )]
@@ -176,7 +177,7 @@ enum TatolabVerb {
         long_about = "Cancel the stream action ACTION, the id `run`, `dev`, `stop`, `start` or \
                       `rm` printed. A queued action is dropped and its streams' records stay as \
                       they were; prints `<action> cancelled`. A running load or start stops at \
-                      the step it is on — a running uv sync or compile is killed and a half-made \
+                      the step it is on — a running uv sync is killed and a half-made \
                       .venv removed — and the streams it had not reached stay as recorded; \
                       prints `<action> cancelling` and ends cancelled. A running stop or rm has \
                       begun unloading and cannot be cut short: it is refused, and ends done."
@@ -208,7 +209,7 @@ enum TatolabVerb {
                       step_ns, paced at the scale, behind the step barrier every node runs on. \
                       Refused for a stream on the real or a stepped clock, and for a scale above 1 \
                       while the stream holds a node that paces itself and is not paced by real \
-                      time. Live only: the stream's next start runs the clock its stream function \
+                      time. Live only: the stream's next start runs the clock its graph document \
                       names.",
         override_usage = "tatolab clock [STREAM] --scale <SCALE>"
     )]

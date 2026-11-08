@@ -132,6 +132,62 @@ With the default `tracing` feature,
 `module_host_tracing::forward_this_modules_tracing_records_to(&module_host)`
 routes the module's own `tracing` records into the node's log.
 
+## A function node in Rust
+
+With the `function-node` feature, `#[function_node]` writes a function node in
+Rust, for code outside Numba's subset that still needs native speed. Its grammar
+is `@node.function`'s: each plain parameter is an input pin, a `Time` parameter
+takes the reader's stream time, a `State<Record>` one the state its last call
+returned, and a parameter named `config` the node's config record. A value is an
+`f64`, `i64` or `bool`; a record is a struct of them deriving
+`FunctionNodeRecord`, whose `Default` is its first state or its config's defaults.
+
+```rust
+use tatolab_module_sdk::function_node::{function_node, FunctionNodeRecord, State, Stateful};
+
+/// `x` scaled by `gain`, then moved by `offset`.
+#[function_node]
+fn scale_and_offset(x: f64, #[pin_default(1.0)] gain: f64, #[pin_default(0.0)] offset: f64) -> f64 {
+    x * gain + offset
+}
+
+#[derive(Clone, Copy, Default, FunctionNodeRecord)]
+struct RunningTotal {
+    total: f64,
+}
+
+/// `x` added into a running total.
+#[function_node]
+fn accumulate(x: f64, previous: State<RunningTotal>) -> Stateful<f64, RunningTotal> {
+    let total = previous.total + x;
+    (total, RunningTotal { total })
+}
+```
+
+Each `#[function_node]` function gains a `<function>_function_node_declaration()`.
+The native half hands its Python half that declaration with the `pyo3` feature,
+and the Python half declares the node, whose type is its import path in the
+module's `tatolab.nodes` entry points:
+
+```rust
+#[pymodule]
+fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let declaration = scale_and_offset_function_node_declaration();
+    module.add("ScaleAndOffset", declaration.to_python_declaration(module.py())?)
+}
+```
+
+```python
+from tatolab.stream import node
+from my_module import _native
+
+ScaleAndOffset = node.rust_function(_native.ScaleAndOffset)
+```
+
+The node runs inside the read of each node it feeds, in that node's helper, never
+in `tatolabd`. A panic refuses the call. The body is held to a function node's
+contract (no I/O, no clock but `Time`, no state but `State`) by review.
+
 ## From C
 
 `include/tatolab_module_host_table.h` declares the same table for a native half

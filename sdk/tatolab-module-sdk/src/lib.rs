@@ -13,7 +13,13 @@
 //! hands the capsule to its native half, which reads it with
 //! [`ModuleHost::from_python_module_host_table_capsule`] (feature `pyo3`) or
 //! [`ModuleHost::from_module_host_table_pointer`].
+//!
+//! A `#[function_node]` function (feature `function-node`) is a function node
+//! written in Rust: [`function_node`] carries its grammar.
 
+pub mod function_node;
+#[cfg(feature = "pyo3")]
+mod function_node_python_declaration;
 pub mod module_host;
 pub mod module_host_audio_capture;
 pub mod module_host_audio_playback;
@@ -53,7 +59,8 @@ pub use module_host_shared_native_service::{
 };
 pub use module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR,
-    MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHostTable, ModuleHostTablePayloadDescriptor,
+    MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHostTable,
+    ModuleHostTableFunctionNodeEvaluateEntry, ModuleHostTablePayloadDescriptor,
 };
 pub use module_host_virtual_camera::{
     ModuleHostVirtualCameraFramePresentation, ModuleHostVirtualCameraStream,

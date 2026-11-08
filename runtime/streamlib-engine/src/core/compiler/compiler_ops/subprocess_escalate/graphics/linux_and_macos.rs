@@ -36,7 +36,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::context::{
     GpuContextLimitedAccess, GraphicsKernelHeldForOneDraw, SurfaceBoundKernelBindingResource,
 };
-use crate::core::rhi::{GlslCompilationTargetStage, SurfaceBoundKernelBindingKind};
+use crate::core::rhi::{ShaderCompilationTargetStage, SurfaceBoundKernelBindingKind};
 use crate::host_rhi::HostTextureExt as _;
 
 /// The RHI binding kind a graphics wire enum names.
@@ -112,14 +112,14 @@ pub(super) fn prepare_graphics_kernel_registration(
         "vertex_",
         &req.vertex_source,
         &req.vertex_spv_hex,
-        GlslCompilationTargetStage::Vertex,
+        ShaderCompilationTargetStage::Vertex,
         &req.vertex_entry_point,
     )?;
     let fragment_source = registered_shader_stage_source(
         "fragment_",
         &req.fragment_source,
         &req.fragment_spv_hex,
-        GlslCompilationTargetStage::Fragment,
+        ShaderCompilationTargetStage::Fragment,
         &req.fragment_entry_point,
     )?;
     let vertex_spv = vertex_source.spirv(sandbox).map_err(|e| e.to_string())?;
@@ -175,7 +175,7 @@ pub(super) fn prepare_graphics_kernel_registration(
 /// re-registering an identical kernel is a cache hit that answers with the same
 /// `kernel_id`.
 ///
-/// Each stage arrives as GLSL `*_source` the engine compiles, or as the
+/// Each stage arrives as Slang `*_source` the engine compiles, or as the
 /// pre-compiled `*_spv_hex` escape hatch.
 ///
 /// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):

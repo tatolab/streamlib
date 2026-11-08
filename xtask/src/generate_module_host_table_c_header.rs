@@ -168,6 +168,8 @@ fn c_scalar_type_name(rust_scalar_name: &str) -> Option<&'static str> {
         "i32" => "int32_t",
         "i64" => "int64_t",
         "isize" => "ptrdiff_t",
+        "f32" => "float",
+        "f64" => "double",
         "c_void" => "void",
         _ => return None,
     })

@@ -3,9 +3,9 @@
 
 """`tatolab run` / `dev` loading a project's stream into the machine's runtime, end to end.
 
-The runtime compiles the project's stream in the project's own venv — here a
-symlink to the suite venv, holding `tatolab-stream` and nothing of the runtime —
-loads it and records it: the local API names it by its stream id, every
+The runtime reads each graph document of the project, runs its Python nodes in
+the project's own venv — here a symlink to the suite venv, holding
+`tatolab-stream` and nothing of the runtime — loads each stream and records it: the local API names it by its stream id, every
 observation verb reaches it through the one socket, and it runs on once the
 `tatolab` that loaded it has returned or been stopped, until `tatolab stop`.
 Starting a stream initializes a GPU context, so the module needs a device.
@@ -43,12 +43,21 @@ from conftest import (
 )
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
-from stream_runs_on_tatolabd import TatolabRunOfAProject, stream_id_of_the_location
+from stream_runs_on_tatolabd import (
+    GRAPH_DOCUMENTS_DIRECTORY_NAME,
+    TatolabRunOfAProject,
+    graph_document_path_of,
+    stream_asset_held_at,
+    stream_id_of_the_stream_in,
+    write_a_graph_document,
+    write_the_graph_documents_the_stream_py_compiles_to,
+    write_the_project_file_unless_there,
+)
 from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
 
 pytestmark = pytest.mark.requires_gpu
 
-# A load is the project's compile + the describe of its Python types + the
+# A load is the project's graph documents read + the describe of its Python types + the
 # engine's GPU context on the runtime's first start.
 NODE_READY_TIMEOUT_SECONDS = 90.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
@@ -129,13 +138,13 @@ SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
 # How long a loaded stream's source has to write its first bag on `video`.
 FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
 
-#: The one stream function every project here defines, as its location names it.
-STREAM_FUNCTION_OF_EVERY_PROJECT = "stream:main"
+#: The one stream every project here holds.
+STREAM_NAME_OF_EVERY_PROJECT = "main"
 
 
 def stream_id_of_the_project(app_directory: Path) -> str:
     """The stream id the runtime keys and addresses the project's one stream by."""
-    return stream_id_of_the_location(app_directory.resolve(), STREAM_FUNCTION_OF_EVERY_PROJECT)
+    return stream_id_of_the_stream_in(app_directory, STREAM_NAME_OF_EVERY_PROJECT)
 
 
 def the_stream_stopped_log_line(stream_id: str) -> str:
@@ -211,14 +220,19 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
 
     assert loaded["stream_id"] == stream_id
     assert loaded["display_name"] == "main"
-    assert loaded["stream_function"] == STREAM_FUNCTION_OF_EVERY_PROJECT
+    project_file = write_the_project_file_unless_there(app_directory)
+    stream_asset = stream_asset_held_at(
+        graph_document_path_of(app_directory, STREAM_NAME_OF_EVERY_PROJECT)
+    )
+    assert (loaded["project"], loaded["stream_asset"]) == (project_file["project"], stream_asset)
     assert Path(loaded["project_directory"]) == app_directory.resolve()
     listed_running = {
         "stream": stream_id,
         "display_name": "main",
         "location": {
             "project_directory": str(app_directory.resolve()),
-            "stream_function": STREAM_FUNCTION_OF_EVERY_PROJECT,
+            "project": project_file["project"],
+            "stream_asset": stream_asset,
         },
         "state": "running",
         "node_count": 1,
@@ -537,7 +551,7 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
 
     The config travels to the engine as JSON and every field of a built-in's
     config struct carries a serde default, so `{}` deserializes and `null` does
-    not. The struct is built at graph compile, after the load accepted the graph,
+    not. The struct is built at the graph's load, after the load accepted the graph,
     so only a running graph proves it.
     """
     app_directory = make_tatolab_project(
@@ -592,9 +606,8 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     """What `tatolab new` writes must actually run, frame after frame.
 
     Run exactly as scaffolded:
-    `new` has the runtime write the scaffold, compile its `@stream` and load
-    the graph it builds, so the graph the local API renders carries the stream's name
-    and the nodes it added. A listed stream alone proves almost nothing here:
+    `new` has the runtime write the scaffold and load its graph document, so the
+    graph the local API renders carries the stream's id and the nodes it holds. A listed stream alone proves almost nothing here:
     it is listed whether or not `process()` ever succeeds, so the assertions
     that carry this test are the ones on the run's own records. `process()
     failed` catches an effect that raises every frame; the count of frames
@@ -636,57 +649,6 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     assert meter_reports <= MAXIMUM_METER_REPORTS, (
         f"the scaffolded meter logged a brightness {meter_reports} times in "
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is per frame, not once a second"
-    )
-
-
-def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
-    make_scaffolded_tatolab_project: "Callable[..., Path]",
-    run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
-    start_tatolabd: "Callable[..., TatolabdUnderTest]",
-):
-    """The cross-floor check informs; it never walls off a start.
-
-    The finding sits in a function nothing calls, so the app needs neither
-    cupy nor CUDA to run: the check reads source, and this proves a finding in
-    it reaches the user who ran `tatolab run` — in the project's log, under the
-    load's action, which `tatolab logs --action` reads — without costing the
-    start.
-    """
-    tatolabd = start_tatolabd()
-    app_directory = make_scaffolded_tatolab_project(tatolabd)
-    effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
-    effect_module.write_text(
-        effect_module.read_text()
-        + "\n\ndef never_called():\n"
-        "    import cupy\n"
-        "    import torch\n"
-        '    return torch.device("cuda")\n'
-    )
-
-    tatolab_run = load_the_projects_stream(tatolabd, app_directory)
-    loaded = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    assert tatolab_run.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0
-    the_loads_records = run_tatolab(
-        "logs",
-        "--dir",
-        app_directory,
-        "--action",
-        tatolab_run.queued_action(),
-        working_directory=app_directory,
-    )
-
-    output = succeeded(the_loads_records)
-    assert f"{SCAFFOLDED_EFFECT_MODULE_PATH}:" in output and "imports `cupy`" in output, (
-        f"the warning block in the load's records must name the cupy import; they were:\n{output}"
-    )
-    assert "names the device 'cuda'" in output, (
-        f"the warning block in the load's records must name the device literal; they were:\n"
-        f"{output}"
-    )
-    assert "cross-floor check" in output, output
-    assert loaded["stream_id"] == stream_id_of_the_project(app_directory), (
-        f"the load the warning came with must still start the stream: {loaded}"
     )
 
 
@@ -939,96 +901,6 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     assert (listed["stream"], listed["state"]) == (failed_stream_id, "failed"), listed
 
 
-@pytest.mark.parametrize("verb", ["run", "dev"])
-def test_a_stream_function_that_raises_is_recorded_failed_with_its_traceback_and_loads_nothing(
-    verb: str,
-    make_tatolab_project: "Callable[..., Path]",
-    start_tatolabd: "Callable[..., TatolabdUnderTest]",
-):
-    """A graph that failed to build loads nothing, and the runtime takes the
-    stream in failed with the function's traceback.
-
-    `run` returns once the load is queued, and the load records the stream
-    failed; `dev` prints the failure from the project's log and waits for the
-    save that fixes it, until a Ctrl-C ends it.
-    """
-    app_directory = make_tatolab_project(
-        {
-            "stream.py": (
-                "from tatolab.stream import StreamBuilder, stream\n"
-                "\n"
-                "\n"
-                "@stream\n"
-                "def main(stream_builder: StreamBuilder) -> None:\n"
-                "    raise ValueError('bad wiring')\n"
-            )
-        }
-    )
-    stream_id = stream_id_of_the_project(app_directory)
-    tatolabd = start_tatolabd()
-
-    stream_run = load_the_projects_stream(tatolabd, app_directory, verb)
-
-    failed_stream = stream_run.failed_stream(timeout=NODE_READY_TIMEOUT_SECONDS)
-    assert failed_stream is not None, stream_run.recent_stderr()
-    failed_stream_id, printed_reason = failed_stream
-    assert failed_stream_id == stream_id
-    if verb == "run":
-        assert stream_run.await_exit(timeout=NODE_READY_TIMEOUT_SECONDS) == 0, (
-            f"`run` exits 0 once the load is queued; standard error:\n{stream_run.recent_stderr()}"
-        )
-    else:
-        await_dev_printed(stream_run, "ValueError: bad wiring", timeout=NODE_READY_TIMEOUT_SECONDS)
-        stream_run.interrupt()
-        assert stream_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, stream_run.recent_stderr()
-        printed_reason = stream_run.stdout_text
-    assert "ValueError: bad wiring" in printed_reason, printed_reason
-    assert 'stream.py", line 6, in main' in printed_reason, printed_reason
-    [listed] = tatolabd.local_api_client().list_streams()
-    assert (listed["stream"], listed["state"]) == (stream_id, "failed"), listed
-    assert "ValueError: bad wiring" in listed["failed_because"], listed
-    assert "[start] Starting the stream" not in tatolabd.stderr_text, tatolabd.recent_stderr()
-
-
-def test_a_stream_py_defining_no_stream_is_a_failed_project_until_a_run_defines_one(
-    make_tatolab_project: "Callable[..., Path]",
-    start_tatolabd: "Callable[..., TatolabdUnderTest]",
-):
-    """A `stream.py` that imports and defines no `@stream` is no refusal: the
-    load lists the project as `<folder>-<hash>` failed with the missing `@stream`
-    and a sample of one; a run once it defines one replaces it."""
-    app_directory = make_tatolab_project({"stream.py": "PIPELINE = 1\n"})
-    tatolabd = start_tatolabd()
-
-    stream_run = load_the_projects_stream(tatolabd, app_directory)
-
-    failed_stream = stream_run.failed_stream(timeout=NODE_READY_TIMEOUT_SECONDS)
-    assert failed_stream is not None, stream_run.stdout_text + stream_run.stderr_text
-    failed_project_id, failed_because = failed_stream
-    assert "stream.py` defines no @stream function" in failed_because, failed_because
-    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in failed_because
-    [listed] = tatolabd.local_api_client().list_streams()
-    assert (listed["stream"], listed["state"]) == (failed_project_id, "failed"), listed
-    assert listed["location"]["stream_function"] == "", listed
-
-    (app_directory / "stream.py").write_text(
-        "from tatolab.stream import StreamBuilder, stream\n"
-    "from tatolab.testpattern import TestPatternSource\n"
-        "\n"
-        "\n"
-        "@stream\n"
-        "def main(stream_builder: StreamBuilder) -> None:\n"
-        "    stream_builder.add(TestPatternSource)\n",
-        encoding="utf-8",
-    )
-    defined_run = load_the_projects_stream(tatolabd, app_directory)
-    defined_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
-
-    [listed] = tatolabd.local_api_client().list_streams()
-    assert listed["stream"] == stream_id_of_the_project(app_directory), listed
-    assert listed["state"] == "running", listed
-
-
 STREAM_PY_WITH_TWO_STREAMS = (
     "from tatolab.stream import StreamBuilder, stream\n"
     "from tatolab.testpattern import TestPatternSource\n"
@@ -1060,6 +932,7 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     unsyncable_directory.mkdir()
     (unsyncable_directory / "pyproject.toml").write_text("this is [not toml\n", encoding="utf-8")
     (unsyncable_directory / "stream.py").write_text(STREAM_WITH_ONE_TEST_PATTERN_SOURCE, encoding="utf-8")
+    write_the_graph_documents_the_stream_py_compiles_to(unsyncable_directory)
     unsynced_run = client.call_tool(
         "run_project", {"project_directory": str(unsyncable_directory.resolve())}
     )
@@ -1092,7 +965,7 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     every_record = client.call_tool("logs", {"project_directory": project_directory})["records"]
     assert {record.get("stream") for record in every_record} >= running_ids, every_record
 
-    camera_id = stream_id_of_the_location(app_directory.resolve(), "stream:camera")
+    camera_id = stream_id_of_the_stream_in(app_directory, "camera")
     camera_records_while_loaded = client.call_tool(
         "logs", {"project_directory": project_directory, "stream": camera_id}
     )["records"]
@@ -1110,41 +983,19 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     )
 
 
-STREAM_PY_WITH_TWO_GOOD_STREAMS_AND_ONE_RAISING = (
-    "from tatolab.stream import StreamBuilder, stream\n"
-    "from tatolab.testpattern import TestPatternSource\n"
-    "\n"
-    "\n"
-    "@stream\n"
-    "def camera(stream_builder: StreamBuilder) -> None:\n"
-    "    stream_builder.add(TestPatternSource)\n"
-    "\n"
-    "\n"
-    "@stream\n"
-    "def preview(stream_builder: StreamBuilder) -> None:\n"
-    "    stream_builder.add(TestPatternSource)\n"
-    "\n"
-    "\n"
-    "@stream\n"
-    "def broken(stream_builder: StreamBuilder) -> None:\n"
-    '    raise ValueError("bad wiring")\n'
-)
-
-
-def test_a_run_takes_in_every_stream_of_stream_py_and_fails_one_no_longer_defined(
+def test_a_run_takes_in_every_graph_document_and_forgets_a_stream_whose_document_is_gone(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """`run` loads every `@stream` in `stream.py`, each its own stream: two
-    run, and the one that raises is failed with its traceback; a run once
-    `stream.py` drops one records it failed, naming the function."""
-    app_directory = make_tatolab_project(
-        {"stream.py": STREAM_PY_WITH_TWO_GOOD_STREAMS_AND_ONE_RAISING}
-    )
+    """`run` loads every graph document of the project, each its own stream: two
+    run, and one that does not load is failed saying why; a run once a document is
+    gone unloads and forgets its stream."""
+    app_directory = make_tatolab_project({"stream.py": STREAM_PY_WITH_TWO_STREAMS})
+    write_a_graph_document(app_directory, "broken", '{"nodes": "not a list"}')
     tatolabd = start_tatolabd()
-    stream_id_of = lambda function: stream_id_of_the_location(  # noqa: E731
-        app_directory.resolve(), f"stream:{function}"
-    )
+
+    def stream_id_of(stream_name: str) -> str:
+        return stream_id_of_the_stream_in(app_directory, stream_name)
 
     stream_run = load_the_projects_stream(tatolabd, app_directory)
 
@@ -1162,30 +1013,18 @@ def test_a_run_takes_in_every_stream_of_stream_py_and_fails_one_no_longer_define
     failed_stream = stream_run.failed_stream()
     assert failed_stream is not None, ended_load
     assert failed_stream[0] == stream_id_of("broken"), failed_stream
-    assert "ValueError: bad wiring" in failed_stream[1], failed_stream[1]
+    assert "`streams/broken.graph.json` does not load" in failed_stream[1], failed_stream[1]
+
+    graph_document_path_of(app_directory, "preview").unlink()
+    rerun = load_the_projects_stream(tatolabd, app_directory)
+    assert rerun.action_once_ended(timeout=NODE_READY_TIMEOUT_SECONDS)["state"] == "done"
+
     states = {
         listed["stream"]: listed["state"]
         for listed in tatolabd.local_api_client().list_streams()
     }
     assert states == {
         stream_id_of("camera"): "running",
-        stream_id_of("preview"): "running",
         stream_id_of("broken"): "failed",
     }, states
-
-    (app_directory / "stream.py").write_text(
-        STREAM_PY_WITH_TWO_GOOD_STREAMS_AND_ONE_RAISING.replace(
-            "@stream\ndef preview", "def preview"
-        ),
-        encoding="utf-8",
-    )
-    rerun = load_the_projects_stream(tatolabd, app_directory)
-    assert rerun.action_once_ended(timeout=NODE_READY_TIMEOUT_SECONDS)["state"] == "done"
-
-    listed_by_id = {
-        listed["stream"]: listed for listed in tatolabd.local_api_client().list_streams()
-    }
-    assert listed_by_id[stream_id_of("camera")]["state"] == "running", listed_by_id
-    preview = listed_by_id[stream_id_of("preview")]
-    assert preview["state"] == "failed", preview
-    assert preview["failed_because"] == "`stream:preview` is no longer defined in stream.py"
+    assert (app_directory / GRAPH_DOCUMENTS_DIRECTORY_NAME / "camera.graph.json").is_file()

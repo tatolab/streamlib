@@ -21,13 +21,13 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 
 ---
 
-- **A stream is a Python function.** `@stream` wires nodes together, and a node is a `@node` class
-  in a module of its own. There is no manifest, no registration file, and no build step between an
-  edit and a run.
+- **A stream is a graph document.** `streams/<name>.graph.json` wires nodes together, and a Python
+  node is a `@node.process` class in a module of its own. There is no registration file and no build step
+  between an edit and a run.
 - **Every Python node runs in its own process**, with its own interpreter started from your stream's
   venv. A node that hangs or crashes is one node, named in the log; it cannot stall the others.
 - **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
-  CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
+  CPU copy, and a pixel effect is one Slang kernel. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
 - **Media nodes are modules, built the way you would build one.** The camera, microphone,
   speaker, H.264 / H.265 and Opus codecs, the test pattern and the Linux virtual camera are
@@ -35,8 +35,8 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
   sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
   the stream runs — the same operations the `tatolab` CLI uses.
-- **A fast edit loop.** `tatolab dev` restarts the stream on every saved edit, and keeps the running
-  one when an edit fails to compile.
+- **A fast edit loop.** `tatolab dev` restarts the stream on every saved edit; an edit that fails
+  to load records the stream failed, with why in the log, until the next save.
 
 > **Alpha.** APIs will change. On Linux one command installs the runtime; on macOS you build it
 > from a checkout of this repository for now. One runtime per machine runs every stream on it. See
@@ -165,7 +165,7 @@ tatolabd                    # in a terminal of its own: this machine's runtime
 ```bash
 tatolab new my-stream       # the runtime writes a test pattern → GPU effect, plus a CPU meter, and runs it
 cd my-stream
-tatolab dev                 # the test pattern through a GPU lens, encoded and shared, its brightness logged
+tatolab dev                 # the test pattern through a GPU lens, its brightness logged
 ```
 
 `tatolab new` asks the runtime to create the project: it writes the files, makes the `.venv` and
@@ -175,88 +175,110 @@ no directory, the runtime creates the project in a new folder under `~/streams` 
 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
 starts one. `dev` queues a load of the project in the working directory and follows the project's
-log: the runtime syncs the project's `.venv` with the uv it carries, compiles every `@stream`
-function of `stream.py` to its graph there, loads each one and starts it, and `dev` prints every
-record in your terminal. Save an edit and `dev` queues another load, and the runtime replaces the
-running streams with the edit. An edit whose code fails unloads its stream and records it failed:
-the traceback lands in the log `dev` prints, and the next save loads it again. Ctrl-C ends `dev`
+log: the runtime syncs the project's `.venv` with the uv it carries, reads every graph document
+in the project, loads each one as its own stream and starts it, and `dev` prints every record in
+your terminal. Save an edit and `dev` queues another load, and the runtime replaces the running
+streams with the edit. An edit that fails unloads its stream and records it failed: the reason
+lands in the log `dev` prints, and the next save loads it again. An edit that leaves
+`tatolab-project.json` unreadable fails the load itself and leaves the running streams as they
+were. Ctrl-C ends `dev`
 and leaves the streams running. Every stream the runtime loads is recorded: it runs until
 `tatolab stop` or `tatolab rm`, and the runtime loads it again each time it starts. `tatolab run`
 queues the load once, without watching for edits, prints the action's id and returns at once;
 `tatolab logs -f` follows the load and the streams' records. `tatolab cancel <action>` takes an
 action back: a queued one is dropped, and a running load stops at the step it is on, its uv sync
-or compile killed, leaving the streams it had not reached as they were. A stop or `rm` that has
+killed, leaving the streams it had not reached as they were. A stop or `rm` that has
 begun unloading runs to the end.
 
 ## Writing a stream
 
-`stream.py` is wiring and nothing else:
+A stream is a graph document, `streams/<name>.graph.json`: its nodes and the links between
+them, and nothing that runs. `tatolab new` writes `streams/main.graph.json`:
 
-```python
-from tatolab.stream import StreamBuilder, stream
-from tatolab.testpattern import TestPatternSource
-
-from nodes.brightness_meter import BrightnessMeter
-from nodes.halftone_lens_effect import HalftoneLensEffect
-
-
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    """The sample animation through the lens; its brightness logged each second."""
-    # Point it at your camera: `stream_builder.add(CameraSource)`, imported
-    # from `tatolab.camera` (`pip install tatolab-camera`), publishes on the
-    # same `video` port.
-    source = stream_builder.add(TestPatternSource)
-    effect = stream_builder.add(HalftoneLensEffect)
-    meter = stream_builder.add(BrightnessMeter)
-    stream_builder.connect(source.output("video"), effect.input("video_from_upstream"))
-    stream_builder.connect(
-        effect.output("video_to_downstream"), meter.input("video_from_upstream")
-    )
+```json
+{
+  "asset": "6f1c2e9a-3b4d-4c5e-8f60-71a2b3c4d5e6",
+  "links": [
+    {
+      "source": {"node": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "port": "video"},
+      "target": {"node": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "port": "video_from_upstream"}
+    },
+    {
+      "source": {"node": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "port": "video_to_downstream"},
+      "target": {"node": "8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f", "port": "video_from_upstream"}
+    }
+  ],
+  "nodes": [
+    {"config": {}, "id": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"},
+    {"config": {}, "id": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "name": "halftonelenseffect", "type": "nodes.halftone_lens_effect:HalftoneLensEffect"},
+    {"config": {}, "id": "8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f", "name": "brightnessmeter", "type": "nodes.brightness_meter:BrightnessMeter"}
+  ]
+}
 ```
 
+`asset` is the stream's UUID and each node's `id` is its own, which the runtime generates when it
+places the node and never reuses; a link end names its node by that UUID. A node may also hold
+`pins`, the values on its unlinked inputs, and `studio`, how Tato Studio draws it. Reading the
+document runs no code, but a load imports each node's module in the project's interpreter to
+describe its ports, so a module's import-time code runs at every load.
+
 The meter reads the effect's output and logs its brightness each second; open that output in
-Tato Studio's viewer to watch it. `add` names each node after its class, lowercased
-(`halftonelenseffect`), unless you pass `name=`. Swap `TestPatternSource` for `tatolab.camera`'s
-`CameraSource`, as the comment says, to run your camera through the same effect. A node's `config`
-class — `TestPatternSourceConfig`, `OpusEncoderConfig` — is typed, so a type checker catches a
-misspelled key.
+Tato Studio's viewer to watch it. Swap `tatolab.testpattern:TestPatternSource` for
+`tatolab.camera:CameraSource` (`uv add tatolab-camera` in the project), which publishes on the same `video`
+port, to run your camera through the same effect.
 
 To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes
-(`pip install tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
+(`uv add tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
 declares a track of it, and a `MoqTrackSend` writes a port's messages to that track. Another
 stream, on this machine or another, reads the track through a `MoqTrackReceive` node naming a
 gateway on the same relay; a link's two ends are always in one stream.
 
-Pixels stay on the GPU. `nodes/halftone_lens_effect.py` is one shader function, with a lens that
-drifts around the frame and turns what it covers into dots:
+Pixels stay on the GPU. `nodes/halftone_lens_effect.py` is one Slang compute kernel, with a lens
+that drifts around the frame and turns what it covers into dots:
 
 ```python
+import struct
+
 from tatolab.stream import (
-    GlslPixelEffect,
     Image,
+    ImageFrameToWrite,
     Input,
+    NodeOutputTextureRing,
     Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     node,
 )
 
-# The whole effect: the output pixel for the source pixel at `at`, with each
-# channel in 0.0-1.0. A lens drifts around the frame and turns what it covers
-# into dots. `dials` are the values `process()` hands it each frame. Edit it
-# while `tatolab dev` runs to see the change.
-HALFTONE_LENS_GLSL = """
-// How big the drifting lens is, as a share of the frame's height.
-const float LENS_RADIUS = 0.3;
-// How many pixels apart the dots sit under the lens.
-const float DOT_CELL_SIZE = 8.0;
-// How far the gaps between the dots fade toward grey.
-const float GAP_FADE = 0.35;
+# The whole effect, as a Slang compute kernel: one invocation per output pixel.
+# A lens drifts around the frame and turns what it covers into dots. `dials`
+# are the values `process()` pushes each frame. Edit it while `tatolab dev`
+# runs to see the change.
+HALFTONE_LENS_SLANG = """
+[[vk::binding(0, 0)]] Sampler2D source_frame;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> halftone_frame;
 
-vec4 effect(vec4 source, ivec2 at) {
-    vec2 pixel = vec2(at) + 0.5;
-    vec2 lens_centre = dials.frame_size * vec2(
+struct HalftoneLensDials {
+    float2 frame_size;
+    float seconds;
+};
+[[vk::push_constant]] ConstantBuffer<HalftoneLensDials> dials;
+
+// How big the drifting lens is, as a share of the frame's height.
+static const float LENS_RADIUS = 0.3;
+// How many pixels apart the dots sit under the lens.
+static const float DOT_CELL_SIZE = 8.0;
+// How far the gaps between the dots fade toward grey.
+static const float GAP_FADE = 0.35;
+
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    if (any(float2(invocation.xy) >= dials.frame_size)) {
+        return;
+    }
+    float4 source = source_frame.Load(int3(invocation.xy, 0));
+    float2 pixel = float2(invocation.xy) + 0.5;
+    float2 lens_centre = dials.frame_size * float2(
         0.5 + 0.3 * sin(dials.seconds * 0.4),
         0.5 + 0.25 * sin(dials.seconds * 0.55)
     );
@@ -266,20 +288,29 @@ vec4 effect(vec4 source, ivec2 at) {
 
     // Each cell keeps a round dot of the picture and fades the gap around it
     // toward grey, so the dots show on every colour, black included.
-    vec2 cell_centre = (floor(pixel / DOT_CELL_SIZE) + 0.5) * DOT_CELL_SIZE;
+    float2 cell_centre = (floor(pixel / DOT_CELL_SIZE) + 0.5) * DOT_CELL_SIZE;
     float dot_radius = DOT_CELL_SIZE * 0.42;
     float in_the_dot = 1.0 - smoothstep(dot_radius - 1.0, dot_radius, length(pixel - cell_centre));
-    vec3 gap = mix(source.rgb, vec3(0.5), GAP_FADE);
-    vec3 dotted = mix(gap, source.rgb, in_the_dot);
+    float3 gap = lerp(source.rgb, float3(0.5), GAP_FADE);
+    float3 dotted = lerp(gap, source.rgb, in_the_dot);
 
-    return vec4(mix(source.rgb, dotted, under_the_lens), source.a);
+    halftone_frame[invocation.xy] = float4(lerp(source.rgb, dotted, under_the_lens), source.a);
 }
 """
+
+# `HalftoneLensDials` as the push constants lay it out: two floats, then one.
+HALFTONE_LENS_DIALS = struct.Struct("<fff")
+
+WORKGROUP_TILE_SIZE_IN_PIXELS = 8
 
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
-@node
+def workgroups_covering(pixels: int) -> int:
+    return (pixels + WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // WORKGROUP_TILE_SIZE_IN_PIXELS
+
+
+@node.process
 class HalftoneLensEffect:
     """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 
@@ -287,10 +318,21 @@ class HalftoneLensEffect:
     video_to_downstream = Output(Image)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.halftone_lens_pixel_effect = GlslPixelEffect.compile(
-            ctx.gpu_full_access,
-            effect_glsl=HALFTONE_LENS_GLSL,
-            dials={"seconds": "float", "frame_size": "vec2"},
+        self.halftone_lens_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=HALFTONE_LENS_SLANG,
+            push_constant_size=HALFTONE_LENS_DIALS.size,
+            bindings={
+                "source_frame": "sampled_texture",
+                "halftone_frame": "storage_image",
+            },
+        )
+        # A frame arrives as a pixel buffer, which a kernel cannot sample, so
+        # each one is copied into a texture first.
+        self.source_frame_textures = NodeOutputTextureRing(
+            "rgba8_unorm", ["texture_binding"], depth=1
+        )
+        self.halftone_frame_textures = NodeOutputTextureRing(
+            "rgba8_unorm", ["storage_binding", "texture_binding"]
         )
         self.first_frame_at_ns: int | None = None
 
@@ -301,16 +343,29 @@ class HalftoneLensEffect:
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if self.first_frame_at_ns is None:
             self.first_frame_at_ns = ctx.time
-        halftone_frame = self.halftone_lens_pixel_effect.apply_to_frame(
-            ctx.gpu_limited_access,
-            frame,
-            dials={
-                "seconds": (ctx.time - self.first_frame_at_ns) / NANOSECONDS_PER_SECOND,
-                "frame_size": (frame.width, frame.height),
-            },
+        seconds = (ctx.time - self.first_frame_at_ns) / NANOSECONDS_PER_SECOND
+
+        gpu = ctx.gpu_limited_access
+        source_frame = self.source_frame_textures.next_texture_for_this_frame(
+            gpu, frame.width, frame.height
+        )
+        gpu.copy_surface_to_surface(frame.surface_id, source_frame)
+        halftone_frame = self.halftone_frame_textures.next_texture_for_this_frame(
+            gpu, frame.width, frame.height
+        )
+        self.halftone_lens_kernel.dispatch(
+            bindings={"source_frame": source_frame, "halftone_frame": halftone_frame},
+            group_count=(
+                workgroups_covering(frame.width),
+                workgroups_covering(frame.height),
+                1,
+            ),
+            push_constants=HALFTONE_LENS_DIALS.pack(frame.width, frame.height, seconds),
         )
         ctx.outputs.write(
-            self.video_to_downstream, halftone_frame, timestamp_ns=frame.timestamp_ns
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(halftone_frame, frame.colour),
+            timestamp_ns=frame.timestamp_ns,
         )
 ```
 
@@ -324,24 +379,27 @@ What a node declares:
   `Channels`, `Packets` or `Records`. The attribute name is the port name, and a read through it
   returns the family's type. Every input names its [delivery](#how-it-works), `newest` or
   `ordered`.
-- **When it runs**, with `@node(execution=…)`: `reactive` (the default once it has an input),
+- **When it runs**, with `@node.process(execution=…)`: `reactive` (the default once it has an input),
   `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source has nothing
   to react to, so it must name one. `scheduling` asks for `realtime`, `high` or `normal` priority.
 - **Its configuration**, as the annotation on `__init__`'s `config` parameter — a `TypedDict`, a
-  dataclass or a pydantic model — passed as `stream_builder.add(MyNode, config={...})`.
+  dataclass or a pydantic model — that the node's `config` in the graph document fills.
 
-A node class lives in a module of its own, never in `stream.py`: its process imports the class by
-name, and `stream.py` is not importable under that name. `add` refuses such a class with a message
-naming the fix.
+A node class lives in a module of its own, which the graph document names as `module:ClassName`:
+its process imports the class by that name.
 
-A file may define several streams, and a load of the project loads every `@stream` function
-`stream.py` defines. `--dir DIR` names another project directory than the working one. A stream
-shows under its function's name until `tatolab rename` gives it another display name, which a
-load of the project keeps.
-A stream is keyed and addressed by its **stream id**, `<folder>-<function>-<hash>`, which the
-runtime computes from where its code lives: the project directory, resolved, and the stream
-function as `module:function`. Two checkouts of one project get two ids, and running a project
-again replaces its stream under the same id.
+A project may hold several graph documents, and a load of the project loads each one as its own
+stream; a document that is gone unloads and forgets its stream. `--dir DIR` names another project
+directory than the working one. A stream first loaded by `run` or `dev` shows under its document's
+name, and the one `tatolab new` creates under the project folder's name, until `tatolab rename`
+gives it another display name, which a load of the project keeps. A stream is keyed and addressed
+by its **stream id**, `<project name>-<stream name>-<hash>`, the hash over the project's UUID in
+`tatolab-project.json` and the stream asset's UUID in its document. Once recorded, a stream keeps
+its id when the project moves or its document is renamed, since the runtime finds its record by
+those two UUIDs; a document first loaded after a rename takes its id from the new name. Running a
+project again replaces its stream under the same id. A
+second copy of a project, the same project UUID in another directory, is refused while the first
+holds the stream.
 
 ## The `tatolab` CLI
 
@@ -370,27 +428,30 @@ tatolab enable-virtual-camera [--print]
 - **`new`** has the runtime create a project in `DIRECTORY`, resolved against the working
   directory, or with none in a folder `<adjective>-<noun>` it draws under `~/streams`, and
   prints `<action> queued: create of <project>` and `follow it: tatolab logs -f --dir
-  <project>`, then returns 0 at once. The action writes `stream.py`, `nodes/`,
-  `pyproject.toml`, `.python-version` (3.12) and `.gitignore`, then loads the project as `run`
-  does, showing its stream under the folder's name. A directory already holding one of those
-  files fails the action with nothing written.
+  <project>`, then returns 0 at once. The action writes `tatolab-project.json`,
+  `streams/main.graph.json`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
+  `.gitignore`, makes the project's first commit, then loads the project as `run` does, showing
+  its stream under the folder's name. A directory already holding one of those files fails the
+  action with nothing written.
 - **`run`** queues a load of the project on the project's queue and prints
   `<action> queued: load of <project>` and how to follow it, then returns 0 at once. The runtime
-  syncs the project's `.venv`, compiles every `@stream` function of `stream.py` in it, and loads
-  and records each one; `tatolab logs --action <action>` and `tatolab streams` show how it went.
-  A stream whose code fails is not refused: the runtime records it failed, with its traceback in
+  syncs the project's `.venv`, reads every graph document in the project, and loads and
+  records each one; `tatolab logs --action <action>` and `tatolab streams` show how it went. A
+  stream whose document does not load is not refused: the runtime records it failed, with why in
   the project's log. `run` exits 1 only when the load is not queued: the runtime refuses it or
   cannot be reached, or `--dir` names no directory. The runtime
   loads each stream again at each of its own starts until `stop` or `rm`, and loading the same
   project again replaces its streams under the same ids — failed ones included.
 - **`dev`** is `run`, then the project's log followed from where it ended, with another load
-  queued on every saved edit to a `.py` file or `pyproject.toml` in the project; the runtime
-  replaces the running streams, and an edit whose code fails unloads its stream and records it
-  failed, its traceback printed from the log, until the next save. Ctrl-C ends `dev` and leaves
+  queued on every saved edit to a `.py` file, a `.graph.json` document, `pyproject.toml` or
+  `tatolab-project.json` in the project; the runtime replaces the running streams, and an edit
+  that fails unloads its stream and records it failed, why printed from the log, until the next
+  save; an edit that leaves `tatolab-project.json` missing or unreadable fails the load and leaves
+  the running streams as they were. Ctrl-C ends `dev` and leaves
   the streams running. When the runtime goes away, `dev` says so, waits for it to answer again,
   and follows the project's log on from where it read up to.
 - **`streams`** lists the streams the runtime holds: each one's id and display name, whether it is
-  running, stopped or failed, its node count, its project and its stream function, and why each
+  running, stopped or failed, its node count, its project and its stream asset, and why each
   failed one failed. A
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
@@ -407,8 +468,8 @@ tatolab enable-virtual-camera [--print]
   `preparing` until it has run, and a runtime that crashes first finishes it at its next start.
 - **`cancel`** takes back the action whose id `run`, `dev`, `stop`, `start` or `rm` printed. A
   queued action is dropped, its streams' records left as they were, and `cancel` prints
-  `<action> cancelled`. A running load or start stops at the step it is on: its uv sync or
-  compile is killed and a half-made `.venv` removed, a stream it was loading is recorded failed,
+  `<action> cancelled`. A running load or start stops at the step it is on: its uv sync is
+  killed and a half-made `.venv` removed, a stream it was loading is recorded failed,
   and the streams it had not reached stay as they were; `cancel` prints `<action> cancelling`.
   A running stop or `rm` has begun unloading and cannot be cut short, so `cancel` is refused and
   the action ends done.
@@ -418,14 +479,14 @@ tatolab enable-virtual-camera [--print]
 - **`clock`** runs a started stream's scaled clock at another `--scale`, live: stream time carries
   on from where it stands, and every node's time, write stamps and continuous pace follow it. A
   stream on the real or a stepped clock is refused, as is a scale above 1. The stream's next load
-  runs the clock its stream function names.
+  runs the clock its graph document names.
 - **`graph`** prints every loaded stream's nodes, ports and links as JSON, with each
   node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
   one stream's graph alone, in the shape a load takes. The machine's name is its hostname, less a
   trailing mDNS `.local`, cast to lowercase URL-safe.
 - **`logs`** reads a project's log — `--dir`'s, or the working directory's — through the runtime,
   oldest record first, rendered the way the runtime prints them: every record its streams, their
-  venv step and their compile wrote, kept in `<project>/.streamlib/logs/project.jsonl` across
+  venv step and their load wrote, kept in `<project>/.streamlib/logs/project.jsonl` across
   restarts. `--stream` narrows it to one stream, by its id or a display name only it holds, and a
   removed stream's id still reads its records; `--action` narrows it to one stream action.
   `--follow` keeps reading as records land until Ctrl-C, which leaves every stream running, and
@@ -490,7 +551,8 @@ and the folder of its own log — to observe; `add_node`, `connect`, `disconnect
 `remove_node` to change a running graph; `run_project`, which queues a run of a project and
 answers at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
-same way, and `list_project_streams`; `stop_stream`, `start_stream`, `remove_project`,
+same way, and `list_assets`, `describe_asset`, `import_asset`, `move_asset`, `rename_asset` and
+`delete_asset` over the project's assets; `stop_stream`, `start_stream`, `remove_project`,
 `rename_stream`, `set_stream_clock_scale` and `list_streams` to manage the streams the runtime
 holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
 machine, naming the node by the `id` `graph` lists. Every tool
@@ -498,7 +560,7 @@ about one stream names it with `stream`, and `connect` links two ports of that o
 them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as
 resources, and four prompts whose every step is a tool call. An agent can write a
-node class into a module beside `stream.py`, or `uv add` a package that ships one, then add it by
+node class into a module of the project, or `uv add` a package that ships one, then add it by
 its `module:ClassName` path and connect it into the running stream. The runtime never imports it:
 the class runs in its own process, started from the stream's venv, like every other Python node.
 
@@ -518,14 +580,13 @@ open its local socket — only processes running as your user — can observe an
 machine's lock, so a second `tatolabd` is refused naming the first one's user, pid and executable,
 and serves its local socket at a fixed path. It keeps its state in
 `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
-Support/Tatolab/` on macOS: a record of each stream it runs — its graph, project, interpreter,
-and whether it is stopped — and its own log. At each start it loads every
+Support/Tatolab/` on macOS: a record of each stream it runs — its project and stream asset,
+interpreter, and whether it is stopped — and its own log. At each start it loads every
 recorded stream that is neither stopped nor failed.
 
-`tatolab run` queues a load of a project. The runtime syncs the project's `.venv`, then runs
-`tatolab.stream`'s compile entry in its interpreter, which imports `stream.py`, calls each
-`@stream` function and hands back the graphs they built; the CLI compiles nothing. The runtime
-loads each graph, starts it and records it, writing every step to the project's log;
+`tatolab run` queues a load of a project. The runtime syncs the project's `.venv`, reads
+`tatolab-project.json` and each graph document in the project, then loads each graph, starts it
+and records it, writing every step to the project's log;
 `tatolab run` returns as soon as the load is queued.
 
 `tatolabd` is native: the engine, the built-in nodes, and the local socket the CLI and MCP hosts
@@ -551,7 +612,7 @@ No mode runs a Python node inside the runtime's process: not a default, not a fa
 something that kicks in under load.
 
 **It costs you** a process boundary on every link crossing into Python, and one authoring rule: a
-node's class lives in an importable module rather than in `stream.py`.
+node's class lives in an importable module of its own.
 
 </details>
 
@@ -658,8 +719,8 @@ Every GPU operation in the runtime goes through Vulkan. CUDA appears only at the
 a frame hands to torch. On Linux, `libcuda` and the Vulkan loader are opened at run time, never
 linked, so one build runs on any system that has them; the runtime also carries its
 own Vulkan loader and Mesa's lavapipe, a CPU Vulkan driver, for a machine with no GPU driver. On
-macOS the runtime carries its own Vulkan loader and MoltenVK and links only the system. It also carries its own GLSL compiler,
-so writing a pixel effect or a kernel needs no shader toolchain.
+macOS the runtime carries its own Vulkan loader and MoltenVK and links only the system. It also carries the Slang shader
+compiler, so writing a pixel effect or a kernel needs no shader toolchain.
 
 **It costs you** any CUDA-specific fast path inside the runtime, permanently — a vendor trick that
 would help is expressed through Vulkan interop or not at all. And portability in the design is not
@@ -692,7 +753,7 @@ the helper owns on Linux, VideoToolbox on macOS. A scaffolded project depends on
 Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
 libopus linked statically into the wheel.
 
-From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
+From Python you also get compute, graphics and ray-tracing kernels written in Slang, a
 model-input tensor kernel, and the stream clock every node reads as `ctx.time`.
 
 **Platforms.** Two floors, the same API on both:
@@ -723,14 +784,11 @@ Not built yet: the macOS app and Windows.
   `cargo xtask build-runtime`.
 - **``… cannot import `tatolab.stream`: add `tatolab-stream` to the project's dependencies``** —
   the project does not depend on `tatolab-stream` yet: `uv add tatolab-stream`.
-- **A node defined in `stream.py` is refused** — move the class into a module beside `stream.py` and
-  import it from there.
 - **``the stream `<id>` failed: <traceback>``** in the project's log, shown by `dev` and
-  `tatolab logs` — the stream's code raised, or its load was refused; the runtime lists it
-  `failed` with that reason. Fix the code and run or save again; `tatolab start <id>` retries it.
-  A `stream.py` that does not import, or imports and defines no `@stream`, fails every stream of
-  the project, or with none lists the project as `<folder>-<hash>` with the traceback or the
-  missing `@stream` and a sample of one; the next run that defines a stream replaces it.
+  `tatolab logs` — the stream's graph document does not load, a node raised, or its load was
+  refused; the runtime lists it `failed` with that reason. Fix it and run or save again;
+  `tatolab start <id>` retries it. A folder with no `tatolab-project.json` is no project: its
+  load fails saying so.
 - **`tatolab dev: <refusal>; save again to queue another load`** — the runtime refused to queue
   the load at all; its refusal names why.
 - **`No usable Vulkan driver (ICD) was found` or `No Vulkan loader library could be opened`**

@@ -3,7 +3,7 @@
 
 //! The native half of `tatolab-camera`, imported as `tatolab.camera._native`.
 //!
-//! The engine never calls anything here: the wheel's `@node` hands this module
+//! The engine never calls anything here: the wheel's `@node.process` hands this module
 //! its module host table, and a thread here captures, converts and publishes
 //! every frame through it with no Python attached.
 

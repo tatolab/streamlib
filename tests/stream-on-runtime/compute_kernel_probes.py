@@ -47,19 +47,21 @@ DISCARDED_SOURCE_RGBA = (200, 210, 220, 255)
 # One row of RGBA32F entries — the LUT shape the owner ruling named.
 LUT_WIDTH = 256
 
-READ_ONE_WRITE_ANOTHER_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0) uniform sampler2D source_image;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D output_image;
-layout(push_constant) uniform PushConstants { float bias; } pc;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(output_image);
-    if (at.x >= extent.x || at.y >= extent.y) { return; }
-    vec2 uv = (vec2(at) + 0.5) / vec2(extent);
-    vec4 source = texture(source_image, uv);
-    imageStore(output_image, at, vec4(1.0 - source.rgb + pc.bias, source.a));
+READ_ONE_WRITE_ANOTHER_SLANG = """\
+[[vk::binding(0, 0)]] Sampler2D source_image;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> output_image;
+struct PushConstants { float bias; };
+[[vk::push_constant]] ConstantBuffer<PushConstants> pc;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    int2 at = int2(invocation.xy);
+    uint width;
+    uint height;
+    output_image.GetDimensions(width, height);
+    if (at.x >= int(width) || at.y >= int(height)) { return; }
+    float2 uv = (float2(at) + 0.5) / float2(width, height);
+    float4 source = source_image.SampleLevel(uv, 0.0);
+    output_image[at] = float4(1.0 - source.rgb + pc.bias, source.a);
 }
 """
 
@@ -106,7 +108,7 @@ class _ComputeKernelProbeBase:
             self.gpu_full_access = gpu
             self.gpu_limited_access = ctx.gpu_limited_access
             kernel = gpu.create_compute_kernel(
-                source=READ_ONE_WRITE_ANOTHER_GLSL,
+                source=READ_ONE_WRITE_ANOTHER_SLANG,
                 push_constant_size=4,
                 # The declaration asserts what the shader must reflect; a
                 # disagreement refuses at construction.
@@ -134,7 +136,7 @@ class _ComputeKernelProbeBase:
         raise NotImplementedError
 
 
-@node(
+@node.process(
     execution="manual",
     description="Reads one surface and writes another through a compute kernel",
 )
@@ -156,7 +158,7 @@ class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting the bindings wrong, refused by name",
 )
@@ -170,7 +172,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
 
         wrong_declaration = _refusal_of(
             lambda: self.gpu_full_access.create_compute_kernel(
-                source=READ_ONE_WRITE_ANOTHER_GLSL,
+                source=READ_ONE_WRITE_ANOTHER_SLANG,
                 push_constant_size=4,
                 bindings={"sharpen_amount": "storage_buffer"},
             )
@@ -218,7 +220,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A texture's pixels reach the CPU through the staged door",
 )
@@ -264,7 +266,7 @@ class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A raise inside the CPU door over a texture propagates",
 )
@@ -299,7 +301,7 @@ class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="An acquired texture takes a write-back without spelling copy usage",
 )
@@ -345,27 +347,23 @@ class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
         }
 
 
-BRIGHTEN_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0) uniform sampler2D unbrightened_image;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D brightened_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    vec4 source = texelFetch(unbrightened_image, at, 0);
-    imageStore(brightened_image, at, vec4(source.rgb + 40.0 / 255.0, source.a));
+BRIGHTEN_SLANG = """\
+[[vk::binding(0, 0)]] Sampler2D unbrightened_image;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> brightened_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    float4 source = unbrightened_image.Load(int3(invocation.xy, 0));
+    brightened_image[invocation.xy] = float4(source.rgb + 40.0 / 255.0, source.a);
 }
 """
 
-DOUBLE_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0) uniform sampler2D brightened_image;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D doubled_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    vec4 source = texelFetch(brightened_image, at, 0);
-    imageStore(doubled_image, at, vec4(source.rgb * 2.0, source.a));
+DOUBLE_SLANG = """\
+[[vk::binding(0, 0)]] Sampler2D brightened_image;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> doubled_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    float4 source = brightened_image.Load(int3(invocation.xy, 0));
+    doubled_image[invocation.xy] = float4(source.rgb * 2.0, source.a);
 }
 """
 
@@ -393,8 +391,8 @@ class _TwoPassProbeBase:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             self.gpu_full_access = gpu
-            self.brighten = gpu.create_compute_kernel(source=BRIGHTEN_GLSL)
-            self.double = gpu.create_compute_kernel(source=DOUBLE_GLSL)
+            self.brighten = gpu.create_compute_kernel(source=BRIGHTEN_SLANG)
+            self.double = gpu.create_compute_kernel(source=DOUBLE_SLANG)
             usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
             self.source = gpu.acquire_texture(
                 SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
@@ -435,7 +433,7 @@ class _TwoPassProbeBase:
         raise NotImplementedError
 
 
-@node(
+@node.process(
     execution="manual",
     description="A two-pass filter dispatched as one batch",
 )
@@ -467,7 +465,7 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A raise inside a batch scope submits nothing and propagates",
 )
@@ -499,7 +497,7 @@ class BatchExceptionProbe(_TwoPassProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting a batch wrong, refused by name",
 )
@@ -572,12 +570,12 @@ class BatchRefusalProbe(_TwoPassProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting the kernel's source wrong, refused by name",
 )
 class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
-    """GLSL source and pre-compiled SPIR-V are alternatives, and a shader that
+    """Slang source and pre-compiled SPIR-V are alternatives, and a shader that
     does not compile says so with the compiler's own diagnostic."""
 
     def observe(self, kernel, source, output) -> dict:
@@ -587,20 +585,25 @@ class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
             "neither": _refusal_of(lambda: gpu.create_compute_kernel()),
             "both": _refusal_of(
                 lambda: gpu.create_compute_kernel(
-                    source=READ_ONE_WRITE_ANOTHER_GLSL,
+                    source=READ_ONE_WRITE_ANOTHER_SLANG,
                     spirv=b"\x03\x02\x23\x07",
                 )
             ),
             "does_not_compile": _refusal_of(
                 lambda: gpu.create_compute_kernel(
-                    source="#version 450\nvoid main() { no_such_function(); }\n",
+                    source="[numthreads(1, 1, 1)]\nvoid main() { no_such_function(); }\n",
                 )
             ),
-            "non_main_entry_point": _refusal_of(
+            "missing_entry_point": _refusal_of(
                 lambda: gpu.create_compute_kernel(
-                    source=READ_ONE_WRITE_ANOTHER_GLSL,
+                    source=READ_ONE_WRITE_ANOTHER_SLANG,
                     push_constant_size=4,
                     entry_point="sharpen",
+                )
+            ),
+            "glsl_source": _refusal_of(
+                lambda: gpu.create_compute_kernel(
+                    source="#version 450\nlayout(local_size_x = 1) in;\nvoid main() {}\n",
                 )
             ),
         }

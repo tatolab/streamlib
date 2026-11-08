@@ -300,7 +300,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
 }
 
 /// Every port, input or output, needs a name of its own once cast — the rule
-/// `@node` holds a Python class to.
+/// `@node.process` holds a Python class to.
 fn refuse_ports_that_cast_alike<'port>(
     ports: impl IntoIterator<Item = &'port ParsedPort>,
 ) -> syn::Result<()> {

@@ -18,21 +18,16 @@ use crate::core::RuntimeContext;
 use crate::core::child_process_restart_backoff::{
     CHILD_PROCESS_RUN_THAT_RESETS_THE_RESTART_BACKOFF, ChildProcessRestartBackoff,
 };
-use crate::core::context::{
-    IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClock,
-    StreamClockSpec,
+use crate::core::context::StreamClock;
+use crate::core::context::{IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::execution::processor_scheduling_loop::{
+    ProcessorSchedulingCallback, ProcessorSchedulingLoopControl, ProcessorSchedulingLoopHost,
+    run_continuous_scheduling_loop_on_its_stream_clock,
+    run_continuous_scheduling_loop_on_real_time, run_reactive_scheduling_loop,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId, StepProgressOfOneNode};
-use crate::core::media_clock::MediaClock;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
-/// Duration to sleep when paused (avoids busy-waiting).
-const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
-
-/// Sleep cadence for the no-fd-waiter fallback paths (a platform with neither
-/// epoll nor kqueue, or the rare case where waiter setup fails). Reactive mode
-/// with a working waiter blocks in its wait up to its bound and never sleeps.
-const NO_WAITER_FALLBACK_SLEEP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Run the processor thread main loop based on execution mode.
 #[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_wake_fd, state, pause_gate, step_progress, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
@@ -56,23 +51,29 @@ pub fn run_processor_loop(
 
     match exec_config.execution {
         ProcessExecution::Continuous { interval_ms } => {
-            let continuous_runner = ContinuousRunnerOfOneProcessor {
-                id: &id,
-                processor: &processor,
-                shutdown_rx: &shutdown_rx,
-                pause_gate: &pause_gate,
-                interval_ms,
-                runtime_ctx: &runtime_ctx,
-            };
+            let mut host = scheduling_loop_host_on_this_thread(
+                &id,
+                &processor,
+                &shutdown_rx,
+                #[cfg(unix)]
+                None,
+                &pause_gate,
+                &runtime_ctx,
+                &step_progress,
+            );
             if step_progress.stands_outside_the_step_barrier() {
-                run_continuous_mode_on_real_time(&continuous_runner);
+                run_continuous_scheduling_loop_on_real_time(&mut host, interval_ms);
             } else {
-                run_continuous_mode_on_its_stream_clock(&continuous_runner, &step_progress);
+                run_continuous_scheduling_loop_on_its_stream_clock(
+                    &mut host,
+                    &*runtime_ctx.stream_clock,
+                    interval_ms,
+                );
             }
             tracing::info!("[{}] Received shutdown signal", id);
         }
         ProcessExecution::Reactive => {
-            run_reactive_mode(
+            let mut host = scheduling_loop_host_on_this_thread(
                 &id,
                 &processor,
                 &shutdown_rx,
@@ -82,6 +83,7 @@ pub fn run_processor_loop(
                 &runtime_ctx,
                 &step_progress,
             );
+            run_reactive_scheduling_loop(id.as_str(), &mut host);
         }
         ProcessExecution::Manual => {
             run_manual_mode(
@@ -124,893 +126,152 @@ pub fn run_processor_loop(
     tracing::info!("[{}] Thread stopped", id);
 }
 
-/// Why a continuous runner left the way it was running.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ContinuousRunnerLeftItsMode {
-    ShutdownRequested,
-    /// The stream clock moved behind the step barrier or out of it.
-    TheClockChangedHowItAdvances,
+/// A processor thread's [`ProcessorSchedulingLoopHost`]: the processor
+/// instance, the shutdown channel and its wake fd, the pause gate, and the
+/// stream clock and step ledger entry its callbacks are counted on.
+struct ProcessorSchedulingLoopHostOnAnEngineThread<'a, CallProcessor> {
+    processor: &'a Arc<Mutex<ProcessorInstance>>,
+    shutdown_rx: &'a crossbeam_channel::Receiver<()>,
+    /// Owned for as long as the loop runs, which registers it by its raw fd.
+    #[cfg(unix)]
+    shutdown_wake_fd: Option<OwnedFd>,
+    pause_gate: &'a AtomicBool,
+    stream_clock: &'a StreamClock,
+    step_progress: &'a StepProgressOfOneNode,
+    /// Makes one callback on the processor; told whether to count it on the
+    /// step ledger.
+    call_processor: CallProcessor,
 }
 
-/// One continuous processor and what its runner reads: its callbacks, its
-/// shutdown and pause signals, its interval and its stream's context.
-#[derive(Clone, Copy)]
-struct ContinuousRunnerOfOneProcessor<'a> {
+impl<CallProcessor> ProcessorSchedulingLoopHost
+    for ProcessorSchedulingLoopHostOnAnEngineThread<'_, CallProcessor>
+where
+    CallProcessor: FnMut(ProcessorSchedulingCallback, bool),
+{
+    fn call_processor(
+        &mut self,
+        callback: ProcessorSchedulingCallback,
+        counted_on_the_step_ledger: bool,
+    ) {
+        (self.call_processor)(callback, counted_on_the_step_ledger);
+    }
+
+    fn note_step_finished(&mut self, step_index: u64) {
+        self.step_progress.note_step_finished(step_index);
+        self.stream_clock.note_step_progress();
+    }
+
+    fn pause_requested(&self) -> bool {
+        self.pause_gate.load(Ordering::Acquire)
+    }
+
+    fn input_mailboxes(&self) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
+        self.processor.lock().iceoryx2_input_mailboxes_inner()
+    }
+
+    #[cfg(unix)]
+    fn control_arrival_fd(&self) -> Option<std::os::fd::RawFd> {
+        use std::os::fd::AsRawFd;
+        self.shutdown_wake_fd.as_ref().map(AsRawFd::as_raw_fd)
+    }
+
+    fn take_arrived_control(&mut self) -> ProcessorSchedulingLoopControl {
+        if self.shutdown_rx.try_recv().is_ok() {
+            ProcessorSchedulingLoopControl::Stop
+        } else {
+            ProcessorSchedulingLoopControl::KeepRunning
+        }
+    }
+
+    /// Only a shutdown makes the wake fd readable, and it stays readable.
+    fn take_the_control_its_fd_announced(&mut self) -> ProcessorSchedulingLoopControl {
+        ProcessorSchedulingLoopControl::Stop
+    }
+
+    fn after_a_signal_interrupted_a_wait(&mut self) -> ProcessorSchedulingLoopControl {
+        ProcessorSchedulingLoopControl::KeepRunning
+    }
+
+    fn wait_on_the_machine_clock_or_a_control(
+        &mut self,
+        machine_wait: Duration,
+    ) -> ProcessorSchedulingLoopControl {
+        match self.shutdown_rx.recv_timeout(machine_wait) {
+            Ok(()) => ProcessorSchedulingLoopControl::Stop,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                ProcessorSchedulingLoopControl::KeepRunning
+            }
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                let _ = crossbeam_channel::after(machine_wait).recv();
+                ProcessorSchedulingLoopControl::KeepRunning
+            }
+        }
+    }
+
+    fn wait_for_a_step_opened_after(
+        &mut self,
+        after: Option<u64>,
+        longest_wait: Duration,
+    ) -> Option<u64> {
+        self.stream_clock
+            .wait_for_a_step_opened_after(after, longest_wait)
+    }
+}
+
+/// Make `callback` on `processor`, counted in flight on `step_progress` when
+/// `counted_on_the_step_ledger` and its stream clock is not real time.
+fn dispatch_processor_scheduling_callback(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    runtime_ctx: &RuntimeContext,
+    step_progress: &StepProgressOfOneNode,
+    callback: ProcessorSchedulingCallback,
+    counted_on_the_step_ledger: bool,
+) {
+    let counted = counted_on_the_step_ledger && !runtime_ctx.stream_clock.spec().is_real();
+    {
+        let _callback_in_flight = counted.then(|| step_progress.callback_in_flight());
+        match callback {
+            ProcessorSchedulingCallback::OnPause => dispatch_on_pause(id, processor, runtime_ctx),
+            ProcessorSchedulingCallback::OnResume => dispatch_on_resume(id, processor, runtime_ctx),
+            ProcessorSchedulingCallback::Process => dispatch_process(id, processor, runtime_ctx),
+        }
+    }
+    if counted {
+        runtime_ctx.stream_clock.note_step_progress();
+    }
+}
+
+/// The scheduling-loop host of the processor a thread runs.
+#[allow(clippy::too_many_arguments)]
+fn scheduling_loop_host_on_this_thread<'a>(
     id: &'a ProcessorUniqueId,
     processor: &'a Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &'a crossbeam_channel::Receiver<()>,
-    pause_gate: &'a Arc<AtomicBool>,
-    interval_ms: u32,
-    runtime_ctx: &'a RuntimeContext,
-}
-
-/// A continuous processor paced by real time: on the interval grid of the
-/// machine clock, whatever clock its stream runs, until a shutdown.
-fn run_continuous_mode_on_real_time(continuous_runner: &ContinuousRunnerOfOneProcessor<'_>) {
-    let machine_clock = StreamClock::starting_now(StreamClockSpec::Real);
-    let mut was_paused = false;
-    let why_the_runner_left =
-        run_continuous_mode(continuous_runner, &machine_clock, &mut was_paused, || false);
-    debug_assert_eq!(
-        why_the_runner_left,
-        ContinuousRunnerLeftItsMode::ShutdownRequested
-    );
-}
-
-/// A continuous processor on its stream's clock: in steps while the clock
-/// runs behind the step barrier, on the interval grid of stream time while it
-/// runs free, switching whenever the clock does; until a shutdown.
-fn run_continuous_mode_on_its_stream_clock(
-    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
-    step_progress: &StepProgressOfOneNode,
-) {
-    let stream_clock = &continuous_runner.runtime_ctx.stream_clock;
-    let mut was_paused = false;
-    let mut last_step_handled: Option<u64> = None;
-    loop {
-        let why_the_runner_left_its_mode = if stream_clock.runs_behind_the_step_barrier() {
-            run_continuous_mode_on_steps(
-                continuous_runner,
-                step_progress,
-                &mut was_paused,
-                &mut last_step_handled,
-            )
-        } else {
-            run_continuous_mode(continuous_runner, stream_clock, &mut was_paused, || {
-                stream_clock.runs_behind_the_step_barrier()
-            })
-        };
-        if why_the_runner_left_its_mode == ContinuousRunnerLeftItsMode::ShutdownRequested {
-            return;
-        }
-    }
-}
-
-/// A continuous processor on the interval grid of `clock_it_paces_on`, until
-/// a shutdown or `leaves_when` holds.
-fn run_continuous_mode(
-    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
-    clock_it_paces_on: &StreamClock,
-    was_paused: &mut bool,
-    leaves_when: impl Fn() -> bool,
-) -> ContinuousRunnerLeftItsMode {
-    let ContinuousRunnerOfOneProcessor {
-        id,
-        processor,
-        shutdown_rx,
-        pause_gate,
-        interval_ms,
-        runtime_ctx,
-    } = *continuous_runner;
-    let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
-    let mut next_deadline_ns = clock_it_paces_on.now_ns();
-
-    loop {
-        match wait_for_stream_time_or_shutdown(
-            clock_it_paces_on,
-            next_deadline_ns,
-            shutdown_rx,
-            &leaves_when,
-        ) {
-            ContinuousRunnerWaitOutcome::ShutdownRequested => {
-                return ContinuousRunnerLeftItsMode::ShutdownRequested;
-            }
-            ContinuousRunnerWaitOutcome::StoppedWaitingEarly => {
-                return ContinuousRunnerLeftItsMode::TheClockChangedHowItAdvances;
-            }
-            ContinuousRunnerWaitOutcome::DeadlineReached => {}
-        }
-
-        let is_paused = pause_gate.load(Ordering::Acquire);
-
-        if is_paused && !*was_paused {
-            dispatch_on_pause(id, processor, runtime_ctx);
-            *was_paused = true;
-        } else if !is_paused && *was_paused {
-            dispatch_on_resume(id, processor, runtime_ctx);
-            *was_paused = false;
-        }
-
-        if is_paused {
-            if wait_on_the_machine_clock_or_shutdown(PAUSE_CHECK_INTERVAL, shutdown_rx)
-                == ContinuousRunnerWaitOutcome::ShutdownRequested
-            {
-                return ContinuousRunnerLeftItsMode::ShutdownRequested;
-            }
-            if leaves_when() {
-                return ContinuousRunnerLeftItsMode::TheClockChangedHowItAdvances;
-            }
-            next_deadline_ns = clock_it_paces_on.now_ns();
-            continue;
-        }
-
-        dispatch_process(id, processor, runtime_ctx);
-
-        next_deadline_ns = next_continuous_deadline_stream_ns(
-            next_deadline_ns,
-            interval_stream_ns,
-            clock_it_paces_on.now_ns(),
-        );
-    }
-}
-
-/// A continuous processor on a clock behind the step barrier: once in each
-/// step whose time reached its next deadline, and every step it sees open
-/// marked finished, whether or not it ran; until a shutdown or the clock runs
-/// free of the barrier.
-fn run_continuous_mode_on_steps(
-    continuous_runner: &ContinuousRunnerOfOneProcessor<'_>,
-    step_progress: &StepProgressOfOneNode,
-    was_paused: &mut bool,
-    last_step_handled: &mut Option<u64>,
-) -> ContinuousRunnerLeftItsMode {
-    let ContinuousRunnerOfOneProcessor {
-        id,
-        processor,
-        shutdown_rx,
-        pause_gate,
-        interval_ms,
-        runtime_ctx,
-    } = *continuous_runner;
-    let stream_clock = &runtime_ctx.stream_clock;
-    let interval_stream_ns = continuous_interval_stream_ns(interval_ms);
-    let mut next_deadline_stream_ns: Option<i64> = None;
-
-    loop {
-        if shutdown_rx.try_recv().is_ok() {
-            return ContinuousRunnerLeftItsMode::ShutdownRequested;
-        }
-        let Some(step_index) = stream_clock.wait_for_a_step_opened_after(
-            *last_step_handled,
-            CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK,
-        ) else {
-            if !stream_clock.runs_behind_the_step_barrier() {
-                return ContinuousRunnerLeftItsMode::TheClockChangedHowItAdvances;
-            }
-            continue;
-        };
-
-        let is_paused = pause_gate.load(Ordering::Acquire);
-        if is_paused != *was_paused {
-            let _callback_in_flight = step_progress.callback_in_flight();
-            if is_paused {
-                dispatch_on_pause(id, processor, runtime_ctx);
-            } else {
-                dispatch_on_resume(id, processor, runtime_ctx);
-            }
-            *was_paused = is_paused;
-        }
-
-        let step_stream_ns = stream_clock.now_ns();
-        let deadline_stream_ns = *next_deadline_stream_ns.get_or_insert(step_stream_ns);
-        if !is_paused && deadline_stream_ns <= step_stream_ns {
-            dispatch_process_on_the_step_ledger(id, processor, runtime_ctx, step_progress);
-            next_deadline_stream_ns = Some(next_continuous_deadline_stream_ns(
-                deadline_stream_ns,
-                interval_stream_ns,
-                step_stream_ns,
-            ));
-        }
-        step_progress.note_step_finished(step_index);
-        stream_clock.note_step_progress();
-        *last_step_handled = Some(step_index);
-    }
-}
-
-/// Stream nanoseconds between a continuous processor's calls; a floor of
-/// 100 µs when its config names no interval.
-fn continuous_interval_stream_ns(interval_ms: u32) -> i64 {
-    if interval_ms > 0 {
-        i64::from(interval_ms) * 1_000_000
-    } else {
-        100_000
-    }
-}
-
-/// The first deadline on the `previous + k·interval` grid after
-/// `stream_now_ns`: a processor that overran fires once, never a backlog.
-fn next_continuous_deadline_stream_ns(
-    previous_deadline_stream_ns: i64,
-    interval_stream_ns: i64,
-    stream_now_ns: i64,
-) -> i64 {
-    let intervals_passed = stream_now_ns
-        .saturating_sub(previous_deadline_stream_ns)
-        .max(0)
-        / interval_stream_ns;
-    previous_deadline_stream_ns.saturating_add(
-        intervals_passed
-            .saturating_add(1)
-            .saturating_mul(interval_stream_ns),
-    )
-}
-
-/// How a continuous runner's wait ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ContinuousRunnerWaitOutcome {
-    /// The wait ran its course.
-    DeadlineReached,
-    ShutdownRequested,
-    /// What the wait was told to stop early for held.
-    StoppedWaitingEarly,
-}
-
-/// Longest single wait before the continuous runner re-reads its stream clock,
-/// so a live rescale reaches a wait already under way.
-const CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK: Duration = Duration::from_millis(100);
-
-/// Wait on the shutdown channel until `stream_clock` reaches
-/// `deadline_stream_ns`, or `stops_waiting_early` holds.
-fn wait_for_stream_time_or_shutdown(
-    stream_clock: &StreamClock,
-    deadline_stream_ns: i64,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-    stops_waiting_early: impl Fn() -> bool,
-) -> ContinuousRunnerWaitOutcome {
-    loop {
-        if shutdown_rx.try_recv().is_ok() {
-            return ContinuousRunnerWaitOutcome::ShutdownRequested;
-        }
-        if stops_waiting_early() {
-            return ContinuousRunnerWaitOutcome::StoppedWaitingEarly;
-        }
-        let machine_now_ns = MediaClock::now().as_nanos() as i64;
-        let machine_ns_to_go = stream_clock
-            .machine_time_ns_reaching(deadline_stream_ns, machine_now_ns)
-            .saturating_sub(machine_now_ns);
-        if machine_ns_to_go <= 0 {
-            return ContinuousRunnerWaitOutcome::DeadlineReached;
-        }
-        let machine_wait_before_recheck = Duration::from_nanos(machine_ns_to_go as u64)
-            .min(CONTINUOUS_RUNNER_STREAM_CLOCK_RECHECK);
-        if wait_on_the_machine_clock_or_shutdown(machine_wait_before_recheck, shutdown_rx)
-            == ContinuousRunnerWaitOutcome::ShutdownRequested
-        {
-            return ContinuousRunnerWaitOutcome::ShutdownRequested;
-        }
-    }
-}
-
-/// Wait `machine_wait` on the machine's monotonic clock, waking early for a
-/// shutdown.
-fn wait_on_the_machine_clock_or_shutdown(
-    machine_wait: Duration,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-) -> ContinuousRunnerWaitOutcome {
-    match shutdown_rx.recv_timeout(machine_wait) {
-        Ok(()) => ContinuousRunnerWaitOutcome::ShutdownRequested,
-        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-            ContinuousRunnerWaitOutcome::DeadlineReached
-        }
-        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-            let _ = crossbeam_channel::after(machine_wait).recv();
-            ContinuousRunnerWaitOutcome::DeadlineReached
-        }
-    }
-}
-
-fn run_reactive_mode(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
     #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
-    pause_gate: &Arc<AtomicBool>,
-    runtime_ctx: &RuntimeContext,
-    step_progress: &StepProgressOfOneNode,
-) {
-    let counts_its_callbacks_on_the_step_ledger = !runtime_ctx.stream_clock.spec().is_real();
-    run_reactive_scheduling_loop(
-        id,
+    pause_gate: &'a AtomicBool,
+    runtime_ctx: &'a RuntimeContext,
+    step_progress: &'a StepProgressOfOneNode,
+) -> ProcessorSchedulingLoopHostOnAnEngineThread<'a, impl FnMut(ProcessorSchedulingCallback, bool)>
+{
+    ProcessorSchedulingLoopHostOnAnEngineThread {
         processor,
         shutdown_rx,
         #[cfg(unix)]
         shutdown_wake_fd,
         pause_gate,
-        |callback| {
-            let _callback_in_flight =
-                counts_its_callbacks_on_the_step_ledger.then(|| step_progress.callback_in_flight());
-            match callback {
-                ReactiveRunnerProcessorCallback::OnPause => {
-                    dispatch_on_pause(id, processor, runtime_ctx)
-                }
-                ReactiveRunnerProcessorCallback::OnResume => {
-                    dispatch_on_resume(id, processor, runtime_ctx)
-                }
-                ReactiveRunnerProcessorCallback::Process => {
-                    dispatch_process(id, processor, runtime_ctx)
-                }
-            }
-            if counts_its_callbacks_on_the_step_ledger {
-                runtime_ctx.stream_clock.note_step_progress();
-            }
+        stream_clock: &runtime_ctx.stream_clock,
+        step_progress,
+        call_processor: move |callback, counted_on_the_step_ledger| {
+            dispatch_processor_scheduling_callback(
+                id,
+                processor,
+                runtime_ctx,
+                step_progress,
+                callback,
+                counted_on_the_step_ledger,
+            )
         },
-    );
-}
-
-/// One of the processor's own callbacks the reactive runner decides to make.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReactiveRunnerProcessorCallback {
-    OnPause,
-    OnResume,
-    Process,
-}
-
-/// The reactive runner's scheduling: when to wait, when to drain the listener,
-/// and when to call the processor, which `call_processor` does.
-fn run_reactive_scheduling_loop(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    shutdown_rx: &crossbeam_channel::Receiver<()>,
-    #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
-    pause_gate: &AtomicBool,
-    mut call_processor: impl FnMut(ReactiveRunnerProcessorCallback),
-) {
-    // Reactive mode waits on two fds through epoll on Linux and kqueue on
-    // macOS: the destination's iceoryx2 Listener fd (any upstream
-    // Notifier::notify() wakes the loop) and the shutdown wake fd (compiler
-    // signals teardown). The wait blocks until one of those fds fires or its
-    // bound elapses — idle CPU is a wake every REACTIVE_WAIT_BOUND and nothing
-    // more.
-    //
-    // Processors with no Rust-side listener fd (subprocess host, audio-only,
-    // etc.) fall through to the channel-poll sleep loop, waking at
-    // NO_WAITER_FALLBACK_SLEEP cadence. Waking is not dispatching: the loop
-    // below gates every `process()` on a read having something to return, so a
-    // processor whose ports are empty — or not wired yet — wakes on that
-    // cadence and goes back to sleep. That is the same rule the helper loop
-    // has always applied to every Python processor.
-    //
-    // The listener is followed on every pass, not registered once before the
-    // loop: a processor added to a running graph gets its first inbound link
-    // — and with it the listener — only when a later connect wires it, and a
-    // destination whose last link went away gets a new listener with the next.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut shutdown_wake_fd = shutdown_wake_fd;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut waiter: Option<ReactiveLoopFdWaiter> = None;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let mut waiter_setup_failed = false;
-
-    let mut was_paused = false;
-
-    loop {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        {
-            let (listener_fd, listener_generation) = {
-                let guard = processor.lock();
-                match guard.iceoryx2_input_mailboxes_inner() {
-                    Some(inner) => (inner.listener_fd(), inner.listener_generation()),
-                    None => (None, 0),
-                }
-            };
-            refresh_reactive_loop_waiter(
-                id,
-                &mut waiter,
-                &mut shutdown_wake_fd,
-                &mut waiter_setup_failed,
-                listener_fd,
-                listener_generation,
-            );
-        }
-
-        // Channel-side shutdown check covers two paths:
-        //   1. The fallback sleep loop (no waiter, or waiter setup failure),
-        //      which has no way to wake on shutdown otherwise.
-        //   2. A race where signal_shutdown() landed between the previous
-        //      wait's return and reading the wake-fd-side outcome.
-        if shutdown_rx.try_recv().is_ok() {
-            tracing::info!("[{}] Received shutdown signal", id);
-            break;
-        }
-
-        let is_paused = pause_gate.load(Ordering::Acquire);
-
-        if is_paused && !was_paused {
-            call_processor(ReactiveRunnerProcessorCallback::OnPause);
-            was_paused = true;
-        } else if !is_paused && was_paused {
-            call_processor(ReactiveRunnerProcessorCallback::OnResume);
-            was_paused = false;
-        }
-
-        // Every path that is not waking on the listener fd drains it too, so
-        // the next wait wakes only for a notification sent after this tick
-        // looked at its ports, never for one this tick already answered.
-        if is_paused {
-            // While paused we deliberately poll: the pause_gate is an
-            // AtomicBool with no fd, so on_resume can't fire from the wait.
-            std::thread::sleep(PAUSE_CHECK_INTERVAL);
-            drain_input_listener(processor);
-            continue;
-        }
-
-        // A bag can be waiting with no notification left to wake on it: one
-        // that arrived during a pause, whose notifications the paused ticks
-        // drained, or one published after a first link's subscriber existed
-        // and before its listener did, which notified nobody. So the runner
-        // asks before it waits. A bag that lands after the check notifies, and
-        // the wait below ends for it — at the latest at its bound, when the
-        // listener was replaced since the waiter was built.
-        let a_read_is_already_waiting = ports_would_return_something(processor).unwrap_or(false);
-
-        if !a_read_is_already_waiting {
-            // Block until an upstream notify, a shutdown signal, or (in the
-            // no-waiter and wait-error fallbacks) the next channel-poll tick.
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            match waiter.as_ref() {
-                Some(w) => match w.wait(REACTIVE_WAIT_BOUND) {
-                    ReactiveLoopWakeOutcome::Notified => drain_input_listener(processor),
-                    ReactiveLoopWakeOutcome::Shutdown => {
-                        tracing::info!("[{}] Received shutdown via the wake fd", id);
-                        break;
-                    }
-                    ReactiveLoopWakeOutcome::Interrupted | ReactiveLoopWakeOutcome::TimedOut => {
-                        continue;
-                    }
-                    ReactiveLoopWakeOutcome::Error => {
-                        std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
-                        drain_input_listener(processor);
-                    }
-                },
-                None => {
-                    std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
-                    drain_input_listener(processor);
-                }
-            }
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            {
-                std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
-                drain_input_listener(processor);
-            }
-
-            // The first dispatch after a wait is gated on readiness like every
-            // later one. A wake is not evidence that a read would return
-            // anything: an audio input port declaring a window contract reports
-            // data only when a full window can be emitted, so a bag that does
-            // not complete one wakes this loop and must not dispatch. The helper
-            // loop already gates every dispatch this way; this is the
-            // app-process half of the same rule. A processor with no mailboxes
-            // to ask has nothing to gate on, and gating on an absent answer
-            // would stop it running at all.
-            if !ports_would_return_something(processor).unwrap_or(true) {
-                continue;
-            }
-        }
-
-        // Drain-loop dispatch: iceoryx2's Event service coalesces
-        // every notify() between two drains into one fd-readable
-        // transition — it counts them in shared memory and signals
-        // the fd only once. After `drain_listener` resets that count,
-        // the listener fd is not-readable again, and the next wait
-        // would block — even though the subscriber's shared-memory
-        // ring and the per-port mailboxes may still hold unread
-        // samples from the same burst. Call `process()` until every
-        // input port reports empty, then go back to sleep. This is
-        // the standard level-triggered drain pattern (libuv, tokio
-        // reactor, GStreamer base-src loop). Skips entirely for
-        // processors that have no input mailboxes (manual sources),
-        // which fall back to the single-process() shape.
-        //
-        // A shutdown_rx check is interleaved with each drain iteration
-        // so a producer that publishes faster than the consumer can
-        // drain (sustained back-pressure) doesn't starve the runner's
-        // shutdown signaling — without it, the outer loop's
-        // shutdown_rx.try_recv at the top never fires.
-        loop {
-            call_processor(ReactiveRunnerProcessorCallback::Process);
-
-            if shutdown_rx.try_recv().is_ok() {
-                tracing::info!("[{}] Received shutdown signal mid-drain", id);
-                return;
-            }
-
-            // Drained on every dispatch, not only on a wake: a processor slower
-            // than its upstream stays in this loop for as long as bags keep
-            // arriving, and each one notifies, so the wait after the loop wakes
-            // only for a bag its last readiness check did not see. Drained
-            // before that check, so a bag whose notify this clears is one that
-            // check sees.
-            drain_input_listener(processor);
-
-            // A processor with no mailboxes drains in one dispatch, which is
-            // the single-`process()` shape this loop's doc describes.
-            if !ports_would_return_something(processor).unwrap_or(false) {
-                break;
-            }
-        }
-    }
-}
-
-/// Whether any of this processor's input ports would hand a reader something.
-///
-/// `None` when there are no mailboxes to ask — a processor that declared no
-/// input ports, or whose handle is not wired yet. Callers want different
-/// defaults for that case and each says which, rather than this picking one:
-/// the gate after a wait must not silence a processor it cannot ask, while the
-/// check before a wait and the drain loop must not spin on one.
-fn ports_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> Option<bool> {
-    let guard = processor.lock();
-    guard
-        .iceoryx2_input_mailboxes_inner()
-        .map(|inner| inner.any_port_has_data())
-}
-
-/// Clear the pending events on this processor's listener, so its fd goes
-/// not-readable and the queue upstream keeps filling has room again.
-///
-/// No-op for a processor with no input mailboxes (a manual source).
-fn drain_input_listener(processor: &Arc<Mutex<ProcessorInstance>>) {
-    let guard = processor.lock();
-    if let Some(inner) = guard.iceoryx2_input_mailboxes_inner() {
-        inner.drain_listener();
-    }
-}
-
-/// Outcome of one [`ReactiveLoopFdWaiter::wait`] call.
-#[derive(Debug, Clone, Copy)]
-enum ReactiveLoopWakeOutcome {
-    /// Listener fd became readable — at least one upstream notify arrived.
-    Notified,
-    /// Shutdown wake fd became readable — runner should exit.
-    Shutdown,
-    /// The wait was interrupted by a signal (`EINTR`); caller should retry.
-    Interrupted,
-    /// Nothing fired within the bounded wait; the caller comes round to check
-    /// whether its listener is still the one the mailboxes hold.
-    TimedOut,
-    /// The wait returned an unrecoverable error.
-    Error,
-}
-
-/// Keep the waiter on the listener the mailboxes hold now.
-///
-/// A listener goes with a destination's last inbound link and comes back with
-/// the next one, and a readiness queue never learns of the new fd on its own —
-/// a closed fd simply leaves it. So a waiter built for an earlier generation,
-/// or for a listener that is gone, is released with its shutdown wake fd
-/// recovered, and one is built for the current listener when there is one.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn refresh_reactive_loop_waiter(
-    id: &ProcessorUniqueId,
-    waiter: &mut Option<ReactiveLoopFdWaiter>,
-    shutdown_wake_fd: &mut Option<OwnedFd>,
-    waiter_setup_failed: &mut bool,
-    listener_fd: Option<i32>,
-    listener_generation: u64,
-) {
-    let registered_listener_is_gone = waiter.as_ref().is_some_and(|registered| {
-        listener_fd.is_none() || registered.listener_generation != listener_generation
-    });
-    if registered_listener_is_gone {
-        *shutdown_wake_fd = waiter
-            .take()
-            .and_then(ReactiveLoopFdWaiter::into_shutdown_wake_fd);
-    }
-    if waiter.is_some() || *waiter_setup_failed {
-        return;
-    }
-    let Some(fd) = listener_fd else {
-        return;
-    };
-    match ReactiveLoopFdWaiter::new(fd, listener_generation, shutdown_wake_fd.take()) {
-        Ok(built) => *waiter = Some(built),
-        Err(e) => {
-            tracing::warn!(
-                "[{}] Reactive waiter setup failed, falling back to channel-poll loop: {}",
-                id,
-                e
-            );
-            *waiter_setup_failed = true;
-        }
-    }
-}
-
-/// Which of the waiter's two fds a readiness-queue registration watches.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReactiveLoopFdRegistration {
-    InputListener,
-    ShutdownWake,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl ReactiveLoopFdRegistration {
-    /// The value carried in the kernel's per-registration user data.
-    fn user_data(self) -> u64 {
-        match self {
-            Self::InputListener => 0,
-            Self::ShutdownWake => 1,
-        }
-    }
-
-    fn from_user_data(user_data: u64) -> Self {
-        if user_data == Self::ShutdownWake.user_data() {
-            Self::ShutdownWake
-        } else {
-            Self::InputListener
-        }
-    }
-}
-
-/// Which registrations one wait found readable; neither means it timed out.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[derive(Debug, Default, Clone, Copy)]
-struct ReactiveLoopReadableRegistrations {
-    input_listener: bool,
-    shutdown_wake: bool,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl ReactiveLoopReadableRegistrations {
-    fn mark_readable(&mut self, registration: ReactiveLoopFdRegistration) {
-        match registration {
-            ReactiveLoopFdRegistration::InputListener => self.input_listener = true,
-            ReactiveLoopFdRegistration::ShutdownWake => self.shutdown_wake = true,
-        }
-    }
-}
-
-/// The reactive runner's readiness queue — an epoll set on Linux, a kqueue on
-/// macOS. Level-triggered on both, so an undrained fd wakes every wait.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct ReactiveLoopReadinessQueue {
-    readiness_queue_fd: OwnedFd,
-}
-
-/// The waiter the reactive runner blocks in: its readiness queue watching the
-/// iceoryx2 listener fd plus an optional shutdown wake fd.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct ReactiveLoopFdWaiter {
-    readiness_queue: ReactiveLoopReadinessQueue,
-    /// Which of the destination's listeners this waiter registered, by the
-    /// generation the mailboxes assigned it. A listener created after the last
-    /// inbound link went away is a new fd the readiness queue never saw.
-    listener_generation: u64,
-    /// Declared after the readiness queue so it closes after it: closing a
-    /// registered fd first would leave a registration that never fires.
-    shutdown_wake_fd: Option<OwnedFd>,
-}
-
-/// How long a reactive wait blocks before returning empty-handed, so a runner
-/// whose listener was replaced while it slept comes round to rebuild its
-/// waiter rather than sleeping on a dead fd until shutdown.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-const REACTIVE_WAIT_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl ReactiveLoopFdWaiter {
-    fn new(
-        listener_fd: std::os::fd::RawFd,
-        listener_generation: u64,
-        shutdown_wake_fd: Option<OwnedFd>,
-    ) -> std::io::Result<Self> {
-        use std::os::fd::AsRawFd;
-
-        let readiness_queue = ReactiveLoopReadinessQueue::create()?;
-        readiness_queue
-            .register_readable_fd(listener_fd, ReactiveLoopFdRegistration::InputListener)?;
-        if let Some(ref wake_fd) = shutdown_wake_fd {
-            readiness_queue.register_readable_fd(
-                wake_fd.as_raw_fd(),
-                ReactiveLoopFdRegistration::ShutdownWake,
-            )?;
-        }
-
-        Ok(Self {
-            readiness_queue,
-            listener_generation,
-            shutdown_wake_fd,
-        })
-    }
-
-    /// Release the registration and hand back the shutdown wake fd, so the
-    /// next waiter can register it.
-    fn into_shutdown_wake_fd(mut self) -> Option<OwnedFd> {
-        self.shutdown_wake_fd.take()
-    }
-
-    /// Block until a registered fd is readable, a signal interrupts the call,
-    /// or `wait_bound` elapses with nothing to report.
-    fn wait(&self, wait_bound: std::time::Duration) -> ReactiveLoopWakeOutcome {
-        match self.readiness_queue.wait_for_readable(wait_bound) {
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
-                ReactiveLoopWakeOutcome::Interrupted
-            }
-            Err(e) => {
-                tracing::warn!("reactive runner wait failed: {}", e);
-                ReactiveLoopWakeOutcome::Error
-            }
-            // Shutdown takes priority over notify when both fired in the same
-            // wait — let the runner exit instead of draining one more frame.
-            Ok(readable) if readable.shutdown_wake => ReactiveLoopWakeOutcome::Shutdown,
-            Ok(readable) if readable.input_listener => ReactiveLoopWakeOutcome::Notified,
-            Ok(_) => ReactiveLoopWakeOutcome::TimedOut,
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl ReactiveLoopReadinessQueue {
-    fn create() -> std::io::Result<Self> {
-        use std::os::fd::FromRawFd;
-        // SAFETY: epoll_create1 returns -1 on failure; checked below.
-        let raw_epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
-        if raw_epoll_fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: raw_epoll_fd was just opened here and nothing else owns it.
-        let readiness_queue_fd = unsafe { OwnedFd::from_raw_fd(raw_epoll_fd) };
-        Ok(Self { readiness_queue_fd })
-    }
-
-    fn register_readable_fd(
-        &self,
-        watched_fd: std::os::fd::RawFd,
-        registration: ReactiveLoopFdRegistration,
-    ) -> std::io::Result<()> {
-        use std::os::fd::AsRawFd;
-        let mut event = libc::epoll_event {
-            events: libc::EPOLLIN as u32,
-            u64: registration.user_data(),
-        };
-        // SAFETY: epoll_ctl with EPOLL_CTL_ADD takes a pointer to a valid
-        // epoll_event for the duration of the call.
-        let result = unsafe {
-            libc::epoll_ctl(
-                self.readiness_queue_fd.as_raw_fd(),
-                libc::EPOLL_CTL_ADD,
-                watched_fd,
-                &mut event,
-            )
-        };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn wait_for_readable(
-        &self,
-        wait_bound: std::time::Duration,
-    ) -> std::io::Result<ReactiveLoopReadableRegistrations> {
-        use std::os::fd::AsRawFd;
-        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 2];
-        let timeout_ms = wait_bound.as_millis().min(i32::MAX as u128) as i32;
-        // SAFETY: epoll_wait writes up to events.len() events into the buffer.
-        let ready_count = unsafe {
-            libc::epoll_wait(
-                self.readiness_queue_fd.as_raw_fd(),
-                events.as_mut_ptr(),
-                events.len() as i32,
-                timeout_ms,
-            )
-        };
-        if ready_count < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let mut readable = ReactiveLoopReadableRegistrations::default();
-        for event in &events[..ready_count as usize] {
-            readable.mark_readable(ReactiveLoopFdRegistration::from_user_data(event.u64));
-        }
-        Ok(readable)
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl ReactiveLoopReadinessQueue {
-    fn create() -> std::io::Result<Self> {
-        use std::os::fd::{AsRawFd, FromRawFd};
-        // SAFETY: kqueue returns -1 on failure; checked below.
-        let raw_kqueue_fd = unsafe { libc::kqueue() };
-        if raw_kqueue_fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: raw_kqueue_fd was just opened here and nothing else owns it.
-        let readiness_queue_fd = unsafe { OwnedFd::from_raw_fd(raw_kqueue_fd) };
-        // Darwin has no `kqueue1`, so close-on-exec is set before the fd is used.
-        // SAFETY: fcntl on a live fd this function owns.
-        if unsafe {
-            libc::fcntl(
-                readiness_queue_fd.as_raw_fd(),
-                libc::F_SETFD,
-                libc::FD_CLOEXEC,
-            )
-        } < 0
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(Self { readiness_queue_fd })
-    }
-
-    /// No `EV_CLEAR`, which is what keeps the registration level-triggered.
-    fn register_readable_fd(
-        &self,
-        watched_fd: std::os::fd::RawFd,
-        registration: ReactiveLoopFdRegistration,
-    ) -> std::io::Result<()> {
-        use std::os::fd::AsRawFd;
-        let change = libc::kevent {
-            ident: watched_fd as libc::uintptr_t,
-            filter: libc::EVFILT_READ,
-            flags: libc::EV_ADD,
-            fflags: 0,
-            data: 0,
-            udata: std::ptr::without_provenance_mut(registration.user_data() as usize),
-        };
-        // SAFETY: one valid change in, no event slots out; a failed
-        // registration returns -1 when the event list is empty.
-        let result = unsafe {
-            libc::kevent(
-                self.readiness_queue_fd.as_raw_fd(),
-                &change,
-                1,
-                std::ptr::null_mut(),
-                0,
-                std::ptr::null(),
-            )
-        };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn wait_for_readable(
-        &self,
-        wait_bound: std::time::Duration,
-    ) -> std::io::Result<ReactiveLoopReadableRegistrations> {
-        use std::os::fd::AsRawFd;
-        let timeout = libc::timespec {
-            tv_sec: wait_bound.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
-            tv_nsec: wait_bound.subsec_nanos() as libc::c_long,
-        };
-        // SAFETY: an all-zero `kevent` is a valid out-slot.
-        let mut events: [libc::kevent; 2] = unsafe { std::mem::zeroed() };
-        // SAFETY: kevent writes up to events.len() events into the buffer; the
-        // timeout is a valid stack slot.
-        let ready_count = unsafe {
-            libc::kevent(
-                self.readiness_queue_fd.as_raw_fd(),
-                std::ptr::null(),
-                0,
-                events.as_mut_ptr(),
-                events.len() as libc::c_int,
-                &timeout,
-            )
-        };
-        if ready_count < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let mut readable = ReactiveLoopReadableRegistrations::default();
-        for event in &events[..ready_count as usize] {
-            if event.flags & libc::EV_ERROR != 0 {
-                return Err(std::io::Error::from_raw_os_error(event.data as i32));
-            }
-            readable.mark_readable(ReactiveLoopFdRegistration::from_user_data(
-                event.udata.addr() as u64,
-            ));
-        }
-        Ok(readable)
     }
 }
 
@@ -1246,7 +507,8 @@ const GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED: Durat
 
 /// Start a new helper process in place of one that died on its own, under a
 /// fresh full-access grant as the processor's first `setup()` and `start()`
-/// had.
+/// had, once any promotion the death asked for has settled — waited on without
+/// holding the processor, since the compile carrying it may need to.
 fn restart_the_out_of_process_helper_that_died(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
@@ -1260,6 +522,12 @@ fn restart_the_out_of_process_helper_that_died(
         ))
     })?;
     let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, restart_grant);
+    let promotion_awaited = processor
+        .lock()
+        .ask_to_promote_the_function_node_that_lost_the_helper_that_died(&full_ctx);
+    if let Some(promotion_awaited) = promotion_awaited {
+        promotion_awaited.wait_until_it_settles();
+    }
     processor
         .lock()
         .restart_the_out_of_process_helper_that_died(&full_ctx)
@@ -1326,21 +594,6 @@ fn dispatch_process(
     }
 }
 
-/// [`dispatch_process`] counted in flight on the node's step-ledger entry, so
-/// no step closes while it runs.
-fn dispatch_process_on_the_step_ledger(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    runtime_ctx: &RuntimeContext,
-    step_progress: &StepProgressOfOneNode,
-) {
-    {
-        let _callback_in_flight = step_progress.callback_in_flight();
-        dispatch_process(id, processor, runtime_ctx);
-    }
-    runtime_ctx.stream_clock.note_step_progress();
-}
-
 fn dispatch_on_resume(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
@@ -1359,10 +612,16 @@ fn dispatch_on_resume(
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
+    use crate::core::execution::processor_scheduling_loop::{
+        ContinuousLoopWaitOutcome, PAUSE_CHECK_INTERVAL, ReactiveLoopFdWaiter,
+        ReactiveLoopWakeOutcome, next_continuous_deadline_ns, wait_for_a_deadline_or_a_control,
+    };
     use crate::core::graph::ShutdownChannelComponent;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use iceoryx2::prelude::*;
     use std::os::fd::AsRawFd;
+    use std::os::fd::OwnedFd;
+    use std::time::Instant;
 
     fn unique_suffix(tag: &str) -> String {
         format!(
@@ -1379,6 +638,68 @@ mod tests {
             .try_clone_shutdown_wake_fd()
             .expect("the shutdown wake fd duplicates");
         (shutdown_channel, shutdown_wake_fd)
+    }
+
+    /// Whether any of `processor`'s input ports would hand a reader
+    /// something; `None` when it holds no mailboxes to ask.
+    fn ports_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> Option<bool> {
+        processor
+            .lock()
+            .iceoryx2_input_mailboxes_inner()
+            .map(|mailboxes| mailboxes.any_port_has_data())
+    }
+
+    fn drain_input_listener(processor: &Arc<Mutex<ProcessorInstance>>) {
+        if let Some(mailboxes) = processor.lock().iceoryx2_input_mailboxes_inner() {
+            mailboxes.drain_listener();
+        }
+    }
+
+    /// Run the reactive scheduling loop over `processor` on an engine thread's
+    /// host, recording each callback through `make_callback` rather than
+    /// dispatching it.
+    fn run_reactive_scheduling_loop_recording_callbacks(
+        processor: &Arc<Mutex<ProcessorInstance>>,
+        shutdown_rx: &crossbeam_channel::Receiver<()>,
+        shutdown_wake_fd: Option<OwnedFd>,
+        pause_gate: &AtomicBool,
+        mut make_callback: impl FnMut(ProcessorSchedulingCallback),
+    ) {
+        let stream_clock = StreamClock::starting_now(crate::core::context::StreamClockSpec::Real);
+        let step_progress = StepProgressOfOneNode::default();
+        let mut host = ProcessorSchedulingLoopHostOnAnEngineThread {
+            processor,
+            shutdown_rx,
+            shutdown_wake_fd,
+            pause_gate,
+            stream_clock: &stream_clock,
+            step_progress: &step_progress,
+            call_processor: |callback, _counted_on_the_step_ledger| make_callback(callback),
+        };
+        run_reactive_scheduling_loop("Preactive-scheduling", &mut host);
+    }
+
+    /// Wait on `stream_clock` for `deadline_ns` the way a continuous loop does,
+    /// on an engine thread's host over `shutdown_rx`.
+    fn wait_for_stream_time_or_shutdown(
+        stream_clock: &StreamClock,
+        deadline_ns: i64,
+        shutdown_rx: &crossbeam_channel::Receiver<()>,
+        stops_waiting_early: impl Fn() -> bool,
+    ) -> ContinuousLoopWaitOutcome {
+        let (processor, _mailboxes) = input_only_processor_with_plain_port(None);
+        let step_progress = StepProgressOfOneNode::default();
+        let pause_gate = AtomicBool::new(false);
+        let mut host = ProcessorSchedulingLoopHostOnAnEngineThread {
+            processor: &processor,
+            shutdown_rx,
+            shutdown_wake_fd: None,
+            pause_gate: &pause_gate,
+            stream_clock,
+            step_progress: &step_progress,
+            call_processor: |_, _| {},
+        };
+        wait_for_a_deadline_or_a_control(&mut host, stream_clock, deadline_ns, stops_waiting_early)
     }
 
     fn listener_fd_of(
@@ -1498,7 +819,7 @@ mod tests {
     /// runner runs it, with its processor callbacks recorded and each dispatch
     /// reading one bag off `in1`.
     struct ReactiveSchedulingLoopOnItsOwnThread {
-        processor_callbacks: Arc<Mutex<Vec<ReactiveRunnerProcessorCallback>>>,
+        processor_callbacks: Arc<Mutex<Vec<ProcessorSchedulingCallback>>>,
         shutdown_channel: ShutdownChannelComponent,
         pause_gate: Arc<AtomicBool>,
         loop_thread: std::thread::JoinHandle<()>,
@@ -1518,8 +839,7 @@ mod tests {
             each_dispatch_takes: std::time::Duration,
             pause_gate_at_loop_start: PauseGateAtLoopStart,
         ) -> Self {
-            let processor_callbacks: Arc<Mutex<Vec<ReactiveRunnerProcessorCallback>>> =
-                Arc::default();
+            let processor_callbacks: Arc<Mutex<Vec<ProcessorSchedulingCallback>>> = Arc::default();
             let (mut shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
             let shutdown_receiver = shutdown_channel
                 .take_receiver()
@@ -1532,14 +852,13 @@ mod tests {
                 let processor_callbacks = Arc::clone(&processor_callbacks);
                 let pause_gate = Arc::clone(&pause_gate);
                 move || {
-                    run_reactive_scheduling_loop(
-                        &"Preactive-scheduling".into(),
+                    run_reactive_scheduling_loop_recording_callbacks(
                         &processor,
                         &shutdown_receiver,
                         Some(shutdown_wake_fd),
                         &pause_gate,
                         |callback| {
-                            if callback == ReactiveRunnerProcessorCallback::Process {
+                            if callback == ProcessorSchedulingCallback::Process {
                                 let _ = mailboxes.read_raw("in1");
                                 std::thread::sleep(each_dispatch_takes);
                             }
@@ -1556,7 +875,7 @@ mod tests {
             }
         }
 
-        fn count_of(&self, callback: ReactiveRunnerProcessorCallback) -> usize {
+        fn count_of(&self, callback: ProcessorSchedulingCallback) -> usize {
             self.processor_callbacks
                 .lock()
                 .iter()
@@ -1567,7 +886,7 @@ mod tests {
         /// Whether `callback` has been made `times` times within `deadline`.
         fn made_within(
             &self,
-            callback: ReactiveRunnerProcessorCallback,
+            callback: ProcessorSchedulingCallback,
             times: usize,
             deadline: std::time::Duration,
         ) -> bool {
@@ -1681,7 +1000,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        let dispatches = running.count_of(ReactiveRunnerProcessorCallback::Process);
+        let dispatches = running.count_of(ProcessorSchedulingCallback::Process);
         running.stop();
 
         assert!(
@@ -1720,7 +1039,7 @@ mod tests {
         );
         assert!(
             running.made_within(
-                ReactiveRunnerProcessorCallback::OnPause,
+                ProcessorSchedulingCallback::OnPause,
                 1,
                 std::time::Duration::from_secs(5)
             ),
@@ -1736,11 +1055,11 @@ mod tests {
         running.pause_gate.store(false, Ordering::Release);
 
         let dispatched = running.made_within(
-            ReactiveRunnerProcessorCallback::Process,
+            ProcessorSchedulingCallback::Process,
             3,
             std::time::Duration::from_secs(2),
         );
-        let dispatches = running.count_of(ReactiveRunnerProcessorCallback::Process);
+        let dispatches = running.count_of(ProcessorSchedulingCallback::Process);
         running.stop();
         assert!(
             dispatched,
@@ -1774,7 +1093,7 @@ mod tests {
             PauseGateAtLoopStart::Open,
         );
         let dispatched = running.made_within(
-            ReactiveRunnerProcessorCallback::Process,
+            ProcessorSchedulingCallback::Process,
             1,
             std::time::Duration::from_secs(2),
         );
@@ -1853,6 +1172,8 @@ mod tests {
         listener: iceoryx2::port::listener::Listener<ipc_threadsafe::Service>,
         shutdown_channel: ShutdownChannelComponent,
         waiter: ReactiveLoopFdWaiter,
+        /// Registered by the waiter without being owned by it.
+        _shutdown_wake_fd: OwnedFd,
     }
 
     impl ListenerWaiterFixture {
@@ -1866,15 +1187,19 @@ mod tests {
                 )
                 .unwrap();
             let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
-            let waiter =
-                ReactiveLoopFdWaiter::new(listener_fd_of(&listener), 1, Some(shutdown_wake_fd))
-                    .expect("the readiness queue registers both fds");
+            let waiter = ReactiveLoopFdWaiter::new(
+                listener_fd_of(&listener),
+                1,
+                Some(shutdown_wake_fd.as_raw_fd()),
+            )
+            .expect("the readiness queue registers both fds");
             Self {
                 _node: node,
                 notifier,
                 listener,
                 shutdown_channel,
                 waiter,
+                _shutdown_wake_fd: shutdown_wake_fd,
             }
         }
     }
@@ -1905,7 +1230,7 @@ mod tests {
         let outcome = fixture.waiter.wait(std::time::Duration::ZERO);
 
         assert!(
-            matches!(outcome, ReactiveLoopWakeOutcome::Shutdown),
+            matches!(outcome, ReactiveLoopWakeOutcome::ControlArrived),
             "expected Shutdown, got {outcome:?}"
         );
     }
@@ -1920,7 +1245,7 @@ mod tests {
         let outcome = fixture.waiter.wait(std::time::Duration::ZERO);
 
         assert!(
-            matches!(outcome, ReactiveLoopWakeOutcome::Shutdown),
+            matches!(outcome, ReactiveLoopWakeOutcome::ControlArrived),
             "expected Shutdown, got {outcome:?}"
         );
         fixture.listener.try_wait(|_| {}).unwrap();
@@ -1957,8 +1282,7 @@ mod tests {
         let (withheld_shutdown_sender, withheld_shutdown_receiver) = crossbeam_channel::bounded(1);
         let (loop_exited_sender, loop_exited_receiver) = crossbeam_channel::bounded(1);
         let loop_thread = std::thread::spawn(move || {
-            run_reactive_scheduling_loop(
-                &"Preactive-wake-fd-shutdown".into(),
+            run_reactive_scheduling_loop_recording_callbacks(
                 &processor,
                 &withheld_shutdown_receiver,
                 Some(shutdown_wake_fd),
@@ -1981,113 +1305,6 @@ mod tests {
             exited_on_the_wake_fd,
             "the loop never saw the wake fd's shutdown, so it is not waiting on it"
         );
-    }
-
-    /// A destination that loses its last inbound link drops its listener, and
-    /// the next connect creates a new one the readiness queue never saw. The runner
-    /// keeps its waiter on the listener the mailboxes hold now, so a frame on
-    /// the reconnected link wakes it. Revert lock: register the listener once
-    /// before the loop and the second notify below wakes nothing.
-    #[test]
-    fn the_waiter_follows_a_listener_replaced_after_the_last_link_went_away() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let open_event_service = |suffix: &str| {
-            node.service_builder(&ServiceName::new(&unique_suffix(suffix)).unwrap())
-                .event()
-                .max_notifiers(1)
-                .max_listeners(1)
-                .open_or_create()
-                .unwrap()
-        };
-        let id: ProcessorUniqueId = "Preactive".into();
-        let mut waiter = None;
-        let (_shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
-        let mut shutdown_wake_fd = Some(shutdown_wake_fd);
-        let mut waiter_setup_failed = false;
-
-        let first = open_event_service("replaced-first");
-        let first_listener =
-            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&first)
-                .unwrap();
-        let first_fd = listener_fd_of(&first_listener);
-        refresh_reactive_loop_waiter(
-            &id,
-            &mut waiter,
-            &mut shutdown_wake_fd,
-            &mut waiter_setup_failed,
-            Some(first_fd),
-            1,
-        );
-        let first_readiness_queue_fd = waiter
-            .as_ref()
-            .expect("a waiter for the first listener")
-            .readiness_queue
-            .readiness_queue_fd
-            .as_raw_fd();
-        assert!(
-            shutdown_wake_fd.is_none(),
-            "the waiter took the shutdown wake fd"
-        );
-
-        refresh_reactive_loop_waiter(
-            &id,
-            &mut waiter,
-            &mut shutdown_wake_fd,
-            &mut waiter_setup_failed,
-            Some(first_fd),
-            1,
-        );
-        assert_eq!(
-            waiter
-                .as_ref()
-                .map(|registered| registered.readiness_queue.readiness_queue_fd.as_raw_fd()),
-            Some(first_readiness_queue_fd),
-            "the same listener keeps the same waiter"
-        );
-
-        // The last link goes, and the listener with it.
-        drop(first_listener);
-        refresh_reactive_loop_waiter(
-            &id,
-            &mut waiter,
-            &mut shutdown_wake_fd,
-            &mut waiter_setup_failed,
-            None,
-            1,
-        );
-        assert!(
-            waiter.is_none(),
-            "a waiter on a dropped listener is released"
-        );
-        assert!(
-            shutdown_wake_fd.is_some(),
-            "the shutdown wake fd comes back for the next one"
-        );
-
-        // A reconnect creates a new listener, on a fresh notify service.
-        let second = open_event_service("replaced-second");
-        let second_listener =
-            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&second)
-                .unwrap();
-        let second_fd = listener_fd_of(&second_listener);
-        refresh_reactive_loop_waiter(
-            &id,
-            &mut waiter,
-            &mut shutdown_wake_fd,
-            &mut waiter_setup_failed,
-            Some(second_fd),
-            2,
-        );
-        let waiter = waiter.expect("a waiter for the new listener");
-        let notifier = second.notifier_builder().create().unwrap();
-
-        notifier.notify().unwrap();
-        let outcome = waiter.wait(std::time::Duration::ZERO);
-        assert!(
-            matches!(outcome, ReactiveLoopWakeOutcome::Notified),
-            "a notify on the reconnected link must wake the runner; got {outcome:?}"
-        );
-        second_listener.try_wait(|_| {}).unwrap();
     }
 
     /// A helper that keeps dying soon after it starts reads `Restarting`, with
@@ -2161,14 +1378,14 @@ mod tests {
 
     #[test]
     fn a_continuous_deadline_steps_one_interval_on_its_grid() {
-        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 1_050), 1_100);
-        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 900), 1_100);
+        assert_eq!(next_continuous_deadline_ns(1_000, 100, 1_050), 1_100);
+        assert_eq!(next_continuous_deadline_ns(1_000, 100, 900), 1_100);
     }
 
     #[test]
     fn an_overrun_skips_to_the_next_deadline_after_now_on_the_same_grid() {
-        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 1_350), 1_400);
-        assert_eq!(next_continuous_deadline_stream_ns(1_000, 100, 1_400), 1_500);
+        assert_eq!(next_continuous_deadline_ns(1_000, 100, 1_350), 1_400);
+        assert_eq!(next_continuous_deadline_ns(1_000, 100, 1_400), 1_500);
     }
 
     fn a_scaled_stream_clock(scale: f64) -> StreamClock {
@@ -2192,7 +1409,7 @@ mod tests {
             || false,
         );
 
-        assert_eq!(outcome, ContinuousRunnerWaitOutcome::DeadlineReached);
+        assert_eq!(outcome, ContinuousLoopWaitOutcome::DeadlineReached);
         assert!(machine_started.elapsed() >= Duration::from_millis(40));
         assert!(stream_clock.now_ns() >= deadline_stream_ns);
     }
@@ -2219,7 +1436,7 @@ mod tests {
         );
 
         rescaler.join().expect("the rescaling thread finishes");
-        assert_eq!(outcome, ContinuousRunnerWaitOutcome::DeadlineReached);
+        assert_eq!(outcome, ContinuousLoopWaitOutcome::DeadlineReached);
         assert!(machine_started.elapsed() < Duration::from_secs(5));
     }
 
@@ -2236,6 +1453,6 @@ mod tests {
             || false,
         );
 
-        assert_eq!(outcome, ContinuousRunnerWaitOutcome::ShutdownRequested);
+        assert_eq!(outcome, ContinuousLoopWaitOutcome::Stopped);
     }
 }

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Reading one described node type — the `@node` stamps a processor
+//! Reading one described node type — the `@node.process` stamps a processor
 //! interpreter printed for a class — into what the engine registers.
 //!
 //! The keys of a described node type are the `__tatolab_node_*__` attributes
@@ -10,33 +10,46 @@
 
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, CatalogEntry, PortDescriptor, PortFamilyDeclaration,
-    PortFamilyDeclarationDirection, ProcessorClassImportPath, ProcessorClassShortName,
-    ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
-    refuse_audio_window_beside_a_skipping_delivery_profile,
+    AudioWindowContractDeclaredValues, CatalogEntry, FunctionNodeLanguage, NodeKind,
+    PortDescriptor, PortFamilyDeclaration, PortFamilyDeclarationDirection,
+    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
+    ProcessorScheduling, refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::core::processors::refuse_catalog_entries_hang_does_not_read;
 use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
+use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
 const DESCRIBED_DESCRIPTION_KEY: &str = "description";
+const DESCRIBED_KIND_KEY: &str = "kind";
+const DESCRIBED_LANGUAGE_KEY: &str = "language";
 const DESCRIBED_EXECUTION_KEY: &str = "execution";
 const DESCRIBED_SCHEDULING_PRIORITY_KEY: &str = "scheduling_priority";
 const DESCRIBED_PACED_BY_REAL_TIME_KEY: &str = "paced_by_real_time";
 const DESCRIBED_CONFIG_SCHEMA_KEY: &str = "config_schema";
 const DESCRIBED_INPUT_PORTS_KEY: &str = "input_ports";
 const DESCRIBED_OUTPUT_PORTS_KEY: &str = "output_ports";
+const DESCRIBED_STATE_FIELDS_KEY: &str = "state_fields";
 
-/// Everything the engine needs to register and instantiate one Python
-/// processor class.
+/// Everything the engine needs to register one Python node type and run its
+/// nodes.
 pub struct PythonProcessorDeclaration {
-    /// The class's descriptor, registered under its import path.
+    /// The type's descriptor, registered under its import path.
     pub descriptor: ProcessorDescriptor,
-    /// The execution the class declared, which its processor interpreter
-    /// drives its own loop in.
-    pub execution_config: ExecutionConfig,
+    /// How a node of the type runs, by its kind.
+    pub how_a_python_node_of_the_type_runs: HowAPythonNodeOfTheTypeRuns,
+}
+
+/// How a node of a described Python type runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HowAPythonNodeOfTheTypeRuns {
+    /// A `@node.process` class, in its own processor interpreter, driven on
+    /// the execution it declared.
+    InItsOwnProcessorInterpreter(ExecutionConfig),
+    /// A `@node.function`, inside the read of each node it feeds.
+    InsideTheReadOfEachNodeItFeeds,
 }
 
 impl PythonProcessorDeclaration {
@@ -59,8 +72,6 @@ impl PythonProcessorDeclaration {
             DESCRIBED_SHORT_NAME_KEY,
         )?)
         .map_err(|blank| blank.to_string())?;
-        let execution_config = read_execution_config(described_node_type)?;
-
         let mut descriptor = ProcessorDescriptor::new(
             class_short_name,
             requested_import_path.clone(),
@@ -68,13 +79,33 @@ impl PythonProcessorDeclaration {
         )
         .with_runtime(ProcessorRuntime::Python)
         .with_entrypoint(requested_import_path.as_str())
-        .with_scheduling(ProcessorScheduling {
-            priority: read_thread_priority(described_node_type)?,
-        })
         .with_config_schema(read_config_schema_document(described_node_type)?);
-        if read_paced_by_real_time(described_node_type)? {
-            descriptor = descriptor.paced_by_real_time();
-        }
+        let how_a_python_node_of_the_type_runs =
+            match read_described_node_kind(described_node_type)? {
+                NodeKind::Process => {
+                    descriptor = descriptor.with_scheduling(ProcessorScheduling {
+                        priority: read_thread_priority(described_node_type)?,
+                    });
+                    if read_paced_by_real_time(described_node_type)? {
+                        descriptor = descriptor.paced_by_real_time();
+                    }
+                    HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(
+                        read_execution_config(described_node_type)?,
+                    )
+                }
+                function_kind @ NodeKind::Function { .. } => {
+                    descriptor.node_kind = function_kind;
+                    descriptor.function_node_state_fields =
+                        read_function_node_state_fields(described_node_type)?;
+                    HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
+                }
+                NodeKind::Shader => {
+                    return Err(format!(
+                        "{DESCRIBED_KIND_KEY} is \"shader\", which a processor interpreter never \
+                     describes: a shader is Slang the engine compiles"
+                    ));
+                }
+            };
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
@@ -83,8 +114,63 @@ impl PythonProcessorDeclaration {
 
         Ok(Self {
             descriptor,
-            execution_config,
+            how_a_python_node_of_the_type_runs,
         })
+    }
+}
+
+/// The fields of a described function node's state record, refused past what
+/// one function node's state entry holds.
+fn read_function_node_state_fields(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<Vec<String>, String> {
+    let state_fields: Vec<String> = described_node_type
+        .get(DESCRIBED_STATE_FIELDS_KEY)
+        .cloned()
+        .ok_or_else(|| format!("{DESCRIBED_STATE_FIELDS_KEY} is missing"))
+        .and_then(|state_fields| {
+            serde_json::from_value(state_fields).map_err(|not_a_list_of_names| {
+                format!(
+                    "{DESCRIBED_STATE_FIELDS_KEY} is not a list of names: {not_a_list_of_names}"
+                )
+            })
+        })?;
+    if state_fields.len() > STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS {
+        return Err(format!(
+            "its state record has {} fields, and a function node's state carries at most \
+             {STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS} numbers; keep fewer fields \
+             in `State[...]`",
+            state_fields.len()
+        ));
+    }
+    Ok(state_fields)
+}
+
+/// The kind a described node type declares: `process`, or `function` beside
+/// its `language`: `python` for a `@node.function`, `rust` for a module's
+/// `#[function_node]`.
+fn read_described_node_kind(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<NodeKind, String> {
+    match read_string(described_node_type, DESCRIBED_KIND_KEY)?.as_str() {
+        "process" => Ok(NodeKind::Process),
+        "function" => match read_string(described_node_type, DESCRIBED_LANGUAGE_KEY)?.as_str() {
+            "python" => Ok(NodeKind::Function {
+                language: FunctionNodeLanguage::Python,
+            }),
+            "rust" => Ok(NodeKind::Function {
+                language: FunctionNodeLanguage::Rust,
+            }),
+            other => Err(format!(
+                "{DESCRIBED_LANGUAGE_KEY} is {other:?}, but a function node a processor \
+                 interpreter describes is `python` or `rust`"
+            )),
+        },
+        "shader" => Ok(NodeKind::Shader),
+        other => Err(format!(
+            "{DESCRIBED_KIND_KEY} is {other:?}, which names no node kind: a class is \
+             `@node.process` and a function `@node.function`"
+        )),
     }
 }
 
@@ -101,7 +187,7 @@ fn read_config_schema_document(
         return Err(format!(
             "{DESCRIBED_CONFIG_SCHEMA_KEY} must be a JSON object, got {} — the decorator derives \
              this document, so a class reaching here was built by hand rather than by \
-             @tatolab.stream.node",
+             @tatolab.stream.node.process",
             json_kind_name(document)
         ));
     }
@@ -132,7 +218,7 @@ fn read_execution_config(
         unknown => {
             return Err(format!(
                 "unknown execution mode {unknown:?} — the decorator validates this, so a class \
-                 reaching here was built by hand rather than by @tatolab.stream.node"
+                 reaching here was built by hand rather than by @tatolab.stream.node.process"
             ));
         }
     };
@@ -559,13 +645,14 @@ mod tests {
         ProcessorClassImportPath::new(import_path).expect("the test path names a class")
     }
 
-    /// A described node type carrying what `@tatolab.stream.node` stamps,
+    /// A described node type carrying what `@tatolab.stream.node.process` stamps,
     /// with `input_ports` as given.
     fn described_node_type_with_input_ports(input_ports: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
             "import_path": "my_app.audio:AudioConsumer",
             "short_name": "AudioConsumer",
             "description": "consumes audio",
+            "kind": "process",
             "execution": {"mode": "continuous", "interval_ms": 20},
             "scheduling_priority": "high",
             "paced_by_real_time": false,
@@ -622,6 +709,103 @@ mod tests {
             "catalog_entry": catalog_entry,
         }]);
         described
+    }
+
+    #[test]
+    fn a_described_process_reads_as_a_process_node_and_a_function_as_a_python_function_node() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        let process = read(&described).expect("reads");
+        assert_eq!(process.descriptor.node_kind, NodeKind::Process);
+        assert!(matches!(
+            process.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(_)
+        ));
+
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("python");
+        described["state_fields"] = serde_json::json!([]);
+        for process_only_field in ["execution", "scheduling_priority", "paced_by_real_time"] {
+            described
+                .as_object_mut()
+                .expect("a described node type is an object")
+                .remove(process_only_field);
+        }
+        let function = read(&described).expect("reads");
+        assert_eq!(
+            function.descriptor.node_kind,
+            NodeKind::Function {
+                language: FunctionNodeLanguage::Python
+            }
+        );
+        assert_eq!(
+            function.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
+        );
+    }
+
+    #[test]
+    fn a_described_function_nodes_state_fields_read_into_its_descriptor_up_to_what_an_entry_holds()
+    {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("python");
+        described["state_fields"] = serde_json::json!(["phase", "cycles"]);
+        assert_eq!(
+            read(&described)
+                .expect("reads")
+                .descriptor
+                .function_node_state_fields,
+            vec!["phase".to_string(), "cycles".to_string()]
+        );
+
+        let one_field_too_many: Vec<String> = (0
+            ..=STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS)
+            .map(|field_index| format!("field_{field_index}"))
+            .collect();
+        described["state_fields"] = serde_json::json!(one_field_too_many);
+        assert!(refusal_of(&described).contains("at most"));
+
+        described
+            .as_object_mut()
+            .expect("an object")
+            .remove("state_fields");
+        assert!(refusal_of(&described).contains("state_fields"));
+    }
+
+    #[test]
+    fn a_described_rust_function_node_reads_as_a_function_node_run_inside_its_readers() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("rust");
+        described["state_fields"] = serde_json::json!(["total"]);
+        let function = read(&described).expect("reads");
+        assert_eq!(
+            function.descriptor.node_kind,
+            NodeKind::Function {
+                language: FunctionNodeLanguage::Rust
+            }
+        );
+        assert_eq!(
+            function.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
+        );
+    }
+
+    #[test]
+    fn a_kind_a_processor_interpreter_never_describes_is_refused_naming_it() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("cobol");
+        assert!(refusal_of(&described).contains("\"cobol\""));
+
+        described["kind"] = serde_json::json!("shader");
+        assert!(refusal_of(&described).contains("Slang"));
+
+        described["kind"] = serde_json::json!("sorcery");
+        assert!(refusal_of(&described).contains("\"sorcery\""));
+
+        described.as_object_mut().expect("an object").remove("kind");
+        assert!(refusal_of(&described).contains("kind"));
     }
 
     #[test]
@@ -791,8 +975,10 @@ mod tests {
         );
         assert_eq!(descriptor.outputs[0].name, "levels");
         assert_eq!(
-            declaration.execution_config.execution,
-            ProcessExecution::Continuous { interval_ms: 20 }
+            declaration.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(ExecutionConfig {
+                execution: ProcessExecution::Continuous { interval_ms: 20 },
+            })
         );
     }
 

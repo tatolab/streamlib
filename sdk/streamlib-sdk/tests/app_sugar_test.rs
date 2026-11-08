@@ -88,13 +88,18 @@ where
         .expect("registration must succeed")
 }
 
-/// Replace each captured concrete id with its positional token so two graphs
-/// built by identical operations differ only where the runtime minted a random
-/// cuid2. Ids are 24-char cuid2 strings — they never alias JSON structure.
-fn normalize_ids(graph_json: &serde_json::Value, ids_in_build_order: &[String]) -> String {
+/// Replace each node's minted UUID with its positional token so two graphs
+/// built by identical operations differ only where the runtime minted an id.
+fn normalize_node_uuids(graph_json: &serde_json::Value) -> String {
     let mut text = serde_json::to_string_pretty(graph_json).expect("graph serializes");
-    for (index, concrete_id) in ids_in_build_order.iter().enumerate() {
-        text = text.replace(concrete_id, &format!("<ID{index}>"));
+    for (index, node_uuid) in graph_json["nodes"]
+        .as_array()
+        .expect("nodes array")
+        .iter()
+        .filter_map(|node| node["id"].as_str())
+        .enumerate()
+    {
+        text = text.replace(node_uuid, &format!("<ID{index}>"));
     }
     text
 }
@@ -114,33 +119,22 @@ fn app_add_matches_the_streams_add_processor_snapshot() {
 
     // App-built graph.
     let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
-    let app_alpha = app
-        .add(alpha_ref.clone(), config.clone(), None)
+    app.add(alpha_ref.clone(), config.clone(), None)
         .expect("app add alpha");
-    let app_beta = app
-        .add(beta_ref.clone(), config.clone(), None)
+    app.add(beta_ref.clone(), config.clone(), None)
         .expect("app add beta");
-    let app_snapshot = normalize_ids(
-        &app.stream().to_json().expect("app graph json"),
-        &[
-            app_alpha.processor_id().to_string(),
-            app_beta.processor_id().to_string(),
-        ],
-    );
+    let app_snapshot = normalize_node_uuids(&app.stream().to_json().expect("app graph json"));
 
     // Stream-built graph — the same operations, spelled out against a loaded
     // stream.
     let (_runner, stream) = an_engine_loading_one_empty_stream(project_directory.path());
-    let stream_alpha = stream
+    stream
         .add_processor(ProcessorSpec::new(alpha_ref, config.clone()))
         .expect("stream add alpha");
-    let stream_beta = stream
+    stream
         .add_processor(ProcessorSpec::new(beta_ref, config))
         .expect("stream add beta");
-    let stream_snapshot = normalize_ids(
-        &stream.to_json().expect("stream graph json"),
-        &[stream_alpha.to_string(), stream_beta.to_string()],
-    );
+    let stream_snapshot = normalize_node_uuids(&stream.to_json().expect("stream graph json"));
 
     assert_eq!(
         app_snapshot, stream_snapshot,
@@ -258,18 +252,22 @@ fn add_local_hello_world_materializes_a_real_node() {
         .expect("add_local materializes a node");
 
     let graph_json = app.stream().to_json().expect("graph json");
-    let node_ids: Vec<&str> = graph_json["nodes"]
+    let node_types: Vec<&str> = graph_json["nodes"]
         .as_array()
         .expect("nodes array")
         .iter()
-        .filter_map(|n| n["id"].as_str())
+        .filter_map(|n| n["type"].as_str())
         .collect();
-
-    let node_id = node.processor_id().to_string();
+    assert_eq!(node_types.len(), 1, "one node in the graph: {node_types:?}");
     assert!(
-        node_ids.contains(&node_id.as_str()),
-        "the add_local id {node_id} must name a real node in the graph, found {node_ids:?}"
+        node_types[0].contains("MaterializeNode"),
+        "the graph's node is the add_local type: {node_types:?}"
     );
+
+    let node_id = node.processor_id();
+    app.stream()
+        .remove_processor(node_id)
+        .unwrap_or_else(|why| panic!("the add_local id {node_id} must name a real node: {why}"));
 }
 
 /// A config value that cannot serialize to JSON (a map with non-string keys)

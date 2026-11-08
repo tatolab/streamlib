@@ -73,7 +73,7 @@ class ChannelsBlock(Protocol):
 
     @property
     def sample_rate(self) -> int:
-        """Samples per second, per channel."""
+        """Samples per second, per channel; 0 on a control value, which has no regular rate."""
         ...
 
     @property
@@ -275,7 +275,10 @@ class NodeLinkDataAccess(Protocol):
         ...
 
     def open_loss_count_board(
-        self, service_name: str, output_port_names: list[str]
+        self,
+        service_name: str,
+        output_port_names: list[str],
+        function_node_states: list[tuple[int, list[int] | None]] = ...,
     ) -> None:
         """Open the loss-count board the parent created for this spawn.
 
@@ -283,8 +286,11 @@ class NodeLinkDataAccess(Protocol):
         counted — an input link onto the slot its wiring names, an output port
         onto its entry under its channel's generation — which is how the parent
         renders this helper's `metrics` in `graph`. `output_port_names` is the
-        board's output-port section in key order. Raises `RuntimeError` for a
-        second board.
+        board's output-port section in key order. `function_node_states` names
+        each stateful function node's entry by breadcrumb number, beside the
+        state it resumes from as f64 bit patterns, or `None` for its state
+        record's defaults; each call's new state is written there. Raises
+        `RuntimeError` for a second board.
         """
         ...
 
@@ -523,7 +529,7 @@ class RuntimeContextLimitedAccess(_RuntimeContextMembersBothCapabilitiesShare, P
 class LinkInputDataReader(Protocol):
     """A node's input ports, as `ctx.inputs`.
 
-    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    A port name is cast the way `@node.process` casts it — lowercased, accents dropped,
     anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
     """
@@ -713,7 +719,7 @@ class LinkInputDataReader(Protocol):
 class LinkOutputDataWriter(Protocol):
     """A node's output ports, as `ctx.outputs`.
 
-    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    A port name is cast the way `@node.process` casts it — lowercased, accents dropped,
     anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
     """

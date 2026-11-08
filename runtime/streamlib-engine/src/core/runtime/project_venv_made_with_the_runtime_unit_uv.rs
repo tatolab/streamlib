@@ -7,7 +7,7 @@
 //! `uv sync`, which takes the Python the project's `.python-version` pins from
 //! the machine or fetches it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -19,11 +19,29 @@ use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
     HowABoundedChildProcessRunEnded, remove_every_python_variable_named_in,
     run_a_child_process_to_its_exit_within,
 };
-use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects_interpreter::{
-    refuse_a_project_directory_not_named_by_its_absolute_path, the_projects_venv_interpreter,
-};
 use crate::core::error::Error;
 use crate::core::runtime::what_interrupted_a_load;
+
+/// The interpreter a project's streams run in: `<project>/.venv/bin/python`,
+/// taken as it is spelled, never resolved through its symlink.
+pub(crate) fn the_projects_venv_interpreter(project_directory: &Path) -> PathBuf {
+    project_directory.join(".venv").join("bin").join("python")
+}
+
+/// Refuse `project_directory` unless it is an absolute path: a project is
+/// named by its absolute path.
+fn refuse_a_project_directory_not_named_by_its_absolute_path(
+    project_directory: &Path,
+) -> Result<(), Error> {
+    if !project_directory.is_absolute() {
+        return Err(Error::Configuration(format!(
+            "the project directory `{}` is not an absolute path; a project is named by its \
+             absolute path",
+            project_directory.display()
+        )));
+    }
+    Ok(())
+}
 
 /// How long `.venv/bin/python -I -c ""` may take to show that the venv's
 /// interpreter runs.

@@ -202,6 +202,32 @@ pushes over smart HTTP, including the v1 `receive-pack` Artifacts takes, and its
 exception lets it link into a BUSL binary. It sits behind one seam, so `gix` can replace it once
 gitoxide pushes. Ticket 1 proves its push against an Artifacts remote.
 
+**Decided 7 — the graph document is the runtime's database (owner, 2026-11-08).** People and
+agents write node and generator code; the graph changes only through operations the runtime
+performs, as in Unreal, TouchDesigner, Houdini and Resolve, so the runtime writes every node's
+UUID. A load refuses a document holding a node with no UUID as its `id`, naming the node, as a
+database refuses a damaged file, and never mints one in memory.
+
+**Decided 8 — history is the project's transaction log (owner, 2026-11-08).** It exists so local
+agents, the studio and, later, remote collaborators reconcile their edits; it is no Git repository
+for the person and never touches their own `.git` or any tool they version with. Each commit
+records the whole project: every file outside a hidden folder, `node_modules`, `__pycache__` and a
+Python virtual environment, an asset whose bytes the content store holds as its sidecar alone, and
+no symbolic link.
+
+**Decided 9 — pin values are saved like links (owner, 2026-11-08).** A value typed on an unlinked
+input is part of the document; delivering it to the running node is lightweight-node-kinds'
+#3227.
+
+**Decided 10 — the cross-floor check runs as a load reads the project (owner, 2026-11-08).** The
+runtime runs `tatolab.stream._cross_floor_check` over the project in its own interpreter once the
+venv runs, its findings a warning in the project's log that never blocks a start.
+
+**Decided 11 — what only the compile reported stays gone (owner, 2026-11-08).** With no stream
+function run at a load there is no traceback of a raising `@stream`, no "defines no `@stream`"
+record and no "no longer defined" failure; a stream whose document is gone is forgotten, as
+deleting an asset in an editor removes it. A generator's traceback returns with #3259.
+
 **Deferred, on the same transactions and history:** the cloud hub (one Durable Object per project,
 PartyKit-style, ordering transactions with no runtime), branches per person and merge rules, roles,
 releases and variants, pushing content to cloud storage beside an Artifacts remote, presets and
@@ -229,7 +255,7 @@ keys and the record there.
 5. **#3260 — Linked dependencies.** `add_dependency` from a local path or an Artifacts remote, read-only
    use of its assets, `update_dependency` and `fork_asset`. Waits on 2.
 6. **#3152 — A project's node types and generators, listed without running code** (rewritten):
-   each `@node` class, function and shader node and `@graph_generator` in a project and its
+   each `@node.process` class, function and shader node and `@graph_generator` in a project and its
    dependencies, read from source, over the local API and MCP. Waits on 1.
 
 ## Notes (not in scope)

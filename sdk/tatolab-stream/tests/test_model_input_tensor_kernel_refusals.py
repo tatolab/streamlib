@@ -333,10 +333,10 @@ def test_the_dispatch_covers_every_word_of_the_tensor(
 def test_the_affine_and_channel_order_are_compiled_into_the_kernel() -> None:
     _, gpu = compiled(channel_order="bgr", scale=0.5, mean=(1.0, 2.0, 3.0), std=(4.0, 5.0, 6.0))
     source = gpu.kernel_requests[0]["source"]
-    assert "const float SCALE = float(0.5);" in source
-    assert "const vec3 MEAN = vec3(float(1.0), float(2.0), float(3.0));" in source
-    assert "const vec3 STD = vec3(float(4.0), float(5.0), float(6.0));" in source
-    assert "const ivec3 SOURCE_CHANNEL_BY_OUTPUT_CHANNEL = ivec3(2, 1, 0);" in source
+    assert "static const float SCALE = float(0.5);" in source
+    assert "static const float3 MEAN = float3(float(1.0), float(2.0), float(3.0));" in source
+    assert "static const float3 STD = float3(float(4.0), float(5.0), float(6.0));" in source
+    assert "static const int3 SOURCE_CHANNEL_BY_OUTPUT_CHANNEL = int3(2, 1, 0);" in source
 
 
 @pytest.mark.parametrize(

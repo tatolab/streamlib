@@ -15,10 +15,13 @@ mod python_bag_conversion;
 mod python_class_from_source_for_tests;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
+mod python_function_node_island;
 mod python_gpu_surface_pixel_exchange;
 #[cfg(target_os = "macos")]
 mod python_helper_process_parent_death_watch;
 mod python_helper_process_pixel_exchange;
+#[cfg(unix)]
+mod python_helper_scheduling_loop;
 mod python_helper_stream_clock;
 mod python_logging;
 #[cfg(target_os = "macos")]
@@ -35,6 +38,14 @@ mod python_surface_share_service_for_tests;
 
 #[pymodule]
 fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add(
+        "MODULE_HOST_TABLE_ABI_MAJOR",
+        tatolab_module_sdk::MODULE_HOST_TABLE_ABI_MAJOR,
+    )?;
+    module.add(
+        "MODULE_HOST_TABLE_ABI_MINOR",
+        tatolab_module_sdk::MODULE_HOST_TABLE_ABI_MINOR,
+    )?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
     module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;
@@ -83,10 +94,17 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
     module.add_class::<python_helper_stream_clock::PythonStreamClockReading>()?;
+    #[cfg(unix)]
     module.add_function(wrap_pyfunction!(
-        python_helper_stream_clock::machine_nanoseconds_until_this_helpers_stream_clock_reaches,
+        python_helper_scheduling_loop::run_the_scheduling_loop_of_this_helper,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_function_node_island::feed_an_input_port_from_a_function_node_island,
+        module
+    )?)?;
+    module
+        .add_class::<python_function_node_island::FunctionNodeEvaluatedAsItsHelpersProcessor>()?;
     module.add_function(wrap_pyfunction!(
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
         module

@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode, is_in_exposed_name_cast_form};
@@ -112,6 +112,16 @@ impl ProcessorInstance {
     /// Why this processor's helper process died on its own, once noticed.
     pub fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
         self.0.why_the_out_of_process_helper_died_on_its_own()
+    }
+
+    /// Ask to promote the function node whose call lost this processor's
+    /// helper out of its islands, before the helper is restarted.
+    pub(crate) fn ask_to_promote_the_function_node_that_lost_the_helper_that_died(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Option<super::FunctionNodePromotionAwaitedBeforeTheReaderRestarts> {
+        self.0
+            .ask_to_promote_the_function_node_that_lost_the_helper_that_died(ctx)
     }
 
     /// Start a new helper process, with a new processor instance, in place of
@@ -540,6 +550,14 @@ impl ProcessorInstanceFactory {
         self.descriptors.read().get(processor_type).cloned()
     }
 
+    /// How `processor_type` runs, projected out under the read lock.
+    pub(crate) fn node_kind(&self, processor_type: &ProcessorClassImportPath) -> Option<NodeKind> {
+        self.descriptors
+            .read()
+            .get(processor_type)
+            .map(|descriptor| descriptor.node_kind)
+    }
+
     /// The class's short name, as the registering surface declared it — what
     /// an instance's display name defaults to.
     ///
@@ -879,7 +897,7 @@ mod tests {
         let refusal = node_types_one_stream_resolves
             .register_a_type_described_in_this_streams_processor_interpreter(
                 descriptor,
-                constructor,
+                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(constructor),
             )
             .expect_err("a describe's registration must refuse it");
         assert!(is_the_expected_refusal(&refusal), "got {refusal:?}");

@@ -31,7 +31,7 @@ fn listed_stream(
 ) -> serde_json::Value {
     json!({
         "stream": stream_id, "display_name": display_name, "state": "running",
-        "location": {"project_directory": project_directory, "stream_function": "stream:main"},
+        "location": {"project_directory": project_directory, "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
         "node_count": 3, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
     })
 }
@@ -363,10 +363,10 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
         StubToolAnswer::tool_result(
             &json!({"streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
-                 "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
+                 "location": {"project_directory": "/srv/cam", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
                  "node_count": 3, "capture_devices_whose_access_was_never_asked_for": []},
                 {"stream": "mic-listen-9f8e7d", "display_name": "Desk mic", "state": "stopped",
-                 "location": {"project_directory": "/srv/mic", "stream_function": "stream:listen"},
+                 "location": {"project_directory": "/srv/mic", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f"},
                  "node_count": null, "capture_devices_whose_access_was_never_asked_for": []},
             ]})
             .to_string(),
@@ -377,9 +377,9 @@ fn streams_prints_the_table_of_what_the_runtime_holds() {
 
     assert_eq!(
         printed,
-        "ID                 NAME      STATE    NODES  PROJECT   FUNCTION\n\
-         cam-main-0a1b2c    main      running  3      /srv/cam  stream:main\n\
-         mic-listen-9f8e7d  Desk mic  stopped  -      /srv/mic  stream:listen\n"
+        "ID                 NAME      STATE    NODES  PROJECT   ASSET\n\
+         cam-main-0a1b2c    main      running  3      /srv/cam  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
+         mic-listen-9f8e7d  Desk mic  stopped  -      /srv/mic  0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f\n"
     );
     assert_eq!(
         stub_local_api_server.recorded_arguments_of("list_streams"),

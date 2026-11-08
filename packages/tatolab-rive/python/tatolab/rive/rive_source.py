@@ -42,7 +42,7 @@ class RiveSourceConfig:
     ] = 4
 
 
-@node(
+@node.process(
     execution="manual",
     description="Plays a Rive state machine, drawing each frame straight into the stream on the GPU",
 )

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -10,15 +10,17 @@ use uuid::Uuid;
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_asset::{
-    ASSET_SIDECAR_FILE_SUFFIX, DIRECTORIES_A_PROJECT_SCAN_SKIPS, GRAPH_DOCUMENT_FILE_SUFFIX,
-    ProjectAsset, ProjectAssetKind, ProjectAssetSidecar, ProjectRelativeAssetPath,
+    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind,
+    ProjectAssetSidecar, ProjectRelativeAssetPath, project_files_ending_with,
+    project_files_the_history_records,
 };
-use crate::project_content_store::ProjectContentStore;
+use crate::project_content_store::{ProjectContentStore, content_sha256_of};
 use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
 use crate::project_history_repository::{
     PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
+use crate::project_stream_document::project_stream_documents;
 use crate::project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetOperation, ProjectTransaction, ProjectTransactionAuthor,
@@ -91,6 +93,27 @@ impl ProjectRepository {
         Ok(repository)
     }
 
+    /// Open the project whose files are already written in `project_directory`, and commit them
+    /// as its first commit.
+    pub fn commit_a_written_project_as_its_first(
+        project_directory: &Path,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        refuse_an_author_without_a_name(author)?;
+        let repository = Self::open(project_directory)?;
+        if repository.history.head_commit()?.is_some() {
+            return Err(ProjectRepositoryRefusal::ProjectAlreadyCommitted {
+                project_directory: project_directory.to_path_buf(),
+            });
+        }
+        repository.history.commit_tracked_files(
+            &repository.tracked_files(&repository.assets_by_uuid)?,
+            author,
+            &format!("create_project {}", repository.project_file.name),
+        )?;
+        Ok(repository)
+    }
+
     /// Open the project in `project_directory`, its assets read from their sidecars.
     pub fn open(project_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
         refuse_a_relative_project_directory(project_directory)?;
@@ -115,16 +138,50 @@ impl ProjectRepository {
         &self.project_file
     }
 
-    /// Every asset, ordered by UUID.
-    pub fn assets(&self) -> impl Iterator<Item = &ProjectAsset> {
-        self.assets_by_uuid.values()
+    /// Every asset, ordered by UUID: each sidecar's, and each stream's, read from its graph
+    /// document as it is on disk now.
+    pub fn assets(&self) -> Result<Vec<ProjectAsset>, ProjectRepositoryRefusal> {
+        Ok(self.every_asset()?.into_values().collect())
     }
 
     /// The asset `asset` names, or a refusal naming it.
-    pub fn asset(&self, asset: Uuid) -> Result<&ProjectAsset, ProjectRepositoryRefusal> {
-        self.assets_by_uuid
-            .get(&asset)
+    pub fn asset(&self, asset: Uuid) -> Result<ProjectAsset, ProjectRepositoryRefusal> {
+        self.every_asset()?
+            .remove(&asset)
             .ok_or(ProjectRepositoryRefusal::NoSuchAsset(asset))
+    }
+
+    fn every_asset(&self) -> Result<BTreeMap<Uuid, ProjectAsset>, ProjectRepositoryRefusal> {
+        let mut every_asset = self.assets_by_uuid.clone();
+        for stream_document in project_stream_documents(&self.project_directory)? {
+            if self
+                .assets_by_uuid
+                .values()
+                .any(|asset| asset.path == stream_document.path)
+            {
+                continue;
+            }
+            let Ok(bytes) = &stream_document.bytes else {
+                continue;
+            };
+            let stream_asset = ProjectAsset {
+                asset: stream_document.stream_asset(self.project_file.project),
+                kind: ProjectAssetKind::Stream,
+                content_sha256: content_sha256_of(bytes),
+                content_byte_len: bytes.len() as u64,
+                import_settings: serde_json::Map::new(),
+                path: stream_document.path,
+            };
+            if let Some(earlier) = every_asset.get(&stream_asset.asset) {
+                return Err(ProjectRepositoryRefusal::AssetNamedTwice {
+                    asset: stream_asset.asset,
+                    first: earlier.path.to_string(),
+                    second: stream_asset.path.to_string(),
+                });
+            }
+            every_asset.insert(stream_asset.asset, stream_asset);
+        }
+        Ok(every_asset)
     }
 
     /// The project's content store, which an upload writes into before its import.
@@ -174,7 +231,7 @@ impl ProjectRepository {
         if changes.is_empty() {
             return Err(ProjectRepositoryRefusal::EmptyTransaction);
         }
-        let mut staged_assets = self.assets_by_uuid.clone();
+        let mut staged_assets = self.every_asset()?;
         let mut operations = Vec::with_capacity(changes.len());
         for change in changes {
             if let Some(operation) = self.operation_for_change(&staged_assets, change)? {
@@ -223,6 +280,7 @@ impl ProjectRepository {
                 return Err(refusal);
             }
         };
+        staged_assets.retain(|_, asset| asset.kind != ProjectAssetKind::Stream);
         self.assets_by_uuid = staged_assets;
         tracing::info!(
             project = %self.project_directory.display(),
@@ -317,12 +375,17 @@ impl ProjectRepository {
             ProjectAssetChangeRequest::DeleteAsset { asset } => {
                 let current = staged_asset(asset)?;
                 self.refuse_a_path_through_a_symbolic_link(&current.path)?;
-                let referencing_documents = self.graph_documents_referencing(asset)?;
+                let referencing_documents =
+                    self.graph_documents_referencing(asset, &current.path)?;
                 if !referencing_documents.is_empty() {
                     return Err(ProjectRepositoryRefusal::AssetStillReferenced {
                         asset,
                         referencing_documents,
                     });
+                }
+                if current.kind == ProjectAssetKind::Stream {
+                    self.content_store
+                        .store_the_file_at(&current.path.on_disk_under(&self.project_directory))?;
                 }
                 Ok(Some(ProjectAssetOperation::DeleteAsset {
                     asset: current.clone(),
@@ -333,6 +396,11 @@ impl ProjectRepository {
                 import_settings,
             } => {
                 let current = staged_asset(asset)?;
+                if current.kind == ProjectAssetKind::Stream {
+                    return Err(ProjectRepositoryRefusal::StreamAssetHasNoImportSettings(
+                        asset,
+                    ));
+                }
                 self.refuse_a_path_through_a_symbolic_link(&current.path)?;
                 if current.import_settings == import_settings {
                     return Ok(None);
@@ -358,7 +426,11 @@ impl ProjectRepository {
         }
         self.refuse_a_path_through_a_symbolic_link(&current.path)?;
         self.refuse_a_path_through_a_symbolic_link(&to)?;
-        refuse_a_graph_document_path(&to)?;
+        if current.kind == ProjectAssetKind::Stream {
+            refuse_a_stream_document_path_without_its_suffix(&to)?;
+        } else {
+            refuse_a_graph_document_path(&to)?;
+        }
         refuse_a_path_another_asset_holds(staged_assets, &to, Some(current.asset))?;
         if to.on_disk_under(&self.project_directory).exists() {
             return Err(ProjectRepositoryRefusal::AssetPathHoldsAnotherFile {
@@ -397,7 +469,7 @@ impl ProjectRepository {
                 })
             }
             ProjectAssetOperation::DeleteAsset { asset } => {
-                std::fs::remove_file(self.sidecar_on_disk(&asset.path))?;
+                self.remove_the_sidecar_of(asset)?;
                 let file = asset.path.on_disk_under(&self.project_directory);
                 if !file.exists() {
                     return Ok(PerformedAssetEffect::Operation(operation.clone()));
@@ -418,6 +490,9 @@ impl ProjectRepository {
                 }
                 if from_file.exists() {
                     std::fs::rename(&from_file, &to_file)?;
+                }
+                if is_a_stream_document(from) {
+                    return Ok(PerformedAssetEffect::Operation(operation.clone()));
                 }
                 if let Err(error) =
                     std::fs::rename(self.sidecar_on_disk(from), self.sidecar_on_disk(to))
@@ -447,7 +522,7 @@ impl ProjectRepository {
                     .perform_effect(&ProjectAssetOperation::DeleteAsset { asset })
                     .map(|_| ()),
                 PerformedAssetEffect::Operation(ProjectAssetOperation::ImportAsset { asset }) => {
-                    std::fs::remove_file(self.sidecar_on_disk(&asset.path)).map_err(Into::into)
+                    self.remove_the_sidecar_of(&asset)
                 }
                 PerformedAssetEffect::Operation(ProjectAssetOperation::DeleteAsset { asset }) => {
                     self.write_sidecar(&asset)
@@ -507,29 +582,52 @@ impl ProjectRepository {
         Ok(())
     }
 
+    /// Write `asset`'s sidecar; a stream asset has none, its UUID being inside its document.
     fn write_sidecar(&self, asset: &ProjectAsset) -> Result<(), ProjectRepositoryRefusal> {
+        if asset.kind == ProjectAssetKind::Stream {
+            return Ok(());
+        }
         write_file_whole(&self.sidecar_on_disk(&asset.path), &asset.sidecar_bytes()?)
+    }
+
+    fn remove_the_sidecar_of(&self, asset: &ProjectAsset) -> Result<(), ProjectRepositoryRefusal> {
+        if asset.kind == ProjectAssetKind::Stream {
+            return Ok(());
+        }
+        Ok(std::fs::remove_file(self.sidecar_on_disk(&asset.path))?)
     }
 
     fn sidecar_on_disk(&self, path: &ProjectRelativeAssetPath) -> PathBuf {
         self.project_directory.join(path.sidecar_path())
     }
 
+    /// The whole project as its history records it with `assets`: every file the project's
+    /// scan records, an asset whose bytes the content store holds as its sidecar alone.
     fn tracked_files(
         &self,
         assets: &BTreeMap<Uuid, ProjectAsset>,
     ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
+        let content_store_asset_paths: BTreeSet<&str> = assets
+            .values()
+            .filter(|asset| asset.kind != ProjectAssetKind::Stream)
+            .map(|asset| asset.path.as_str())
+            .collect();
         let mut tracked_files = BTreeMap::new();
+        for project_file in project_files_the_history_records(&self.project_directory)? {
+            if content_store_asset_paths.contains(project_file.as_str()) {
+                continue;
+            }
+            let bytes = std::fs::read(self.project_directory.join(&project_file))?;
+            tracked_files.insert(project_file, bytes);
+        }
         tracked_files.insert(
             PROJECT_FILE_NAME.to_owned(),
             self.project_file.canonical_bytes()?,
         );
         for asset in assets.values() {
-            tracked_files.insert(asset.path.sidecar_path(), asset.sidecar_bytes()?);
-        }
-        for graph_document in self.graph_documents_beside(assets)? {
-            let bytes = std::fs::read(self.project_directory.join(&graph_document))?;
-            tracked_files.insert(graph_document, bytes);
+            if asset.kind != ProjectAssetKind::Stream {
+                tracked_files.insert(asset.path.sidecar_path(), asset.sidecar_bytes()?);
+            }
         }
         Ok(tracked_files)
     }
@@ -570,13 +668,18 @@ impl ProjectRepository {
         }
     }
 
+    /// Every graph document but the asset's own at `asset_path` that references `asset`.
     fn graph_documents_referencing(
         &self,
         asset: Uuid,
+        asset_path: &ProjectRelativeAssetPath,
     ) -> Result<Vec<String>, ProjectRepositoryRefusal> {
         let asset_text = asset.to_string();
         let mut referencing = Vec::new();
         for graph_document in self.graph_documents_beside(&self.assets_by_uuid)? {
+            if graph_document == asset_path.as_str() {
+                continue;
+            }
             let bytes = std::fs::read(self.project_directory.join(&graph_document))?;
             let document = serde_json::from_slice::<Value>(&bytes).map_err(|not_parsed| {
                 ProjectRepositoryRefusal::GraphDocumentUnreadable {
@@ -643,6 +746,22 @@ fn refuse_a_graph_document_path(
     Ok(())
 }
 
+fn is_a_stream_document(path: &ProjectRelativeAssetPath) -> bool {
+    path.as_str().ends_with(GRAPH_DOCUMENT_FILE_SUFFIX)
+}
+
+fn refuse_a_stream_document_path_without_its_suffix(
+    path: &ProjectRelativeAssetPath,
+) -> Result<(), ProjectRepositoryRefusal> {
+    if !is_a_stream_document(path) {
+        return Err(ProjectRepositoryRefusal::AssetPathRefused {
+            path: path.to_string(),
+            why: "a stream asset's graph document is named `<name>.graph.json`",
+        });
+    }
+    Ok(())
+}
+
 fn refuse_a_path_another_asset_holds(
     assets: &BTreeMap<Uuid, ProjectAsset>,
     path: &ProjectRelativeAssetPath,
@@ -695,7 +814,7 @@ fn read_every_asset_sidecar(
         let sidecar: ProjectAssetSidecar =
             serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string()))?;
         if let Some(earlier) = assets_by_uuid.get(&sidecar.asset) {
-            return Err(ProjectRepositoryRefusal::AssetNamedByTwoSidecars {
+            return Err(ProjectRepositoryRefusal::AssetNamedTwice {
                 asset: sidecar.asset,
                 first: earlier.path.sidecar_path(),
                 second: sidecar_path,
@@ -707,38 +826,6 @@ fn read_every_asset_sidecar(
         );
     }
     Ok(assets_by_uuid)
-}
-
-fn project_files_ending_with(
-    project_directory: &Path,
-    suffix: &str,
-) -> Result<Vec<String>, ProjectRepositoryRefusal> {
-    let mut found = Vec::new();
-    let mut directories_to_read = vec![(project_directory.to_path_buf(), String::new())];
-    while let Some((directory, relative_directory)) = directories_to_read.pop() {
-        for entry in std::fs::read_dir(&directory)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
-                continue;
-            }
-            let relative = if relative_directory.is_empty() {
-                name.clone()
-            } else {
-                format!("{relative_directory}/{name}")
-            };
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                if !DIRECTORIES_A_PROJECT_SCAN_SKIPS.contains(&name.as_str()) {
-                    directories_to_read.push((entry.path(), relative));
-                }
-            } else if file_type.is_file() && name.ends_with(suffix) {
-                found.push(relative);
-            }
-        }
-    }
-    found.sort();
-    Ok(found)
 }
 
 fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {

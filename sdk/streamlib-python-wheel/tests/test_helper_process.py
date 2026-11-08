@@ -225,7 +225,7 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
 
 
 def test_a_port_lookup_casts_its_argument_to_the_declared_name():
-    """`@node` declares each port under its cast name, so every lookup casts
+    """`@node.process` declares each port under its cast name, so every lookup casts
     too: `Video` and `VIDEO` reach the port declared as `video`.
     """
     link_data_access = _engine.open_node_link_data_access_for_helper_process()
@@ -838,31 +838,6 @@ def drive_lifecycle_on_a_thread(bridge, processor_class):
     return lifecycle_thread
 
 
-def drive_lifecycle_on_a_thread_and_hand_it_back(bridge, processor_class):
-    """The same, with the lifecycle object once its thread has built it, so a
-    test can swap in a counting data plane after `setup` has handed the real
-    one to the engine's context."""
-    lifecycle_holder: "list[HelperProcessLifecycle]" = []
-    lifecycle_built = threading.Event()
-
-    def drive() -> None:
-        lifecycle = HelperProcessLifecycle(
-            bridge,
-            processor_class,
-            "R-helper-test",
-            "P-helper-test",
-            _engine.open_node_link_data_access_for_helper_process(),
-        )
-        lifecycle_holder.append(lifecycle)
-        lifecycle_built.set()
-        lifecycle.run_until_the_parent_is_done()
-
-    lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
-    lifecycle_thread.start()
-    assert lifecycle_built.wait(timeout=5.0), "the lifecycle thread never built its loop"
-    return lifecycle_thread, lifecycle_holder[0]
-
-
 def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
     """A helper that replied to `run` would desynchronize every later command:
     the parent reads that reply as the answer to whatever it sends next."""
@@ -990,10 +965,9 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     loop is polling — the listener owns it, and dropping the last subscriber
     drops the listener.
 
-    Fail-without-fix: cache `input_listener_fd()` outside the loop and every
-    later wait polls a closed descriptor, which `poll` reports invalid at once,
-    so the loop spins where it should park — or, once the OS recycles the
-    number, silently waits on an unrelated object.
+    Fail-without-fix: keep waiting on the listener's fd once it is gone and
+    every later wait reports it invalid at once, so the loop spins where it
+    should park.
 
     A processor left with no inputs has nothing to wake it but the parent,
     which is exactly what it must fall back to.
@@ -1001,7 +975,7 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    lifecycle_thread, lifecycle = drive_lifecycle_on_a_thread_and_hand_it_back(
+    lifecycle_thread = drive_lifecycle_on_a_thread(
         bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
@@ -1015,22 +989,21 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
         }
     )
     assert stand_in_parent.receive()["rpc"] == "ready"
-    counting = _CountingLinkDataAccess(lifecycle._link_data_access)
-    # A duck-typed stand-in: the loop only ever calls methods on it.
-    lifecycle._link_data_access = cast(NodeLinkDataAccess, counting)
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
     stand_in_parent.send(
         {"cmd": "unwire_link", "direction": "input", "link_id": link_id}
     )
+    cpu_seconds_before_the_wait = time.process_time()
     # The wait is load-bearing, not just the unanswered-command assertion: it
     # is what lets the loop go round again on the fd the unwire just closed.
     # Send `teardown` immediately instead and both commands drain in one batch,
     # the loop leaves before it ever waits again, and the bug hides.
     assert stand_in_parent.receive(timeout_seconds=0.5) is None
-    assert counting.readiness_checks < 50, (
-        f"the loop asked for data {counting.readiness_checks} times in half a second "
-        f"with no input left — it must park on the parent, not spin"
+    cpu_seconds_in_the_wait = time.process_time() - cpu_seconds_before_the_wait
+    assert cpu_seconds_in_the_wait < 0.25, (
+        f"the helper spent {cpu_seconds_in_the_wait:.2f} s of CPU in half a second with "
+        f"no input left — it must park on the parent, not spin"
     )
 
     stand_in_parent.send({"cmd": "on_pause", "capability": "limited"})
@@ -1232,6 +1205,10 @@ def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 0})
+    deadline = time.monotonic() + 5.0
+    while "process-interrupted" not in hooks_the_interrupt_probes_reached:
+        assert time.monotonic() < deadline, "process() never took the interrupt"
+        time.sleep(0.01)
 
     # Both rungs at once, the way the ladder sends them.
     stand_in_parent.send({"cmd": "stop", "capability": "full"})
@@ -1603,53 +1580,15 @@ def test_a_wire_in_an_unknown_direction_is_refused_rather_than_left_unanswered(
     assert not lifecycle_thread.is_alive()
 
 
-class _CountingLinkDataAccess:
-    """Forwards to the real data plane and counts the loop's listener drains."""
-
-    def __init__(self, real) -> None:
-        self._real = real
-        self.drain_calls = 0
-        self.readiness_checks = 0
-
-    def drain_input_listener(self) -> None:
-        self.drain_calls += 1
-        self._real.drain_input_listener()
-
-    def any_input_port_has_data(self) -> bool:
-        self.readiness_checks += 1
-        return self._real.any_input_port_has_data()
-
-    def __getattr__(self, name: str):
-        return getattr(self._real, name)
-
-
-def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand_in_parent):
-    """A processor slower than its upstream never goes idle, so a loop that
-    drains only when idle leaves every notification of the burst pending, and
-    the wait it finally reaches wakes for bags already answered. The drain has
-    to happen on every pass.
-
-    Fail-without-fix: move the drain back under the idle branch and the burst
-    below is processed with a drain or two at most, all after it ended.
-    """
+def test_a_helper_slower_than_its_upstream_forwards_the_burst(stand_in_parent):
+    """A processor slower than its upstream never goes idle, so the loop runs
+    `process()` back to back and still forwards what the burst sent."""
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    lifecycle_holder: "list[HelperProcessLifecycle]" = []
-
-    def drive() -> None:
-        lifecycle = HelperProcessLifecycle(
-            bridge,
-            load_processor_class(f"{PROBE_MODULE}:SlowPassThroughProbe"),
-            "R-helper-test",
-            "P-helper-test",
-            _engine.open_node_link_data_access_for_helper_process(),
-        )
-        lifecycle_holder.append(lifecycle)
-        lifecycle.run_until_the_parent_is_done()
-
-    lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
-    lifecycle_thread.start()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:SlowPassThroughProbe")
+    )
 
     inbound_link_id = "L-slow-in"
     outbound_link_id = "L-slow-out"
@@ -1672,10 +1611,6 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     assert stand_in_parent.receive()["rpc"] == "ready"
     # Swapped in after setup, which handed the real object to the engine's
     # context; from here on only the loop reads it.
-    (lifecycle,) = lifecycle_holder
-    counting = _CountingLinkDataAccess(lifecycle._link_data_access)
-    # A duck-typed stand-in: the loop only ever calls methods on it.
-    lifecycle._link_data_access = cast(NodeLinkDataAccess, counting)
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
     upstream = _engine.open_node_link_data_access_for_helper_process()
@@ -1700,10 +1635,6 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
             continue
         time.sleep(0.01)
     assert forwarded >= 8, f"the probe forwarded only {forwarded} messages of the burst"
-    assert counting.drain_calls >= 8, (
-        f"the listener was drained {counting.drain_calls} times while {forwarded} messages "
-        f"were processed back to back — it must be drained on every pass"
-    )
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"
@@ -1714,6 +1645,10 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
 # =============================================================================
 # The continuous loop's pacing
 # =============================================================================
+
+# The interval the engine's scheduling loop runs a continuous processor
+# declaring none at.
+THE_ENGINES_CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
 
 
 @pytest.fixture
@@ -1848,7 +1783,7 @@ def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floo
     ) / 1_000_000_000
     calls_per_second = (process_calls - 1) / measured_span_seconds
     floor_calls_per_second = (
-        1_000_000_000 / processor_interpreter_bootstrap.CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
+        1_000_000_000 / THE_ENGINES_CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
     )
     assert calls_per_second <= floor_calls_per_second * 1.2, (
         f"a zero interval ran process() {calls_per_second:.0f} times a second; the "

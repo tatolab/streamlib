@@ -3,7 +3,7 @@
 
 """WHIP publish and WHEP play for StreamLib.
 
-An extension wheel: the Rust is inside this package and the two `@node`
+An extension wheel: the Rust is inside this package and the two `@node.process`
 classes below are the binding. Nothing here links the engine — the wheel depends
 on `tatolab-stream`, and each processor runs in its own processor interpreter
 like any other Python processor. The transport stack comes up in that

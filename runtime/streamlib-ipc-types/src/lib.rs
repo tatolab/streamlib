@@ -883,9 +883,17 @@ const HELPER_PROCESS_LOSS_COUNT_BOARD_OUTPUT_PORT_SECTION: u32 = 1;
 /// The board section holding the helper's one step-progress entry.
 const HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION: u32 = 2;
 
+/// The board section holding the helper's one function-node call breadcrumb.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION: u32 = 3;
+
+/// The board section holding one state entry per stateful function node the
+/// helper calls, by the node's breadcrumb number.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_STATE_SECTION: u32 = 4;
+
 /// The key of one entry on a helper process's loss-count blackboard: an
-/// inbound-link slot, a declared output port by its index, or the helper's step
-/// progress.
+/// inbound-link slot, a declared output port by its index, the helper's step
+/// progress, its function-node call breadcrumb, or the state of one stateful
+/// function node it calls.
 ///
 /// The iceoryx2 type name is pinned for the reason
 /// [`DataChannelSampleUserHeader`]'s is: the parent creates the board
@@ -920,6 +928,21 @@ impl HelperProcessLossCountBoardKey {
         section: HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION,
         index_within_section: 0,
     };
+
+    /// The key of the helper's function-node call breadcrumb.
+    pub const FUNCTION_NODE_CALL_BREADCRUMB: Self = Self {
+        section: HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION,
+        index_within_section: 0,
+    };
+
+    /// The key of the state entry of the stateful function node numbered
+    /// `function_node_breadcrumb_number` on the helper's setup command.
+    pub const fn function_node_state(function_node_breadcrumb_number: u32) -> Self {
+        Self {
+            section: HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_STATE_SECTION,
+            index_within_section: function_node_breadcrumb_number,
+        }
+    }
 }
 
 /// One inbound link's loss counts as a helper process last wrote them, beside
@@ -978,6 +1001,86 @@ pub struct HelperProcessStepProgressBoardEntry {
     pub callbacks_in_flight: u32,
     /// Always zero; keeps the entry a multiple of 8 bytes.
     pub reserved: u32,
+}
+
+/// The function-node call a helper process has under way, as it last wrote it:
+/// what its parent reads after the helper dies, and what the parent's watchdog
+/// times.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("HelperProcessFunctionNodeCallBreadcrumbBoardEntry")]
+#[repr(C)]
+pub struct HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+    /// The machine's monotonic time the call started at, in nanoseconds; zero
+    /// while no function-node call is under way.
+    pub call_started_at_monotonic_ns: u64,
+    /// The number the parent gave the called function node on the helper's
+    /// setup command; read only while a call is under way.
+    pub function_node_breadcrumb_number: u32,
+    /// How many function-node calls the helper has under way, this oldest one
+    /// among them; zero between calls.
+    pub function_node_calls_under_way: u32,
+}
+
+/// The most state values one function node's state entry holds: a state record
+/// of at most this many numbers.
+pub const STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS: usize = 30;
+
+/// The state one stateful function node's last call returned, as its helper
+/// process last wrote it: what its parent reads to carry the state across a
+/// restart, a promotion and a reload, and what `graph` shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, ZeroCopySend)]
+#[type_name("HelperProcessFunctionNodeStateBoardEntry")]
+#[repr(C)]
+pub struct HelperProcessFunctionNodeStateBoardEntry {
+    /// How many times the helper wrote this entry; zero before its first
+    /// write, when the entry holds no state.
+    pub state_writes: u64,
+    /// How many of `state_values` hold the state, in the state record's field
+    /// order.
+    pub state_value_count: u32,
+    /// Always zero; keeps `state_values` 8-byte aligned.
+    pub reserved: u32,
+    /// The state record's fields, each as an f64; past `state_value_count`
+    /// always zero.
+    pub state_values: [f64; STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS],
+}
+
+impl HelperProcessFunctionNodeStateBoardEntry {
+    /// The entry holding `state_values` as its `state_writes`-th write;
+    /// `None` when there are more values than an entry holds.
+    pub fn holding(state_values: &[f64], state_writes: u64) -> Option<Self> {
+        let mut entry = Self {
+            state_writes,
+            state_value_count: u32::try_from(state_values.len()).ok()?,
+            ..Self::default()
+        };
+        entry
+            .state_values
+            .get_mut(..state_values.len())?
+            .copy_from_slice(state_values);
+        Some(entry)
+    }
+
+    /// The state the entry holds, or `None` before the helper's first write.
+    pub fn state_values_written(&self) -> Option<&[f64]> {
+        if self.state_writes == 0 {
+            return None;
+        }
+        self.state_values.get(..self.state_value_count as usize)
+    }
+}
+
+/// The breadcrumb number of the function node a helper runs as its own
+/// processor, once that node is promoted out of its readers' islands; the nodes
+/// of the islands feeding it are numbered after it.
+pub const BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR: u32 = 0;
+
+impl HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+    /// The breadcrumb number of the function node whose call is under way, or
+    /// `None` between calls.
+    pub fn function_node_whose_call_is_under_way(&self) -> Option<u32> {
+        (self.call_started_at_monotonic_ns != 0).then_some(self.function_node_breadcrumb_number)
+    }
 }
 
 /// The key of the one entry on a stream's clock blackboard.
@@ -1239,10 +1342,72 @@ mod tests {
             HelperProcessLossCountBoardKey::inbound_link_slot(0),
             "the step-progress entry is in a section of its own"
         );
+        assert_ne!(
+            HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB,
+            HelperProcessLossCountBoardKey::STEP_PROGRESS,
+            "the function-node call breadcrumb is in a section of its own"
+        );
         assert_eq!(
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
             unsafe { <HelperProcessLossCountBoardKey as ZeroCopySend>::type_name() },
             "HelperProcessLossCountBoardKey"
+        );
+    }
+
+    #[test]
+    fn a_function_node_state_entry_is_two_counts_then_its_values_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<HelperProcessFunctionNodeStateBoardEntry>(),
+            16 + 8 * STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS
+        );
+        assert_eq!(
+            std::mem::align_of::<HelperProcessFunctionNodeStateBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, state_writes),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, state_value_count),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, reserved),
+            12
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, state_values),
+            16
+        );
+        assert_ne!(
+            HelperProcessLossCountBoardKey::function_node_state(0),
+            HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB,
+            "a function node's state is in a section of its own"
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <HelperProcessFunctionNodeStateBoardEntry as ZeroCopySend>::type_name() },
+            "HelperProcessFunctionNodeStateBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_function_node_state_entry_holds_what_was_written_and_nothing_before_its_first_write() {
+        assert_eq!(
+            HelperProcessFunctionNodeStateBoardEntry::default().state_values_written(),
+            None
+        );
+        let written = HelperProcessFunctionNodeStateBoardEntry::holding(&[0.25, -1.0], 3)
+            .expect("two values fit");
+        assert_eq!(written.state_values_written(), Some(&[0.25, -1.0][..]));
+        assert!(
+            HelperProcessFunctionNodeStateBoardEntry::holding(
+                &[0.0; STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS + 1],
+                1
+            )
+            .is_none(),
+            "a state past what an entry holds is refused"
         );
     }
 
@@ -1333,6 +1498,64 @@ mod tests {
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
             unsafe { <HelperProcessStepProgressBoardEntry as ZeroCopySend>::type_name() },
             "HelperProcessStepProgressBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_helpers_function_node_call_breadcrumb_is_a_u64_and_two_u32s_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<HelperProcessFunctionNodeCallBreadcrumbBoardEntry>(),
+            16
+        );
+        assert_eq!(
+            std::mem::align_of::<HelperProcessFunctionNodeCallBreadcrumbBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+                call_started_at_monotonic_ns
+            ),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+                function_node_breadcrumb_number
+            ),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+                function_node_calls_under_way
+            ),
+            12
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe {
+                <HelperProcessFunctionNodeCallBreadcrumbBoardEntry as ZeroCopySend>::type_name()
+            },
+            "HelperProcessFunctionNodeCallBreadcrumbBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_breadcrumb_names_a_function_node_only_while_its_call_is_under_way() {
+        let between_calls = HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+            call_started_at_monotonic_ns: 0,
+            function_node_breadcrumb_number: 3,
+            function_node_calls_under_way: 0,
+        };
+        assert_eq!(between_calls.function_node_whose_call_is_under_way(), None);
+        let during_a_call = HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+            call_started_at_monotonic_ns: 42,
+            ..between_calls
+        };
+        assert_eq!(
+            during_a_call.function_node_whose_call_is_under_way(),
+            Some(3)
         );
     }
 

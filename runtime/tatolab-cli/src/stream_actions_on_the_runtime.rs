@@ -27,7 +27,7 @@ use crate::verb_standard_output::write_verb_standard_output;
 /// A local API tool that runs, stops or reads the streams the runtime holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StreamActionTool {
-    /// Queues a load of every `@stream` of a project.
+    /// Queues a load of every stream of a project.
     RunProject,
     /// Creates a project and queues its load.
     CreateProject,
@@ -83,12 +83,12 @@ const NOT_LOADED_NODE_COUNT_CELL: &str = "-";
 /// What `streams` prints in place of a step for a preparing stream whose action waits its turn.
 const STREAM_ACTION_STILL_QUEUED_CELL: &str = "queued";
 
-/// The `PROJECT` and `FUNCTION` cells of a stream with no location: one a library host loaded,
+/// The `PROJECT` and `ASSET` cells of a stream with no location: one a library host loaded,
 /// or a record an earlier runtime wrote.
 const NO_LOCATION_CELL: &str = "-";
 
-/// What `run` and `dev` ask the runtime to load: the project, every `@stream` of its
-/// `stream.py`.
+/// What `run` and `dev` ask the runtime to load: the project, every stream asset of its
+/// `streams/` graph documents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectLoadRequest {
     /// The absolute project directory the runtime loads, symlinks resolved.
@@ -432,7 +432,7 @@ pub(crate) fn list_streams() -> Result<u8, TatolabCommandFailure> {
     write_verb_standard_output(&rendered_streams_table(&list_streams_result.streams))
 }
 
-/// The `ID  NAME  STATE  NODES  PROJECT  FUNCTION` table, each column as wide as its widest cell,
+/// The `ID  NAME  STATE  NODES  PROJECT  ASSET` table, each column as wide as its widest cell,
 /// then an `<id> <step>` line per preparing stream, a line per failed stream saying why it
 /// failed and a line per stream waiting for capture-device access nobody has asked for; one line
 /// when there is no stream.
@@ -446,13 +446,13 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         "STATE".to_owned(),
         "NODES".to_owned(),
         "PROJECT".to_owned(),
-        "FUNCTION".to_owned(),
+        "ASSET".to_owned(),
     ];
     let stream_rows = listed_streams.iter().map(|listed_stream| {
-        let (project_cell, function_cell) = match &listed_stream.location {
+        let (project_cell, stream_asset_cell) = match &listed_stream.location {
             Some(location) => (
                 location.project_directory.display().to_string(),
-                location.stream_function.clone(),
+                location.stream_asset.to_string(),
             ),
             None => (NO_LOCATION_CELL.to_owned(), NO_LOCATION_CELL.to_owned()),
         };
@@ -465,7 +465,7 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
                 |node_count| node_count.to_string(),
             ),
             project_cell,
-            function_cell,
+            stream_asset_cell,
         ]
     });
     let table_rows: Vec<[String; 6]> = std::iter::once(header_row).chain(stream_rows).collect();
@@ -625,10 +625,10 @@ mod tests {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "Desk camera", "state": "running",
-                 "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
+                 "location": {"project_directory": "/srv/cam", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
                  "node_count": 4, "capture_devices_whose_access_was_never_asked_for": []},
                 {"stream": "a-back-9f8e7d", "display_name": "back", "state": "stopped",
-                 "location": {"project_directory": "/srv/a", "stream_function": "rigs:back"},
+                 "location": {"project_directory": "/srv/a", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f"},
                  "node_count": null, "capture_devices_whose_access_was_never_asked_for": []},
             ]
         }))
@@ -636,9 +636,9 @@ mod tests {
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "ID               NAME         STATE    NODES  PROJECT   FUNCTION\n\
-             cam-main-0a1b2c  Desk camera  running  4      /srv/cam  stream:main\n\
-             a-back-9f8e7d    back         stopped  -      /srv/a    rigs:back\n"
+            "ID               NAME         STATE    NODES  PROJECT   ASSET\n\
+             cam-main-0a1b2c  Desk camera  running  4      /srv/cam  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
+             a-back-9f8e7d    back         stopped  -      /srv/a    0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f\n"
         );
         assert_eq!(rendered_streams_table(&[]), "No streams in this runtime.\n");
     }
@@ -648,7 +648,7 @@ mod tests {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
                 {"stream": "cam-main-0a1b2c", "display_name": "main", "state": "running",
-                 "location": {"project_directory": "/srv/cam", "stream_function": "stream:main"},
+                 "location": {"project_directory": "/srv/cam", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
                  "node_count": 4, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null},
                 {"stream": "main", "display_name": "main", "state": "failed", "location": null,
                  "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": "an earlier runtime recorded it"},
@@ -658,8 +658,8 @@ mod tests {
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "ID               NAME  STATE    NODES  PROJECT   FUNCTION\n\
-             cam-main-0a1b2c  main  running  4      /srv/cam  stream:main\n\
+            "ID               NAME  STATE    NODES  PROJECT   ASSET\n\
+             cam-main-0a1b2c  main  running  4      /srv/cam  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
              main             main  failed   -      -         -\n\
              \n\
              main failed: an earlier runtime recorded it.\n"
@@ -671,7 +671,7 @@ mod tests {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
                 {"stream": "desk-0a1b2c", "display_name": "desk", "state": "running",
-                 "location": {"project_directory": "/srv/desk", "stream_function": "stream"},
+                 "location": {"project_directory": "/srv/desk", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
                  "node_count": 3,
                  "capture_devices_whose_access_was_never_asked_for": ["camera", "microphone"]},
             ]
@@ -680,8 +680,8 @@ mod tests {
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "ID           NAME  STATE    NODES  PROJECT    FUNCTION\n\
-             desk-0a1b2c  desk  running  3      /srv/desk  stream\n\
+            "ID           NAME  STATE    NODES  PROJECT    ASSET\n\
+             desk-0a1b2c  desk  running  3      /srv/desk  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
              \n\
              desk-0a1b2c is waiting for camera and microphone access, which nobody has asked \
              for yet: `tatolab stop desk-0a1b2c` then `tatolab start desk-0a1b2c` asks for it.\n"
@@ -693,10 +693,10 @@ mod tests {
         let list_streams_result: ListStreamsToolResult = serde_json::from_value(json!({
             "streams": [
                 {"stream": "desk-0a1b2c", "display_name": "desk", "state": "preparing",
-                 "location": {"project_directory": "/srv/desk", "stream_function": "stream"},
+                 "location": {"project_directory": "/srv/desk", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
                  "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-1", "step": "making_the_venv"},
                 {"stream": "hall-3d4e5f", "display_name": "hall", "state": "preparing",
-                 "location": {"project_directory": "/srv/hall", "stream_function": "stream"},
+                 "location": {"project_directory": "/srv/hall", "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f"},
                  "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "action": "Rabc-2", "step": null},
             ]
         }))
@@ -704,9 +704,9 @@ mod tests {
 
         assert_eq!(
             rendered_streams_table(&list_streams_result.streams),
-            "ID           NAME  STATE      NODES  PROJECT    FUNCTION\n\
-             desk-0a1b2c  desk  preparing  -      /srv/desk  stream\n\
-             hall-3d4e5f  hall  preparing  -      /srv/hall  stream\n\
+            "ID           NAME  STATE      NODES  PROJECT    ASSET\n\
+             desk-0a1b2c  desk  preparing  -      /srv/desk  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
+             hall-3d4e5f  hall  preparing  -      /srv/hall  0f6d2c1e-7a3b-4c5d-9e8f-1a2b3c4d5e6f\n\
              \n\
              desk-0a1b2c making_the_venv\n\
              hall-3d4e5f queued\n"

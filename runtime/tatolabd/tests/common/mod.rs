@@ -286,42 +286,92 @@ pub fn expect_the_runtime_to_crash_on_segv(tatolabd_command: Command) {
     );
 }
 
-/// The location of the function `function` of `stream.py` in `project_directory`.
-pub fn the_location_of_the_function(project_directory: &Path, function: &str) -> StreamLocation {
+/// The name every test project's `tatolab-project.json` gives it.
+pub const TEST_PROJECT_NAME: &str = "rig";
+
+/// The project UUID of the project at `project_directory`, writing its
+/// `tatolab-project.json` with a fresh one when it holds none.
+pub fn the_project_at(project_directory: &Path) -> uuid::Uuid {
+    let project_file_path = project_directory.join("tatolab-project.json");
+    if let Ok(project_file_text) = std::fs::read_to_string(&project_file_path) {
+        let project_file: serde_json::Value =
+            serde_json::from_str(&project_file_text).expect("the project file reads");
+        return project_file["project"]
+            .as_str()
+            .and_then(|project| project.parse().ok())
+            .expect("the project file holds its project UUID");
+    }
+    let project = uuid::Uuid::new_v4();
+    std::fs::create_dir_all(project_directory).expect("the project directory");
+    std::fs::write(
+        &project_file_path,
+        serde_json::json!({ "project": project, "name": TEST_PROJECT_NAME, "dependencies": [] })
+            .to_string(),
+    )
+    .expect("the project's tatolab-project.json");
+    project
+}
+
+/// The location of the stream `stream_name` of the project at `project_directory`: its
+/// project UUID, and the stream asset UUID drawn from it and the stream's name.
+pub fn the_location_of_the_stream(project_directory: &Path, stream_name: &str) -> StreamLocation {
+    let project = the_project_at(project_directory);
     StreamLocation {
         project_directory: project_directory.to_path_buf(),
-        stream_function: format!("stream:{function}"),
+        project,
+        stream_asset: uuid::Uuid::new_v5(&project, stream_name.as_bytes()),
     }
 }
 
-/// The stream id the runtime computes for the function `function` of
-/// `stream.py` in `project_directory`.
-pub fn the_stream_id_of_the_function(project_directory: &Path, function: &str) -> String {
-    the_location_of_the_function(project_directory, function).stream_id()
+/// The stream id a first run records the stream `stream_name` of the project at
+/// `project_directory` under.
+pub fn the_stream_id_of_the_stream(project_directory: &Path, stream_name: &str) -> String {
+    the_location_of_the_stream(project_directory, stream_name)
+        .stream_id_named(TEST_PROJECT_NAME, stream_name)
 }
 
-/// The record of a recorded stream: the function `function` of `stream.py` in
-/// `project_directory`, running `graph` under `interpreter`, keyed by the
-/// stream id its location computes to.
+/// The record of a recorded stream: the stream `stream_name` of the project at
+/// `project_directory`, whose graph document holding `graph` it writes, a UUID given to each
+/// node holding none as the runtime gives one, under
+/// `interpreter`, keyed by the stream id its location computes to.
 pub fn a_stream_record(
-    function: &str,
+    stream_name: &str,
     graph: serde_json::Value,
     project_directory: &Path,
     interpreter: &Path,
     stopped: bool,
 ) -> StreamRecord {
-    let location = the_location_of_the_function(project_directory, function);
+    let location = the_location_of_the_stream(project_directory, stream_name);
+    let mut graph_document = graph;
+    if let Some(nodes) = graph_document["nodes"].as_array_mut() {
+        for node in nodes {
+            if node.get("id").is_none() {
+                let node_name = node["name"].as_str().unwrap_or_default().to_string();
+                node["id"] = serde_json::json!(
+                    uuid::Uuid::new_v5(&location.stream_asset, node_name.as_bytes()).to_string()
+                );
+            }
+        }
+    }
+    graph_document["asset"] = serde_json::json!(location.stream_asset);
+    let streams_directory = project_directory.join("streams");
+    std::fs::create_dir_all(&streams_directory).expect("the streams directory");
+    std::fs::write(
+        streams_directory.join(format!("{stream_name}.graph.json")),
+        graph_document.to_string(),
+    )
+    .expect("the graph document");
     StreamRecord {
         schema_version: STREAM_RECORD_SCHEMA_VERSION,
-        stream_id: location.stream_id(),
+        stream_id: location.stream_id_named(TEST_PROJECT_NAME, stream_name),
         location,
-        display_name: function.to_owned(),
+        display_name: stream_name.to_owned(),
         interpreter: interpreter.to_path_buf(),
-        graph: Some(graph),
         stopped,
         failed_because: None,
         runtime_crashes_in_a_row_implicating_it: 0,
         pending_stream_actions: Vec::new(),
+        function_node_states_by_node_name: Default::default(),
     }
 }
 

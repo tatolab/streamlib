@@ -4,6 +4,7 @@
 pub(crate) mod address_chunk;
 mod end_the_process_at_once;
 mod engine_teardown_watchdog;
+mod function_node_states_carried_across_loads;
 mod graph_change_listener;
 mod helper_process_group_registry;
 mod loaded_stream;
@@ -48,6 +49,10 @@ pub(crate) use engine_teardown_watchdog::{
     ArmedTeardownWatchdogOfOneStream, ENGINE_TEARDOWN_WATCHDOG_BUDGET,
     count_threads_abandoned_in_this_process,
 };
+pub use function_node_states_carried_across_loads::{
+    FunctionNodeState, FunctionNodeStatesCarriedForEveryStream,
+    FunctionNodeStatesCarriedForOneStream, RecordTheFunctionNodeStatesOfAStreamAtItsEnd,
+};
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
@@ -58,9 +63,9 @@ pub(crate) use helper_process_group_registry::{
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use machine_name::MachineName;
 pub use machine_state_directory::{
-    PendingStreamActionKind, PendingStreamActionOnTheRecord, STREAM_RECORD_SCHEMA_VERSION,
-    StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure,
-    StreamRecordsInTheStateDirectory,
+    PendingStreamActionKind, PendingStreamActionOnTheRecord, RecordedFunctionNodeState,
+    STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime,
+    StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
 };
 pub use open_descriptor_soft_limit::{
     OpenDescriptorSoftLimitRaise, raise_the_open_descriptor_soft_limit_to_its_ceiling,
@@ -73,15 +78,13 @@ pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use output_port_viewer::{OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen};
 pub use project_stream_action_queue::{
-    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, ProjectStreamsListing, StreamAction,
-    StreamActionKind, StreamActionQueued, StreamActionState, StreamActionStep,
-    StreamActionWorkingOnAStream, StreamOfAStreamAction, StreamTheLastCompileOfTheProjectNamed,
-    WhatTheLastCompileOfTheProjectGave,
+    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, StreamAction, StreamActionKind, StreamActionQueued,
+    StreamActionState, StreamActionStep, StreamActionWorkingOnAStream, StreamOfAStreamAction,
 };
 pub(crate) use runtime::what_interrupted_a_load;
 pub use runtime::{
-    EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
-    StreamLoadObservingInterrupts, WhatALoadedStreamIsKeyedBy,
+    CreatedProjectFirstCommit, EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner,
+    RunnerConstructionOptions, StreamLoadObservingInterrupts, WhatALoadedStreamIsKeyedBy,
 };
 pub use runtime_crash_pinned_on_a_stream::{
     CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, RuntimeRunInProgressRecord,

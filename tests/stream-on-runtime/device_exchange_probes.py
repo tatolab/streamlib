@@ -79,7 +79,7 @@ class _FrameProbeBase:
         _report(lambda: self._probe(ctx, frame))
 
 
-@node
+@node.process
 class GraphFrameToTorchProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -107,7 +107,7 @@ class GraphFrameToTorchProbe(_FrameProbeBase):
             return observation
 
 
-@node
+@node.process
 class DeviceEditProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -139,7 +139,7 @@ class DeviceEditProbe(_FrameProbeBase):
             return observation
 
 
-@node
+@node.process
 class WithBlockEditProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -168,7 +168,7 @@ class WithBlockEditProbe(_FrameProbeBase):
             return observation
 
 
-@node
+@node.process
 class TensorOutlivesHandleProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -193,7 +193,7 @@ class TensorOutlivesHandleProbe(_FrameProbeBase):
         }
 
 
-@node
+@node.process
 class HostSideProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -213,7 +213,7 @@ class HostSideProbe(_FrameProbeBase):
             return observation
 
 
-@node
+@node.process
 class LaggedConsumerHoldsItsFrameProbe:
     """View identity across ring cycles, plus a frame held past the pool's own
     depth.
@@ -347,7 +347,7 @@ class LaggedConsumerHoldsItsFrameProbe:
         _report(lambda: observation)
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class DmaBufExportProbe:
     """Round-trips a surface's DMA-BUF fd out of and back into the graph.
 
@@ -393,18 +393,18 @@ class DmaBufExportProbe:
             return observation
 
 
-# GLSL that fills its one bound texture with a constant — the smallest
+# Slang that fills its one bound texture with a constant — the smallest
 # engine-kernel producer a cross-process texture consumer can stand behind.
 # The constant is chosen to be exact in unorm8: 64, 128, 192, 255.
-FILL_CONSTANT_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba8) uniform writeonly image2D output_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(output_image);
-    if (at.x >= extent.x || at.y >= extent.y) { return; }
-    imageStore(output_image, at, vec4(64.0 / 255.0, 128.0 / 255.0, 192.0 / 255.0, 1.0));
+FILL_CONSTANT_SLANG = """\
+[[vk::binding(0, 0)]] [format("rgba8")] RWTexture2D<float4> output_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint width;
+    uint height;
+    output_image.GetDimensions(width, height);
+    if (invocation.x >= width || invocation.y >= height) { return; }
+    output_image[invocation.xy] = float4(64.0 / 255.0, 128.0 / 255.0, 192.0 / 255.0, 1.0);
 }
 """
 
@@ -412,15 +412,15 @@ FILL_CONSTANT_RGBA = [64, 128, 192, 255]
 
 # The float fill, chosen exact in float16 and doubled exactly by the scope
 # demo: (0.25, 0.5, 1.5, 2.0) -> (0.5, 1.0, 3.0, 4.0).
-FILL_FLOAT_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D output_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(output_image);
-    if (at.x >= extent.x || at.y >= extent.y) { return; }
-    imageStore(output_image, at, vec4(0.25, 0.5, 1.5, 2.0));
+FILL_FLOAT_SLANG = """\
+[[vk::binding(0, 0)]] [format("rgba16f")] RWTexture2D<float4> output_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint width;
+    uint height;
+    output_image.GetDimensions(width, height);
+    if (invocation.x >= width || invocation.y >= height) { return; }
+    output_image[invocation.xy] = float4(0.25, 0.5, 1.5, 2.0);
 }
 """
 
@@ -440,7 +440,7 @@ RENDER_TARGET_FLAVOUR_USAGE = [
 ]
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TextureHandleRoundTripProbe:
     """A kernel output crosses the process boundary as the texture itself.
 
@@ -462,7 +462,7 @@ class TextureHandleRoundTripProbe:
             ctx.gpu_limited_access, "export_opaque_fd"
         ) and not hasattr(ctx.gpu_limited_access, "export_dma_buf")
         fill_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=FILL_CONSTANT_GLSL,
+            source=FILL_CONSTANT_SLANG,
             bindings={"output_image": "storage_image"},
         )
         with ctx.gpu_full_access.acquire_texture(
@@ -609,7 +609,7 @@ class TextureHandleRoundTripProbe:
         return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class PrivilegedCapabilityProbe:
     """What the privileged capability answers from a helper process."""
 
@@ -654,7 +654,7 @@ class PrivilegedCapabilityProbe:
         return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class DeviceTensorScopeDoublesAKernelOutputProbe:
     """The demo: torch doubles a kernel output in place through the scope.
 
@@ -672,7 +672,7 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
         import torch
 
         fill_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=FILL_FLOAT_GLSL,
+            source=FILL_FLOAT_SLANG,
             bindings={"output_image": "storage_image"},
         )
         with ctx.gpu_full_access.acquire_texture(
@@ -705,7 +705,7 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
             return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class DeviceTensorScopeDiscardsOnRaiseProbe:
     """A raise mid-scope leaves the surface holding its pre-scope content.
 
@@ -721,7 +721,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
         import torch
 
         fill_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=FILL_CONSTANT_GLSL,
+            source=FILL_CONSTANT_SLANG,
             bindings={"output_image": "storage_image"},
         )
         with ctx.gpu_full_access.acquire_texture(
@@ -766,7 +766,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
             return observation
 
 
-@node
+@node.process
 class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
     """One rule for both scopes: the CPU pixel-buffer scope discards a pending
     device write when the block is left by a raise.
@@ -810,7 +810,7 @@ class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
         }
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class PooledTextureExportProbe:
     """Resurrected from #1737 (removed by #1754, carried by #1757): a pooled
     texture acquired by a Python processor exports a device tensor of correct
@@ -846,7 +846,7 @@ class PooledTextureExportProbe:
         return outcomes
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
     """No usage an author spells at `acquire_texture` can close the scope.
 
@@ -888,7 +888,7 @@ class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
                     observation[entry] = f"refused: {refusal}"
         return observation
 
-@node(execution="manual")
+@node.process(execution="manual")
 class OpaqueFdExportHandoffProbe:
     """Hands a kernel-written texture's OPAQUE_FD export to a foreign process.
 
@@ -913,7 +913,7 @@ class OpaqueFdExportHandoffProbe:
             return {"failure": "STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET is not set"}
         observation = {}
         fill_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=FILL_CONSTANT_GLSL,
+            source=FILL_CONSTANT_SLANG,
             bindings={"output_image": "storage_image"},
         )
         with ctx.gpu_full_access.acquire_texture(
@@ -961,7 +961,7 @@ class OpaqueFdExportHandoffProbe:
         return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class OpaqueFdPixelBufferExportHandoffProbe:
     """Hands a pooled pixel buffer's OPAQUE_FD export to a foreign process.
 
@@ -1047,7 +1047,7 @@ class OpaqueFdPixelBufferExportHandoffProbe:
 # ---------------------------------------------------------------------------
 
 
-@node
+@node.process
 class CopyRequestRefusedAtBothDoorsProbe(_FrameProbeBase):
     """`copy=True` asks for memory the consumer owns; both doors export in
     place, so both refuse by name rather than hand back an alias."""
@@ -1106,7 +1106,7 @@ def _store_at_the_end_of_a_row_and_read_it_back(tensor_scope_or_handle, host_rea
     return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class DeviceTensorStridesFollowTheRowPitchProbe:
     """Both backings at a width whose GPU-image rows pad: the device tensor's
     row stride is the surface's own pitch, so a store at the last pixel of a
@@ -1163,16 +1163,16 @@ class DeviceTensorStridesFollowTheRowPitchProbe:
 
 # Reads its source texel for texel, so the output is exactly what the engine's
 # own GPU read of the source saw.
-COPY_TEXEL_FOR_TEXEL_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0) uniform sampler2D source_image;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D output_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(output_image);
-    if (at.x >= extent.x || at.y >= extent.y) { return; }
-    imageStore(output_image, at, texelFetch(source_image, at, 0));
+COPY_TEXEL_FOR_TEXEL_SLANG = """\
+[[vk::binding(0, 0)]] Sampler2D source_image;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> output_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint width;
+    uint height;
+    output_image.GetDimensions(width, height);
+    if (invocation.x >= width || invocation.y >= height) { return; }
+    output_image[invocation.xy] = source_image.Load(int3(invocation.xy, 0));
 }
 """
 
@@ -1199,7 +1199,7 @@ class _DeviceWriteThenEngineGpuReadProbe:
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
         copy_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=COPY_TEXEL_FOR_TEXEL_GLSL,
+            source=COPY_TEXEL_FOR_TEXEL_SLANG,
             bindings={"source_image": "sampled_texture", "output_image": "storage_image"},
         )
         with ctx.gpu_full_access.acquire_texture(
@@ -1227,7 +1227,7 @@ class _DeviceWriteThenEngineGpuReadProbe:
             return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TorchDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
         import torch
@@ -1245,7 +1245,7 @@ def _mlx_or_none():
         return None
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:
@@ -1267,7 +1267,7 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
         mx.eval(array)
 
 
-@node
+@node.process
 class MlxReadsTheFrameProbe(_FrameProbeBase):
     """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
     frame's own bytes."""
@@ -1302,7 +1302,7 @@ def _frame_pixels_now(ctx, surface_id: str):
     return pixels
 
 
-@node
+@node.process
 class MlxWritesTheFrameThroughTheWriteDoorProbe(_FrameProbeBase):
     """`with frame.writable() as t:` with MLX as the package: an in-place,
     evaluated write reaches every other holder once the block ends."""
@@ -1330,7 +1330,7 @@ class MlxWritesTheFrameThroughTheWriteDoorProbe(_FrameProbeBase):
         }
 
 
-@node
+@node.process
 class MlxWriteWithAViewAliveMissesTheFrameProbe(_FrameProbeBase):
     """The negative control the MLX write contract rests on: with a view of the
     array alive at the write, MLX cannot donate the buffer, so the scatter lands
@@ -1359,7 +1359,7 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(_FrameProbeBase):
 
 
 
-@node
+@node.process
 class MlxWholeArrayAssignmentMissesTheFrameProbe(_FrameProbeBase):
     """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
     array to MLX, not a store into this one, so the frame never sees it even
@@ -1385,7 +1385,7 @@ class MlxWholeArrayAssignmentMissesTheFrameProbe(_FrameProbeBase):
 SCOPES_IN_ONE_HELPER = 12
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TorchAndMlxScopesAlternateInOneHelperProbe:
     """Many device-tensor scopes in one helper, torch and MLX alternating, each
     over a fresh texture whose arrays are dropped as soon as the scope ends.
@@ -1486,7 +1486,7 @@ class _DeviceArrayOutlivesTextureHandleProbe:
         }
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _import(self, handle):
         import torch
@@ -1499,7 +1499,7 @@ class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandlePro
         return int(array.to(torch.int64).sum().item())
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:
@@ -1658,7 +1658,7 @@ def _export_iosurface_and_read_it_natively(ctx, shim, surface) -> dict:
     }
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class IOSurfaceExportProbe:
     """A pixel buffer and a texture whose rows pad, each exported as an
     IOSurface port and read back by native code in this same helper."""
@@ -1693,7 +1693,7 @@ def _refusal_of(export_call) -> str | None:
     return None
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class RawHandleOffItsPlatformRefusesProbe:
     """Every raw-handle flavour exists on both floors; off its own it refuses,
     naming its peer."""

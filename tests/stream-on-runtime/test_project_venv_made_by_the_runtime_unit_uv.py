@@ -6,8 +6,9 @@
 A project with no `.venv` is loaded over the local API by a `tatolabd` whose
 `PATH` holds no uv, and whose environment points uv elsewhere: the runtime
 unit's own `bin/uv` makes the venv, from the project's `pyproject.toml` and
-`.python-version`. The project's one `@stream` raises, so the compile runs in
-the venv uv made and answers its traceback, and no stream starts: needs no GPU.
+`.python-version`. The project's one graph document names a node whose module
+raises as it imports, so the describe of its type runs in the venv uv made and
+answers its traceback, and no stream starts: needs no GPU.
 A load whose sync waits on a package index that never answers is cancelled with
 `tatolab cancel`: uv is killed, no `.venv` is left, and the action ends
 `cancelled`.
@@ -30,18 +31,30 @@ import pytest
 from conftest import TatolabdUnderTest
 from local_api_client import LocalApiClient
 from runtime_unit_under_test import REPOSITORY_ROOT, RuntimeUnitUnderTest
+from stream_runs_on_tatolabd import (
+    stream_id_of_the_stream_in,
+    write_a_graph_document,
+    write_the_project_file_unless_there,
+)
 
 VENV_INTERPRETER_PROBE_TIMEOUT_SECONDS = 30.0
 
-RAISED_ON_PURPOSE = "the stream function raised on purpose"
+RAISED_ON_PURPOSE = "the node module raised on purpose"
 
-STREAM_PY = f'''from tatolab.stream import StreamBuilder, stream
+NODE_MODULE_THAT_RAISES_AS_IT_IMPORTS = f'raise ValueError("{RAISED_ON_PURPOSE}")\n'
+
+GRAPH_OF_ONE_NODE_WHOSE_MODULE_RAISES = {
+    "nodes": [{"name": "raiser", "type": "raising_node:RaisingNode", "config": {}}],
+    "links": [],
+}
 
 
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    raise ValueError("{RAISED_ON_PURPOSE}")
-'''
+def write_the_stream_whose_node_module_raises(project_directory: Path) -> None:
+    (project_directory / "raising_node.py").write_text(
+        NODE_MODULE_THAT_RAISES_AS_IT_IMPORTS, encoding="utf-8"
+    )
+    write_the_project_file_unless_there(project_directory)
+    write_a_graph_document(project_directory, "main", GRAPH_OF_ONE_NODE_WHOSE_MODULE_RAISES)
 
 
 def a_project_with_no_venv(project_directory: Path) -> Path:
@@ -65,7 +78,7 @@ def a_project_with_no_venv(project_directory: Path) -> Path:
     (project_directory / ".python-version").write_text(
         f"{sys.version_info.major}.{sys.version_info.minor}\n", encoding="utf-8"
     )
-    (project_directory / "stream.py").write_text(STREAM_PY, encoding="utf-8")
+    write_the_stream_whose_node_module_raises(project_directory)
     return project_directory
 
 
@@ -138,7 +151,7 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
 PROJECT_VENV_UV_SYNC_LOG_LABEL = "project-venv-uv-sync"
 
 
-def test_a_run_project_answers_at_once_and_its_action_makes_the_venv_compiles_and_logs_by_action(
+def test_a_run_project_answers_at_once_and_its_action_makes_the_venv_loads_and_logs_by_action(
     runtime_unit: RuntimeUnitUnderTest,
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     tmp_path: Path,
@@ -165,12 +178,7 @@ def test_a_run_project_answers_at_once_and_its_action_makes_the_venv_compiles_an
     [listed] = local_api.call_tool("list_streams", {})["streams"]
     assert listed["state"] == "failed" and RAISED_ON_PURPOSE in listed["failed_because"], listed
     assert listed["action"] is None and listed["step"] is None, listed
-    project_streams = local_api.call_tool(
-        "list_project_streams", {"project_directory": str(project_directory)}
-    )
-    assert [stream["stream_function"] for stream in project_streams["streams"]] == [
-        "stream:main"
-    ], project_streams
+    assert listed["stream"] == stream_id_of_the_stream_in(project_directory, "main"), listed
 
     records_of_the_action = local_api.call_tool(
         "logs", {"project_directory": str(project_directory), "action": action, "count": 4096}
@@ -258,7 +266,7 @@ def a_project_whose_sync_waits_on(index: PackageIndexThatNeverAnswers, project_d
     (project_directory / ".python-version").write_text(
         f"{sys.version_info.major}.{sys.version_info.minor}\n", encoding="utf-8"
     )
-    (project_directory / "stream.py").write_text(STREAM_PY, encoding="utf-8")
+    write_the_stream_whose_node_module_raises(project_directory)
     return project_directory
 
 

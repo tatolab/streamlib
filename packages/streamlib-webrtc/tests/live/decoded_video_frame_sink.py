@@ -6,7 +6,7 @@
 from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
 
 
-@node
+@node.process
 class DecodedVideoFrameSink:
     """The reader a decoder's `video` port needs for `graph` to count its writes."""
 

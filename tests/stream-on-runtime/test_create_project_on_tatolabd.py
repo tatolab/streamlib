@@ -3,10 +3,11 @@
 
 """`create_project` end to end: an MCP host creates a project through `tatolab mcp`.
 
-The runtime writes the scaffold `tatolab new` writes, loads its `stream:main`
-under the folder's name, and records it, so a later connection finds it in
-`list_streams`. A second `@stream` that raises is listed failed beside the
-running one, with its traceback in the project's log, and a start of a stream
+The runtime writes the scaffold `tatolab new` writes, loads its graph document
+`streams/main.graph.json` under the folder's name, and records it, so a later
+connection finds it in `list_streams`. A second graph document whose node module
+raises is listed failed beside the running one, with its traceback in the
+project's log, and a start of a stream
 whose `.venv` was deleted has the runtime unit's uv make it again. With no
 directory, the project is created in a folder `<adjective>-<noun>` drawn under
 the machine's streams root. `tatolabd`'s `PATH` holds no uv.
@@ -29,6 +30,12 @@ from mcp.types import TextContent
 
 from conftest import PrivateMachineDirectories, TatolabdUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT, RuntimeUnitUnderTest
+from stream_runs_on_tatolabd import (
+    PROJECT_FILE_NAME,
+    graph_document_path_of,
+    stream_asset_held_at,
+    write_a_graph_document,
+)
 from test_project_venv_made_by_the_runtime_unit_uv import (
     assert_uv_made_a_venv_whose_interpreter_runs,
     path_without_any_uv,
@@ -39,17 +46,18 @@ pytestmark = pytest.mark.requires_gpu
 MCP_SESSION_TIMEOUT_SECONDS = 60.0
 SCAFFOLD_WRITTEN_TIMEOUT_SECONDS = 60.0
 
-RAISED_ON_PURPOSE = "the second stream raised on purpose"
+RAISED_ON_PURPOSE = "the second stream's node module raised on purpose"
 
-SECOND_STREAM_THAT_RAISES = f'''
+NODE_MODULE_THAT_RAISES_AS_IT_IMPORTS = f'raise ValueError("{RAISED_ON_PURPOSE}")\n'
 
-@stream
-def broken(stream_builder: StreamBuilder) -> None:
-    raise ValueError("{RAISED_ON_PURPOSE}")
-'''
+SECOND_STREAM_WHOSE_NODE_MODULE_RAISES = {
+    "nodes": [{"name": "raiser", "type": "nodes.raising_node:RaisingNode", "config": {}}],
+    "links": [],
+}
 
 FILES_A_NEW_PROJECT_STARTS_WITH = (
-    "stream.py",
+    "tatolab-project.json",
+    "streams/main.graph.json",
     "nodes/__init__.py",
     "nodes/halftone_lens_effect.py",
     "nodes/brightness_meter.py",
@@ -128,11 +136,14 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
     assert listed["state"] == "running", listed
     assert listed["location"] == {
         "project_directory": str(resolved_project_directory),
-        "stream_function": "stream:main",
+        "project": json.loads((project_directory / PROJECT_FILE_NAME).read_text())["project"],
+        "stream_asset": stream_asset_held_at(graph_document_path_of(project_directory, "main")),
     }, listed
 
-    with (project_directory / "stream.py").open("a", encoding="utf-8") as stream_py:
-        stream_py.write(SECOND_STREAM_THAT_RAISES)
+    (project_directory / "nodes" / "raising_node.py").write_text(
+        NODE_MODULE_THAT_RAISES_AS_IT_IMPORTS, encoding="utf-8"
+    )
+    write_a_graph_document(project_directory, "broken", SECOND_STREAM_WHOSE_NODE_MODULE_RAISES)
     queued_run = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
     run_once_ended = local_api.stream_action_once_ended(queued_run["action"])
 

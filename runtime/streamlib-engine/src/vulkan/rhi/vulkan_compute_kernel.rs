@@ -1629,16 +1629,21 @@ mod tests {
             .expect("the rig must produce a Vulkan device for the dispatch tests")
     }
 
-    const CLUSTERED_SUBGROUP_REDUCTION_GLSL: &str = r#"#version 450
-#extension GL_KHR_shader_subgroup_clustered : require
-layout(local_size_x = 64) in;
-layout(std430, set = 0, binding = 0) buffer ReducedValues { uint values[]; } reduced_values;
-void main() {
-    uint lane = gl_GlobalInvocationID.x;
-    reduced_values.values[lane] = subgroupClusteredAdd(reduced_values.values[lane], 4);
+    const CLUSTERED_SUBGROUP_REDUCTION_SLANG: &str = r#"
+[[vk::binding(0, 0)]] RWStructuredBuffer<uint> reduced_values;
+uint clustered_add_over_four_lanes(uint value) {
+    return spirv_asm {
+        OpCapability GroupNonUniformArithmetic;
+        OpCapability GroupNonUniformClustered;
+        OpGroupNonUniformIAdd $$uint result Subgroup ClusteredReduce $value $(4U)
+    };
+}
+[numthreads(64, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint lane = invocation.x;
+    reduced_values[lane] = clustered_add_over_four_lanes(reduced_values[lane]);
 }
 "#;
-
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -1646,10 +1651,10 @@ void main() {
     #[test]
     fn a_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_where_not() {
         let device = vulkan_device_for_dispatch_tests();
-        let spv = crate::core::rhi::GlslShaderSourceToSpirvCompiler::new()
+        let spv = crate::core::rhi::SlangShaderSourceCompiler::new()
             .compile_or_reuse(
-                CLUSTERED_SUBGROUP_REDUCTION_GLSL,
-                crate::core::rhi::GlslCompilationTargetStage::Compute,
+                CLUSTERED_SUBGROUP_REDUCTION_SLANG,
+                crate::core::rhi::ShaderCompilationTargetStage::Compute,
                 "main",
                 "clustered-subgroup-reduction",
             )

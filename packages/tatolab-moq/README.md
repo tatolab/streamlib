@@ -1,7 +1,7 @@
 # tatolab-moq
 
 MoQ gateway nodes for [Tatolab](https://tatolab.com) streams, as an extension wheel: the MoQ
-client in Rust inside, four ordinary `@node` classes as the binding. Nothing leaves a stream
+client in Rust inside, four ordinary `@node.process` classes as the binding. Nothing leaves a stream
 unless its author adds one of these nodes.
 
 > **New to Tatolab? Install the Tatolab app first.** This package adds four nodes to a stream

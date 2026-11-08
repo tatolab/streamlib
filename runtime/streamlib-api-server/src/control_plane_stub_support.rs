@@ -9,7 +9,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
     ($surface:literal) => {
         fn open_a_viewer_of_an_output_port(
             &self,
-            node_id: ::streamlib::sdk::graph::ProcessorUniqueId,
+            node_id: String,
             port_name: String,
             _process_id_of_the_viewer: Option<u32>,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
@@ -124,6 +124,15 @@ macro_rules! graph_mutation_ops_are_unreachable {
             unreachable!(
                 "the control plane never asks a stream to shut down; `stop_stream` unloads it"
             )
+        }
+        fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+            &self,
+            _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _promotion_request_number: u64,
+            _reason: &str,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!("only a reader's own host asks for a function node's promotion")
         }
     };
 }
@@ -320,13 +329,13 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "cancel_stream_action",
                 ))
             }
-            fn list_project_streams(
+            fn forget_the_stream_of_a_deleted_stream_asset(
                 &self,
-                _project_directory: &::std::path::Path,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProjectStreamsListing>
-            {
+                _project: ::uuid::Uuid,
+                _stream_asset: ::uuid::Uuid,
+            ) -> ::streamlib::sdk::error::Result<Option<String>> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "list_project_streams",
+                    "delete_asset",
                 ))
             }
             fn stop_stream(
@@ -525,6 +534,15 @@ macro_rules! graph_mutation_ops_record_the_call {
             unreachable!(
                 "the control plane never asks a stream to shut down; `stop_stream` unloads it"
             )
+        }
+        fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+            &self,
+            _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _promotion_request_number: u64,
+            _reason: &str,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!("only a reader's own host asks for a function node's promotion")
         }
     };
 }

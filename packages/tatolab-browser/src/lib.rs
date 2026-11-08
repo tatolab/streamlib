@@ -3,7 +3,7 @@
 
 //! The native half of `tatolab-browser`, imported as `tatolab.browser._native`.
 //!
-//! The engine never calls anything here: the wheel's `@node` hands this module
+//! The engine never calls anything here: the wheel's `@node.process` hands this module
 //! its module host table, and the page opens as a tab in the machine's browser
 //! host, whose paints, audio and published objects this module's threads
 //! publish through the table with no Python attached.

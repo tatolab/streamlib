@@ -220,7 +220,7 @@ with its description, config schema and ports — served over the local API. _Av
 "registry" for the served view (the registry is the process-global table behind it),
 "processor catalog" (retired).
 
-**Node** _(user)_: a step in a stream — the class a person writes (`@node` in Python,
+**Node** _(user)_: a step in a stream — the class a person writes (`@node.process` in Python,
 `#[node]` in Rust) and each placement of it under a name; "node instance" when the
 distinction matters, as for any class. The class is identified by its fully-qualified import
 path (a built-in by its class's path in `tatolab.stream`), so a class the project writes must

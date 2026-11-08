@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@node` classes `test_stream_graph_builder.py` adds to a stream.
+"""The nodes `test_stream_graph_builder.py` adds to a stream.
 
 Their own module rather than the test file because a node's type is the import
-path of its class, `stream_graph_builder_nodes:<qualname>` — a name a child
+path of its class or function, `stream_graph_builder_nodes:<qualname>` — a name a child
 process can import.
 """
 
@@ -13,7 +13,13 @@ import dataclasses
 from tatolab.stream import Input, Output, Packets, RuntimeContextLimitedAccess, node
 
 
-@node
+@node.function
+def remap_onto_a_range(x: float, low: float = 0.0, high: float = 1.0) -> float:
+    """Maps 0..1 onto low..high."""
+    return low + x * (high - low)
+
+
+@node.process
 class FrameInverter:
     """Inverts each frame it reads."""
 
@@ -27,7 +33,7 @@ class FrameInverter:
             ctx.outputs.write("video_to_downstream", frame)
 
 
-@node
+@node.process
 class BrightnessReader:
     """Reads each frame it receives and writes nothing."""
 
@@ -40,7 +46,7 @@ class BrightnessReader:
 class FrameFilters:
     """A namespace, so a node's qualname differs from its short name."""
 
-    @node
+    @node.process
     class FrameDarkener:
         """Darkens each frame it reads."""
 
@@ -61,7 +67,7 @@ class RigMonitorConfig:
     name: "str | None" = None
 
 
-@node
+@node.process
 class RigMonitor:
     """Shows each frame it reads under the name it is configured with."""
 

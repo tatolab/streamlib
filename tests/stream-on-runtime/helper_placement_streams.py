@@ -3,17 +3,28 @@
 
 """The `@stream` functions `test_helper_placement.py` runs from the suite project."""
 
-from tatolab.stream import ChannelsToRecords, StreamBuilder, stream
+from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCalls
+from rust_function_node_fixture import ScaleAndOffset
+from tatolab.ops import Clamp, Lfo, Remap
+from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, stream
 
 from helper_placement_processors import (
+    STEPPED_LFO_STEP_MS,
+    STEPPED_LFO_STEPS_REPORTED,
+    CountsItsOwnCalls,
     DiesAbruptlyProbe,
     ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
+    ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
+    ReportsTheCountsItReadInOrderSink,
+    ReportsTheFunctionNodeValuesItReadSink,
+    ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
+    SpinsForever,
     WritesRawMessagePayloadSource,
 )
 
@@ -98,3 +109,75 @@ def one_probe_forking_a_worker_that_outlives_it(stream_builder: StreamBuilder) -
 def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> None:
     """A processor still inside `setup()` when shutdown arrives."""
     stream_builder.add(SleepsThroughItsOwnSetupProbe)
+
+
+@stream
+def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Lfo` into `Remap` into a Python class reading the value they evaluate to."""
+    lfo = stream_builder.add(Lfo)
+    remap = stream_builder.add(Remap)
+    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
+    stream_builder.connect(lfo.output("result"), remap.input("x"))
+    stream_builder.connect(remap.output("result"), sink.input("brightness"))
+
+
+@stream
+def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A function node whose compiled call never returns, inside the read of a Python class."""
+    spinner = stream_builder.add(SpinsForever, name="spinner")
+    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(spinner.output("result"), sink.input("brightness"))
+
+
+@stream
+def stateful_counter_into_python_sink_that_dies_once(stream_builder: StreamBuilder) -> None:
+    """A stateful function node counting its calls, read by a Python class that
+    takes its own helper down once a fresh count reaches twenty."""
+    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
+    sink = stream_builder.add(ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty, name="sink")
+    stream_builder.connect(counter.output("result"), sink.input("count"))
+
+
+@stream
+def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
+    """One stateful function node counting its calls, read by two Python classes."""
+    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
+    for reader_name in ("first_reader", "second_reader"):
+        reader = stream_builder.add(ReportsTheCountsItReadInOrderSink, name=reader_name)
+        stream_builder.connect(counter.output("result"), reader.input("count"))
+
+
+@stream
+def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
+    stream_builder: StreamBuilder,
+) -> None:
+    """The same `Lfo` island twice, each read by its own Python class, on an unpaced stepped clock."""
+    stream_builder.run_on_clock(
+        SteppedStreamClock(
+            step_ns=STEPPED_LFO_STEP_MS * 1_000_000,
+            stop_after_steps=STEPPED_LFO_STEPS_REPORTED * 4,
+        )
+    )
+    for run in ("first", "second"):
+        lfo = stream_builder.add(Lfo, name=f"{run}_lfo")
+        sink = stream_builder.add(ReportsTheLfoValueOfEachStepSink, name=f"{run}_sink")
+        stream_builder.connect(lfo.output("result"), sink.input("wave"))
+
+
+@stream
+def rust_function_nodes_in_islands_beside_tatolab_ops(stream_builder: StreamBuilder) -> None:
+    """`Lfo` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`
+    into `Remap`, each island read by its own Python class."""
+    lfo = stream_builder.add(Lfo)
+    scale_and_offset = stream_builder.add(ScaleAndOffset)
+    clamp = stream_builder.add(Clamp)
+    values_sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
+    stream_builder.connect(lfo.output("result"), scale_and_offset.input("x"))
+    stream_builder.connect(scale_and_offset.output("result"), clamp.input("x"))
+    stream_builder.connect(clamp.output("result"), values_sink.input("brightness"))
+
+    counter = stream_builder.add(RustCountsItsOwnCalls, name="rust_counter")
+    remap = stream_builder.add(Remap)
+    counts_sink = stream_builder.add(ReportsTheCountsItReadInOrderSink)
+    stream_builder.connect(counter.output("result"), remap.input("x"))
+    stream_builder.connect(remap.output("result"), counts_sink.input("count"))

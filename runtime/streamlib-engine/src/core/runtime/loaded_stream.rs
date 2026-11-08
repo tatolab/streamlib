@@ -285,6 +285,9 @@ impl LoadedStreamInThisRuntime {
                 teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
                 log_route: Arc::clone(&log_route),
                 capture_device_access_prompting,
+                function_node_states: engine_resources_shared_by_every_stream
+                    .function_node_states_carried_for_every_stream
+                    .of_the_stream(&stream_id),
             }),
             processor_interpreter_launch_record: Arc::new(
                 ProcessorInterpreterLaunchRecordOfOneStream::new(
@@ -849,14 +852,17 @@ impl LoadedStreamInThisRuntime {
         );
     }
 
-    /// Write this stream's records to its project's log, let go of the
-    /// stream, then mark it ended — so a waiter that wakes finds them on disk
-    /// whole.
+    /// Write this stream's records to its project's log and its function-node
+    /// states to its record, let go of the stream, then mark it ended — so a
+    /// waiter that wakes finds them on disk whole.
     fn let_go_of_this_stream_then_mark_it_ended(
         self: Arc<Self>,
         how_it_ended: HowALoadedStreamEnded,
     ) {
         self.log_route().write_every_record_it_emitted_and_sync();
+        self.engine_resources_shared_by_every_stream
+            .function_node_states_carried_for_every_stream
+            .record_the_states_of_a_stream_that_ended(self.stream_id());
         let the_end_of_this_stream = Arc::clone(&self.the_end_of_this_stream);
         drop(self);
         the_end_of_this_stream.mark(how_it_ended);
@@ -1033,9 +1039,12 @@ impl LoadedStreamInThisRuntime {
                     .refuse_a_config_update_that_breaks_a_declared_port(
                         &self.node_types_this_stream_resolves,
                         &crate::core::graph_snapshot::GraphSnapshotNode {
+                            id: Some(node.node_uuid),
                             name: node.display_name.clone(),
                             processor_type: node.processor_type.clone(),
                             config: node.config.clone().unwrap_or_default(),
+                            pins: node.pins.clone(),
+                            studio: node.studio.clone(),
                         },
                         &config_json,
                     )?;
@@ -1065,15 +1074,80 @@ impl LoadedStreamInThisRuntime {
             .machine_name
             .name()
             .to_string();
-        let mut graph_response = self
-            .compiler
-            .scope(|graph, _tx| graph.to_graph_response(machine_name));
+        let (mut graph_response, stateful_function_nodes_by_node_uuid) =
+            self.compiler.scope(|graph, _tx| {
+                let stateful_function_nodes_by_node_uuid: HashMap<String, (String, Vec<String>)> =
+                    graph
+                        .traversal()
+                        .v(())
+                        .iter()
+                        .filter(|node| {
+                            matches!(
+                                node.node_kind(),
+                                Some(crate::core::descriptors::NodeKind::Function { .. })
+                            )
+                        })
+                        .map(|node| {
+                            (
+                                node.node_uuid.to_string(),
+                                (
+                                    node.display_name.clone(),
+                                    crate::core::compiler::compiler_ops::function_node_island::the_state_fields_of_a_function_node(
+                                        graph,
+                                        &node.processor_type,
+                                    ),
+                                ),
+                            )
+                        })
+                        .filter(|(_, (_, state_fields))| !state_fields.is_empty())
+                        .collect();
+                (
+                    graph.to_graph_response(machine_name),
+                    stateful_function_nodes_by_node_uuid,
+                )
+            });
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
+        self.render_the_state_of_each_stateful_function_node_into(
+            &mut graph_response.nodes,
+            &stateful_function_nodes_by_node_uuid,
+        );
         self.graph_only_nodes_as_drawn
             .lock()
             .render_into(&mut graph_response);
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+    }
+
+    /// Render, under each stateful function node's `function_node_state`
+    /// component, each field of the state its stream carries now for the
+    /// state fields the node declares.
+    fn render_the_state_of_each_stateful_function_node_into(
+        &self,
+        nodes: &mut [crate::core::json_schema::ProcessorNodeOutput],
+        stateful_function_nodes_by_node_uuid: &HashMap<String, (String, Vec<String>)>,
+    ) {
+        let function_node_states = &self.this_streams_identity_and_handles.function_node_states;
+        for node in nodes {
+            let Some(state) = stateful_function_nodes_by_node_uuid.get(&node.id).and_then(
+                |(function_node_name, state_fields)| {
+                    function_node_states
+                        .the_current_state_of(function_node_name)
+                        .filter(|state| &state.state_fields == state_fields)
+                },
+            ) else {
+                continue;
+            };
+            let state_by_field: serde_json::Map<String, serde_json::Value> = state
+                .state_fields
+                .into_iter()
+                .zip(state.state_values)
+                .map(|(state_field, state_value)| (state_field, serde_json::json!(state_value)))
+                .collect();
+            node.components.insert(
+                "function_node_state".to_string(),
+                serde_json::Value::Object(state_by_field),
+            );
+        }
     }
 
     /// Every reference edge the configs of `nodes` hold, under the keys their
@@ -1367,7 +1441,9 @@ impl LoadedStreamInThisRuntime {
         graph
             .clock
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
-        let resolution = graph.with_graph_only_nodes_resolved()?;
+        let graph_whose_every_node_holds_a_uuid =
+            graph.with_a_uuid_minted_for_each_node_holding_none();
+        let resolution = graph_whose_every_node_holds_a_uuid.with_graph_only_nodes_resolved()?;
         let graph = &resolution.graph_the_runtime_runs;
         self.processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
@@ -1381,16 +1457,20 @@ impl LoadedStreamInThisRuntime {
             resolution.graph_only_nodes_as_drawn.node_names_cast();
         self.compiler.scope(|this_streams_graph, _tx| {
             this_streams_graph.set_stream_clock_spec(graph.clock);
+            this_streams_graph.set_stream_asset(graph.asset);
             this_streams_graph
                 .set_node_names_the_graph_only_nodes_hold(node_names_the_graph_only_nodes_hold);
         });
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
-            let added = self.add_processor_of_a_validated_graph_load(
-                ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
-                    .with_display_name(node.name.clone()),
-            )?;
+            let mut spec = ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
+                .with_display_name(node.name.clone())
+                .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone());
+            if let Some(node_uuid) = node.id {
+                spec = spec.with_node_uuid(node_uuid);
+            }
+            let added = self.add_processor_of_a_validated_graph_load(spec)?;
             processor_id_by_node_name.insert(added.name, added.processor_id);
         }
         let processor_id_of = |node: &str| -> Result<ProcessorUniqueId> {

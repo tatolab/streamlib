@@ -36,8 +36,8 @@ pub(crate) struct PythonChannelsBlock {
 
 impl PythonChannelsBlock {
     /// Hold `payload` as the block `block` describes, refused when the
-    /// payload's length is not the planar length the body states or the
-    /// block states no sample rate.
+    /// payload's length is not the planar length the body states. A rate of 0
+    /// is a control value's, which has no regular rate.
     pub(crate) fn holding(
         port_name: &str,
         payload: InputPortMessagePayload,
@@ -51,11 +51,6 @@ impl PythonChannelsBlock {
                 block.sample_type
             ))
         })?;
-        if block.sample_rate == 0 {
-            return Err(PyValueError::new_err(format!(
-                "a Channels block on {port_name:?} states a sample rate of 0"
-            )));
-        }
         let payload_byte_len = payload.bytes().len();
         if block.planar_payload_byte_len() != Some(payload_byte_len) {
             return Err(PyValueError::new_err(format!(

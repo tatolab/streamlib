@@ -5,7 +5,7 @@
 
 A stream is a `@stream` function that adds and links nodes on a
 `StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
-declares its execution with `@node` and its ports as `Input` and `Output` class
+declares its execution with `@node.process` and its ports as `Input` and `Output` class
 attributes of one family each, and receives a capability-typed context in every lifecycle hook. The contexts, link
 endpoints, GPU classes and timer a node is handed while it runs are
 `typing.Protocol`s the runtime implements; the clock and the timer's start are
@@ -74,6 +74,11 @@ from ._node_context_protocols import (
 from ._message import Message as Message
 from ._node_declaration import AudioWindowContract as AudioWindowContract
 from ._node_declaration import node as node
+from ._function_node_declaration import FunctionNode as FunctionNode
+from ._function_node_declaration import State as State
+from ._function_node_declaration import Stateful as Stateful
+from ._function_node_declaration import Time as Time
+from ._rust_function_node_declaration import RustFunctionNode as RustFunctionNode
 from ._port_family_declaration import Array as Array
 from ._port_family_declaration import Channels as Channels
 from ._port_family_declaration import Image as Image
@@ -119,8 +124,6 @@ from .clock import StreamClock as StreamClock
 from .clock import StreamClockReading as StreamClockReading
 from .clock import monotonic_now_ns as monotonic_now_ns
 from .clock import start_monotonic_timer as start_monotonic_timer
-from .glsl_pixel_effect import GlslPixelEffect as GlslPixelEffect
-from .glsl_pixel_effect import GlslPixelEffectDialType as GlslPixelEffectDialType
 from .model_input_tensor_kernel import ModelInputTensor as ModelInputTensor
 from .model_input_tensor_kernel import (
     ModelInputTensorChannelOrder as ModelInputTensorChannelOrder,
@@ -167,8 +170,6 @@ __all__ = [
     "GraphInputConfig",
     "GraphOutput",
     "GraphOutputConfig",
-    "GlslPixelEffect",
-    "GlslPixelEffectDialType",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
@@ -201,8 +202,12 @@ __all__ = [
     "NodeReference",
     "NodeReferenceToNodeType",
     "ExposedNameCastsToNothingError",
+    "FunctionNode",
+    "RustFunctionNode",
     "cast_exposed_name_to_url_safe",
     "SoleReferrerNodeReferenceToNodeType",
+    "State",
+    "Stateful",
     "OpaqueFdAllocationExport",
     "Output",
     "Packets",
@@ -226,6 +231,7 @@ __all__ = [
     "StreamBuilder",
     "StreamClock",
     "StreamClockReading",
+    "Time",
     "catalog",
     "clock",
     "compile_stream_to_graph",

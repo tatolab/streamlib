@@ -4,10 +4,10 @@
 """`tatolab new` end to end: the project the runtime writes for the runtime unit's `tatolab`.
 
 The templates are checked as files in the stream suite; this checks what the
-runtime renders from them, as a user receives it: every
-Python file lints and is formatted, and the stream compiles in a venv holding
-`tatolab-stream` and no runtime. The create loads the scaffold's stream, which
-runs a GPU effect.
+runtime renders from them, as a user receives it: every Python file lints and is
+formatted, the project file and the stream's graph document hold the UUIDs the
+runtime minted, and the venv holds `tatolab-stream` and no runtime. The create loads
+the scaffold's stream, which runs a GPU effect.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import ast
 import json
 import os
 import subprocess
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 
@@ -33,7 +34,8 @@ COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
 RUFF_TIMEOUT_SECONDS = 60.0
 
 SCAFFOLDED_FILE_PATHS = {
-    "stream.py",
+    "tatolab-project.json",
+    "streams/main.graph.json",
     "nodes/__init__.py",
     "nodes/halftone_lens_effect.py",
     "nodes/brightness_meter.py",
@@ -52,11 +54,14 @@ def scaffold_with_tatolab_new(
 
 def files_written_into(app_directory: Path) -> "dict[str, str]":
     """Every file under the project but its `.venv`, the bytecode its load
-    compiled and the runtime's own `.streamlib`, by its path in the project."""
+    compiled and what the runtime keeps in `.streamlib` and `.tatolab`, by its path in
+    the project."""
     written_files: "dict[str, str]" = {}
     for directory, subdirectory_names, file_names in os.walk(app_directory):
         subdirectory_names[:] = [
-            name for name in subdirectory_names if name not in (".venv", "__pycache__", ".streamlib")
+            name
+            for name in subdirectory_names
+            if name not in (".venv", "__pycache__", ".streamlib", ".tatolab")
         ]
         for file_name in file_names:
             path = Path(directory) / file_name
@@ -105,17 +110,16 @@ def test_every_scaffolded_python_file_passes_ruff(
         )
 
 
-def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
+def test_the_scaffolded_venv_holds_no_runtime(
     make_scaffolded_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The compile `tatolab run` makes, in the project's own venv, over what `new` wrote."""
+    """The project's own venv holds `tatolab-stream`; the runtime stays the runtime's."""
     app_directory = scaffold_with_tatolab_new(make_scaffolded_tatolab_project, start_tatolabd)
-    project_venv_interpreter = app_directory / ".venv" / "bin" / "python"
 
     runtime_probe = subprocess.run(
         [
-            str(project_venv_interpreter),
+            str(app_directory / ".venv" / "bin" / "python"),
             "-I",
             "-c",
             "import importlib.util; print(importlib.util.find_spec('tatolab.runtime') is None)",
@@ -127,35 +131,33 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
     )
     assert runtime_probe.stdout.strip() == "True", "the project's venv holds a runtime"
 
-    finished = subprocess.run(
-        [
-            str(project_venv_interpreter),
-            "-I",
-            "-m",
-            "tatolab.stream._project_stream_compile_entry",
-            "--verb",
-            "run",
-            "stream.py:main",
-        ],
-        cwd=app_directory,
-        capture_output=True,
-        text=True,
-        timeout=COMPILE_ENTRY_TIMEOUT_SECONDS,
-        check=False,
-    )
 
-    assert finished.returncode == 0, finished.stdout + finished.stderr
-    compiled = json.loads(finished.stdout)
-    assert Path(compiled["project_directory"]) == app_directory.resolve()
-    assert compiled["stream_function"] == "stream:main"
-    stream_graph = compiled["stream_graph"]
-    assert stream_graph["stream"] == "main"
-    assert [node["type"] for node in stream_graph["nodes"]] == [
+def test_the_scaffolded_graph_document_holds_its_stream_asset_and_a_uuid_on_each_node(
+    make_scaffolded_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+):
+    """The runtime mints the project's, the stream asset's and every node's UUID into what
+    `new` writes."""
+    app_directory = scaffold_with_tatolab_new(make_scaffolded_tatolab_project, start_tatolabd)
+
+    project_file = json.loads((app_directory / "tatolab-project.json").read_text())
+    graph_document = json.loads((app_directory / "streams" / "main.graph.json").read_text())
+
+    assert project_file["name"] == "demo"
+    uuid.UUID(project_file["project"])
+    uuid.UUID(graph_document["asset"])
+    assert graph_document["asset"] != project_file["project"]
+    node_uuids = [str(uuid.UUID(node["id"])) for node in graph_document["nodes"]]
+    assert len(set(node_uuids)) == len(node_uuids) == 3
+    assert [node["type"] for node in graph_document["nodes"]] == [
         "tatolab.testpattern:TestPatternSource",
         "nodes.halftone_lens_effect:HalftoneLensEffect",
         "nodes.brightness_meter:BrightnessMeter",
     ]
-    assert "exposed" not in stream_graph
+    assert all(
+        link["source"]["node"] in node_uuids and link["target"]["node"] in node_uuids
+        for link in graph_document["links"]
+    ), "each link end names its node by UUID"
 
 
 def test_the_sample_stream_runs_no_camera_and_names_no_window(
@@ -163,8 +165,7 @@ def test_the_sample_stream_runs_no_camera_and_names_no_window(
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The sample stream runs on a machine with no capture device and no display:
-    nothing `new` writes mentions a window, and the camera appears only in the
-    comment naming the one-line swap to it, never in code."""
+    nothing `new` writes mentions a window or runs a camera."""
     app_directory = scaffold_with_tatolab_new(make_scaffolded_tatolab_project, start_tatolabd)
 
     for path_in_project, contents in files_written_into(app_directory).items():
@@ -178,9 +179,6 @@ def test_the_sample_stream_runs_no_camera_and_names_no_window(
             assert "CameraSource" not in names_in_the_code, (
                 f"the scaffolded {path_in_project} runs a camera:\n{contents}"
             )
-    stream_py = (app_directory / "stream.py").read_text()
-    assert "stream_builder.add(TestPatternSource)" in stream_py
-    assert any(
-        line.strip().startswith("#") and "stream_builder.add(CameraSource)" in line
-        for line in stream_py.splitlines()
-    ), stream_py
+    graph_document = (app_directory / "streams" / "main.graph.json").read_text()
+    assert "tatolab.testpattern:TestPatternSource" in graph_document
+    assert "Camera" not in graph_document, graph_document

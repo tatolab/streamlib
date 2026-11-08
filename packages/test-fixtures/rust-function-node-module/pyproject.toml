@@ -1,0 +1,27 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rust-function-node-fixture"
+version = "0.0.0"
+description = "A fixture module of Rust function nodes, built the way a third party builds one, for the integration suite."
+requires-python = ">=3.12"
+license = { text = "BUSL-1.1" }
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+dependencies = ["tatolab-stream>=0.68.34"]
+
+[project.entry-points."tatolab.nodes"]
+ScaleAndOffset = "rust_function_node_fixture:ScaleAndOffset"
+CountsItsOwnCalls = "rust_function_node_fixture:CountsItsOwnCalls"
+
+[tool.maturin]
+python-source = "python"
+module-name = "rust_function_node_fixture._native"
+features = ["pyo3/extension-module"]
+
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "26.0"

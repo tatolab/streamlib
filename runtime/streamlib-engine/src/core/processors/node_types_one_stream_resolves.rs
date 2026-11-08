@@ -6,9 +6,11 @@ use std::collections::HashMap;
 use parking_lot::RwLock;
 
 use crate::core::ProcessorDescriptor;
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
-use crate::core::graph::{PortInfo, ProcessorNode};
+use crate::core::graph::{
+    FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents, PortInfo, ProcessorNode,
+};
 use crate::core::processors::processor_instance_factory::{
     refuse_catalog_entries_hang_does_not_read, refuse_port_names_not_cast_or_declared_twice,
 };
@@ -17,12 +19,24 @@ use crate::core::processors::{
 };
 
 /// A node type described in one stream's processor interpreter: what it
-/// declares, and the constructor that starts its processor in that stream's
-/// interpreter.
+/// declares, and how a node of it runs.
 struct NodeTypeDescribedInAStreamsProcessorInterpreter {
     descriptor: ProcessorDescriptor,
     input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
-    constructor: DynamicProcessorConstructorFn,
+    how_its_nodes_run: HowANodeOfADescribedTypeRuns,
+}
+
+/// How a node of a type a stream's processor interpreter described runs.
+pub(crate) enum HowANodeOfADescribedTypeRuns {
+    /// As a processor the constructor builds, which starts the node in that
+    /// stream's interpreter.
+    AsAProcessorItsConstructorBuilds(DynamicProcessorConstructorFn),
+    /// Inside the read of each node it feeds, with no processor of its own: a
+    /// function node, until it is promoted out of its readers' islands and the
+    /// constructor builds the processor of its own helper.
+    InsideTheReadOfEachNodeItFeeds {
+        processor_once_promoted_to_its_own_process: DynamicProcessorConstructorFn,
+    },
 }
 
 /// The installed distribution that declares a node type in its `tatolab.nodes`
@@ -75,7 +89,7 @@ impl NodeTypesOneStreamResolves {
     pub(crate) fn register_a_type_described_in_this_streams_processor_interpreter(
         &self,
         descriptor: ProcessorDescriptor,
-        constructor: DynamicProcessorConstructorFn,
+        how_its_nodes_run: HowANodeOfADescribedTypeRuns,
     ) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         refuse_catalog_entries_hang_does_not_read(&descriptor)?;
@@ -98,7 +112,7 @@ impl NodeTypesOneStreamResolves {
                 NodeTypeDescribedInAStreamsProcessorInterpreter {
                     descriptor,
                     input_and_output_port_info,
-                    constructor,
+                    how_its_nodes_run,
                 },
             );
         tracing::info!(
@@ -125,6 +139,15 @@ impl NodeTypesOneStreamResolves {
         PROCESSOR_REGISTRY.port_info(node_type).or_else(|| {
             self.project_the_type_this_streams_interpreter_described(node_type, |described| {
                 described.input_and_output_port_info.clone()
+            })
+        })
+    }
+
+    /// How `node_type` runs, native first.
+    pub(crate) fn node_kind(&self, node_type: &ProcessorClassImportPath) -> Option<NodeKind> {
+        PROCESSOR_REGISTRY.node_kind(node_type).or_else(|| {
+            self.project_the_type_this_streams_interpreter_described(node_type, |described| {
+                described.descriptor.node_kind
             })
         })
     }
@@ -182,7 +205,24 @@ impl NodeTypesOneStreamResolves {
         let Some(described) = described.get(&node.processor_type) else {
             return PROCESSOR_REGISTRY.create(node);
         };
-        let mut instance = ProcessorInstance::new((described.constructor)(node)?);
+        let constructor = match &described.how_its_nodes_run {
+            HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(constructor) => {
+                constructor
+            }
+            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                processor_once_promoted_to_its_own_process,
+            } if node.has::<FunctionNodePromotedToItsOwnProcessComponent>() => {
+                processor_once_promoted_to_its_own_process
+            }
+            HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds { .. } => {
+                return Err(Error::Configuration(format!(
+                    "`{}` is a function node, which runs inside the read of the node it \
+                     feeds and has no processor of its own",
+                    node.processor_type
+                )));
+            }
+        };
+        let mut instance = ProcessorInstance::new(constructor(node)?);
         instance.install_iceoryx2_resources()?;
         instance.reach_the_catalog_entries_of(node);
         Ok(instance)
@@ -294,7 +334,7 @@ mod tests {
     }
 
     fn a_node_of(node_type: &ProcessorClassImportPath) -> ProcessorNode {
-        ProcessorNode::new(node_type.clone(), "a-node", None, vec![], vec![])
+        ProcessorNode::new(node_type.clone(), None, "a-node", None, vec![], vec![])
     }
 
     /// A later describe of a type into one stream replaces what the earlier
@@ -307,13 +347,17 @@ mod tests {
         node_types
             .register_a_type_described_in_this_streams_processor_interpreter(
                 descriptor_for(path).with_input(port_named("video")),
-                a_constructor_refusing_with("first describe"),
+                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+                    a_constructor_refusing_with("first describe"),
+                ),
             )
             .expect("a first describe registers the type");
         node_types
             .register_a_type_described_in_this_streams_processor_interpreter(
                 descriptor_for(path).with_input(port_named("frames")),
-                a_constructor_refusing_with("later describe"),
+                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+                    a_constructor_refusing_with("later describe"),
+                ),
             )
             .expect("a later describe replaces it");
 
@@ -352,7 +396,9 @@ mod tests {
             let refused = node_types
                 .register_a_type_described_in_this_streams_processor_interpreter(
                     descriptor_for(registered_natively.as_str()),
-                    a_constructor_refusing_with("a describe that must be refused"),
+                    HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+                        a_constructor_refusing_with("a describe that must be refused"),
+                    ),
                 )
                 .expect_err("a describe never replaces a natively compiled type");
             assert!(
@@ -378,13 +424,17 @@ mod tests {
         first_stream
             .register_a_type_described_in_this_streams_processor_interpreter(
                 descriptor_for(path.as_str()).with_input(port_named("video")),
-                a_constructor_refusing_with("the first stream's interpreter"),
+                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+                    a_constructor_refusing_with("the first stream's interpreter"),
+                ),
             )
             .expect("the first stream describes the class");
         second_stream
             .register_a_type_described_in_this_streams_processor_interpreter(
                 descriptor_for(path.as_str()).with_input(port_named("frames")),
-                a_constructor_refusing_with("the second stream's interpreter"),
+                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+                    a_constructor_refusing_with("the second stream's interpreter"),
+                ),
             )
             .expect("the second stream describes the class");
 

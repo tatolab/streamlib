@@ -22,22 +22,70 @@ conformance gate prints as its allowlist.
 
 import sys
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, final
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
 
 __all__ = [
+    "MODULE_HOST_TABLE_ABI_MAJOR",
+    "MODULE_HOST_TABLE_ABI_MINOR",
+    "FunctionNodeEvaluatedAsItsHelpersProcessor",
     "capture_this_helper_processes_engine_log_records",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
+    "feed_an_input_port_from_a_function_node_island",
     "limited_access_view_of_runtime_context_for_helper_process",
-    "machine_nanoseconds_until_this_helpers_stream_clock_reaches",
     "note_execution_mode_from_parent_on_runtime_context",
     "note_pause_state_from_parent_on_runtime_context",
     "note_stop_request_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
+    "run_the_scheduling_loop_of_this_helper",
 ]
+
+MODULE_HOST_TABLE_ABI_MAJOR: int
+"""The module host table major this runtime serves; a module's native code built for another is refused."""
+
+MODULE_HOST_TABLE_ABI_MINOR: int
+"""The module host table minor this runtime serves; a module's native code built for a newer one is refused."""
+
+@final
+class FunctionNodeEvaluatedAsItsHelpersProcessor:
+    """The function node a helper runs as its own processor, once it is promoted out of its readers' islands."""
+
+    def __new__(
+        cls,
+        *,
+        link_data_access: _stream_protocols.NodeLinkDataAccess,
+        node_id: str,
+        evaluate_entry_address: int,
+        input_count: int,
+        config_values: list[float],
+        initial_state_values: list[float],
+        output_count: int,
+    ) -> FunctionNodeEvaluatedAsItsHelpersProcessor: ...
+    def evaluate(self, input_values: list[float]) -> list[float]:
+        """Call the node with `input_values` at the stream's time now, answering its outputs."""
+
+def feed_an_input_port_from_a_function_node_island(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    input_port: str,
+    function_nodes: list[
+        tuple[
+            str, int, int, list[tuple[tuple[int, int] | None, float]], list[float], list[float], int
+        ]
+    ],
+    island_output: tuple[int, int],
+) -> None:
+    """Feed `input_port` from an island of compiled function nodes, evaluated at each read.
+
+    Each node, after the nodes it reads, is its id, the breadcrumb number its
+    calls are noted under, its evaluate entry's address,
+    where each input takes its value (an earlier node's output, or `None` and its
+    pin value), its config values, its initial state values and its output count.
+    `island_output` names the node and output the port reads.
+    """
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
     """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.
@@ -65,12 +113,6 @@ def limited_access_view_of_runtime_context_for_helper_process(
 ) -> _stream_protocols.RuntimeContextLimitedAccess:
     """The limited-access view of the same node: same configuration, links and pause state."""
 
-def machine_nanoseconds_until_this_helpers_stream_clock_reaches(
-    stream_deadline_ns: int,
-) -> int:
-    """Machine nanoseconds until this helper's stream clock reaches stream time
-    `stream_deadline_ns`, as the clock runs now; zero or less once it has."""
-
 def note_pause_state_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool
 ) -> None:
@@ -86,6 +128,21 @@ def note_stop_request_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, stop_requested: bool
 ) -> None:
     """Record on a helper's context whether its parent asked the node to stop."""
+
+def run_the_scheduling_loop_of_this_helper(
+    *,
+    processor_interpreter: Any,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    lifecycle_command_arrival_fd: int,
+    execution_mode: str,
+    interval_ms: int,
+    paced_by_real_time: bool,
+    stream_clock_may_step: bool,
+    paused: bool,
+) -> None:
+    """Run the hosted processor on the engine's scheduling loop for
+    `execution_mode`, `"reactive"` or `"continuous"`, until a lifecycle command
+    stops it, raising what any callback into `processor_interpreter` raised."""
 
 def engine_build_id_compiled_into_this_extension() -> str:
     """The build id of the engine compiled into this extension:

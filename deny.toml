@@ -233,3 +233,8 @@ license-files = []
 name = "tatolab-module-sdk"
 expression = "BUSL-1.1"
 license-files = []
+
+[[licenses.clarify]]
+name = "tatolab-module-sdk-macros"
+expression = "BUSL-1.1"
+license-files = []

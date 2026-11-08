@@ -1778,9 +1778,10 @@ mod tests {
     #[test]
     fn refusals_and_sends_on_a_mirrored_output_port_reach_its_board_entry_as_they_are_counted() {
         let (board, board_writer, _helper_node) =
-            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[
-                "out",
-            ]);
+            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(
+                &["out"],
+                &[],
+            );
         let bags_on_the_board = || {
             board.output_port_entry("out").map(|entry| {
                 (

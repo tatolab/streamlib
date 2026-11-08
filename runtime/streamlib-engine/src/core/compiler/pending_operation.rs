@@ -29,6 +29,16 @@ pub enum PendingOperation {
         processor_id: ProcessorUniqueId,
         config_to_apply: serde_json::Value,
     },
+
+    /// Move a function node whose call crashed or stalled its reader's helper,
+    /// and every function node downstream of it, out of that reader's islands
+    /// into a helper process of its own.
+    PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
+        function_node_id: ProcessorUniqueId,
+        reader_id: ProcessorUniqueId,
+        promotion_request_number: u64,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for PendingOperation {
@@ -41,6 +51,14 @@ impl std::fmt::Display for PendingOperation {
             PendingOperation::UpdateProcessorConfig { processor_id, .. } => {
                 write!(f, "UpdateProcessorConfig({})", processor_id)
             }
+            PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
+                function_node_id,
+                reader_id,
+                ..
+            } => write!(
+                f,
+                "PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed({function_node_id} out of {reader_id})"
+            ),
         }
     }
 }

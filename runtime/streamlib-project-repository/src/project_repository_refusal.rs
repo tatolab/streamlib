@@ -15,14 +15,16 @@ pub enum ProjectRepositoryRefusal {
     },
     #[error("{project_directory} already holds a project")]
     AlreadyAProject { project_directory: PathBuf },
+    #[error("the project in {project_directory} already has a first commit")]
+    ProjectAlreadyCommitted { project_directory: PathBuf },
     #[error("the project directory {0} is not an absolute path")]
     ProjectDirectoryNotAbsolute(PathBuf),
     #[error("the project file {path} could not be read: {why}")]
     ProjectFileUnreadable { path: PathBuf, why: String },
     #[error("the asset sidecar {path} could not be read: {why}")]
     AssetSidecarUnreadable { path: PathBuf, why: String },
-    #[error("the sidecars {first} and {second} both name the asset {asset}")]
-    AssetNamedByTwoSidecars {
+    #[error("`{first}` and `{second}` both name the asset {asset}")]
+    AssetNamedTwice {
         asset: Uuid,
         first: String,
         second: String,
@@ -37,6 +39,8 @@ pub enum ProjectRepositoryRefusal {
     AssetPathHoldsAnotherFile { path: String },
     #[error("a stream asset is a graph document the stream verbs create; it is never imported")]
     StreamAssetsAreNotImported,
+    #[error("the stream asset {0} has no import settings: its settings are in its graph document")]
+    StreamAssetHasNoImportSettings(Uuid),
     #[error("the asset {asset} cannot be deleted while {referencing_documents:?} reference it")]
     AssetStillReferenced {
         asset: Uuid,
@@ -58,6 +62,7 @@ pub enum ProjectRepositoryRefusal {
     TrackedFileAndFolderShareAName { name: String },
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    #[cfg(feature = "history")]
     #[error("the project's history refused the change: {0}")]
     History(#[from] git2::Error),
     #[error("{0}")]

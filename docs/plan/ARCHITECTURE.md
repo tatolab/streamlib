@@ -95,7 +95,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `@stream`, `TestPatternSource` (the branded animation, §Media I/O) → `HalftoneLensEffect`
   → `H264Encoder` → `expose(…, PUBLIC)`, the source and the encoder imported from the
   `tatolab-testpattern` and `tatolab-h264` modules, and two nodes, each in its own module under
-  `nodes/` — the `HalftoneLensEffect` over `GlslPixelEffect`, a drifting lens that turns what
+  `nodes/` — the `HalftoneLensEffect` over a Slang compute kernel, a drifting lens that turns what
   it covers into dots (owner, 2026-10-19), and a numpy `BrightnessMeter` on a fan-out of the
   effect's output that reads the frame through `frame.cpu()` and logs its mean once a
   second, paced on `ctx.time`, the stream's clock — with dependencies `tatolab-stream`, `tatolab-h264`,
@@ -187,7 +187,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2686, #2689, #2693; optional-accelerators — SHIPPED #2778, #2780]
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
-  stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
+  stream's graph of nodes and links from the classes it imports (`@node.process`), plus `pyproject.toml`
   and one venv; a stream may expose ports. Each machine runs one runtime, which runs many streams — written by different people
   or teams — owns the accelerator when one is
   present, serves the machine's local API, schedules across streams, sends every exposed
@@ -777,7 +777,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   complete without one. [one-runtime-per-machine]
 - **DECIDED** — The package split and the lend. `tatolab-stream`, importing as
   `tatolab.stream`, is pure Python and is everything a stream module imports: `@stream`,
-  `@node` with its `Input` and `Output` port attributes and the five families, the
+  `@node.process` with its `Input` and `Output` port attributes and the five families, the
   `StreamBuilder` and its references,
   the built-in node class with its config shape, and the data types; a stream is
   written, type-checked and
@@ -799,12 +799,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2671, #2673, #2686, #2689, #2693, #2697; authoring-names — SHIPPED #2682]
 - **DECIDED** — `tatolab-stream` as built. A pure build backend, `requires-python >=3.12`,
   depending on what its own modules import and never on the runtime. A module belongs in it
-  exactly when a stream or node module imports it: the declarations (`@node`, `@stream`, the
+  exactly when a stream or node module imports it: the declarations (`@node.process`, `@stream`, the
   `StreamBuilder`, the references, the compile entry), the config schema deriver, the data
   types (`ImageFrame` and its colour types, `ArrayFrame`, and the read types' Protocols), the composable pieces (`ClaimedSurfacePixelAccess`,
-  `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the `ModelInputTensor` family,
+  `PixelAccessToOneClaimedSurface`, the `ModelInputTensor` family,
   `NodeOutputTextureRing`), `clock`, `log`, and the cross-floor check the compile entry runs.
-  `@node` registers nothing — it writes the class's declaration stamps — and the proof is the
+  `@node.process` registers nothing — it writes the class's declaration stamps — and the proof is the
   stream suite itself, run with no runtime on any path. [package-split-and-lend — SHIPPED
   #2686]
 - **DECIDED** — Built-in nodes reach Python as plain classes generated from the runtime: `cargo
@@ -1247,7 +1247,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2020-12 — Rust writes a nullable as `"type": [T, "null"]` and stamps a root `title`,
   Python writes `anyOf` with null and no title — and neither is converted.
   [agent-readable-processor-catalog — SHIPPED #2224]
-- **DECIDED** — The Python half, as built. `@node` reads `__init__` through
+- **DECIDED** — The Python half, as built. `@node.process` reads `__init__` through
   `typing.get_type_hints(..., include_extras=True)`: a `config` parameter annotated with
   a class names the config class; an `__init__` taking nothing beyond `self`, or none at
   all, declares no config; every other signature — a keyword parameter or several,
@@ -1571,7 +1571,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   own callbacks, fails at its start in a stream whose clock steps, and a rescale above 1× is
   refused naming one. Owner, 2026-11-03. [stream-clocks — SHIPPED #3167, #3169, #3175]
 - **DECIDED** — A node that paces itself on real time declares it — `paced_by_real_time=True` on
-  `@node`, `paced_by_real_time` in `#[processor]` — and the node catalog shows it. Such a node
+  `@node.process`, `paced_by_real_time` in `#[processor]` — and the node catalog shows it. Such a node
   loads in any stream: it paces on the machine clock, its writes carry stream time, and it
   stands outside the step barrier, which neither waits on it nor balances its links; what a
   step reads from it follows the reading port's delivery setting. `RelayTrackSource` and the
@@ -1806,7 +1806,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   with an error naming the fix (move the class to an importable module and import it
   from the entry file — one import line). The entry file itself may still run as
   `__main__`; only processor classes may not live there.
-  `@node` declares execution, interval, scheduling
+  `@node.process` declares execution, interval, scheduling
   priority, and description only. Mechanically means at the authoring seam, never from a
   runtime reflection API: Rust captures the type path where the macro expands, because
   `std::any::type_name`'s output format is unspecified across compiler versions and must
@@ -1827,7 +1827,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   changes only when its class's public name does — renaming or moving the runtime's crates
   and modules never changes one — and the first golden graph a runtime is held to already
   carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend — SHIPPED #2684; amended by gateway-nodes: the example type is a former built-in's: `RelayTrackSource` moves to `tatolab.moq:MoqTrackReceive`]
-- **DECIDED** — `@node` registers nothing: it writes the class's declaration stamps and
+- **DECIDED** — `@node.process` registers nothing: it writes the class's declaration stamps and
   returns the class, so a declaration is readable with no engine anywhere. A Python node class
   reaches the node catalog when a graph that names it loads — or a live `add_node` names it —
   and the runtime describes it in the stream's interpreter, registering its descriptor and its
@@ -1937,7 +1937,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
-  opens a device directly says so on `@node`) and carried in the graph, never authored; the
+  opens a device directly says so on `@node.process`) and carried in the graph, never authored; the
   runtime requests exactly those at load and refuses by name what the machine cannot grant, so
   nothing enumerates every possible device up front. Decided with the resources entry below.
   [one-runtime-per-machine]
@@ -3113,7 +3113,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   sustained decoder lag reappears, re-run that scenario on the rig rather than assuming it
   fixed.
   [codec-blocks — SHIPPED #2084, #2085, #2086]
-- **DECIDED** — The four video nodes reach Python as the modules' own `@node` classes
+- **DECIDED** — The four video nodes reach Python as the modules' own `@node.process` classes
   (`tatolab.h264.processors:H264Encoder` is the type a graph carries). Configured the one way
   a node is configured — `stream_builder.add(H265Encoder)`,
   `stream_builder.add(H264Encoder, config={"keyframe_interval_seconds": 2})`, its keys the
@@ -3254,7 +3254,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   frame, surface or GPU: `WhipPublisher` consumes the media frames `H264Encoder` and
   `OpusEncoder` write; `WhepPlayer` writes the same frames upstream of `H264Decoder` and
   `OpusDecoder`. Audio is in scope from the first
-  rung. Both are ordinary processor extensions — `@node` classes in the wheel calling the
+  rung. Both are ordinary processor extensions — `@node.process` classes in the wheel calling the
   wheel's own Rust — each in its own processor interpreter, on the tokio runtime the wheel
   brings up there on first use. [extension-model; networking-extension-wheels — SHIPPED
   #2151; package-split-and-lend — SHIPPED #2691; moq-relays — SHIPPED #2888]
@@ -3300,11 +3300,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   tokio runtime and the rustls provider once, on first use, in whichever process the
   sessions run in. [networking-extension-wheels — SHIPPED #2150; package-split-and-lend —
   SHIPPED #2673, #2691]
-- **DECIDED** — `WhipPublisher`: `@node`, one fan-in input `tracks` (`ordered`) —
+- **DECIDED** — `WhipPublisher`: `@node.process`, one fan-in input `tracks` (`ordered`) —
   each inbound link is one RTP track, video or audio by its upstream port's catalog entry,
   the session's SDP built from the links `inbound_link_names` reports at
   `setup()`; config `url` and optional `bearer_token`. `WhepPlayer`:
-  `@node(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
+  `@node.process(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
   `url` and optional `bearer_token`; `start()` hands `ctx.outputs` to a processor-owned
   thread that connects, drains the session and writes media frames — a group starting at
   each IDR, the stamp from the RTP clock mapped onto the monotonic clock, codec, extent and
@@ -3437,7 +3437,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   their locations (§Product), never refused by name; a **node** name is unique per stream — a
   defaulted duplicate (two unnamed `CameraSource`) is suffixed `-2`, `-3` …, while a duplicate
   the author *typed* is refused by name, because a typed name is an address; a **port** is a
-  method name on its class, and two casting alike are refused at `@node` — or a Rust
+  method name on its class, and two casting alike are refused at `@node.process` — or a Rust
   `#[processor]` — naming both. Every exposed name — machine, stream, node, port — is cast,
   never refused for its spelling: lowercased, accents dropped, every character outside RFC
   3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-`, at most

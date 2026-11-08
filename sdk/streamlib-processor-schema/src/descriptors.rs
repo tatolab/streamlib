@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioWindowContract, CatalogEntry, PortFamilyDeclaration, ProcessorClassImportPath,
+    AudioWindowContract, CatalogEntry, NodeKind, PortFamilyDeclaration, ProcessorClassImportPath,
     ProcessorClassShortName, ProcessorScheduling,
 };
 
@@ -125,6 +125,9 @@ pub struct ProcessorDescriptor {
     pub processor_class_import_path: ProcessorClassImportPath,
     pub description: String,
     pub repository: String,
+    /// The node kind: how the runtime runs this type's code.
+    #[serde(flatten)]
+    pub node_kind: NodeKind,
     /// Runtime environment (Rust, Python).
     #[serde(default)]
     pub runtime: ProcessorRuntime,
@@ -146,6 +149,10 @@ pub struct ProcessorDescriptor {
     /// in a stepped stream it stands outside the step barrier.
     #[serde(default)]
     pub paced_by_real_time: bool,
+    /// A stateful function node's state record fields, in the order its state
+    /// values travel in; empty for every other node type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub function_node_state_fields: Vec<String>,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -162,11 +169,13 @@ impl ProcessorDescriptor {
             processor_class_import_path,
             description: description.into(),
             repository: String::new(),
+            node_kind: NodeKind::default(),
             runtime: ProcessorRuntime::default(),
             entrypoint: None,
             config_schema: None,
             scheduling: ProcessorScheduling::default(),
             paced_by_real_time: false,
+            function_node_state_fields: Vec::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),

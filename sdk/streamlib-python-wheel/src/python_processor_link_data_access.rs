@@ -17,7 +17,7 @@
 //! thread.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
@@ -75,6 +75,10 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// The board this helper's loss counts are mirrored onto for its parent,
     /// once its setup opened the one the parent named.
     loss_count_board_writer: OnceLock<Arc<HelperProcessLossCountBoardWriter>>,
+    /// The state each stateful function node this helper calls resumes from,
+    /// by breadcrumb number, as the setup command's board carries it; a node
+    /// it names no state for starts from its state record's defaults.
+    function_node_states_resumed_from: OnceLock<HashMap<u32, Vec<f64>>>,
     /// The wake on each publish of this helper's stream clock, once its setup
     /// found the stream stepped.
     stream_clock_board_publish_listener: OnceLock<StreamClockBoardPublishListener>,
@@ -96,7 +100,7 @@ pub(crate) struct PythonProcessorLinkDataAccess {
 pub(crate) struct HelperProcessDataPlaneLentToNativeCode {
     pub(crate) input_mailboxes: Arc<InputMailboxesInner>,
     pub(crate) output_writer: Arc<OutputWriterInner>,
-    /// Lent port names, each cast the way `@node` casts it.
+    /// Lent port names, each cast the way `@node.process` casts it.
     pub(crate) lent_input_port_names: Vec<String>,
     pub(crate) lent_output_port_names: Vec<String>,
 }
@@ -108,6 +112,7 @@ impl PythonProcessorLinkDataAccess {
             output_writer: OnceLock::new(),
             iceoryx2_node: OnceLock::new(),
             loss_count_board_writer: OnceLock::new(),
+            function_node_states_resumed_from: OnceLock::new(),
             stream_clock_board_publish_listener: OnceLock::new(),
             declared_input_ports: parking_lot::Mutex::new(HashSet::new()),
             declared_output_ports: parking_lot::Mutex::new(HashSet::new()),
@@ -115,6 +120,47 @@ impl PythonProcessorLinkDataAccess {
             output_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
             runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// This helper's input mailboxes; `None` before a link wired one.
+    pub(crate) fn input_mailboxes_of_this_helper(&self) -> Option<Arc<InputMailboxesInner>> {
+        self.input_mailboxes.get().cloned()
+    }
+
+    /// The loss-count board this helper notes its step callbacks on, once its
+    /// setup opened it.
+    pub(crate) fn loss_count_board_writer_of_this_helper(
+        &self,
+    ) -> Option<&HelperProcessLossCountBoardWriter> {
+        self.loss_count_board_writer.get().map(Arc::as_ref)
+    }
+
+    /// The state the function node numbered `function_node_breadcrumb_number`
+    /// resumes from, when its stream carries one for it.
+    pub(crate) fn the_state_a_function_node_resumes_from(
+        &self,
+        function_node_breadcrumb_number: u32,
+    ) -> Option<Vec<f64>> {
+        self.function_node_states_resumed_from
+            .get()?
+            .get(&function_node_breadcrumb_number)
+            .cloned()
+    }
+
+    /// The loss-count board this helper writes, shared with what notes on it
+    /// past this call, once its setup opened it.
+    pub(crate) fn shared_loss_count_board_writer_of_this_helper(
+        &self,
+    ) -> Option<Arc<HelperProcessLossCountBoardWriter>> {
+        self.loss_count_board_writer.get().cloned()
+    }
+
+    /// The wake on each publish of this helper's stream clock, once it listens
+    /// for them.
+    pub(crate) fn stream_clock_board_publish_listener_of_this_helper(
+        &self,
+    ) -> Option<&StreamClockBoardPublishListener> {
+        self.stream_clock_board_publish_listener.get()
     }
 
     /// Record whether the runtime drives `process()` from this node's inputs,
@@ -1045,22 +1091,35 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// Open the loss-count board the parent created for this spawn, so every
-    /// link wired from here on mirrors its counts onto it.
+    /// link wired from here on mirrors its counts onto it and every stateful
+    /// function node writes its state on it.
     ///
     /// `output_port_names` is the board's output-port section in key order, as
-    /// the setup command lists it.
+    /// the setup command lists it; `function_node_states` names each stateful
+    /// function node's entry by breadcrumb number, beside the state it resumes
+    /// from as f64 bit patterns, `None` for its state record's defaults.
+    #[pyo3(signature = (service_name, output_port_names, function_node_states = Vec::new()))]
     fn open_loss_count_board(
         &self,
         python: Python<'_>,
         service_name: &str,
         output_port_names: Vec<String>,
+        function_node_states: Vec<(u32, Option<Vec<u64>>)>,
     ) -> PyResult<()> {
         let Some(node) = self.iceoryx2_node.get() else {
             return Err(not_a_helper_process_data_plane_error());
         };
+        let stateful_function_node_breadcrumb_numbers: Vec<u32> = function_node_states
+            .iter()
+            .map(|(breadcrumb_number, _)| *breadcrumb_number)
+            .collect();
         let board_writer = python
             .detach(|| {
-                node.open_helper_process_loss_count_board_writer(service_name, &output_port_names)
+                node.open_helper_process_loss_count_board_writer(
+                    service_name,
+                    &output_port_names,
+                    &stateful_function_node_breadcrumb_numbers,
+                )
             })
             .map_err(|open_failure| PyRuntimeError::new_err(open_failure.to_string()))?;
         self.loss_count_board_writer
@@ -1070,7 +1129,24 @@ impl PythonProcessorLinkDataAccess {
                     "this helper already mirrors its loss counts onto a board, so the board \
                      {service_name:?} cannot be opened as a second"
                 ))
+            })?;
+        let function_node_states_resumed_from = function_node_states
+            .into_iter()
+            .filter_map(|(breadcrumb_number, resumes_from_f64_bits)| {
+                Some((
+                    breadcrumb_number,
+                    resumes_from_f64_bits?
+                        .into_iter()
+                        .map(f64::from_bits)
+                        .collect(),
+                ))
             })
+            .collect();
+        // Set once, beside the board the `set` above already admitted once.
+        let _ = self
+            .function_node_states_resumed_from
+            .set(function_node_states_resumed_from);
+        Ok(())
     }
 
     /// Open this node's publisher and one destination notifier for a link
@@ -1512,13 +1588,15 @@ impl PythonProcessorLinkDataAccess {
         timestamp_ns: Option<i64>,
         starts_group: bool,
     ) -> PyResult<()> {
-        if sample_rate == 0 {
-            return Err(PyValueError::new_err(format!(
-                "write_channels_block() on output port {port_name:?} takes a sample_rate above 0"
-            )));
-        }
         let (held_samples, sample_type, channel_count, samples_per_channel) =
             PythonBufferHeldForOneWrite::of_planar_channel_samples(port_name, samples)?;
+        if sample_rate == 0 && samples_per_channel != 1 {
+            return Err(PyValueError::new_err(format!(
+                "write_channels_block() on output port {port_name:?} takes a sample_rate above \
+                 0, or 0 for a control value of one sample per channel, which states no \
+                 regular rate; it was handed {samples_per_channel} samples per channel at 0"
+            )));
+        }
         if let Some(declared_sample_type) = declared_shape.sample_type
             && declared_sample_type != sample_type
         {
@@ -2217,7 +2295,7 @@ fn not_a_helper_process_data_plane_error() -> PyErr {
     )
 }
 
-/// The declared port an author's spelling names: `@node` cast each declared
+/// The declared port an author's spelling names: `@node.process` cast each declared
 /// name, so a lookup casts its argument and `read("Video")` finds `video`.
 fn declared_port_name_the_spelling_names(port_name: &str) -> PyResult<Cow<'_, str>> {
     cast_exposed_name_to_url_safe(port_name)
@@ -3606,11 +3684,11 @@ mod tests {
         Python::attach(|python| {
             let board_name = format!("wiring{}_steps/loss-counts", std::process::id());
             let parent_board = Iceoryx2Node::for_this_test_process()
-                .create_helper_process_loss_count_board(&board_name, Vec::new())
+                .create_helper_process_loss_count_board(&board_name, Vec::new(), Vec::new())
                 .unwrap();
             let helper = helper_plane();
             helper
-                .open_loss_count_board(python, &board_name, Vec::new())
+                .open_loss_count_board(python, &board_name, Vec::new(), Vec::new())
                 .expect("the helper opens the board its parent named");
 
             helper.note_a_step_callback_started();
@@ -3691,12 +3769,16 @@ mod tests {
             let board_name = format!("wiring{}_board/loss-counts", std::process::id());
             let output_ports = vec!["frames_to_downstream".to_string()];
             let parent_board = Iceoryx2Node::for_this_test_process()
-                .create_helper_process_loss_count_board(&board_name, output_ports.clone())
+                .create_helper_process_loss_count_board(
+                    &board_name,
+                    output_ports.clone(),
+                    Vec::new(),
+                )
                 .unwrap();
             let source = helper_plane();
             let destination = helper_plane();
             destination
-                .open_loss_count_board(python, &board_name, output_ports)
+                .open_loss_count_board(python, &board_name, output_ports, Vec::new())
                 .expect("the helper opens the board its parent named");
 
             destination

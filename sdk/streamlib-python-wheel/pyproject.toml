@@ -79,9 +79,13 @@ features = ["extension-module"]
 # one interpreter's stale `.pyc` files inside an abi3 wheel.
 exclude = ["**/__pycache__/**"]
 # maturin drops every `*.so` it finds under `python-source`, taking it for a
-# stale develop build of `_engine`; the bundled Vulkan driver on Linux is one,
-# so it is named here, where the glob is relative to `python-source`.
-include = [{ path = "tatolab/runtime/_vulkan_driver/*.so", format = "wheel" }]
+# stale develop build of `_engine`; the bundled Vulkan driver and the Slang
+# compiler on Linux are such files, so they are named here, where the glob is
+# relative to `python-source`.
+include = [
+    { path = "tatolab/runtime/_vulkan_driver/*.so", format = "wheel" },
+    { path = "tatolab/runtime/_slang_compiler/*.so", format = "wheel" },
+]
 
 # Apple Silicon only, built on the pinned `macos-26` runner's SDK. Every Apple
 # Silicon Mac can run it, and it clears MoltenVK's own floor (12) and AVFoundation's

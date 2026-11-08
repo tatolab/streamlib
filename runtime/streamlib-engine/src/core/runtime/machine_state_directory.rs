@@ -5,6 +5,7 @@
 //! stream, named by its id and written whole or not at all, changed only
 //! through one read-edit-write at a time, and the stream actions queued on it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,44 +17,32 @@ use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
 };
 use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
-use super::{StreamEnvironment, StreamListingState, StreamLocation};
+use super::{FunctionNodeState, StreamEnvironment, StreamListingState, StreamLocation};
 use crate::core::graph::is_in_exposed_name_cast_form;
 use crate::core::{Error, Result};
 
 /// The schema version of a stream record this runtime writes and reads.
-pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 5;
-
-/// The schema version whose records hold no pending stream actions; a record
-/// of it reads as current, holding none and with its exposure dropped.
-const STREAM_RECORD_SCHEMA_VERSION_HOLDING_NO_PENDING_STREAM_ACTION: u32 = 3;
-
-/// The schema version whose records hold the owner's exposure rulings and a
-/// graph's `exposed` ports; a record of it reads as current with both dropped.
-const STREAM_RECORD_SCHEMA_VERSION_HOLDING_OUTPUT_PORT_EXPOSURE: u32 = 4;
+pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 6;
 
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
-/// One stream, as its runtime re-loads it: its id and location, its display
-/// name, the graph compiled at its load, the interpreter its processors start
-/// in, and whether it was stopped or has failed.
+/// One stream, as its runtime re-loads it from its graph document: its id and location, its
+/// display name, the interpreter its processors start in, and whether it was stopped or has
+/// failed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamRecord {
     /// [`STREAM_RECORD_SCHEMA_VERSION`] for a record this runtime wrote.
     pub schema_version: u32,
-    /// The stream id its location computes to, which its file is named after.
+    /// The stream id it was first recorded under, which its file is named after.
     pub stream_id: String,
-    /// Where the stream's code lives.
+    /// Its project and stream asset, and where the project sat at its last load.
     pub location: StreamLocation,
     /// The label the stream is shown under.
     pub display_name: String,
     /// The project's venv interpreter, as it was spelled at the load.
     pub interpreter: PathBuf,
-    /// The graph compiled at the load, before any ruling was applied; `None`
-    /// for a stream whose compile failed, which `start_stream` compiles from
-    /// its location.
-    pub graph: Option<serde_json::Value>,
     /// Whether the owner stopped the stream, so a restart leaves it unloaded.
     pub stopped: bool,
     /// Why the stream is failed, so the runtime's start skips it until
@@ -66,6 +55,48 @@ pub struct StreamRecord {
     /// finished, in queue order; each is finalised only by its own action.
     #[serde(default)]
     pub pending_stream_actions: Vec<PendingStreamActionOnTheRecord>,
+    /// The state each stateful function node of the stream held at the
+    /// stream's last end, by node name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub function_node_states_by_node_name: BTreeMap<String, RecordedFunctionNodeState>,
+}
+
+/// One stateful function node's state as a stream record keeps it: each value
+/// as its f64 bit pattern, so a NaN, an infinity and a negative zero come back
+/// exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedFunctionNodeState {
+    /// The state record's fields, in the order the values travel in.
+    pub state_fields: Vec<String>,
+    /// One value per field, as `f64::to_bits` gives it.
+    pub state_values_as_f64_bits: Vec<u64>,
+}
+
+impl RecordedFunctionNodeState {
+    /// `state` as a record keeps it.
+    pub fn of(state: &FunctionNodeState) -> Self {
+        Self {
+            state_fields: state.state_fields.clone(),
+            state_values_as_f64_bits: state
+                .state_values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect(),
+        }
+    }
+
+    /// The state the record keeps.
+    pub fn state(&self) -> FunctionNodeState {
+        FunctionNodeState {
+            state_fields: self.state_fields.clone(),
+            state_values: self
+                .state_values_as_f64_bits
+                .iter()
+                .map(|bits| f64::from_bits(*bits))
+                .collect(),
+        }
+    }
 }
 
 /// A stream action queued on a record, which the runtime's start finishes when
@@ -92,47 +123,25 @@ pub enum PendingStreamActionKind {
 }
 
 impl StreamRecord {
-    /// A record of the stream at `location`, shown as `display_name` and
-    /// running from `stream_environment`, neither stopped nor failed,
-    /// implicated in no crash, and carrying no ruling.
+    /// A record of the stream at `location` under `stream_id`, shown as `display_name` and
+    /// running from `stream_environment`, neither stopped nor failed, and implicated in no crash.
     pub fn of_a_running_stream(
+        stream_id: String,
         location: StreamLocation,
         display_name: impl Into<String>,
         stream_environment: &StreamEnvironment,
-        graph: serde_json::Value,
     ) -> Self {
         Self {
             schema_version: STREAM_RECORD_SCHEMA_VERSION,
-            stream_id: location.stream_id(),
+            stream_id,
             location,
             display_name: display_name.into(),
             interpreter: stream_environment.interpreter.clone(),
-            graph: Some(graph),
             stopped: false,
             failed_because: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             pending_stream_actions: Vec::new(),
-        }
-    }
-
-    /// A record of the stream at `location`, shown as `display_name`, whose
-    /// compile in `stream_environment` gave no graph: failed because of
-    /// `failed_because`, implicated in no crash, and carrying no ruling.
-    pub fn of_a_stream_whose_compile_failed(
-        location: StreamLocation,
-        display_name: impl Into<String>,
-        stream_environment: &StreamEnvironment,
-        failed_because: impl Into<String>,
-    ) -> Self {
-        Self {
-            graph: None,
-            failed_because: Some(failed_because.into()),
-            ..Self::of_a_running_stream(
-                location,
-                display_name,
-                stream_environment,
-                serde_json::Value::Null,
-            )
+            function_node_states_by_node_name: BTreeMap::new(),
         }
     }
 
@@ -218,11 +227,33 @@ impl StreamRecord {
     }
 
     /// Take the record's attributes from `current`, the record as it is on
-    /// disk: the display name and the pending actions,
-    /// none of which a load changes.
+    /// disk: the display name, the pending actions and the function-node
+    /// states, none of which a load changes.
     pub fn keep_the_attributes_of(&mut self, current: &StreamRecord) {
         self.display_name = current.display_name.clone();
         self.pending_stream_actions = current.pending_stream_actions.clone();
+        self.function_node_states_by_node_name = current.function_node_states_by_node_name.clone();
+    }
+
+    /// The function-node states the record keeps, by node name.
+    pub fn function_node_states(&self) -> BTreeMap<String, FunctionNodeState> {
+        self.function_node_states_by_node_name
+            .iter()
+            .map(|(function_node_name, recorded)| (function_node_name.clone(), recorded.state()))
+            .collect()
+    }
+
+    /// Keep `states` as the function-node states of the stream's last end.
+    pub fn keep_the_function_node_states(&mut self, states: &BTreeMap<String, FunctionNodeState>) {
+        self.function_node_states_by_node_name = states
+            .iter()
+            .map(|(function_node_name, state)| {
+                (
+                    function_node_name.clone(),
+                    RecordedFunctionNodeState::of(state),
+                )
+            })
+            .collect();
     }
 }
 
@@ -275,21 +306,6 @@ impl StreamRecordAsRead {
             Self::Current(record) => &record.stream_id,
             Self::RecordedByAnEarlierRuntime(earlier) => &earlier.stream_id,
         }
-    }
-}
-
-/// Drop the owner's exposure rulings and the stored graph's `exposed` ports
-/// from a record a runtime that exposed output ports wrote.
-fn drop_the_output_port_exposure_an_earlier_record_holds(record_document: &mut serde_json::Value) {
-    let Some(record_fields) = record_document.as_object_mut() else {
-        return;
-    };
-    record_fields.remove("exposure_rulings");
-    if let Some(graph_fields) = record_fields
-        .get_mut("graph")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        graph_fields.remove("exposed");
     }
 }
 
@@ -554,7 +570,7 @@ fn read_a_stream_record(
         path: record_path.to_path_buf(),
         reason,
     };
-    let mut record_document: serde_json::Value = serde_json::from_slice(record_bytes)
+    let record_document: serde_json::Value = serde_json::from_slice(record_bytes)
         .map_err(|not_json| failure(format!("it is not JSON: {not_json}")))?;
     let record_file_stem = record_path
         .file_stem()
@@ -566,21 +582,14 @@ fn read_a_stream_record(
         .and_then(serde_json::Value::as_u64)
     {
         Some(version) if version == current_version => {}
-        Some(version)
-            if version
-                == u64::from(STREAM_RECORD_SCHEMA_VERSION_HOLDING_NO_PENDING_STREAM_ACTION)
-                || version
-                    == u64::from(STREAM_RECORD_SCHEMA_VERSION_HOLDING_OUTPUT_PORT_EXPOSURE) =>
-        {
-            drop_the_output_port_exposure_an_earlier_record_holds(&mut record_document);
-        }
         Some(earlier_version) if earlier_version < current_version => {
             return Ok(StreamRecordAsRead::RecordedByAnEarlierRuntime(
                 StreamRecordOfAnEarlierRuntime {
                     stream_id: record_file_stem,
                     schema_version: earlier_version,
                     project_directory: record_document
-                        .get("project_directory")
+                        .pointer("/location/project_directory")
+                        .or_else(|| record_document.get("project_directory"))
                         .and_then(serde_json::Value::as_str)
                         .map(PathBuf::from),
                 },
@@ -609,15 +618,6 @@ fn read_a_stream_record(
              stream action on `{record_file_stem}` reaches it; rename it or remove it"
         )));
     }
-    let location_stream_id = record.location.stream_id();
-    if *recorded_stream_id != location_stream_id {
-        return Err(failure(format!(
-            "it records the stream `{recorded_stream_id}` at {}, whose stream id is \
-             `{location_stream_id}`; a stream's id is the one its location computes to, so \
-             remove this record and run the stream again",
-            record.location
-        )));
-    }
     Ok(StreamRecordAsRead::Current(record))
 }
 
@@ -626,24 +626,24 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    /// A record of the stream `function` in the project folder `folder`.
-    fn a_record_of(folder: &str, function: &str) -> StreamRecord {
+    /// A record of the stream `stream_name` in the project folder `folder`, its UUIDs derived
+    /// from both names so one pair always gives one record.
+    fn a_record_of(folder: &str, stream_name: &str) -> StreamRecord {
         let project_directory = PathBuf::from(format!("/home/someone/{folder}"));
+        let project = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, folder.as_bytes());
+        let location = StreamLocation {
+            project_directory: project_directory.clone(),
+            project,
+            stream_asset: uuid::Uuid::new_v5(&project, stream_name.as_bytes()),
+        };
         StreamRecord::of_a_running_stream(
-            StreamLocation {
-                project_directory: project_directory.clone(),
-                stream_function: format!("stream:{function}"),
-            },
-            function,
+            location.stream_id_named(folder, stream_name),
+            location,
+            stream_name,
             &StreamEnvironment {
                 interpreter: project_directory.join(".venv/bin/python"),
                 project_directory,
             },
-            serde_json::json!({
-                "stream": function,
-                "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource", "config": {}}],
-                "links": [],
-            }),
         )
     }
 
@@ -668,8 +668,7 @@ mod tests {
                 .unwrap();
         let mut record = a_record_of("camera-app", "preview");
         record.stopped = true;
-        let stream_id = record.location.stream_id();
-        assert_eq!(record.stream_id, stream_id);
+        let stream_id = record.stream_id.clone();
 
         records.write(&record).unwrap();
 
@@ -684,91 +683,122 @@ mod tests {
         );
     }
 
-    fn a_record_file_of_schema(
-        schema_version: u32,
-        record: &StreamRecord,
-        stored_graph: serde_json::Value,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "schema_version": schema_version,
-            "stream_id": record.stream_id,
-            "location": record.location,
-            "display_name": "preview",
-            "interpreter": record.interpreter,
-            "graph": stored_graph,
-            "stopped": false,
-            "failed_because": null,
-            "runtime_crashes_in_a_row_implicating_it": 0,
-            "exposure_rulings": [{"node": "camera", "port": "video", "level": "public"}],
-        })
+    #[test]
+    fn a_records_function_node_states_read_back_exactly_and_a_load_keeps_them() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let states_at_its_end = BTreeMap::from([(
+            "lfo".to_string(),
+            FunctionNodeState {
+                state_fields: vec!["phase".into(), "held".into(), "floor".into()],
+                state_values: vec![0.1 + 0.2, f64::NEG_INFINITY, -0.0],
+            },
+        )]);
+        let mut record = a_record_of("synth", "main");
+        record.keep_the_function_node_states(&states_at_its_end);
+        records.write(&record).unwrap();
+
+        let Some(StreamRecordAsRead::Current(read_back)) = records.read(&record.stream_id).unwrap()
+        else {
+            panic!("the record reads back as this runtime's");
+        };
+        let state_read_back = &read_back.function_node_states()["lfo"];
+        assert_eq!(state_read_back.state_fields, ["phase", "held", "floor"]);
+        assert_eq!(
+            state_read_back
+                .state_values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            [0.1f64 + 0.2, f64::NEG_INFINITY, -0.0]
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            "each value comes back bit for bit"
+        );
+
+        let reloaded = records
+            .write_the_record_a_load_made(a_record_of("synth", "main"))
+            .unwrap();
+        assert_eq!(
+            reloaded.function_node_states_by_node_name, record.function_node_states_by_node_name,
+            "a load never forgets the states the stream's last end recorded"
+        );
     }
 
     #[test]
-    fn a_schema_3_or_4_record_reads_as_current_with_its_output_port_exposure_dropped() {
-        for schema_version in [3, 4] {
+    fn a_record_with_no_function_node_states_writes_no_key_for_them() {
+        let rendered = serde_json::to_value(a_record_of("synth", "main")).unwrap();
+        assert!(rendered.get("function_node_states_by_node_name").is_none());
+    }
+
+    #[test]
+    fn a_record_of_schema_5_or_earlier_is_read_as_an_earlier_runtimes() {
+        for schema_version in [3, 4, 5] {
             let state_directory = tempfile::tempdir().unwrap();
             let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-            let record = a_record_of("camera-app", "preview");
-            let mut stored_graph = record.graph.clone().unwrap();
-            stored_graph["exposed"] =
-                serde_json::json!([{"node": "camera", "port": "video", "level": "private"}]);
             std::fs::write(
-                state_directory
-                    .path()
-                    .join(format!("{}.json", record.stream_id)),
-                serde_json::to_vec(&a_record_file_of_schema(
-                    schema_version,
-                    &record,
-                    stored_graph,
-                ))
+                records.streams_directory().join("hello-main-0a1b2c.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "schema_version": schema_version,
+                    "stream_id": "hello-main-0a1b2c",
+                    "location": {
+                        "project_directory": "/home/someone/hello",
+                        "stream_function": "stream:main",
+                    },
+                    "display_name": "main",
+                    "interpreter": "/home/someone/hello/.venv/bin/python",
+                    "graph": {"stream": "main", "nodes": [], "links": []},
+                    "stopped": false,
+                    "failed_because": null,
+                    "runtime_crashes_in_a_row_implicating_it": 0,
+                    "pending_stream_actions": [],
+                }))
                 .unwrap(),
             )
             .unwrap();
 
-            let read = records.read(&record.stream_id).unwrap();
-
-            assert_eq!(read, Some(current(record)), "schema {schema_version}");
+            assert_eq!(
+                records.read("hello-main-0a1b2c").unwrap(),
+                Some(StreamRecordAsRead::RecordedByAnEarlierRuntime(
+                    StreamRecordOfAnEarlierRuntime {
+                        stream_id: "hello-main-0a1b2c".to_string(),
+                        schema_version,
+                        project_directory: Some(PathBuf::from("/home/someone/hello")),
+                    }
+                )),
+                "schema {schema_version}"
+            );
         }
     }
 
     #[test]
-    fn a_current_record_holding_exposure_rulings_is_refused() {
+    fn a_current_record_holding_a_graph_is_refused() {
         let state_directory = tempfile::tempdir().unwrap();
         let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
         let record = a_record_of("camera-app", "preview");
+        let mut written = serde_json::to_value(&record).unwrap();
+        written["graph"] = serde_json::json!({"nodes": [], "links": []});
         std::fs::write(
-            state_directory
-                .path()
-                .join(format!("{}.json", record.stream_id)),
-            serde_json::to_vec(&a_record_file_of_schema(
-                STREAM_RECORD_SCHEMA_VERSION,
-                &record,
-                record.graph.clone().unwrap(),
-            ))
-            .unwrap(),
+            records.record_path_of(&record.stream_id).unwrap(),
+            serde_json::to_vec(&written).unwrap(),
         )
         .unwrap();
 
         let refusal = records.read(&record.stream_id).unwrap_err().to_string();
 
-        assert!(refusal.contains("exposure_rulings"), "{refusal}");
+        assert!(refusal.contains("graph"), "{refusal}");
     }
 
     #[test]
-    fn a_record_of_a_stream_whose_compile_failed_holds_no_graph_and_reads_back_whole() {
+    fn a_failed_record_reads_back_whole() {
         let state_directory = tempfile::tempdir().unwrap();
         let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        let compiled = a_record_of("camera-app", "preview");
-        let record = StreamRecord::of_a_stream_whose_compile_failed(
-            compiled.location.clone(),
-            "preview",
-            &compiled.stream_environment(),
-            "Traceback (most recent call last):\nValueError: bad wiring",
-        );
+        let mut record = a_record_of("camera-app", "preview");
+        record.failed_because = Some("the graph document does not parse".to_string());
 
         records.write(&record).unwrap();
 
-        assert_eq!(record.graph, None);
         assert_eq!(record.listing_state(), StreamListingState::Failed);
         assert_eq!(
             records.read(&record.stream_id).unwrap(),
@@ -800,14 +830,16 @@ mod tests {
 
         assert_eq!(written["schema_version"], STREAM_RECORD_SCHEMA_VERSION);
         assert_eq!(written["pending_stream_actions"], serde_json::json!([]));
-        assert_eq!(written["stream_id"], record.location.stream_id());
+        assert_eq!(written["stream_id"], record.stream_id);
         assert_eq!(
             written["location"],
             serde_json::json!({
                 "project_directory": "/home/someone/camera-app",
-                "stream_function": "stream:preview",
+                "project": record.location.project.to_string(),
+                "stream_asset": record.location.stream_asset.to_string(),
             })
         );
+        assert_eq!(written.get("graph"), None);
         assert_eq!(written["display_name"], "preview");
     }
 
@@ -884,41 +916,6 @@ mod tests {
             )),
             "{later}"
         );
-    }
-
-    #[test]
-    fn a_schema_3_record_reads_as_holding_no_pending_action_and_is_rewritten_under_the_current_schema()
-     {
-        let state_directory = tempfile::tempdir().unwrap();
-        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        let record = a_record_of("camera-app", "preview");
-        let mut schema_3 = serde_json::to_value(&record).unwrap();
-        schema_3["schema_version"] = serde_json::json!(3);
-        schema_3
-            .as_object_mut()
-            .unwrap()
-            .remove("pending_stream_actions");
-        std::fs::write(
-            records.record_path_of(&record.stream_id).unwrap(),
-            serde_json::to_vec(&schema_3).unwrap(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            records.read(&record.stream_id).unwrap(),
-            Some(current(record.clone()))
-        );
-        records
-            .change_the_record(&record.stream_id, |recorded| {
-                recorded.display_name = "Desk".to_string();
-            })
-            .unwrap();
-        let rewritten: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(records.record_path_of(&record.stream_id).unwrap()).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(rewritten["schema_version"], STREAM_RECORD_SCHEMA_VERSION);
-        assert_eq!(rewritten["display_name"], "Desk");
     }
 
     #[test]
@@ -1076,32 +1073,6 @@ mod tests {
         );
         let refusal = records.read("zz-copy").unwrap_err();
         assert_eq!(refusal.path, renamed_copy);
-    }
-
-    #[test]
-    fn a_record_whose_id_is_not_the_one_its_location_computes_to_is_reported_naming_both() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
-        let mut record = a_record_of("camera-app", "preview");
-        record.stream_id = "camera-app-preview-000000".to_string();
-        std::fs::write(
-            records
-                .streams_directory()
-                .join("camera-app-preview-000000.json"),
-            serde_json::to_vec(&record).unwrap(),
-        )
-        .unwrap();
-
-        let refusal = records
-            .read("camera-app-preview-000000")
-            .unwrap_err()
-            .to_string();
-
-        assert!(refusal.contains("`camera-app-preview-000000`"), "{refusal}");
-        assert!(
-            refusal.contains(&format!("`{}`", record.location.stream_id())),
-            "{refusal}"
-        );
     }
 
     #[test]

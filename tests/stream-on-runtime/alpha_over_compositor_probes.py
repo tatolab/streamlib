@@ -46,16 +46,17 @@ SETTLING_SECONDS_AFTER_THE_FIRST_COMPOSITE = 3.0
 #: How long the probe waits for a first composite before reporting none.
 FIRST_COMPOSITE_DEADLINE_SECONDS = 8.0
 
-_FILL_KERNEL_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba8) uniform writeonly image2D filled_frame;
-layout(push_constant) uniform FillColour { vec4 premultiplied_rgba; } fill;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(filled_frame);
-    if (at.x >= extent.x || at.y >= extent.y) { return; }
-    imageStore(filled_frame, at, fill.premultiplied_rgba);
+_FILL_KERNEL_SLANG = """\
+[[vk::binding(0, 0)]] [format("rgba8")] RWTexture2D<float4> filled_frame;
+struct FillColour { float4 premultiplied_rgba; };
+[[vk::push_constant]] ConstantBuffer<FillColour> fill;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint width;
+    uint height;
+    filled_frame.GetDimensions(width, height);
+    if (invocation.x >= width || invocation.y >= height) { return; }
+    filled_frame[invocation.xy] = fill.premultiplied_rgba;
 }
 """
 
@@ -66,7 +67,7 @@ class SolidPremultipliedColourSourceConfig(TypedDict):
     premultiplied_rgba: "list[int]"
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=SOURCE_INTERVAL_MS,
     description="Publishes frames of one premultiplied RGBA colour",
@@ -86,7 +87,7 @@ class SolidPremultipliedColourSource:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.fill_kernel: ComputeKernel = ctx.gpu_full_access.create_compute_kernel(
-            source=_FILL_KERNEL_GLSL,
+            source=_FILL_KERNEL_SLANG,
             push_constant_size=len(self.fill_push_constants),
             bindings={"filled_frame": "storage_image"},
         )
@@ -107,7 +108,7 @@ class SolidPremultipliedColourSource:
         )
 
 
-@node(execution="manual", description="Declares a video output and never publishes on it")
+@node.process(execution="manual", description="Declares a video output and never publishes on it")
 class NeverPublishingVideoSource:
     """Stands for a layer that is wired and has never sent a frame."""
 
@@ -122,7 +123,7 @@ def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
     return pixels
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=10,
     description="Reports the pixels of the composite it holds once the sources have settled",

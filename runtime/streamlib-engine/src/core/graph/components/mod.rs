@@ -3,9 +3,7 @@
 
 mod component_map;
 mod device_matched_audio_window_contracts_component;
-mod execution_lightweight_component;
-mod execution_main_thread_component;
-mod execution_rayon_pool_component;
+mod function_node_promoted_to_its_own_process_component;
 mod iceoryx2_services_held_open_for_link_component;
 mod json_component_trait;
 mod link_state_component;
@@ -25,9 +23,7 @@ mod thread_handle_component;
 
 pub use component_map::*;
 pub use device_matched_audio_window_contracts_component::*;
-pub use execution_lightweight_component::*;
-pub use execution_main_thread_component::*;
-pub use execution_rayon_pool_component::*;
+pub use function_node_promoted_to_its_own_process_component::*;
 pub use iceoryx2_services_held_open_for_link_component::*;
 pub use json_component_trait::*;
 pub use link_state_component::*;

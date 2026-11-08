@@ -5,7 +5,7 @@
 
 """The bootstrap a processor interpreter runs — one Python processor, one process.
 
-Every `@node` class runs in a processor interpreter: the stream's own venv
+Every `@node.process` class runs in a processor interpreter: the stream's own venv
 interpreter running this file by path, with the lend directory (the one holding
 `tatolab/runtime/`) and then the project directory on `PYTHONPATH`. It imports
 the class by the import path the parent derived from it, opens that processor's
@@ -30,7 +30,6 @@ import json
 import os
 import platform
 import queue
-import select
 import signal
 import socket
 import stat
@@ -42,7 +41,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, NoReturn, Optional
+from typing import Any, NoReturn, Optional
 
 OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 12)
 
@@ -138,14 +137,19 @@ from tatolab.stream import (
     NodeLinkDataAccess,
     RuntimeContextFullAccess,
     log,
-    monotonic_now_ns,
-    start_monotonic_timer,
+)
+from tatolab.stream._function_node_declaration import (
+    NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
+    NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
+    NODE_DECLARATION_LANGUAGE_STAMP,
+    FunctionNode,
 )
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_DECLARED_STAMP,
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
     NODE_DECLARATION_EXECUTION_STAMP,
+    NODE_DECLARATION_KIND_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
     NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP,
@@ -157,12 +161,19 @@ from tatolab.runtime._engine import (
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
     limited_access_view_of_runtime_context_for_helper_process,
-    machine_nanoseconds_until_this_helpers_stream_clock_reaches,
     note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
     note_stop_request_from_parent_on_runtime_context,
     open_node_link_data_access_for_helper_process,
     open_runtime_context_full_access_for_helper_process,
+    run_the_scheduling_loop_of_this_helper,
+)
+from tatolab.runtime._function_node_compilation import (
+    FunctionNodeCompiledToItsEvaluateEntry,
+    feed_each_input_port_from_its_function_node_island,
+)
+from tatolab.runtime._function_node_run_as_its_helpers_processor import (
+    the_processor_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._processor_hosting import (
     apply_configuration,
@@ -188,25 +199,6 @@ ENGINE_BUILD_ID_ENV = "STREAMLIB_ENGINE_BUILD_ID"
 # response. Generous enough for a cold GPU allocation under load; bounded so
 # a wedged parent surfaces as an error instead of a hung processor callback.
 ESCALATE_REQUEST_TIMEOUT_SECONDS = 60.0
-
-# How long a continuous processor's interval wait may park before the lifecycle
-# queue is drained again. Teardown latency there is bounded by this plus one
-# callback.
-LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
-
-# The interval a continuous processor declaring none runs at: the same 100 µs
-# the engine's native continuous runner waits between calls.
-CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
-
-
-def next_continuous_deadline_stream_ns(
-    previous_deadline_stream_ns: int, interval_stream_ns: int, stream_now_ns: int
-) -> int:
-    """The first deadline on the `previous + k·interval` grid after
-    `stream_now_ns`: a processor that overran fires once, never a backlog."""
-    intervals_passed = max(0, stream_now_ns - previous_deadline_stream_ns) // interval_stream_ns
-    return previous_deadline_stream_ns + (intervals_passed + 1) * interval_stream_ns
-
 
 # How long the engine-log forwarder parks waiting for a record before it looks
 # at its own stop flag again. It bounds nothing a user sees: a record arriving
@@ -850,9 +842,10 @@ def load_processor_class(import_path: str) -> type:
 # Describing processor classes
 # =============================================================================
 
-#: Each key of a described node type the class's own `@node` stamp fills, in wire order.
+#: Each key of a described process node type the class's own `@node.process` stamp fills, in wire order.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
+    ("kind", NODE_DECLARATION_KIND_STAMP),
     ("execution", NODE_DECLARATION_EXECUTION_STAMP),
     ("scheduling_priority", NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP),
     ("paced_by_real_time", NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP),
@@ -862,12 +855,25 @@ DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
 )
 
 
+#: Each key of a described function node type its `@node.function` stamp fills, in wire order.
+DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
+    ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
+    ("kind", NODE_DECLARATION_KIND_STAMP),
+    ("language", NODE_DECLARATION_LANGUAGE_STAMP),
+    ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
+    ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
+    ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+    ("function_signature", NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP),
+    ("state_fields", NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP),
+)
+
+
 class ProcessorClassNotDescribable(Exception):
     """A requested import path names nothing this interpreter can describe."""
 
 
 def describe_one_processor_class(import_path: str) -> "dict[str, Any]":
-    """The declaration the `@node` class at `import_path` carries, as JSON data.
+    """The declaration the `@node.process` class at `import_path` carries, as JSON data.
 
     Refused unless `import_path` names exactly that class: one whose own
     `__module__:__qualname__` is the path, since that is the path its processor
@@ -899,21 +905,29 @@ def _describe_the_processor_class_its_imported_module_defines(
         resolved: Any = load_processor_class(import_path)
     except HelperProcessProtocolError as unresolvable:
         raise ProcessorClassNotDescribable(str(unresolvable)) from None
-    if not isinstance(resolved, type):
+    if isinstance(resolved, FunctionNode):
+        described_keys_and_their_stamps = DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
+        the_decorator_that_stamps_them = "@node.function"
+        what_it_names = "function"
+    elif isinstance(resolved, type):
+        described_keys_and_their_stamps = DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
+        the_decorator_that_stamps_them = "@node.process"
+        what_it_names = "class"
+    else:
         raise ProcessorClassNotDescribable(
-            f"it names a {type(resolved).__name__}, not a class"
+            f"it names a {type(resolved).__name__}, not a class or a `@node.function`"
         )
     if getattr(resolved, NODE_DECLARATION_DECLARED_STAMP, False) is not True:
         raise ProcessorClassNotDescribable(
-            f"the class `{resolved.__qualname__}` carries no `@node` declaration, so it "
-            f"is not a node"
+            f"the {what_it_names} `{resolved.__qualname__}` carries no "
+            f"`{the_decorator_that_stamps_them}` declaration, so it is not a node"
         )
     own_import_path = (
         f"{getattr(resolved, '__module__', None)}:{getattr(resolved, '__qualname__', None)}"
     )
     if own_import_path != import_path:
         raise ProcessorClassNotDescribable(
-            f"the class it names identifies as `{own_import_path}`; a node is named by "
+            f"the {what_it_names} it names identifies as `{own_import_path}`; a node is named by "
             f"its own import path, the one its processor interpreter imports it back by"
         )
     described_node_type: "dict[str, Any]" = {
@@ -923,15 +937,16 @@ def _describe_the_processor_class_its_imported_module_defines(
     for (
         described_node_type_key,
         node_declaration_stamp,
-    ) in DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS:
+    ) in described_keys_and_their_stamps:
         try:
             described_node_type[described_node_type_key] = getattr(
                 resolved, node_declaration_stamp
             )
         except AttributeError:
             raise ProcessorClassNotDescribable(
-                f"the class `{resolved.__qualname__}` carries no `{node_declaration_stamp}`, "
-                f"which `@node` sets; a class stamped by hand is not a node"
+                f"the {what_it_names} `{resolved.__qualname__}` carries no "
+                f"`{node_declaration_stamp}`, which `{the_decorator_that_stamps_them}` sets; a "
+                f"{what_it_names} stamped by hand is not a node"
             ) from None
     try:
         json.dumps(described_node_type, allow_nan=False)
@@ -1288,8 +1303,12 @@ class HelperProcessLifecycle:
         self._running = False
         self._torn_down = False
         self._board_service_name_of_a_stream_clock_that_may_step: "Optional[str]" = None
-        self._last_step_handled: "Optional[int]" = None
         self._paused = False
+        self._scheduling_loop_runs = False
+        self._pause_hook_last_called: "Optional[str]" = None
+        self._function_nodes_compiled_for_the_islands_it_reads: (
+            "list[FunctionNodeCompiledToItsEvaluateEntry]"
+        ) = []
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -1380,7 +1399,12 @@ class HelperProcessLifecycle:
             loss_count_board = command.get("loss_count_board")
             if loss_count_board is not None:
                 self._link_data_access.open_loss_count_board(
-                    loss_count_board["service_name"], loss_count_board["output_ports"]
+                    loss_count_board["service_name"],
+                    loss_count_board["output_ports"],
+                    [
+                        (entry["breadcrumb_number"], entry["resumes_from_f64_bits"])
+                        for entry in loss_count_board.get("function_node_states", [])
+                    ],
                 )
             stream_clock = command.get("stream_clock") or {}
             stream_clock_board_service_name = stream_clock.get("board_service_name")
@@ -1392,7 +1416,15 @@ class HelperProcessLifecycle:
                     self._board_service_name_of_a_stream_clock_that_may_step = (
                         stream_clock_board_service_name
                     )
-            wire_link_data_access(self._link_data_access, command.get("ports") or {})
+            port_wiring = command.get("ports") or {}
+            wire_link_data_access(self._link_data_access, port_wiring)
+            function_node_islands = port_wiring.get("islands") or []
+            if function_node_islands:
+                self._function_nodes_compiled_for_the_islands_it_reads = (
+                    feed_each_input_port_from_its_function_node_island(
+                        self._link_data_access, function_node_islands, load_processor_class
+                    )
+                )
             self._hosted = construct_hosted_processor(
                 self._processor_class,
                 command.get("config"),
@@ -1443,234 +1475,64 @@ class HelperProcessLifecycle:
         note_stop_request_from_parent_on_runtime_context(
             self._hosted.full_access_context, False
         )
-        if execution_mode == "reactive":
-            self._run_reactive()
-        elif (
-            execution_mode == "continuous"
-            and self._board_service_name_of_a_stream_clock_that_may_step is not None
-        ):
-            self._run_continuous_on_its_stream_clock(int(command.get("interval_ms") or 0))
-        elif execution_mode == "continuous" and self._paced_by_real_time():
-            self._run_continuous(
-                int(command.get("interval_ms") or 0),
-                time_ns_the_loop_paces_on=monotonic_now_ns,
-                machine_ns_until=lambda deadline_ns: deadline_ns - monotonic_now_ns(),
-            )
-        elif execution_mode == "continuous":
-            self._run_continuous(
-                int(command.get("interval_ms") or 0),
-                time_ns_the_loop_paces_on=self._hosted_limited_access_context_time,
-                machine_ns_until=machine_nanoseconds_until_this_helpers_stream_clock_reaches,
-            )
+        if execution_mode in ("reactive", "continuous"):
+            self._run_the_scheduling_loop(execution_mode, int(command.get("interval_ms") or 0))
         elif execution_mode == "manual":
             self._hosted.call_hook("start", self._hosted.full_access_context)
         else:
             log.warn("the parent named an unknown execution mode", mode=execution_mode)
 
-    def _run_reactive(self) -> None:
-        assert self._hosted is not None
-        while self._running and not self._torn_down:
-            if self._paused and self._stream_clock_steps_now():
-                # The step ledger leaves a paused node's inbound links off the
-                # balance, so it takes nothing until it resumes.
-                self._park_until_a_command_arrives()
-                continue
-            if self._link_data_access.any_input_port_has_data():
-                # Drained on every pass, not only when idle: a processor that
-                # runs slower than its upstream never reaches the wait below,
-                # so the wait it does reach wakes only for a bag this pass did
-                # not already answer.
-                self._link_data_access.drain_input_listener()
-                self._call_process_on_the_step_ledger(finished_step_index=None)
-                self._drain_commands_arriving_mid_run()
-                continue
-            # Re-read before every wait, never cached across one: the listener
-            # owns this fd, and an `unwire_link` taking this processor's last
-            # inbound link drops the listener and closes it. Polling the stale
-            # number reports it invalid — or, once the OS recycles it, waits on
-            # something else entirely.
-            listener_fd = self._link_data_access.input_listener_fd()
-            if listener_fd is not None and listener_fd >= 0:
-                self._wait_for_a_notify_or_a_command(listener_fd)
-            else:
-                # No inputs left: nothing will ever wake this loop, so the only
-                # thing left to wait on is the parent.
-                self._park_until_a_command_arrives()
-            self._drain_commands_arriving_mid_run()
-
-    def _stream_clock_steps_now(self) -> bool:
-        """Whether this node's stream clock runs behind the step barrier now:
-        stepped, or scaled above 1×."""
-        assert self._hosted is not None
-        return (
-            self._board_service_name_of_a_stream_clock_that_may_step is not None
-            and self._hosted.limited_access_context.stream_clock.step_ns is not None
-        )
+    def _run_the_scheduling_loop(self, execution_mode: str, interval_ms: int) -> None:
+        """Hand the processor to the engine's scheduling loop for
+        `execution_mode` until a lifecycle command stops it."""
+        board_service_name = self._board_service_name_of_a_stream_clock_that_may_step
+        if (
+            execution_mode == "continuous"
+            and board_service_name is not None
+            and self._link_data_access.stream_clock_board_publish_listener_fd() is None
+        ):
+            self._link_data_access.listen_for_each_stream_clock_board_publish(board_service_name)
+        self._scheduling_loop_runs = True
+        try:
+            run_the_scheduling_loop_of_this_helper(
+                processor_interpreter=self,
+                link_data_access=self._link_data_access,
+                lifecycle_command_arrival_fd=self._bridge.lifecycle_command_arrival_fd(),
+                execution_mode=execution_mode,
+                interval_ms=interval_ms,
+                paced_by_real_time=self._paced_by_real_time(),
+                stream_clock_may_step=board_service_name is not None,
+                paused=self._paused,
+            )
+        finally:
+            self._scheduling_loop_runs = False
 
     def _paced_by_real_time(self) -> bool:
         return getattr(self._processor_class, NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP, False) is True
 
-    def _hosted_limited_access_context_time(self) -> int:
+    def call_hook_from_the_scheduling_loop(self, hook_name: str) -> None:
+        """Make the callback the engine's scheduling loop asks for."""
         assert self._hosted is not None
-        return self._hosted.limited_access_context.time
-
-    def _run_continuous(
-        self,
-        interval_ms: int,
-        time_ns_the_loop_paces_on: "Callable[[], int]",
-        machine_ns_until: "Callable[[int], int]",
-        leaves_when: "Callable[[], bool]" = lambda: False,
-    ) -> None:
-        """Call `process` on each deadline of the interval grid on the time
-        `time_ns_the_loop_paces_on` reads: stream time, or the machine's for a
-        node paced by real time; until `leaves_when` holds."""
-        assert self._hosted is not None
-        interval_ns = (
-            interval_ms * 1_000_000
-            if interval_ms > 0
-            else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
-        )
-        limited_access_context = self._hosted.limited_access_context
-        next_deadline_ns = time_ns_the_loop_paces_on()
-        while self._running and not leaves_when():
-            machine_ns_to_go = machine_ns_until(next_deadline_ns)
-            if machine_ns_to_go > 0:
-                # Bounded so a live rescale reaches a wait already under way.
-                machine_wait_ns = min(
-                    machine_ns_to_go, LIFECYCLE_POLL_INTERVAL_MILLISECONDS * 1_000_000
-                )
-                with start_monotonic_timer(machine_wait_ns) as one_wait_timer:
-                    if one_wait_timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS) < 0:
-                        log.error(
-                            "the interval timer failed; leaving the continuous loop"
-                        )
-                        self._running = False
-            else:
-                if not self._paused:
-                    self._hosted.call_hook("process", limited_access_context)
-                next_deadline_ns = next_continuous_deadline_stream_ns(
-                    next_deadline_ns,
-                    interval_ns,
-                    time_ns_the_loop_paces_on(),
-                )
-            self._drain_commands_arriving_mid_run()
-
-    def _run_continuous_on_its_stream_clock(self, interval_ms: int) -> None:
-        """Run `process` in steps while the stream clock runs behind the step
-        barrier, and on the interval grid of stream time while it runs free,
-        switching whenever the clock does."""
-        while self._running:
-            if self._stream_clock_steps_now():
-                self._run_continuous_on_steps(interval_ms)
-            else:
-                self._run_continuous(
-                    interval_ms,
-                    time_ns_the_loop_paces_on=self._hosted_limited_access_context_time,
-                    machine_ns_until=machine_nanoseconds_until_this_helpers_stream_clock_reaches,
-                    leaves_when=self._stream_clock_steps_now,
-                )
-
-    def _run_continuous_on_steps(self, interval_ms: int) -> None:
-        """Run `process` in each step its deadline falls in, noting every step
-        finished on the board the step barrier reads; until the stream clock
-        runs free of the barrier."""
-        assert self._hosted is not None
-        interval_stream_ns = (
-            interval_ms * 1_000_000
-            if interval_ms > 0
-            else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
-        )
-        assert self._board_service_name_of_a_stream_clock_that_may_step is not None
-        limited_access_context = self._hosted.limited_access_context
-        if self._link_data_access.stream_clock_board_publish_listener_fd() is None:
-            self._link_data_access.listen_for_each_stream_clock_board_publish(
-                self._board_service_name_of_a_stream_clock_that_may_step
-            )
-        publish_listener_fd = (
-            self._link_data_access.stream_clock_board_publish_listener_fd()
-        )
-        assert publish_listener_fd is not None
-        next_deadline_stream_ns: "Optional[int]" = None
-        while self._running and self._stream_clock_steps_now():
-            last_step_handled = self._last_step_handled
-            step_index = limited_access_context.stream_clock.step_index
-            if step_index is None or (
-                last_step_handled is not None and step_index <= last_step_handled
-            ):
-                self._wait_for_a_step_or_a_command(publish_listener_fd)
-                self._drain_commands_arriving_mid_run()
-                continue
-            step_stream_ns: int = limited_access_context.time
-            deadline_stream_ns = (
-                step_stream_ns if next_deadline_stream_ns is None else next_deadline_stream_ns
-            )
-            next_deadline_stream_ns = deadline_stream_ns
-            if not self._paused and deadline_stream_ns <= step_stream_ns:
-                self._call_process_on_the_step_ledger(finished_step_index=step_index)
-                next_deadline_stream_ns = next_continuous_deadline_stream_ns(
-                    deadline_stream_ns, interval_stream_ns, step_stream_ns
-                )
-            else:
-                self._link_data_access.note_a_step_callback_started()
-                self._link_data_access.note_a_step_callback_returned(step_index)
-            self._last_step_handled = step_index
-            self._drain_commands_arriving_mid_run()
-
-    def _call_process_on_the_step_ledger(self, finished_step_index: "Optional[int]") -> None:
-        self._call_hook_on_the_step_ledger("process", finished_step_index)
-
-    def _call_hook_on_the_step_ledger(
-        self, hook_name: str, finished_step_index: "Optional[int]"
-    ) -> None:
-        """Call `hook_name`, counted in flight on the step ledger while it runs
-        when the stream's clock may step."""
-        assert self._hosted is not None
-        if self._board_service_name_of_a_stream_clock_that_may_step is None:
-            self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
+        if hook_name in ("on_pause", "on_resume"):
+            self._call_the_pause_hook_once_per_transition(hook_name)
             return
-        self._link_data_access.note_a_step_callback_started()
-        try:
-            self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
-        finally:
-            self._link_data_access.note_a_step_callback_returned(finished_step_index)
+        self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
 
-    def _wait_for_a_step_or_a_command(self, publish_listener_fd: int) -> None:
-        """Park until the stream clock is published or the parent sends a
-        command; `poll`, for the reason the input wait gives."""
-        command_arrival_fd = self._bridge.lifecycle_command_arrival_fd()
-        poller = select.poll()
-        poller.register(publish_listener_fd, select.POLLIN)
-        poller.register(command_arrival_fd, select.POLLIN)
-        for ready_fd, _ in poller.poll(LIFECYCLE_POLL_INTERVAL_MILLISECONDS):
-            if ready_fd == publish_listener_fd:
-                self._link_data_access.take_every_stream_clock_board_publish_noted()
-            elif ready_fd == command_arrival_fd:
-                self._bridge.clear_lifecycle_command_arrivals()
+    def take_the_lifecycle_commands_that_woke_the_scheduling_loop(self) -> "tuple[bool, bool]":
+        """Dispatch every lifecycle command waiting, answering whether the
+        processor still runs and whether it is paused."""
+        self._bridge.clear_lifecycle_command_arrivals()
+        self._drain_commands_arriving_mid_run()
+        return (self._running and not self._torn_down, self._paused)
 
-    def _wait_for_a_notify_or_a_command(self, listener_fd: int) -> None:
-        """Park until upstream notifies or the parent sends a command.
-
-        `poll`, never `select`: `select` refuses a descriptor of 1024 or above,
-        and a live rewire can recreate the listener there. No timeout — only
-        this thread replaces the listener, and only by dispatching a command,
-        which wakes the wait first.
-        """
-        command_arrival_fd = self._bridge.lifecycle_command_arrival_fd()
-        poller = select.poll()
-        poller.register(listener_fd, select.POLLIN)
-        poller.register(command_arrival_fd, select.POLLIN)
-        for ready_fd, _ in poller.poll():
-            if ready_fd == listener_fd:
-                self._link_data_access.drain_input_listener()
-            elif ready_fd == command_arrival_fd:
-                self._bridge.clear_lifecycle_command_arrivals()
-
-    def _park_until_a_command_arrives(self) -> None:
-        command = self._bridge.next_lifecycle_command()
-        if command is None:
-            self._running = False
+    def _call_the_pause_hook_once_per_transition(self, hook_name: str) -> None:
+        """Call `on_pause` or `on_resume`, never the one called last again: a
+        pause noted before the loop started is not announced twice."""
+        assert self._hosted is not None
+        if hook_name == self._pause_hook_last_called:
             return
-        self._dispatch_mid_run(command)
+        self._pause_hook_last_called = hook_name
+        self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
 
     def _drain_commands_arriving_mid_run(self) -> None:
         while self._running:
@@ -1721,13 +1583,28 @@ class HelperProcessLifecycle:
         self._bridge.send({"rpc": "done"})
 
     def _note_pause(self, verb: str) -> None:
+        """Record the pause the parent announced; while a scheduling loop runs,
+        the loop makes the callback itself."""
         self._paused = verb == "on_pause"
         if self._hosted is not None:
             note_pause_state_from_parent_on_runtime_context(
                 self._hosted.full_access_context, verb == "on_pause"
             )
-            self._call_hook_on_the_step_ledger(verb, finished_step_index=None)
+            if not self._scheduling_loop_runs:
+                self._call_the_pause_hook_on_the_step_ledger(verb)
         self._bridge.send({"rpc": "ok"})
+
+    def _call_the_pause_hook_on_the_step_ledger(self, hook_name: str) -> None:
+        """Call `hook_name` outside a scheduling loop, counted in flight on the
+        step ledger while it runs when the stream's clock may step."""
+        if self._board_service_name_of_a_stream_clock_that_may_step is None:
+            self._call_the_pause_hook_once_per_transition(hook_name)
+            return
+        self._link_data_access.note_a_step_callback_started()
+        try:
+            self._call_the_pause_hook_once_per_transition(hook_name)
+        finally:
+            self._link_data_access.note_a_step_callback_returned(None)
 
     def _unwire_link(self, command: "dict[str, Any]") -> None:
         try:
@@ -1959,6 +1836,10 @@ def run_one_processor_until_its_parent_tears_it_down() -> None:
     try:
         processor_class = load_processor_class(import_path)
         link_data_access = open_node_link_data_access_for_helper_process()
+        if isinstance(processor_class, FunctionNode):
+            processor_class = the_processor_class_a_promoted_function_node_runs_as(
+                processor_class, import_path, processor_id, link_data_access
+            )
     except Exception as startup_failure:
         engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(

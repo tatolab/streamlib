@@ -39,6 +39,7 @@ use streamlib_ipc_types::{
     create_the_reserved_slot_subscriber_of,
 };
 use streamlib_ipc_types::{
+    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessFunctionNodeStateBoardEntry,
     HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
     InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry, StreamClockBoardEntry,
     StreamClockBoardKey,
@@ -390,12 +391,14 @@ impl Iceoryx2Node {
         }
     }
     /// Create the loss-count board a helper spawn writes on: every inbound-link
-    /// slot, an entry per declared output port and the step-progress entry, all
-    /// zero.
+    /// slot, an entry per declared output port, the step-progress entry, the
+    /// call breadcrumb and a state entry per stateful function node the helper
+    /// calls, all zero.
     pub fn create_helper_process_loss_count_board(
         &self,
         service_name: &str,
         output_port_names: Vec<String>,
+        stateful_function_node_breadcrumb_numbers: Vec<u32>,
     ) -> Result<HelperProcessLossCountBoard> {
         let service = {
             let node = self.inner.lock();
@@ -414,13 +417,27 @@ impl Iceoryx2Node {
             creator = creator.add_with_default::<HelperProcessStepProgressBoardEntry>(
                 HelperProcessLossCountBoardKey::STEP_PROGRESS,
             );
+            creator = creator
+                .add_with_default::<HelperProcessFunctionNodeCallBreadcrumbBoardEntry>(
+                    HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB,
+                );
+            for &breadcrumb_number in &stateful_function_node_breadcrumb_numbers {
+                creator = creator.add_with_default::<HelperProcessFunctionNodeStateBoardEntry>(
+                    HelperProcessLossCountBoardKey::function_node_state(breadcrumb_number),
+                );
+            }
             creator.create().map_err(|refusal| {
                 Error::Runtime(format!(
                     "could not create the loss-count board '{service_name}': {refusal:?}"
                 ))
             })?
         };
-        HelperProcessLossCountBoard::reading(service_name.to_string(), output_port_names, service)
+        HelperProcessLossCountBoard::reading(
+            service_name.to_string(),
+            output_port_names,
+            stateful_function_node_breadcrumb_numbers,
+            service,
+        )
     }
 
     /// Open the loss-count board a helper's parent created and named, as the
@@ -429,6 +446,7 @@ impl Iceoryx2Node {
         &self,
         service_name: &str,
         output_port_names: &[String],
+        stateful_function_node_breadcrumb_numbers: &[u32],
     ) -> Result<HelperProcessLossCountBoardWriter> {
         let service = {
             let node = self.inner.lock();
@@ -446,6 +464,7 @@ impl Iceoryx2Node {
         HelperProcessLossCountBoardWriter::writing(
             service_name.to_string(),
             output_port_names,
+            stateful_function_node_breadcrumb_numbers,
             service,
         )
     }

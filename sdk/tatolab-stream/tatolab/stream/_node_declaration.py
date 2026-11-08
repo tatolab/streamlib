@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@node` grammar — execution mode and ports, declared in code.
+"""The `@node.process` grammar — execution mode and ports, declared in code.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
-a working node. `@node` validates the declaration and stamps it on the class as
+a working node. `@node.process` validates the declaration and stamps it on the class as
 `__tatolab_node_*__` attributes; it registers nothing. The runtime reads exactly
 that set when a stream naming the class loads, so the set is the contract between
 this module and the runtime's reader, and the two move together.
@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import sys
 import typing
-from typing import Any, Optional, TypeVar
+from collections.abc import Mapping
+from typing import Any, Callable, NoReturn, Optional, ParamSpec, TypeVar, overload
 
 from .catalog import AudioEntry, BinaryEntry, JsonEntry, TextEntry, VideoEntry
 
@@ -28,6 +30,8 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
+from ._function_node_declaration import FunctionNode, declare_function_node
+from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
 from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
     derive_config_class_json_schema,
@@ -40,9 +44,10 @@ __all__ = [
     "node",
 ]
 
-# The stamps `@node` writes and the runtime reads. The runtime's Rust reader
+# The stamps `@node.process` writes and the runtime reads. The runtime's Rust reader
 # spells them too, and its tests run this decorator against it.
 NODE_DECLARATION_DECLARED_STAMP = "__tatolab_node_declared__"
+NODE_DECLARATION_KIND_STAMP = "__tatolab_node_kind__"
 NODE_DECLARATION_CONFIG_CLASS_STAMP = "__tatolab_node_config_class__"
 NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
@@ -51,6 +56,23 @@ NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority
 NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP = "__tatolab_node_paced_by_real_time__"
 NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
 NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
+
+PROCESS_NODE_KIND = "process"
+
+# Every kind stamps these, by the role each plays in the declaration.
+_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
+    "declared": NODE_DECLARATION_DECLARED_STAMP,
+    "kind": NODE_DECLARATION_KIND_STAMP,
+    "config_class": NODE_DECLARATION_CONFIG_CLASS_STAMP,
+    "config_schema": NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
+    "description": NODE_DECLARATION_DESCRIPTION_STAMP,
+    "input_ports": NODE_DECLARATION_INPUT_PORTS_STAMP,
+    "output_ports": NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+}
+
+_FunctionNodeParameters = ParamSpec("_FunctionNodeParameters")
+_FunctionNodeReturn = TypeVar("_FunctionNodeReturn")
+"""The kind a class node is: it runs in a process of its own."""
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
@@ -270,11 +292,77 @@ def _catalog_entry_declaration(catalog: object, port_name: str) -> "dict[str, An
 
 
 class NodeDeclarationDecorator:
-    """The type of [`node`]: `@node` itself."""
+    """The type of [`node`], whose attributes declare each node kind."""
 
     __slots__ = ()
 
-    def __call__(
+    def __call__(self, *_arguments: object, **_keyword_arguments: object) -> NoReturn:
+        """Refuse bare `@node`: every node names its kind."""
+        raise TypeError(
+            "bare `@node` declares no kind; every node names its kind. A class with "
+            "`setup()` / `process()` and ports is `@node.process`, bare or with the same "
+            "keyword arguments (`execution`, `interval_ms`, `scheduling`, "
+            "`paced_by_real_time`, `description`). A function that computes its outputs "
+            "from its inputs is `@node.function`."
+        )
+
+    @overload
+    def function(
+        self,
+        node_function: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]",
+        *,
+        description: str = "",
+    ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
+
+    @overload
+    def function(
+        self, node_function: None = None, *, description: str = ""
+    ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]]": ...
+
+    def function(
+        self, node_function: "Optional[Callable[..., Any]]" = None, *, description: str = ""
+    ) -> Any:
+        """Mark a function as a function node: one that computes its outputs from its inputs.
+
+        Usable bare (`@node.function`) or with `description=`. The signature is
+        the node: each plain parameter is an input pin, its default the pin's
+        value when nothing is wired, and `T | None = None` an optional input.
+        The return annotation is the output `result`, or one output per field
+        of a returned dataclass. `float`, `int` and `bool` are one-channel
+        Channels, `dict` is Records, and a read type is its family. `config`
+        names the node's one config dataclass. A parameter typed `Time` is
+        handed the stream time of the read; one typed `State[Record]` the state
+        the last call returned in its `Stateful[Output, Record]`. The decorated
+        function is still called as itself.
+        """
+
+        def apply_to_function(
+            function_under_decoration: "Callable[..., Any]",
+        ) -> "FunctionNode[..., Any]":
+            return declare_function_node(
+                function_under_decoration,
+                description=description,
+                declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
+            )
+
+        if node_function is None:
+            return apply_to_function
+        return apply_to_function(node_function)
+
+    def rust_function(self, native_declaration: "Mapping[str, Any]") -> "RustFunctionNode":
+        """Declare a function node a module wrote in Rust with `#[function_node]`.
+
+        Takes what its native half's `<function>_function_node_declaration()
+        .to_python_declaration(py)` built, and is assigned at module scope to
+        the node's short name, its import path: `Lerp = node.rust_function(_native.Lerp)`.
+        """
+        return declare_rust_function_node(
+            native_declaration,
+            module_name=sys._getframe(1).f_globals["__name__"],  # pyright: ignore[reportPrivateUsage]
+            declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
+        )
+
+    def process(
         self,
         node_class: Optional[type] = None,
         *,
@@ -284,9 +372,9 @@ class NodeDeclarationDecorator:
         paced_by_real_time: bool = False,
         description: str = "",
     ) -> Any:
-        """Mark a class as a streamlib node.
+        """Mark a class as a process node: one that runs in a process of its own.
 
-        Usable bare (`@node`) or with keyword arguments; its ports are `Input`
+        Usable bare (`@node.process`) or with keyword arguments; its ports are `Input`
         and `Output` class attributes, each of one family. It declares execution,
         interval, scheduling priority and description — never identity: a node is
         named by the import path of the class it is, derived from `__module__` and
@@ -334,10 +422,10 @@ class NodeDeclarationDecorator:
 
         if node_class is not None:
             raise TypeError(
-                f"@node() takes no positional argument; got "
+                f"@node.process() takes no positional argument; got "
                 f"{type(node_class).__name__}. A node is named by the import path "
                 f"of the class it is — `my_app.filters:BlurEffect` — derived from "
-                f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
+                f"`__module__` and `__qualname__` and never authored. Use `@node.process` bare, "
                 f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
                 f"`paced_by_real_time`, "
                 f"`description`)."
@@ -350,7 +438,7 @@ class NodeDeclarationDecorator:
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node class; its `Input` and `Output` attributes are its ports."""
+"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports."""
 
 
 def _declare_node(
@@ -366,6 +454,7 @@ def _declare_node(
     config_class = _config_class_named_by_the_init_annotation(node_class)
 
     setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)
+    setattr(node_class, NODE_DECLARATION_KIND_STAMP, PROCESS_NODE_KIND)
     setattr(node_class, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
     setattr(
         node_class,
@@ -583,7 +672,7 @@ def _resolve_execution(
         if not has_input_ports:
             raise ValueError(
                 f"{node_class.__name__} declares no input ports, so it must declare "
-                f"an execution mode: `@node(execution=\"continuous\", interval_ms=…)` "
+                f"an execution mode: `@node.process(execution=\"continuous\", interval_ms=…)` "
                 f"for a source that produces on its own schedule, or "
                 f"`execution=\"manual\"` for one driven by a callback it owns. Only a "
                 f"node with an input port can default to \"reactive\"."

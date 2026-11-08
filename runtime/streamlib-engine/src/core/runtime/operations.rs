@@ -80,7 +80,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 
-    /// Hold output port `port_name` of node `node_id` open for a viewer,
+    /// Hold output port `port_name` of the node whose UUID, as `graph` lists it under `id`, is
+    /// `node_id` open for a viewer,
     /// answering how the viewer subscribes to its channel's reserved slot from
     /// its own process. No node is added and the graph is not changed; the
     /// channel stays open until what this answers drops. Refused while the
@@ -89,7 +90,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// surface-sharing service while the viewer stays open.
     fn open_a_viewer_of_an_output_port(
         &self,
-        node_id: ProcessorUniqueId,
+        node_id: String,
         port_name: String,
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
@@ -145,6 +146,22 @@ pub trait RuntimeOperations: Send + Sync {
     /// method on this trait it never `block_on`s and therefore cannot deadlock
     /// when called from inside a tokio task.
     fn request_this_streams_shutdown(&self, reason: &str) -> Result<()>;
+
+    /// Ask that function node `function_node_id`, whose call crashed or stalled
+    /// the helper of `reader_id`, move with every function node downstream of
+    /// it out of that reader's islands into a helper process of its own.
+    ///
+    /// A request that never blocks: the graph-change listener compiles it, and
+    /// the reader's link wiring learns how the compile ended. A compile plans
+    /// it only while `promotion_request_number` is the request the reader's
+    /// link wiring still awaits.
+    fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+        &self,
+        function_node_id: &ProcessorUniqueId,
+        reader_id: &ProcessorUniqueId,
+        promotion_request_number: u64,
+        reason: &str,
+    ) -> Result<()>;
 
     // =========================================================================
     // Introspection

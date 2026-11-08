@@ -10,8 +10,6 @@ pub(crate) mod command_queue;
 mod compute_kernel;
 mod device;
 mod external_handle;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod glsl_shader_source_compiler;
 mod graphics_kernel;
 mod host_timeline_semaphore;
 mod index_buffer;
@@ -24,6 +22,8 @@ mod pixel_planes_within_one_allocation;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod plane_fd_under_test;
 mod ray_tracing_kernel;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod slang_shader_source_compiler;
 #[cfg(test)]
 pub(crate) mod spirv_module_rewriting_for_tests;
 mod storage_buffer;
@@ -50,10 +50,6 @@ pub use compute_kernel::{
 pub use device::GpuDevice;
 pub(crate) use device::GpuQueueSubmissionsSnapshot;
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use glsl_shader_source_compiler::{
-    DEFAULT_SHADER_ENTRY_POINT, GlslCompilationTargetStage, GlslShaderSourceToSpirvCompiler,
-};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use graphics_kernel::reconcile_graphics_binding_declarations;
 pub use graphics_kernel::{
@@ -100,6 +96,11 @@ pub use ray_tracing_kernel::{
     validate_shader_groups,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use slang_shader_source_compiler::{
+    DEFAULT_SHADER_ENTRY_POINT, ShaderCompilationBackend, ShaderCompilationTargetStage,
+    SlangShaderSourceCompiler,
+};
 pub use storage_buffer::StorageBuffer;
 pub use tensor_storage_buffer_layout::{TensorElementType, TensorStorageBufferLayout};
 #[cfg(any(target_os = "linux", target_os = "macos"))]

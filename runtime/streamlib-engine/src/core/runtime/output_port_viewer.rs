@@ -17,7 +17,7 @@ use crate::core::compiler::compiler_ops::{
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, OutputLinkPortRef, ProcessorNode, ProcessorUniqueId, names_listed_for_a_refusal,
+    Graph, OutputLinkPortRef, ProcessorNode, names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
 };
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
@@ -63,8 +63,8 @@ fn the_source_wiring_its_answer_says(
 pub struct OutputPortViewerChannelHandOff {
     /// The stream the port belongs to.
     pub stream: String,
-    /// The id of the node the port belongs to, as the stream's graph lists it.
-    pub node_id: ProcessorUniqueId,
+    /// The UUID of the node the port belongs to, as the stream's graph lists it under `id`.
+    pub node_id: String,
     /// The name of the node the port belongs to: its label, not its identity.
     pub node_name: String,
     /// The port's name.
@@ -164,7 +164,8 @@ impl OutputPortViewerHeldOpen {
 }
 
 impl LoadedStreamInThisRuntime {
-    /// Hold output port `port_name` of node `node_id` open for a viewer and
+    /// Hold output port `port_name` of the node whose UUID is `node_id`, as the stream's graph
+    /// lists it under `id`, open for a viewer and
     /// say how to subscribe to its channel's reserved slot. The graph is not
     /// changed. Answers once the port's source has opened its end of the
     /// channel, and refused while the node does not run or when its helper
@@ -174,7 +175,7 @@ impl LoadedStreamInThisRuntime {
     /// unless it is a running process of this user.
     pub(crate) async fn open_a_viewer_of_an_output_port_holding_its_channel(
         &self,
-        node_id: &ProcessorUniqueId,
+        node_id: &str,
         port_name: &str,
         process_id_of_the_viewer: Option<u32>,
     ) -> Result<OutputPortViewerHeldOpen> {
@@ -185,19 +186,18 @@ impl LoadedStreamInThisRuntime {
         let iceoryx2_domain_root = engine_resources.runtime_directory.iceoryx2_domain_root();
         let compiler = Arc::clone(&self.compiler);
         let stream_id = self.stream_id().to_string();
-        let node_id = node_id.clone();
+        let node_id = node_id.to_string();
         let port_name = port_name.to_string();
         // A stream's graph lock is held across a compile, which may take a
         // processor's whole setup, so the open waits off the async workers.
         let viewer_held_open = tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 let (node_name, source_side) = compiler.scope(|graph, _tx| -> Result<_> {
-                    let node_name = the_running_node_with_its_output_port(
+                    let node = the_running_node_with_its_output_port(
                         graph, &stream_id, &node_id, &port_name,
-                    )?
-                    .display_name
-                    .clone();
-                    let source = OutputLinkPortRef::new(node_id.clone(), port_name.as_str());
+                    )?;
+                    let node_name = node.display_name.clone();
+                    let source = OutputLinkPortRef::new(node.id.clone(), port_name.as_str());
                     let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
                         graph,
                         &source,
@@ -269,15 +269,20 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
-/// Node `node_id` of the stream's graph, refused unless it runs and has
+/// The node of the stream's graph whose UUID is `node_id`, refused unless it runs and has
 /// output port `port_name`.
 fn the_running_node_with_its_output_port<'graph>(
     graph: &'graph Graph,
     stream_id: &str,
-    node_id: &ProcessorUniqueId,
+    node_id: &str,
     port_name: &str,
 ) -> Result<&'graph ProcessorNode> {
-    let Some(node) = graph.traversal().v(node_id).first() else {
+    let Some(node) = graph
+        .traversal()
+        .v(())
+        .iter()
+        .find(|node| node.node_uuid.to_string() == node_id)
+    else {
         return Err(Error::ProcessorNotFound(format!(
             "no node in the stream `{stream_id}` has the id `{node_id}`. The stream \
              `{stream_id}` holds: {}",
@@ -286,7 +291,7 @@ fn the_running_node_with_its_output_port<'graph>(
                     .traversal()
                     .v(())
                     .iter()
-                    .map(|node| format!("`{}` ({})", node.id, node.display_name)),
+                    .map(|node| format!("`{}` ({})", node.node_uuid, node.display_name)),
                 "no node",
             )
         )));
@@ -342,7 +347,8 @@ mod tests {
     struct ARunningCameraWithNoLinks {
         _runner: Arc<Runner>,
         stream: Arc<LoadedStreamInThisRuntime>,
-        camera_id: ProcessorUniqueId,
+        camera_id: crate::core::ProcessorUniqueId,
+        camera_node_uuid: String,
         camera_output: Arc<OutputWriterInner>,
         async_runtime: tokio::runtime::Runtime,
         _project_directory: tempfile::TempDir,
@@ -380,19 +386,20 @@ mod tests {
             let camera_output = instance
                 .iceoryx2_output_writer_inner()
                 .expect("an output-only mock holds an output writer");
-            stream.compiler.scope(|graph, _tx| {
-                ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(
-                    graph
-                        .traversal_mut()
-                        .v(&camera_id)
-                        .first_mut()
-                        .expect("the node is in the stream"),
-                );
+            let camera_node_uuid = stream.compiler.scope(|graph, _tx| {
+                let camera = graph
+                    .traversal_mut()
+                    .v(&camera_id)
+                    .first_mut()
+                    .expect("the node is in the stream");
+                ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(camera);
+                camera.node_uuid.to_string()
             });
             Self {
                 _runner: runner,
                 stream,
                 camera_id,
+                camera_node_uuid,
                 camera_output,
                 async_runtime: tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(2)
@@ -406,7 +413,7 @@ mod tests {
         fn open_a_viewer(&self, port_name: &str) -> Result<OutputPortViewerHeldOpen> {
             self.async_runtime
                 .block_on(self.stream.open_a_viewer_of_an_output_port(
-                    self.camera_id.clone(),
+                    self.camera_node_uuid.clone(),
                     port_name.into(),
                     None,
                 ))
@@ -460,7 +467,7 @@ mod tests {
                 hand_off.node_name.as_str(),
                 hand_off.port.as_str()
             ),
-            ("a", &camera.camera_id, "camera", "out1")
+            ("a", &camera.camera_node_uuid, "camera", "out1")
         );
         assert_eq!(the_links_of(&camera.stream), graph_before);
 
@@ -501,7 +508,7 @@ mod tests {
         let by_name = camera
             .async_runtime
             .block_on(camera.stream.open_a_viewer_of_an_output_port(
-                ProcessorUniqueId::from("camera".to_string()),
+                "camera".to_string(),
                 "out1".into(),
                 None,
             ))
@@ -509,8 +516,20 @@ mod tests {
             .to_string();
         assert!(
             by_name.contains("has the id `camera`")
-                && by_name.contains(&format!("`{}` (camera)", camera.camera_id)),
+                && by_name.contains(&format!("`{}` (camera)", camera.camera_node_uuid)),
             "{by_name}"
+        );
+        let by_its_run_id = camera
+            .async_runtime
+            .block_on(camera.stream.open_a_viewer_of_an_output_port(
+                camera.camera_id.to_string(),
+                "out1".into(),
+                None,
+            ))
+            .expect_err("a node's id for one run is not the UUID the graph lists");
+        assert!(
+            by_its_run_id.to_string().contains("has the id"),
+            "{by_its_run_id}"
         );
 
         let no_such_port = camera

@@ -22,7 +22,13 @@ import numpy
 import pytest
 
 import tatolab.stream
-from stream_graph_builder_nodes import BrightnessReader, FrameFilters, FrameInverter, RigMonitor
+from stream_graph_builder_nodes import (
+    BrightnessReader,
+    FrameFilters,
+    FrameInverter,
+    RigMonitor,
+    remap_onto_a_range,
+)
 from tatolab.stream import (
     Input,
     NodeInputPortReference,
@@ -60,7 +66,7 @@ class StandInMarker:
 
 
 class UndecoratedFilter:
-    """A class that never met `@node`."""
+    """A class that never met `@node.process`."""
 
 
 class StreamBuildingFailure(Exception):
@@ -102,7 +108,7 @@ NESTED_CONFIG: "dict[str, Any]" = {
 
 @stream
 def every_kind_of_node(stream_builder: StreamBuilder) -> None:
-    """A `@node` class, a nested one and a marker-shaped class.
+    """A `@node.process` class, a nested one and a marker-shaped class.
 
     The second line of the description.
     """
@@ -377,7 +383,7 @@ def test_a_native_marker_is_the_type_its_class_carries() -> None:
 
 
 def test_a_node_class_defined_inside_a_function_is_refused_naming_stream_add() -> None:
-    @node
+    @node.process
     class FunctionLocalFilter:
         video_from_upstream = Input(Packets, delivery="newest")
 
@@ -413,7 +419,7 @@ def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
     )
     assert (
         "    # entry_file_detector.py\n"
-        "    @node(...)\n"
+        "    @node.process(...)\n"
         "    class EntryFileDetector: ...\n"
         "\n"
         "    # stream.py\n"
@@ -423,6 +429,26 @@ def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
         "The entry file itself may still run as `__main__`; only node classes may "
         "not live in it."
     )
+
+
+def test_a_function_node_in_the_entry_file_is_refused_naming_its_reader() -> None:
+    def entry_file_ease(x: float) -> float:
+        return x
+
+    entry_file_ease.__module__ = "__main__"
+    entry_file_ease.__qualname__ = "entry_file_ease"
+    entry_file_function_node = node.function(entry_file_ease)
+
+    with pytest.raises(ValueError) as refusal:
+        StreamBuilder("rig").add(entry_file_function_node)
+
+    message = str(refusal.value)
+    assert message.startswith(
+        "function node `entry_file_ease` is defined in the entry file, so it identifies as "
+        "`__main__:entry_file_ease`"
+    )
+    assert "runs inside the read of the node it feeds" in message
+    assert "    @node.function\n    def entry_file_ease(...): ...\n" in message
 
 
 def test_a_class_both_function_local_and_in_the_entry_file_gets_the_function_local_fix() -> (
@@ -442,18 +468,37 @@ def test_a_class_both_function_local_and_in_the_entry_file_gets_the_function_loc
         StreamBuilder("rig").add(local_entry_file_class)
 
 
+def test_a_function_node_is_added_by_its_import_path_under_its_cast_name() -> None:
+    stream_builder = StreamBuilder("rig")
+    remap = stream_builder.add(remap_onto_a_range, config={})
+    reader = stream_builder.add(BrightnessReader)
+    stream_builder.connect(remap.output("result"), reader.input("video_from_upstream"))
+
+    graph = stream_builder._compiled_graph()
+    assert [(node["name"], node["type"]) for node in graph["nodes"]][0] == (
+        "remap_onto_a_range",
+        "stream_graph_builder_nodes:remap_onto_a_range",
+    )
+    assert graph["links"][0]["source"] == {"node": "remap_onto_a_range", "port": "result"}
+
+
+def test_an_undecorated_function_is_refused_naming_node_function() -> None:
+    with pytest.raises(TypeError, match="`@node.function`"):
+        StreamBuilder("rig").add(a_config_holding_itself)  # pyright: ignore[reportArgumentType, reportCallIssue]
+
+
 def test_an_undecorated_class_is_refused_naming_node() -> None:
     with pytest.raises(TypeError) as refusal:
         StreamBuilder("rig").add(UndecoratedFilter)
 
     message = str(refusal.value)
-    assert "is not a node: decorate the class with @tatolab.stream.node" in message
-    assert "pass the class itself rather than an instance of it" in message
+    assert "is not a node: decorate the class with `@node.process`" in message
+    assert "pass it itself rather than an instance of it" in message
 
 
 def test_an_instance_is_refused_naming_the_class_itself() -> None:
     with pytest.raises(
-        TypeError, match="pass the class itself rather than an instance"
+        TypeError, match="pass it itself rather than an instance"
     ):
         StreamBuilder("rig").add(FrameInverter())  # pyright: ignore[reportArgumentType]
 
@@ -966,7 +1011,7 @@ def test_stream_stamps_identity_name_and_description() -> None:
         "every_kind_of_node"
     )
     assert getattr(every_kind_of_node, "__streamlib_stream_description__") == (
-        "A `@node` class, a nested one and a marker-shaped class.\n\n"
+        "A `@node.process` class, a nested one and a marker-shaped class.\n\n"
         "The second line of the description."
     )
 
@@ -1208,6 +1253,7 @@ def test_the_builder_module_imports_nothing_native() -> None:
                 (1, "_exposed_name_cast"),
                 (1, "_built_in_node"),
                 (1, "_node_declaration"),
+                (1, "_function_node_declaration"),
                 (1, "_stream_clock_spec"),
                 (1, "_port_family_declaration"),
             }, module_name

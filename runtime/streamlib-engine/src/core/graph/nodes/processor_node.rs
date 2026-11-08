@@ -10,7 +10,7 @@ use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Outpu
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
 use std::sync::Arc;
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::output_port_catalog_entries::{
     CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,
 };
@@ -19,7 +19,17 @@ use crate::core::utils::compute_json_checksum;
 /// Node in the processor graph with embedded component storage.
 #[derive(Serialize, Deserialize)]
 pub struct ProcessorNode {
+    /// This node's id for one run of its stream, which names its channels.
     pub id: ProcessorUniqueId,
+    /// The node's UUID: its spec key in the graph document, kept across every run.
+    #[serde(default = "uuid::Uuid::new_v4")]
+    pub node_uuid: uuid::Uuid,
+    /// The values the graph document sets on the node's unlinked inputs, by input name.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub pins: serde_json::Map<String, serde_json::Value>,
+    /// What the studio draws the node with.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub studio: serde_json::Map<String, serde_json::Value>,
     /// The import path of the class this node is an instance of.
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
@@ -31,6 +41,10 @@ pub struct ProcessorNode {
     #[serde(default)]
     pub config_checksum: u64,
     pub ports: ProcessorNodePorts,
+    /// How the node's type runs, read off its registered descriptor; `None`
+    /// on a node whose type nothing registers.
+    #[serde(skip)]
+    node_kind: Option<NodeKind>,
     /// Runtime components (not serialized by derive, but via serialize_components).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
@@ -50,6 +64,9 @@ impl PartialEq for ProcessorNode {
     fn eq(&self, other: &Self) -> bool {
         // Compare only static fields, not runtime components
         self.id == other.id
+            && self.node_uuid == other.node_uuid
+            && self.pins == other.pins
+            && self.studio == other.studio
             && self.processor_type == other.processor_type
             && self.display_name == other.display_name
             && self.config == other.config
@@ -64,6 +81,7 @@ impl std::fmt::Debug for ProcessorNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProcessorNode")
             .field("id", &self.id)
+            .field("node_uuid", &self.node_uuid)
             .field("processor_type", &self.processor_type)
             .field("display_name", &self.display_name)
             .field("config", &self.config)
@@ -78,6 +96,7 @@ impl ProcessorNode {
     /// Create a new processor node. The ID is generated automatically using cuid2.
     pub fn new(
         processor_type: ProcessorClassImportPath,
+        node_kind: Option<NodeKind>,
         display_name: impl Into<String>,
         config: Option<serde_json::Value>,
         inputs: Vec<PortInfo>,
@@ -88,11 +107,15 @@ impl ProcessorNode {
             Arc::new(CatalogEntriesOfOutputPorts::as_declared_by(&outputs));
         Self {
             id: ProcessorUniqueId::new(),
+            node_uuid: uuid::Uuid::new_v4(),
+            pins: serde_json::Map::new(),
+            studio: serde_json::Map::new(),
             processor_type,
             display_name: display_name.into(),
             config,
             config_checksum,
             ports: ProcessorNodePorts { inputs, outputs },
+            node_kind,
             components: ComponentMap::new(),
             component_serializers: Vec::new(),
             catalog_entries_of_output_ports,
@@ -130,6 +153,11 @@ impl ProcessorNode {
 
     pub fn processor_type(&self) -> &ProcessorClassImportPath {
         &self.processor_type
+    }
+
+    /// How the node's type runs; `None` when nothing registers its type.
+    pub fn node_kind(&self) -> Option<NodeKind> {
+        self.node_kind
     }
 
     pub fn has_input(&self, name: &str) -> bool {

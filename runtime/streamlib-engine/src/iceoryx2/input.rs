@@ -35,6 +35,9 @@ use super::audio_window::{
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::channel_name::InboundLinkName;
+use super::function_node_island_input_port::{
+    FunctionNodeIslandEvaluatedAtEachRead, InputPortFedByAFunctionNodeIsland,
+};
 use super::helper_process_loss_count_board::InboundLinkLossCountBoardSlotMirror;
 use super::input_port_borrow_quota::DEFAULT_INPUT_PORT_BORROW_QUOTA;
 use super::input_port_message_payload::{
@@ -459,6 +462,8 @@ pub struct InputMailboxesInner {
     /// once the processor is created for its node.
     upstream_catalog_entries_by_inbound_link:
         std::sync::OnceLock<Arc<UpstreamCatalogEntriesByInboundLink>>,
+    input_ports_fed_by_function_node_islands:
+        parking_lot::RwLock<HashMap<String, Arc<InputPortFedByAFunctionNodeIsland>>>,
 }
 
 impl InputMailboxesInner {
@@ -474,7 +479,33 @@ impl InputMailboxesInner {
                 DeviceMatchedAudioWindowContractsByInputPort::default(),
             ),
             upstream_catalog_entries_by_inbound_link: std::sync::OnceLock::new(),
+            input_ports_fed_by_function_node_islands: parking_lot::RwLock::default(),
         }
+    }
+
+    /// Feed `port` from `island`, evaluated at each read of the port in place
+    /// of a mailbox.
+    pub fn feed_an_input_port_from_a_function_node_island(
+        &self,
+        port: &str,
+        island: Arc<dyn FunctionNodeIslandEvaluatedAtEachRead>,
+    ) {
+        self.input_ports_fed_by_function_node_islands
+            .write()
+            .insert(
+                port.to_string(),
+                Arc::new(InputPortFedByAFunctionNodeIsland::evaluated_by(island)),
+            );
+    }
+
+    fn function_node_island_feeding(
+        &self,
+        port: &str,
+    ) -> Option<Arc<InputPortFedByAFunctionNodeIsland>> {
+        self.input_ports_fed_by_function_node_islands
+            .read()
+            .get(port)
+            .cloned()
     }
 
     /// Reach the upstream catalog entries of the node this processor was
@@ -516,6 +547,10 @@ impl InputMailboxesInner {
     /// Check if a port has already been configured.
     pub fn has_port(&self, port: &str) -> bool {
         self.ports.lock().contains_key(port)
+            || self
+                .input_ports_fed_by_function_node_islands
+                .read()
+                .contains_key(port)
     }
 
     /// Add a mailbox for the given port with the specified buffer
@@ -1296,6 +1331,9 @@ impl InputMailboxesInner {
     /// The next message on `port`, its payload untouched, or `None` when the
     /// mailbox is empty.
     pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
+        if let Some(island_port) = self.function_node_island_feeding(port) {
+            return island_port.read_the_island_output().map(Some);
+        }
         Ok(self
             .next_bag_for_the_reader(port)?
             .map(|bag_for_the_reader| bag_for_the_reader.message))
@@ -1321,6 +1359,13 @@ impl InputMailboxesInner {
         &self,
         port: &str,
     ) -> Result<Option<(MessageReadFromInputPort, InboundLinkName)>> {
+        if self.function_node_island_feeding(port).is_some() {
+            return Err(Error::Link(format!(
+                "input port '{port}' is fed by a function node island, evaluated at each read \
+                 rather than delivered over a link, so there is no link to name. Read it with \
+                 `read_raw`, which names no link"
+            )));
+        }
         let Some(mut message_body_for_the_reader) = self.next_bag_for_the_reader(port)? else {
             return Ok(None);
         };
@@ -1392,6 +1437,9 @@ impl InputMailboxesInner {
     /// arrived bag: the contract promises `process()` exact-size blocks, so a
     /// reactive processor that woke and found nothing would contradict it.
     pub fn has_data(&self, port: &str) -> bool {
+        if self.function_node_island_feeding(port).is_some() {
+            return true;
+        }
         self.receive_pending();
         let Some(readiness) = self.readiness_of_one_port(port) else {
             return false;
@@ -1456,7 +1504,13 @@ impl InputMailboxesInner {
 
     /// Get the list of configured port names.
     pub fn port_names(&self) -> Vec<String> {
-        self.ports.lock().keys().cloned().collect()
+        let mut port_names: Vec<String> = self.ports.lock().keys().cloned().collect();
+        for island_fed_port_name in self.input_ports_fed_by_function_node_islands.read().keys() {
+            if !port_names.contains(island_fed_port_name) {
+                port_names.push(island_fed_port_name.clone());
+            }
+        }
+        port_names
     }
 }
 
@@ -1733,6 +1787,33 @@ mod tests {
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::test_support::CapturedTracingWarnings;
     use crate::iceoryx2::channel_sample_test_support::TestChannelSample;
+    use crate::iceoryx2::{
+        FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
+    };
+
+    struct IslandAnsweringOneHalf;
+
+    impl FunctionNodeIslandEvaluatedAtEachRead for IslandAnsweringOneHalf {
+        fn evaluate_the_island_output_for_this_read(
+            &self,
+        ) -> Result<FunctionNodeIslandOutputForOneRead> {
+            Ok(FunctionNodeIslandOutputForOneRead {
+                value: 0.5,
+                evaluated_at_ns: 0,
+            })
+        }
+    }
+
+    #[test]
+    fn a_port_an_island_feeds_is_named_among_the_ports_once() {
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.feed_an_input_port_from_a_function_node_island(
+            "brightness",
+            Arc::new(IslandAnsweringOneHalf),
+        );
+        assert!(mailboxes.has_port("brightness"));
+        assert_eq!(mailboxes.port_names(), vec!["brightness".to_string()]);
+    }
 
     fn unique_suffix(tag: &str) -> String {
         format!(
@@ -2075,7 +2156,10 @@ mod tests {
     #[test]
     fn every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted() {
         let (board, board_writer, _helper_node) =
-            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(
+                &[],
+                &[],
+            );
         let mailboxes = InputMailboxesInner::new();
 
         let (plain_publisher, plain_subscriber) = open_channel_for_one_link("mirrored/plain", 5);

@@ -172,9 +172,13 @@ mod tests {
         ListStreamsToolResultStream {
             stream: stream_id.to_owned(),
             display_name: display_name.to_owned(),
-            location: project_directory.map(|project_directory| StreamLocationOnTheWire {
-                project_directory: PathBuf::from(project_directory),
-                stream_function: "stream:main".to_owned(),
+            location: project_directory.map(|project_directory| {
+                serde_json::from_value::<StreamLocationOnTheWire>(serde_json::json!({
+                    "project_directory": project_directory,
+                    "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10",
+                    "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21",
+                }))
+                .unwrap()
             }),
             state,
             node_count: None,

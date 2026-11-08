@@ -22,12 +22,15 @@ use super::processor_interpreter_spawn_host::{
     PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
     SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, StreamInterpreterExitAwaited,
-    processor_interpreter_bootstrap_command, spawn_host_for_processor_node,
+    processor_interpreter_bootstrap_command,
+    spawn_host_for_a_function_node_promoted_to_its_own_process, spawn_host_for_processor_node,
     spawn_standard_error_reader_keeping_its_tail, spawn_standard_output_reader_keeping_its_head,
     standard_error_tail_as_a_refusal_quotes_it, standard_output_head_as_a_refusal_quotes_it,
     wait_for_a_stream_interpreter_to_exit,
 };
-use super::python_processor_declaration::PythonProcessorDeclaration;
+use super::python_processor_declaration::{
+    HowAPythonNodeOfTheTypeRuns, PythonProcessorDeclaration,
+};
 use super::subprocess_bridge::ESCALATE_FD_ENV;
 use crate::core::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
@@ -36,7 +39,8 @@ use crate::core::child_process_lifetime::{
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::processors::{
-    DynGeneratedProcessor, InstalledModuleOfANodeType, NodeTypesOneStreamResolves,
+    DynGeneratedProcessor, HowANodeOfADescribedTypeRuns, InstalledModuleOfANodeType,
+    NodeTypesOneStreamResolves,
 };
 use crate::core::runtime::StreamEnvironment;
 use crate::iceoryx2::{
@@ -235,16 +239,43 @@ fn register_the_described_node_type(
 ) -> Result<()> {
     let PythonProcessorDeclaration {
         descriptor,
-        execution_config: child_execution_config,
+        how_a_python_node_of_the_type_runs,
     } = declaration;
     let processor_class_import_path = descriptor.processor_class_import_path.as_str().to_string();
     let descriptor_for_constructor = descriptor.clone();
     let stream_environment = stream_environment.clone();
     let lend_directory = Arc::new(lend_directory.to_path_buf());
     let the_stream_its_helpers_belong_to = the_stream_its_helpers_belong_to.clone();
+    let child_execution_config =
+        match how_a_python_node_of_the_type_runs {
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
+                execution_config
+            }
+            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
+                return node_types_of_the_stream
+                    .register_a_type_described_in_this_streams_processor_interpreter(
+                        descriptor,
+                        HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                            processor_once_promoted_to_its_own_process: Box::new(move |node| {
+                                Ok(Box::new(
+                                    spawn_host_for_a_function_node_promoted_to_its_own_process(
+                                        &processor_class_import_path,
+                                        &descriptor_for_constructor,
+                                        node,
+                                        &stream_environment,
+                                        &lend_directory,
+                                        the_stream_its_helpers_belong_to.clone(),
+                                    )?,
+                                )
+                                    as Box<dyn DynGeneratedProcessor + Send>)
+                            }),
+                        },
+                    );
+            }
+        };
     node_types_of_the_stream.register_a_type_described_in_this_streams_processor_interpreter(
         descriptor,
-        Box::new(move |node| {
+        HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(move |node| {
             Ok(Box::new(spawn_host_for_processor_node(
                 &processor_class_import_path,
                 &descriptor_for_constructor,
@@ -254,7 +285,7 @@ fn register_the_described_node_type(
                 &lend_directory,
                 the_stream_its_helpers_belong_to.clone(),
             )) as Box<dyn DynGeneratedProcessor + Send>)
-        }),
+        })),
     )
 }
 
@@ -704,6 +735,7 @@ mod tests {
             "import_path": GOOD_TYPE,
             "short_name": "BlurProcessor",
             "description": "blurs",
+            "kind": "process",
             "execution": {"mode": "reactive"},
             "scheduling_priority": null,
             "paced_by_real_time": false,
@@ -731,10 +763,11 @@ mod tests {
         assert_eq!(descriptor.processor_class_import_path.as_str(), GOOD_TYPE);
         assert_eq!(descriptor.inputs[0].name, "video");
         assert_eq!(descriptor.outputs[0].name, "blurred");
-        assert_eq!(
-            declarations[0].execution_config.execution,
-            crate::core::execution::ProcessExecution::Reactive
-        );
+        assert!(matches!(
+            declarations[0].how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config)
+                if execution_config.execution == crate::core::execution::ProcessExecution::Reactive
+        ));
     }
 
     /// A process a stub started in a session of its own, which the describe's
@@ -851,7 +884,7 @@ mod tests {
                 "described_node_types": [],
                 "refused_node_types": [{
                     "import_path": "my_app.nodes:Plain",
-                    "refusal": "the class `Plain` carries no `@node` declaration, so it is not a node",
+                    "refusal": "the class `Plain` carries no `@node.process` declaration, so it is not a node",
                 }],
             }))
         ));
@@ -860,7 +893,7 @@ mod tests {
 
         assert_eq!(node_types, [import_path("my_app.nodes:Plain")]);
         assert!(
-            refusal.contains("the class `Plain` carries no `@node` declaration"),
+            refusal.contains("the class `Plain` carries no `@node.process` declaration"),
             "{refusal}"
         );
     }

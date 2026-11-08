@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod apply_processor_config_update_op;
+pub(crate) mod cross_floor_check_in_the_projects_interpreter;
+pub(crate) mod function_node_island;
+pub(crate) mod function_node_promotion;
 mod open_iceoryx2_service_op;
 mod prepare_processor_op;
 pub(crate) mod processor_interpreter_describe;
@@ -9,7 +12,6 @@ pub(crate) mod processor_interpreter_shutdown_ladder;
 pub(crate) mod processor_interpreter_spawn_host;
 pub(crate) mod python_processor_declaration;
 mod spawn_processor_op;
-pub(crate) mod stream_function_compile_in_the_projects_interpreter;
 pub(crate) mod subprocess_bridge;
 mod subprocess_escalate;
 mod subprocess_escalate_wire_types;

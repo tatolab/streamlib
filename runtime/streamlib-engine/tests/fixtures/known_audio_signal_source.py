@@ -77,7 +77,7 @@ def _stereo_planar_f32(mono_samples):
     )
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class KnownAudioSignalSource:
     """Plays the known signal once, then silence — or over and over."""
 

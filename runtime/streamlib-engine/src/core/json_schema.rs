@@ -31,6 +31,9 @@ pub use streamlib_processor_schema::ProcessorClassImportPath;
 /// [`GraphSnapshot`](crate::core::graph_snapshot::GraphSnapshot).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphResponse {
+    /// The UUID of the stream asset whose graph document this graph was loaded from: a spec key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
     /// The stream id this graph was loaded under, its stream's address. Absent until a load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
@@ -65,11 +68,18 @@ pub struct MachineWideGraphResponse {
 /// A node in the graph.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorNodeOutput {
-    /// This node's per-run id. A live key: a loaded graph mints new ones.
+    /// The node's UUID: a spec key, kept across every run and restart of its stream.
     pub id: String,
     /// The import path of the class this node is — a plain string.
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
+    /// How the node's code runs. Absent on a node whose type nothing
+    /// registers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<NodeKindOutput>,
+    /// The language a function node is written in; absent on every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<FunctionNodeLanguageOutput>,
     /// The node's name, unique in its graph and cast to lowercase URL-safe —
     /// what a link end, an exposure and a port address name it by.
     pub name: String,
@@ -81,6 +91,12 @@ pub struct ProcessorNodeOutput {
     pub config_checksum: u64,
     /// Input and output ports.
     pub ports: ProcessorNodePortsOutput,
+    /// The values set on the node's unlinked inputs, by input name.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub pins: serde_json::Map<String, serde_json::Value>,
+    /// What the studio draws the node with: canvas position, group, comment, colour.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub studio: serde_json::Map<String, serde_json::Value>,
     /// Runtime components (dynamic, varies based on processor state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
@@ -306,6 +322,47 @@ pub struct NodeTypeAnInstalledModuleDeclaresOutput {
     pub node: ProcessorDescriptorOutput,
 }
 
+/// How a node type's code runs: a shader on the GPU, a function evaluated
+/// where its reader reads, or a class in a process of its own.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeKindOutput {
+    Shader,
+    Function,
+    Process,
+}
+
+/// The language a function node is written in.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum FunctionNodeLanguageOutput {
+    Python,
+    Rust,
+}
+
+/// `node_kind` as the two keys a rendering spells it in: the kind, and a
+/// function node's language.
+fn node_kind_rendered_as_kind_and_language(
+    node_kind: crate::core::descriptors::NodeKind,
+) -> (NodeKindOutput, Option<FunctionNodeLanguageOutput>) {
+    use crate::core::descriptors::{FunctionNodeLanguage, NodeKind};
+    match node_kind {
+        NodeKind::Shader => (NodeKindOutput::Shader, None),
+        NodeKind::Process => (NodeKindOutput::Process, None),
+        NodeKind::Function { language } => (
+            NodeKindOutput::Function,
+            Some(match language {
+                FunctionNodeLanguage::Python => FunctionNodeLanguageOutput::Python,
+                FunctionNodeLanguage::Rust => FunctionNodeLanguageOutput::Rust,
+            }),
+        ),
+    }
+}
+
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
@@ -322,6 +379,11 @@ pub struct ProcessorDescriptorOutput {
     /// node carries and `add_node` takes.
     #[serde(rename = "type")]
     pub processor_class_import_path: ProcessorClassImportPath,
+    /// How this node type's code runs.
+    pub kind: NodeKindOutput,
+    /// The language a function node is written in; absent on every other kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<FunctionNodeLanguageOutput>,
     /// Human-readable description.
     pub description: String,
     /// Repository URL.
@@ -393,12 +455,23 @@ pub struct CodeExamplesOutput {
 
 impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
     fn from(node: &crate::core::graph::ProcessorNode) -> Self {
+        let (kind, language) = match node.node_kind() {
+            Some(node_kind) => {
+                let (kind, language) = node_kind_rendered_as_kind_and_language(node_kind);
+                (Some(kind), language)
+            }
+            None => (None, None),
+        };
         Self {
-            id: node.id.to_string(),
+            id: node.node_uuid.to_string(),
             processor_type: node.processor_type.clone(),
+            kind,
+            language,
             name: node.display_name.clone(),
             config: node.config.clone(),
             config_checksum: node.config_checksum,
+            pins: node.pins.clone(),
+            studio: node.studio.clone(),
             ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
             components: node.serialize_components(),
         }
@@ -598,8 +671,11 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
 
 impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
     fn from(desc: &crate::core::ProcessorDescriptor) -> Self {
+        let (kind, language) = node_kind_rendered_as_kind_and_language(desc.node_kind);
         Self {
             processor_class_import_path: desc.processor_class_import_path.clone(),
+            kind,
+            language,
             description: desc.description.clone(),
             repository: desc.repository.clone(),
             runtime: ProcessorRuntimeOutput::from(&desc.runtime),
@@ -871,6 +947,7 @@ mod port_rendering_tests {
         crate::core::graph::ProcessorNode::new(
             streamlib_processor_schema::ProcessorClassImportPath::new("tests.CameraSource")
                 .expect("a legal import path"),
+            Some(crate::core::descriptors::NodeKind::Process),
             "CameraSource",
             None,
             Vec::new(),
@@ -887,6 +964,71 @@ mod port_rendering_tests {
                 ),
             }],
         )
+    }
+
+    fn a_node_of_kind(
+        node_kind: Option<crate::core::descriptors::NodeKind>,
+    ) -> crate::core::graph::ProcessorNode {
+        crate::core::graph::ProcessorNode::new(
+            streamlib_processor_schema::ProcessorClassImportPath::new("tests:Lfo")
+                .expect("a legal import path"),
+            node_kind,
+            "Lfo",
+            None,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn a_node_renders_its_kind_and_a_function_node_its_language_beside_it() {
+        use crate::core::descriptors::{FunctionNodeLanguage, NodeKind};
+        let render = |node_kind| {
+            serde_json::to_value(ProcessorNodeOutput::from(&a_node_of_kind(node_kind))).unwrap()
+        };
+
+        let process = render(Some(NodeKind::Process));
+        assert_eq!(process["kind"], "process");
+        assert!(process.get("language").is_none(), "{process}");
+
+        let shader = render(Some(NodeKind::Shader));
+        assert_eq!(shader["kind"], "shader");
+        assert!(shader.get("language").is_none(), "{shader}");
+
+        let function = render(Some(NodeKind::Function {
+            language: FunctionNodeLanguage::Python,
+        }));
+        assert_eq!(function["kind"], "function");
+        assert_eq!(function["language"], "python");
+    }
+
+    #[test]
+    fn a_node_whose_type_nothing_registers_renders_no_kind() {
+        let unregistered =
+            serde_json::to_value(ProcessorNodeOutput::from(&a_node_of_kind(None))).unwrap();
+        assert!(unregistered.get("kind").is_none(), "{unregistered}");
+        assert!(unregistered.get("language").is_none(), "{unregistered}");
+    }
+
+    #[test]
+    fn a_catalog_entry_renders_its_kind_and_a_function_node_its_language_beside_it() {
+        use crate::core::descriptors::{FunctionNodeLanguage, NodeKind};
+        let mut descriptor = crate::core::ProcessorDescriptor::new(
+            crate::core::descriptors::ProcessorClassShortName::new("Lfo").expect("a short name"),
+            streamlib_processor_schema::ProcessorClassImportPath::new("tests:Lfo")
+                .expect("a legal import path"),
+            "oscillates",
+        );
+        let process = serde_json::to_value(ProcessorDescriptorOutput::from(&descriptor)).unwrap();
+        assert_eq!(process["kind"], "process");
+        assert!(process.get("language").is_none(), "{process}");
+
+        descriptor.node_kind = NodeKind::Function {
+            language: FunctionNodeLanguage::Rust,
+        };
+        let function = serde_json::to_value(ProcessorDescriptorOutput::from(&descriptor)).unwrap();
+        assert_eq!(function["kind"], "function");
+        assert_eq!(function["language"], "rust");
     }
 
     #[test]
@@ -1128,6 +1270,7 @@ mod port_rendering_tests {
         let mut node = crate::core::graph::ProcessorNode::new(
             streamlib_processor_schema::ProcessorClassImportPath::new("tests.SpeakerSink")
                 .expect("a legal import path"),
+            Some(crate::core::descriptors::NodeKind::Process),
             "SpeakerSink",
             None,
             vec![crate::core::graph::PortInfo {
@@ -1302,7 +1445,15 @@ mod graph_response_top_level_key_rendering_tests {
         declared.sort();
         assert_eq!(
             declared,
-            ["clock", "links", "machine", "nodes", "references", "stream"]
+            [
+                "asset",
+                "clock",
+                "links",
+                "machine",
+                "nodes",
+                "references",
+                "stream"
+            ]
         );
     }
 

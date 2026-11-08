@@ -1,0 +1,17 @@
+{
+  "links": [
+    {
+      "source": {"node": "testpatternsource", "port": "video"},
+      "target": {"node": "halftonelenseffect", "port": "video_from_upstream"}
+    },
+    {
+      "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
+      "target": {"node": "brightnessmeter", "port": "video_from_upstream"}
+    }
+  ],
+  "nodes": [
+    {"config": {}, "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"},
+    {"config": {}, "name": "halftonelenseffect", "type": "nodes.halftone_lens_effect:HalftoneLensEffect"},
+    {"config": {}, "name": "brightnessmeter", "type": "nodes.brightness_meter:BrightnessMeter"}
+  ]
+}

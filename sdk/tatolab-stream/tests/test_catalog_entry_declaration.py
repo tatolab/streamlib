@@ -57,7 +57,7 @@ def test_each_entry_names_its_section():
 
 
 def test_an_output_port_stamps_its_catalog_entry_as_section_and_fields():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class FrameSource:
         frames = Output(
             Packets,
@@ -84,7 +84,7 @@ def test_an_output_port_stamps_its_catalog_entry_as_section_and_fields():
 def test_a_catalog_that_is_not_an_entry_is_refused_naming_the_port():
     with pytest.raises(TypeError, match="'frames'.*VideoEntry"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class FrameSource:
             frames = Output(
                 Packets,

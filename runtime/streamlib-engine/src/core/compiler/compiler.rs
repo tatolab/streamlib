@@ -6,10 +6,24 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::PendingOperation;
-use crate::core::compiler::compilation_plan::CompilationPlan;
+use crate::core::compiler::compilation_plan::{
+    CompilationPlan, FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed,
+};
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
+use crate::core::compiler::compiler_ops::function_node_island::{
+    HowALinkIsWired, how_a_link_is_wired, refuse_an_edit_to_an_island_a_running_reader_evaluates,
+    the_function_nodes_among, unwire_a_link_from_a_function_node_island_into_its_reader,
+    wire_a_call_inside_a_function_node_island,
+    wire_a_link_from_a_function_node_island_into_its_reader,
+};
+use crate::core::compiler::compiler_ops::function_node_promotion::{
+    FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
+    place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own,
+    plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
+    record_each_promotion_on_its_nodes_metrics,
+};
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
@@ -20,10 +34,10 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
-    LinkUniqueId, OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle,
-    ProcessorUniqueId,
+    LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
+    ProcessorReadyBarrierHandle, ProcessorUniqueId, StateComponent,
 };
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -135,20 +149,49 @@ impl Compiler {
     ///
     /// A removal whose thread outlived its budget still removes the processor
     /// and lets the rest of the batch compile; the call then fails naming it.
+    /// Each reader a promotion names learns how it ended, so its host stops
+    /// waiting to start the helper that replaces the one a function node crashed.
     fn compile(
         graph_arc: Arc<RwLock<Graph>>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
         abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
     ) -> Result<()> {
+        let readers_awaiting_a_promotion: Vec<ProcessorUniqueId> = operations
+            .iter()
+            .filter_map(|operation| match operation {
+                PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
+                    reader_id,
+                    ..
+                } => Some(reader_id.clone()),
+                _ => None,
+            })
+            .collect();
         let mut result = CompileResult::default();
-        Self::compile_counting_into(
-            graph_arc,
+        let compiled = Self::compile_counting_into(
+            Arc::clone(&graph_arc),
             operations,
             runtime_ctx,
             abandoned_processor_threads,
             &mut result,
-        )
+        );
+        if !readers_awaiting_a_promotion.is_empty() {
+            let outcome = compiled.as_ref().copied().map_err(ToString::to_string);
+            let graph = graph_arc.read();
+            for reader_id in &readers_awaiting_a_promotion {
+                if let Some(reader_link_wiring) = graph
+                    .traversal()
+                    .v(reader_id)
+                    .first()
+                    .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+                {
+                    reader_link_wiring
+                        .0
+                        .settle_the_function_node_promotion_out_of_its_islands(outcome.clone());
+                }
+            }
+        }
+        compiled
     }
 
     /// Compile `operations` against `graph_arc`, counting what it did into
@@ -166,6 +209,7 @@ impl Compiler {
         // 1. Validate and categorize operations
         // =====================================================================
         let mut plan = the_plan_these_operations_make(&graph_arc, operations);
+        let promotions_planned = plan_every_function_node_promotion(&graph_arc, &mut plan);
 
         // A processor removal cascades its incident links out of the graph
         // (petgraph `remove_node`), so a link queued for wiring against a
@@ -177,6 +221,19 @@ impl Compiler {
             plan.drop_link_adds_into_removed_processors(&graph);
         }
         plan.hand_config_updates_to_processors_this_batch_constructs(&mut graph_arc.write());
+        refuse_an_edit_to_an_island_a_running_reader_evaluates(
+            &graph_arc.read(),
+            &plan.processors_to_add,
+            &plan.processors_to_remove,
+            &plan.links_to_add,
+            &plan.links_to_remove,
+            &plan.config_updates,
+        )?;
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph_arc.write(),
+            &plan.processors_to_add,
+            &plan.processors_to_remove,
+        )?;
 
         // Early return if nothing to do
         if plan.is_empty() {
@@ -239,10 +296,18 @@ impl Compiler {
         // 3. Phase 1: PREPARE - Attach infrastructure components
         // =====================================================================
         let mut barrier_handles: Vec<(ProcessorUniqueId, ProcessorReadyBarrierHandle)> = vec![];
+        let function_nodes_run_inside_their_readers =
+            the_function_nodes_among(&graph_arc.read(), &plan.processors_to_add);
+        let processors_to_build: Vec<ProcessorUniqueId> = plan
+            .processors_to_add
+            .iter()
+            .filter(|proc_id| !function_nodes_run_inside_their_readers.contains(*proc_id))
+            .cloned()
+            .collect();
 
-        if !plan.processors_to_add.is_empty() {
+        if !processors_to_build.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Prepare);
-            for proc_id in &plan.processors_to_add {
+            for proc_id in &processors_to_build {
                 let mut graph = graph_arc.write();
                 let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
                     Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
@@ -277,9 +342,9 @@ impl Compiler {
         // =====================================================================
         // 4. Phase 2: SPAWN - Spawn processor threads
         // =====================================================================
-        if !plan.processors_to_add.is_empty() {
+        if !processors_to_build.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Spawn);
-            for proc_id in &plan.processors_to_add {
+            for proc_id in &processors_to_build {
                 tracing::info!("[{}] Spawning {}", CompilePhase::Spawn, proc_id);
                 super::compiler_ops::spawn_processor(Arc::clone(&graph_arc), runtime_ctx, proc_id)?;
             }
@@ -308,6 +373,26 @@ impl Compiler {
                 the_stream_the_compile_belongs_to,
             )?;
             tracing::debug!("[{}] Completed", CompilePhase::Wire);
+        }
+
+        // A function node has no thread whose setup would settle its state: it
+        // runs once it is wired into the read of each node it feeds.
+        {
+            let graph = graph_arc.read();
+            for function_node_id in &function_nodes_run_inside_their_readers {
+                if let Some(state) = graph
+                    .traversal()
+                    .v(function_node_id)
+                    .first()
+                    .and_then(|node| node.get::<StateComponent>())
+                {
+                    state.transition_to_only_from(ProcessorState::Pending, ProcessorState::Running);
+                }
+            }
+        }
+
+        for promotion_planned in &promotions_planned {
+            record_each_promotion_on_its_nodes_metrics(&mut graph_arc.write(), promotion_planned);
         }
 
         // =====================================================================
@@ -386,8 +471,31 @@ fn wire_every_link_a_plan_adds(
                 to_port: to_port.clone(),
             },
         );
-        tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
-        super::compiler_ops::open_iceoryx2_service(&mut graph_arc.write(), link_id, iceoryx2_node)?;
+        let how_the_link_is_wired = how_a_link_is_wired(&graph_arc.read(), link_id)?;
+        match how_the_link_is_wired {
+            HowALinkIsWired::ThroughAChannel => {
+                tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
+                super::compiler_ops::open_iceoryx2_service(
+                    &mut graph_arc.write(),
+                    link_id,
+                    iceoryx2_node,
+                )?;
+            }
+            HowALinkIsWired::AsACallInsideAFunctionNodeIsland => {
+                wire_a_call_inside_a_function_node_island(&mut graph_arc.write(), link_id)?;
+            }
+            HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead => {
+                tracing::info!(
+                    "[{}] Carrying the function node island of {} to its reader",
+                    CompilePhase::Wire,
+                    link_id
+                );
+                wire_a_link_from_a_function_node_island_into_its_reader(
+                    &mut graph_arc.write(),
+                    link_id,
+                )?;
+            }
+        }
 
         the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
             RuntimeEvent::CompilerDidWireLink {
@@ -429,9 +537,18 @@ pub(super) fn unwire_and_remove_a_link(
             },
         );
 
-        tracing::info!("[CLOSE SERVICE] {}", link_id);
-        if let Err(e) = super::compiler_ops::close_iceoryx2_service(&mut graph, link_id) {
-            tracing::warn!("Failed to close service {}: {}", link_id, e);
+        let unwired = match how_a_link_is_wired(&graph, link_id) {
+            Ok(HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead) => {
+                unwire_a_link_from_a_function_node_island_into_its_reader(&mut graph, link_id)
+            }
+            Ok(HowALinkIsWired::AsACallInsideAFunctionNodeIsland) => Ok(()),
+            Ok(HowALinkIsWired::ThroughAChannel) | Err(_) => {
+                tracing::info!("[CLOSE SERVICE] {}", link_id);
+                super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
+            }
+        };
+        if let Err(e) = unwired {
+            tracing::warn!("Failed to unwire {}: {}", link_id, e);
         }
 
         the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
@@ -534,9 +651,101 @@ fn the_plan_these_operations_make(
             } => {
                 plan.config_updates.push((processor_id, config_to_apply));
             }
+            PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
+                function_node_id,
+                reader_id,
+                promotion_request_number,
+                reason,
+            } => {
+                plan.function_node_promotions.push(
+                    FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed {
+                        function_node_id,
+                        reader_id,
+                        promotion_request_number,
+                        reason,
+                    },
+                );
+            }
         }
     }
     plan
+}
+
+/// Plan each promotion `plan` holds against `graph_arc`, adding the nodes it
+/// moves to `plan`'s processors to build and their links to its links to wire.
+///
+/// A promotion is planned only once it claims the request its reader's host
+/// still waits on; a refused one settles that reader alone, and the rest of
+/// the batch compiles.
+fn plan_every_function_node_promotion(
+    graph_arc: &RwLock<Graph>,
+    plan: &mut CompilationPlan,
+) -> Vec<FunctionNodePromotionPlanned> {
+    let mut promotions_planned = Vec::new();
+    for promotion in std::mem::take(&mut plan.function_node_promotions) {
+        let Some(reader_link_wiring) = graph_arc
+            .read()
+            .traversal()
+            .v(&promotion.reader_id)
+            .first()
+            .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+            .map(|component| Arc::clone(&component.0))
+        else {
+            tracing::warn!(
+                "Function node {} is not promoted: its reader {} runs no helper process",
+                promotion.function_node_id,
+                promotion.reader_id,
+            );
+            continue;
+        };
+        if !reader_link_wiring.claim_the_awaited_function_node_promotion_out_of_its_islands(
+            promotion.promotion_request_number,
+        ) {
+            tracing::warn!(
+                "Function node {} is not promoted: {}'s host no longer waits on that request",
+                promotion.function_node_id,
+                promotion.reader_id,
+            );
+            continue;
+        }
+        let promotion_planned =
+            match plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+                &mut graph_arc.write(),
+                &promotion.function_node_id,
+                &promotion.reader_id,
+                &promotion.reason,
+                &WhatTheCompileCarryingAPromotionRemoves {
+                    processors: &plan.processors_to_remove,
+                    links: &plan.links_to_remove,
+                },
+            ) {
+                Ok(promotion_planned) => promotion_planned,
+                Err(refusal) => {
+                    reader_link_wiring.settle_the_function_node_promotion_out_of_its_islands(Err(
+                        refusal.to_string(),
+                    ));
+                    continue;
+                }
+            };
+        tracing::info!(
+            "Promoting function node {} and {} downstream of it out of {}'s islands",
+            promotion.function_node_id,
+            promotion_planned.processors_to_add.len() - 1,
+            promotion.reader_id,
+        );
+        for processor_id in &promotion_planned.processors_to_add {
+            if !plan.processors_to_add.contains(processor_id) {
+                plan.processors_to_add.push(processor_id.clone());
+            }
+        }
+        for link_id in &promotion_planned.links_to_add {
+            if !plan.links_to_add.contains(link_id) {
+                plan.links_to_add.push(link_id.clone());
+            }
+        }
+        promotions_planned.push(promotion_planned);
+    }
+    promotions_planned
 }
 
 /// Whether an `AddLink` names a link this graph has already wired — or handed

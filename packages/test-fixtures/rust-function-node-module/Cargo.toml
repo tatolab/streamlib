@@ -1,0 +1,21 @@
+[package]
+name = "rust-function-node-fixture"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "A fixture module of Rust function nodes, built the way a third party builds one, for the integration suite."
+license = "BUSL-1.1"
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.29.2", features = ["abi3-py312"] }
+tatolab-module-sdk = { path = "../../../sdk/tatolab-module-sdk", version = "1.12.0", features = ["pyo3", "function-node"] }
+
+# Not a member of the engine workspace: a module is built exactly as a third
+# party would build one, with its own root, its own lockfile and no engine crate.
+[workspace]

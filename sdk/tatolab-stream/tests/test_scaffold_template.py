@@ -3,26 +3,24 @@
 
 """The scaffold templates `tatolab new` embeds and writes, checked as files.
 
-The tree is the app `new` writes, so it is a real project: it lints,
-type-checks (pyright runs over `scaffold_template/` as its own execution
-environment) and compiles with no runtime. Rendering it — the project name, the
-stripped licence header, the overwrite refusal — is the native CLI's, and tested
-there.
+The tree is the app `new` writes, so it is a real project: its nodes lint and
+type-check (pyright runs over `scaffold_template/` as its own execution
+environment), and its one stream is the graph document `streams/main.graph.json`.
+Rendering it — the project file, the UUIDs the runtime mints into the document, the
+project name, the stripped licence header, the overwrite refusal — is the runtime's,
+and tested there.
 """
 
 import ast
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from testpattern_module_stand_in import (
-    TESTPATTERN_MODULE_NODE_TYPE,
-    write_the_testpattern_module_stand_in_into,
-)
+from testpattern_module_stand_in import TESTPATTERN_MODULE_NODE_TYPE
 from tatolab.stream._cross_floor_check import (
     check_app_directory_for_floor_bindings,
     render_cross_floor_warning_block,
@@ -32,12 +30,13 @@ SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[1] / "scaffold_te
 SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
     "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
 )
+MAIN_GRAPH_DOCUMENT_PATH = "streams/main.graph.json"
 EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
 METER_MODULE_PATH = "nodes/brightness_meter.py"
 # Stored without their dot so no packaging walk skips them as hidden or reads the
 # template's `.gitignore` as its own ignore rules; `new` writes them dotted.
 SCAFFOLD_TEMPLATE_FILE_NAMES = {
-    "stream.py",
+    MAIN_GRAPH_DOCUMENT_PATH,
     "nodes/__init__.py",
     EFFECT_MODULE_PATH,
     METER_MODULE_PATH,
@@ -52,7 +51,6 @@ SCAFFOLD_TEMPLATE_PYTHON_FILE_NAMES = sorted(
 RENDER_PLACEHOLDERS_BY_TEMPLATE_FILE = {
     "pyproject.toml": ['name = "tatolab-stream-project"'],
 }
-COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
 
 
 def template_text(file_name: str) -> str:
@@ -119,7 +117,7 @@ def test_every_python_template_is_valid_python_that_explains_itself(template_fil
     """The scaffold is the first code the user reads, `__init__.py` included.
 
     An empty package init parses but teaches nothing, and this is where a reader
-    first meets the rule that keeps node classes out of the entry file.
+    first meets the rule of one importable module per node.
     """
     assert ast.get_docstring(ast.parse(template_text(template_file))), (
         f"{template_file} carries no module docstring — every file `new` writes "
@@ -127,61 +125,49 @@ def test_every_python_template_is_valid_python_that_explains_itself(template_fil
     )
 
 
-def test_the_stream_declares_one_stream_named_main():
-    """`dev` loads every `@stream` in `stream.py` as its own stream, and the
-    scaffold starts a project with exactly one, bare."""
-    entry_source = template_text("stream.py")
-    stream_functions = [
-        node.name
-        for node in ast.parse(entry_source).body
-        if isinstance(node, ast.FunctionDef)
-        and [ast.unparse(decorator) for decorator in node.decorator_list] == ["stream"]
-    ]
-
-    assert stream_functions == ["main"]
+def the_main_graph_document() -> "dict[str, Any]":
+    return json.loads(template_text(MAIN_GRAPH_DOCUMENT_PATH))
 
 
-def stream_builder_calls_in_the_entry(method_name: str) -> "list[str]":
+def node_types_in_the_main_graph_document() -> "list[str]":
+    return [node["type"] for node in the_main_graph_document()["nodes"]]
+
+
+def links_in_the_main_graph_document() -> "list[tuple[str, str, str, str]]":
     return [
-        ast.unparse(call)
-        for call in ast.walk(ast.parse(template_text("stream.py")))
-        if isinstance(call, ast.Call) and ast.unparse(call.func) == f"stream_builder.{method_name}"
+        (
+            link["source"]["node"],
+            link["source"]["port"],
+            link["target"]["node"],
+            link["target"]["port"],
+        )
+        for link in the_main_graph_document()["links"]
     ]
+
+
+def test_the_graph_document_holds_only_nodes_and_links_for_the_runtime_to_mint_uuids_into():
+    """`new` gives the stream asset and each node a fresh UUID, so the template holds none."""
+    document = the_main_graph_document()
+
+    assert set(document) == {"nodes", "links"}, document
+    assert all(set(node) == {"name", "type", "config"} for node in document["nodes"]), document
 
 
 def test_the_stream_runs_the_test_pattern_through_the_effect_with_a_meter_on_a_fan_out():
     """The sample runs on a machine with no capture device and no display: it
     needs no camera, the runtime opens no windows, and nothing leaves the stream."""
-    entry_source = template_text("stream.py")
-
-    assert stream_builder_calls_in_the_entry("add") == [
-        "stream_builder.add(TestPatternSource)",
-        "stream_builder.add(HalftoneLensEffect)",
-        "stream_builder.add(BrightnessMeter)",
+    assert node_types_in_the_main_graph_document() == [
+        TESTPATTERN_MODULE_NODE_TYPE,
+        "nodes.halftone_lens_effect:HalftoneLensEffect",
+        "nodes.brightness_meter:BrightnessMeter",
     ]
-    assert stream_builder_calls_in_the_entry("connect") == [
-        "stream_builder.connect(source.output('video'), effect.input('video_from_upstream'))",
-        "stream_builder.connect(effect.output('video_to_downstream'), "
-        "meter.input('video_from_upstream'))",
+    assert links_in_the_main_graph_document() == [
+        ("testpatternsource", "video", "halftonelenseffect", "video_from_upstream"),
+        ("halftonelenseffect", "video_to_downstream", "brightnessmeter", "video_from_upstream"),
     ]
-    assert stream_builder_calls_in_the_entry("expose") == []
-    assert "DisplayWindow" not in entry_source
-
-
-def test_the_camera_is_named_only_as_the_one_line_swap_in_a_comment():
-    """No camera runs in the sample, by default or behind a flag; the comment
-    tells the reader which line points it at theirs."""
-    entry_source = template_text("stream.py")
-    names_in_the_code = {
-        node.id for node in ast.walk(ast.parse(entry_source)) if isinstance(node, ast.Name)
-    }
-    comment_lines = [
-        line.strip() for line in entry_source.splitlines() if line.strip().startswith("#")
-    ]
-
-    assert "CameraSource" not in names_in_the_code
-    assert any("stream_builder.add(CameraSource)" in line for line in comment_lines), (
-        entry_source
+    assert not any(
+        "DisplayWindow" in node_type or "Camera" in node_type
+        for node_type in node_types_in_the_main_graph_document()
     )
 
 
@@ -189,22 +175,17 @@ def test_the_camera_is_named_only_as_the_one_line_swap_in_a_comment():
     ("module_path", "class_name"),
     [(EFFECT_MODULE_PATH, "HalftoneLensEffect"), (METER_MODULE_PATH, "BrightnessMeter")],
 )
-def test_each_node_lives_outside_the_entry_file(module_path: str, class_name: str):
-    """A node class in the entry file identifies as `__main__:<Type>`, which is a
-    wiring error — the entry runs as `__main__`, and the child interpreter that
-    runs the node imports its class by name.
-    """
-    entry_source = template_text("stream.py")
-    node_source = template_text(module_path)
+def test_each_project_node_the_document_names_is_a_node_class_of_its_module(
+    module_path: str, class_name: str
+):
+    """The child interpreter that runs a node imports its class by the `module:Class` the
+    document names."""
     module_name = module_path.removesuffix(".py").replace("/", ".")
+    node_source = template_text(module_path)
 
-    assert "@node" not in entry_source
-    assert f"class {class_name}" not in entry_source
-    assert "@node" in node_source, "the class belongs in the importable module"
+    assert f"{module_name}:{class_name}" in node_types_in_the_main_graph_document()
+    assert "@node.process" in node_source
     assert f"class {class_name}" in node_source
-    assert f"from {module_name} import {class_name}" in entry_source, (
-        "the entry file imports the class it wires"
-    )
 
 
 @pytest.mark.parametrize("module_path", [EFFECT_MODULE_PATH, METER_MODULE_PATH])
@@ -231,24 +212,23 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
     """The effect in the video path runs on the GPU, and the numpy node reads an
     explicit CPU view off the effect's output, so the slow door never sits in
     the video path."""
-    entry_source = template_text("stream.py")
     effect_source = template_text(EFFECT_MODULE_PATH)
     meter_source = template_text(METER_MODULE_PATH)
 
-    assert "GlslPixelEffect.compile(" in effect_source
+    assert "create_compute_kernel(" in effect_source
     assert "numpy" not in effect_source, "the effect in the video path touches no host pixels"
     assert "frame.cpu()" in meter_source, "the meter's host view of the pixels is explicit"
     assert "ctx.time" in meter_source, "the meter paces itself on the monotonic clock"
-    readers_of_the_effect_output = sorted(
-        ast.unparse(call.args[1])
-        for call in ast.walk(ast.parse(entry_source))
-        if isinstance(call, ast.Call)
-        and ast.unparse(call.func) == "stream_builder.connect"
-        and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
+    readers_of_the_effect_output = [
+        (target_node, target_port)
+        for source_node, source_port, target_node, target_port in (
+            links_in_the_main_graph_document()
+        )
+        if (source_node, source_port) == ("halftonelenseffect", "video_to_downstream")
+    ]
+    assert readers_of_the_effect_output == [("brightnessmeter", "video_from_upstream")], (
+        "the meter reads the effect's output"
     )
-    assert readers_of_the_effect_output == [
-        "meter.input('video_from_upstream')",
-    ], "the meter reads the effect's output"
 
 
 def test_the_scaffold_pins_the_python_version_the_plan_names():
@@ -270,62 +250,6 @@ def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():
     """A uv index or source here would resolve `tatolab-stream` from somewhere other
     than PyPI, where the release publishes it."""
     assert "tool.uv" not in template_text("pyproject.toml")
-
-
-def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
-    """The compile `tatolab run` makes, over the template tree as `new` lays it out, with
-    the `tatolab.testpattern` the project's `uv sync` installs."""
-    app_directory = tmp_path.resolve() / "demo"
-    shutil.copytree(SCAFFOLD_TEMPLATE_DIRECTORY, app_directory)
-    write_the_testpattern_module_stand_in_into(app_directory)
-
-    finished = subprocess.run(
-        [sys.executable, "-m", "tatolab.stream._project_stream_compile_entry", "--verb", "dev"],
-        cwd=app_directory,
-        capture_output=True,
-        text=True,
-        timeout=COMPILE_ENTRY_TIMEOUT_SECONDS,
-        check=False,
-    )
-
-    assert finished.returncode == 0, finished.stdout + finished.stderr
-    assert finished.stderr == "", "the scaffold binds to no floor, so the compile says nothing"
-    document = json.loads(finished.stdout)
-    assert set(document) == {"project_directory", "streams"}, document
-    assert document["project_directory"] == str(app_directory)
-    (stream,) = document["streams"]
-    assert stream["stream_function"] == "stream:main"
-    assert stream["description"], "the scaffold's stream carries its docstring"
-    assert stream["stream_graph"] == {
-            "stream": "main",
-            "nodes": [
-                {
-                    "name": "testpatternsource",
-                    "type": TESTPATTERN_MODULE_NODE_TYPE,
-                    "config": {},
-                },
-                {
-                    "name": "halftonelenseffect",
-                    "type": "nodes.halftone_lens_effect:HalftoneLensEffect",
-                    "config": {},
-                },
-                {
-                    "name": "brightnessmeter",
-                    "type": "nodes.brightness_meter:BrightnessMeter",
-                    "config": {},
-                },
-            ],
-            "links": [
-                {
-                    "source": {"node": "testpatternsource", "port": "video"},
-                    "target": {"node": "halftonelenseffect", "port": "video_from_upstream"},
-                },
-                {
-                    "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
-                    "target": {"node": "brightnessmeter", "port": "video_from_upstream"},
-                },
-            ],
-    }
 
 
 def test_the_scaffold_binds_to_no_floor():

@@ -61,6 +61,17 @@ extern "C" {
 typedef int32_t ModuleHostTableStatus;
 
 /**
+ * A function node's evaluate entry, called inside its reader's read: it reads
+ * its input and config values, reads and rewrites its state values, and writes
+ * its output values at stream time `now_ns`.
+ *
+ * Every value is an f64 in its node's signature order: an int as its value, a
+ * bool as 0 or 1. Answers `MODULE_HOST_TABLE_STATUS_OK`, or a refusal that
+ * leaves the outputs and the state unwritten.
+ */
+typedef ModuleHostTableStatus (*ModuleHostTableFunctionNodeEvaluateEntry)(const double *input_values, const double *config_values, double *state_values, double *output_values, int64_t now_ns);
+
+/**
  * The verb did what it was asked.
  */
 #define MODULE_HOST_TABLE_STATUS_OK ((ModuleHostTableStatus)INT32_C(0))

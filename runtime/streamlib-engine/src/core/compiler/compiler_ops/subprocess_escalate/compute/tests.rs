@@ -29,7 +29,7 @@ use crate::core::context::{
     TextureRegistration,
 };
 use crate::core::rhi::{
-    ComputeBindingSpec, GlslCompilationTargetStage, SurfaceBoundKernelBindingKind, TextureFormat,
+    ComputeBindingSpec, ShaderCompilationTargetStage, SurfaceBoundKernelBindingKind, TextureFormat,
     TextureUsages,
 };
 use crate::host_rhi::HostTextureExt;
@@ -42,24 +42,22 @@ fn make_gpu_sandbox_if_available() -> Option<GpuContextLimitedAccess> {
         .map(GpuContextLimitedAccess::new)
 }
 
-/// The GLSL the wire now carries instead of bytes: the same
-/// read-one-write-another pass, as an author would write it.
-const READ_ONE_WRITE_ANOTHER_GLSL: &str = "\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0) uniform sampler2D source_image;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D output_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    imageStore(output_image, at, texelFetch(source_image, at, 0));
+/// The Slang the wire carries instead of bytes: a read-one-write-another
+/// pass, as an author would write it.
+const READ_ONE_WRITE_ANOTHER_SLANG: &str = "\
+[[vk::binding(0, 0)]] Sampler2D source_image;
+[[vk::binding(1, 0)]] [format(\"rgba8\")] RWTexture2D<float4> output_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    output_image[invocation.xy] = source_image.Load(int3(invocation.xy, 0));
 }
 ";
 
-fn register_from_glsl(source: &str, stage: &str) -> EscalateRequestRegisterComputeKernel {
+fn register_from_slang(source: &str, stage: &str) -> EscalateRequestRegisterComputeKernel {
     EscalateRequestRegisterComputeKernel {
         bindings: Vec::new(),
         push_constant_size: 0,
-        request_id: "rid-glsl".to_string(),
+        request_id: "rid-slang".to_string(),
         source: source.to_string(),
         stage: stage.to_string(),
         entry_point: String::new(),
@@ -80,7 +78,7 @@ fn refusal_message(response: EscalateResponse) -> String {
 #[test]
 fn a_register_op_supplying_neither_source_nor_spirv_is_refused_naming_both() {
     let message =
-        registered_shader_stage_source("", "", "", GlslCompilationTargetStage::Compute, "")
+        registered_shader_stage_source("", "", "", ShaderCompilationTargetStage::Compute, "")
             .err()
             .expect("a register op with no shader at all must be refused");
     assert!(message.contains("source"), "{message}");
@@ -91,9 +89,9 @@ fn a_register_op_supplying_neither_source_nor_spirv_is_refused_naming_both() {
 fn a_register_op_supplying_both_source_and_spirv_is_refused_naming_both() {
     let message = registered_shader_stage_source(
         "vertex_",
-        READ_ONE_WRITE_ANOTHER_GLSL,
+        READ_ONE_WRITE_ANOTHER_SLANG,
         "0badc0de",
-        GlslCompilationTargetStage::Vertex,
+        ShaderCompilationTargetStage::Vertex,
         "",
     )
     .err()
@@ -112,8 +110,8 @@ fn a_compute_register_op_carrying_another_stage_is_refused() {
     };
     let message = refusal_message(handle_register_compute_kernel(
         &sandbox,
-        "rid-glsl".to_string(),
-        register_from_glsl(READ_ONE_WRITE_ANOTHER_GLSL, "vertex"),
+        "rid-slang".to_string(),
+        register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "vertex"),
     ));
     assert!(message.contains("vertex"), "{message}");
     assert!(message.contains("compute"), "{message}");
@@ -130,27 +128,27 @@ fn a_stage_that_is_not_a_stage_at_all_is_refused_naming_the_ones_that_are() {
     };
     let message = refusal_message(handle_register_compute_kernel(
         &sandbox,
-        "rid-glsl".to_string(),
-        register_from_glsl(READ_ONE_WRITE_ANOTHER_GLSL, "commpute"),
+        "rid-slang".to_string(),
+        register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "commpute"),
     ));
     assert!(message.contains("commpute"), "{message}");
-    for stage in GlslCompilationTargetStage::ALL {
+    for stage in ShaderCompilationTargetStage::ALL {
         assert!(message.contains(stage.wire_name()), "{message}");
     }
 }
 
-/// The ticket's demo, at the wire: GLSL text where bytes used to go,
+/// At the wire: Slang text where bytes used to go,
 /// with the binding names reflection found handed back.
 #[test]
-fn a_glsl_source_registers_a_kernel_and_reports_its_binding_names() {
+fn a_slang_source_registers_a_kernel_and_reports_its_binding_names() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
-        println!("register from GLSL: no GPU — skipping");
+        println!("register from Slang: no GPU — skipping");
         return;
     };
     let response = handle_register_compute_kernel(
         &sandbox,
-        "rid-glsl".to_string(),
-        register_from_glsl(READ_ONE_WRITE_ANOTHER_GLSL, "compute"),
+        "rid-slang".to_string(),
+        register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "compute"),
     );
     let EscalateResponse::Ok(ok) = response else {
         panic!("expected Ok, got {response:?}");
@@ -171,22 +169,27 @@ fn a_glsl_source_registers_a_kernel_and_reports_its_binding_names() {
 /// assertion counts compiler invocations, never elapsed time, because
 /// re-creation is free of compilation while still allocating handles.
 #[test]
-fn registering_the_same_glsl_twice_compiles_it_once() {
+fn registering_the_same_slang_twice_compiles_it_once() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
-        println!("GLSL compile cache: no GPU — skipping");
+        println!("Slang compile cache: no GPU — skipping");
         return;
     };
-    let before = sandbox.host_inner().glsl_shader_compiler_invocation_count();
+    let before = sandbox
+        .host_inner()
+        .slang_shader_compiler_invocation_count();
     for _ in 0..2 {
         let response = handle_register_compute_kernel(
             &sandbox,
-            "rid-glsl".to_string(),
-            register_from_glsl(READ_ONE_WRITE_ANOTHER_GLSL, "compute"),
+            "rid-slang".to_string(),
+            register_from_slang(READ_ONE_WRITE_ANOTHER_SLANG, "compute"),
         );
         assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
     }
     assert_eq!(
-        sandbox.host_inner().glsl_shader_compiler_invocation_count() - before,
+        sandbox
+            .host_inner()
+            .slang_shader_compiler_invocation_count()
+            - before,
         1
     );
 }
@@ -750,8 +753,8 @@ fn a_batch_every_frame_never_enters_the_escalate_gate() {
         println!("a_batch_every_frame_never_enters_the_escalate_gate: no GPU — skipping");
         return;
     };
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
-    let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
+    let double = register_slang_kernel(&sandbox, DOUBLE_SLANG);
     let held = seeded_chain_textures(
         &sandbox,
         [
@@ -957,30 +960,26 @@ fn dispatching_an_unregistered_kernel_id_is_refused() {
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestRunComputeKernelBatchDispatch;
 
 /// Pass 1 of the chain: every channel gains 40/255.
-const BRIGHTEN_GLSL: &str = "\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0) uniform sampler2D unbrightened_image;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D brightened_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    vec4 source = texelFetch(unbrightened_image, at, 0);
-    imageStore(brightened_image, at, vec4(source.rgb + 40.0 / 255.0, source.a));
+const BRIGHTEN_SLANG: &str = "\
+[[vk::binding(0, 0)]] Sampler2D unbrightened_image;
+[[vk::binding(1, 0)]] [format(\"rgba8\")] RWTexture2D<float4> brightened_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    float4 source = unbrightened_image.Load(int3(invocation.xy, 0));
+    brightened_image[invocation.xy] = float4(source.rgb + 40.0 / 255.0, source.a);
 }
 ";
 
 /// Pass 2 of the chain: every channel doubles. Deliberately not
 /// commutative with pass 1, so running them in the wrong order — or
 /// running pass 2 against pass 1's *input* — lands on different pixels.
-const DOUBLE_GLSL: &str = "\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0) uniform sampler2D brightened_image;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D doubled_image;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    vec4 source = texelFetch(brightened_image, at, 0);
-    imageStore(doubled_image, at, vec4(source.rgb * 2.0, source.a));
+const DOUBLE_SLANG: &str = "\
+[[vk::binding(0, 0)]] Sampler2D brightened_image;
+[[vk::binding(1, 0)]] [format(\"rgba8\")] RWTexture2D<float4> doubled_image;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    float4 source = brightened_image.Load(int3(invocation.xy, 0));
+    doubled_image[invocation.xy] = float4(source.rgb * 2.0, source.a);
 }
 ";
 
@@ -989,11 +988,11 @@ const CHAIN_SEED_RGBA: [u8; 4] = [10, 20, 30, 255];
 const CHAIN_BRIGHTENED_RGBA: [u8; 4] = [50, 60, 70, 255];
 const CHAIN_DOUBLED_RGBA: [u8; 4] = [100, 120, 140, 255];
 
-fn register_glsl_kernel(sandbox: &GpuContextLimitedAccess, source: &str) -> String {
+fn register_slang_kernel(sandbox: &GpuContextLimitedAccess, source: &str) -> String {
     let response = handle_register_compute_kernel(
         sandbox,
         "reg-chain".to_string(),
-        register_from_glsl(source, "compute"),
+        register_from_slang(source, "compute"),
     );
     match response {
         EscalateResponse::Ok(ok) => ok.handle_id,
@@ -1143,8 +1142,8 @@ fn a_later_pass_in_a_batch_reads_what_an_earlier_pass_wrote() {
         .device()
         .inner
         .validation_layer_message_counts();
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
-    let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
+    let double = register_slang_kernel(&sandbox, DOUBLE_SLANG);
     let held = seeded_chain_textures(
         &sandbox,
         ["chain-seed", "chain-brightened", "chain-doubled"],
@@ -1243,8 +1242,8 @@ fn a_batch_costs_one_submission_and_one_stall_where_separate_dispatches_cost_n()
         println!("batch submission count: no GPU — skipping");
         return;
     };
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
-    let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
+    let double = register_slang_kernel(&sandbox, DOUBLE_SLANG);
     let held = seeded_chain_textures(
         &sandbox,
         ["counted-seed", "counted-brightened", "counted-doubled"],
@@ -1352,7 +1351,7 @@ fn a_single_dispatch_costs_one_submission_and_one_stall_and_rests_its_layouts() 
         println!("single dispatch machinery: no GPU — skipping");
         return;
     };
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
     let held = seeded_chain_textures(&sandbox, ["single-seed", "single-brightened"]);
     let run_single_dispatch = |request_id: &str| {
         handle_run_compute_kernel(
@@ -1442,7 +1441,7 @@ fn a_single_dispatch_failing_inside_the_recording_leaves_the_recorder_usable() {
         println!("single dispatch abort: no GPU — skipping");
         return;
     };
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
     let held = seeded_chain_textures(&sandbox, ["abort-seed", "abort-brightened"]);
     let run_single_dispatch = |request_id: &str, push_constants_hex: &str| {
         handle_run_compute_kernel(
@@ -1486,14 +1485,12 @@ fn a_single_dispatch_failing_inside_the_recording_leaves_the_recorder_usable() {
 
 /// Both slots name one image, at one kind — aliasing the resolver
 /// permits, since only differing kinds clash.
-const TWO_SLOTS_ONE_IMAGE_GLSL: &str = "\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba8) uniform readonly image2D image_slot_a;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D image_slot_b;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    imageStore(image_slot_b, at, imageLoad(image_slot_a, at));
+const TWO_SLOTS_ONE_IMAGE_SLANG: &str = "\
+[[vk::binding(0, 0)]] [format(\"rgba8\")] RWTexture2D<float4> image_slot_a;
+[[vk::binding(1, 0)]] [format(\"rgba8\")] RWTexture2D<float4> image_slot_b;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    image_slot_b[invocation.xy] = image_slot_a[invocation.xy];
 }
 ";
 
@@ -1508,7 +1505,7 @@ fn every_registration_cell_naming_one_image_learns_the_landed_layout() {
         println!("per-cell layout publish: no GPU — skipping");
         return;
     };
-    let kernel_id = register_glsl_kernel(&sandbox, TWO_SLOTS_ONE_IMAGE_GLSL);
+    let kernel_id = register_slang_kernel(&sandbox, TWO_SLOTS_ONE_IMAGE_SLANG);
     sandbox
         .escalate(|full| {
             let kernel = full
@@ -1573,7 +1570,7 @@ fn a_batch_naming_one_kernel_twice_is_refused_saying_why() {
         println!("batch duplicate kernel: no GPU — skipping");
         return;
     };
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
     let held = seeded_chain_textures(&sandbox, ["twice-seed", "twice-middle", "twice-out"]);
 
     let response = handle_run_compute_kernel_batch(
@@ -1627,8 +1624,8 @@ fn a_refused_batch_submits_nothing_and_leaves_the_recorder_usable() {
         println!("refused batch: no GPU — skipping");
         return;
     };
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
-    let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
+    let double = register_slang_kernel(&sandbox, DOUBLE_SLANG);
     let held = seeded_chain_textures(
         &sandbox,
         ["refused-seed", "refused-brightened", "refused-doubled"],
@@ -1754,7 +1751,7 @@ fn a_batch_failing_inside_the_recording_aborts_it_and_the_recorder_survives() {
     // The conformance kernel declares 4 push-constant bytes; the batch
     // below sends none.
     let kernel_id = register_read_one_write_another(&sandbox).handle_id;
-    let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+    let brighten = register_slang_kernel(&sandbox, BRIGHTEN_SLANG);
     let held = seeded_chain_textures(&sandbox, ["aborted-seed", "aborted-middle", "aborted-out"]);
 
     let submissions_before = sandbox.host_inner().queue_submission_count();
@@ -1981,25 +1978,21 @@ const TENSOR_ELEMENT_COUNT: usize = 1 << 20;
 const TENSOR_UNWRITTEN_SENTINEL: f32 = -1.0;
 
 /// Pass 1 of the tensor chain: every element takes its own index.
-const WRITE_INDEX_PATTERN_GLSL: &str = "\
-#version 450
-layout(local_size_x = 64) in;
-layout(set = 0, binding = 0, std430) writeonly buffer IndexPatternTensor { float values[]; } index_pattern_tensor;
-void main() {
-    uint at = gl_GlobalInvocationID.x;
-    index_pattern_tensor.values[at] = float(at);
+const WRITE_INDEX_PATTERN_SLANG: &str = "\
+[[vk::binding(0, 0)]] RWStructuredBuffer<float> index_pattern_tensor;
+[numthreads(64, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    index_pattern_tensor[invocation.x] = float(invocation.x);
 }
 ";
 
 /// Pass 2 of the tensor chain: every element of pass 1's tensor, doubled.
-const DOUBLE_TENSOR_GLSL: &str = "\
-#version 450
-layout(local_size_x = 64) in;
-layout(set = 0, binding = 0, std430) readonly buffer UndoubledTensor { float values[]; } undoubled_tensor;
-layout(set = 0, binding = 1, std430) writeonly buffer DoubledTensor { float values[]; } doubled_tensor;
-void main() {
-    uint at = gl_GlobalInvocationID.x;
-    doubled_tensor.values[at] = undoubled_tensor.values[at] * 2.0;
+const DOUBLE_TENSOR_SLANG: &str = "\
+[[vk::binding(0, 0)]] StructuredBuffer<float> undoubled_tensor;
+[[vk::binding(1, 0)]] RWStructuredBuffer<float> doubled_tensor;
+[numthreads(64, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    doubled_tensor[invocation.x] = undoubled_tensor[invocation.x] * 2.0;
 }
 ";
 
@@ -2060,8 +2053,8 @@ fn a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote() {
         .device()
         .inner
         .validation_layer_message_counts();
-    let write_index_pattern = register_glsl_kernel(&sandbox, WRITE_INDEX_PATTERN_GLSL);
-    let double_tensor = register_glsl_kernel(&sandbox, DOUBLE_TENSOR_GLSL);
+    let write_index_pattern = register_slang_kernel(&sandbox, WRITE_INDEX_PATTERN_SLANG);
+    let double_tensor = register_slang_kernel(&sandbox, DOUBLE_TENSOR_SLANG);
 
     let (index_pattern_tensor, doubled_tensor) = sandbox
         .escalate(|full| {
@@ -2189,7 +2182,7 @@ fn a_dispatch_writes_the_tensor_storage_buffer_its_surface_id_names() {
         println!("tensor by id: no GPU — skipping");
         return;
     };
-    let kernel_id = register_glsl_kernel(&sandbox, WRITE_INDEX_PATTERN_GLSL);
+    let kernel_id = register_slang_kernel(&sandbox, WRITE_INDEX_PATTERN_SLANG);
     let surface_id = format!("tensor-by-id-{}", uuid::Uuid::new_v4().simple());
     let tensor = registered_sentinel_filled_tensor(&sandbox, &surface_id);
     assert_every_element_is(
@@ -2221,7 +2214,7 @@ fn a_retired_tensor_frame_id_is_refused_and_writes_nothing() {
         println!("retired tensor id: no GPU — skipping");
         return;
     };
-    let kernel_id = register_glsl_kernel(&sandbox, WRITE_INDEX_PATTERN_GLSL);
+    let kernel_id = register_slang_kernel(&sandbox, WRITE_INDEX_PATTERN_SLANG);
     let pool_slot = format!("tensor-slot-{}", uuid::Uuid::new_v4().simple());
     let tensor = registered_sentinel_filled_tensor(&sandbox, &pool_slot);
     sandbox
@@ -2267,7 +2260,7 @@ fn a_surface_id_with_no_tensor_behind_it_is_refused_naming_the_binding() {
         println!("unknown tensor id: no GPU — skipping");
         return;
     };
-    let kernel_id = register_glsl_kernel(&sandbox, WRITE_INDEX_PATTERN_GLSL);
+    let kernel_id = register_slang_kernel(&sandbox, WRITE_INDEX_PATTERN_SLANG);
     let message = refusal_message(write_index_pattern_into(
         &sandbox,
         &kernel_id,

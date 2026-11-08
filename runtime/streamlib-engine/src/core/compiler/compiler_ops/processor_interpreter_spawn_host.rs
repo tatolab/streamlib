@@ -44,8 +44,14 @@ use crate::core::context::{
 use crate::core::descriptors::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::ProcessorNode;
-use crate::core::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
+use crate::core::graph::{
+    FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents, ProcessorNode,
+};
+use crate::core::media_clock::MediaClock;
+use crate::core::processors::{
+    DynGeneratedProcessor, FunctionNodeCallUnderWayInTheFarSide,
+    FunctionNodePromotionAwaitedBeforeTheReaderRestarts, OutOfProcessLinkWiringEnvelope,
+};
 use crate::core::runtime::{
     LoadedStreamTag, ShutdownEscalationOfOneStream, StreamEnvironment,
     start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
@@ -95,6 +101,21 @@ pub const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
 /// Generous because a cold child imports the whole runtime — but bounded, so a
 /// class that blocks at import time fails the graph instead of hanging it.
 const REGISTRATION_DEADLINE: Duration = Duration::from_secs(60);
+
+/// How long a reader's host waits for a compile to take up the promotion of a
+/// function node that crashed its helper before it starts the next helper
+/// without it.
+const LONGEST_WAIT_FOR_A_COMPILE_TO_CLAIM_A_FUNCTION_NODE_PROMOTION: Duration =
+    Duration::from_secs(30);
+
+/// How many of its reader's frame intervals one function-node call may run
+/// before its helper is ended as stalled.
+const FUNCTION_NODE_CALL_WATCHDOG_FRAME_INTERVALS: u32 = 3;
+
+/// The least a function-node call may run before it counts as stalled: a
+/// reader with no frame interval still has one, and the death poll that reads
+/// the breadcrumb runs only every 100 ms.
+const FUNCTION_NODE_CALL_WATCHDOG_FLOOR: Duration = Duration::from_millis(250);
 
 /// How long the registration wait parks before it re-reads whether shutdown has
 /// begun. A helper still importing then is put on the ladder rather than left
@@ -263,6 +284,10 @@ pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     /// Why the helper died on its own — its exit and the end of its standard
     /// error — once the engine noticed and took its group down.
     why_the_helper_process_died_on_its_own: Option<String>,
+    /// The call to a function node of one of its islands the helper was in
+    /// when it died or was ended; that node is promoted out of them before the
+    /// next helper starts.
+    function_node_call_that_lost_the_helper: Option<FunctionNodeCallUnderWayInTheFarSide>,
     /// Set once this helper has been through the shutdown ask, so the ladder's
     /// own belt-and-braces call cannot make it a second time.
     shutdown_was_already_asked_of_this_helper: bool,
@@ -631,6 +656,20 @@ impl ProcessorInterpreterSpawnHostProcessor {
 
     /// Take the group down with no cooperative rung at all — see
     /// [`HelperProcessShutdownLadder::skip_to_terminating_the_process_group`].
+    /// How long one function-node call may run before its helper is ended as
+    /// stalled: three of its reader's frame intervals, and never less than a
+    /// floor the death poll can resolve.
+    fn function_node_call_watchdog_budget(&self) -> Duration {
+        let reader_frame_interval = Duration::from_millis(
+            self.link_wiring
+                .far_side_process_execution()
+                .interval_ms()
+                .unwrap_or(0) as u64,
+        );
+        (reader_frame_interval * FUNCTION_NODE_CALL_WATCHDOG_FRAME_INTERVALS)
+            .max(FUNCTION_NODE_CALL_WATCHDOG_FLOOR)
+    }
+
     fn take_the_helper_process_group_down(&mut self) -> Option<String> {
         let outcome = self.child.take().map(|child| {
             HelperProcessShutdownLadder::taking_over(
@@ -668,6 +707,8 @@ impl ProcessorInterpreterSpawnHostProcessor {
     ) {
         self.give_up_on_the_helper_process();
         self.bridge.take();
+        self.link_wiring
+            .keep_every_function_node_state_its_far_side_wrote();
         if let Some(HelperProcessShutdownOutcome::Reaped(exit_status)) = outcome {
             tracing::debug!(
                 "[{}] helper process exited: {exit_status}",
@@ -1373,14 +1414,72 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         let Some(child) = self.child.as_ref() else {
             return;
         };
-        if !a_child_process_has_exited_without_being_reaped(child.id()) {
+        let helper_process_id = child.id();
+        let the_helper_died = a_child_process_has_exited_without_being_reaped(helper_process_id);
+        // Read after the exit check: once the helper has exited, the board holds
+        // the calls it had under way when it died.
+        let function_node_call_under_way = self
+            .link_wiring
+            .function_node_call_its_far_side_has_under_way();
+        let stalled_function_node_call = function_node_call_under_way
+            .as_ref()
+            .filter(|_| !the_helper_died)
+            .and_then(|call_under_way| {
+                let call_has_run_for = Duration::from_nanos(
+                    (MediaClock::now().as_nanos() as u64)
+                        .saturating_sub(call_under_way.call_started_at_monotonic_ns),
+                );
+                let watchdog_budget = self.function_node_call_watchdog_budget();
+                (call_has_run_for > watchdog_budget).then_some((call_has_run_for, watchdog_budget))
+            })
+            .filter(|_| {
+                // Read again after the budget was judged: a call that returned
+                // in between is not the stall the first read timed.
+                let read_again = self
+                    .link_wiring
+                    .function_node_call_its_far_side_has_under_way();
+                read_again
+                    .zip(function_node_call_under_way.as_ref())
+                    .is_some_and(|(read_again, first_read)| {
+                        read_again.is_the_same_call_as(first_read)
+                    })
+            });
+        if !the_helper_died && stalled_function_node_call.is_none() {
             return;
         }
-        let helper_process_id = child.id();
+        let why_the_helper_was_lost =
+            match (&function_node_call_under_way, stalled_function_node_call) {
+                (Some(call_under_way), Some((call_has_run_for, watchdog_budget))) => format!(
+                    "function node `{}` stalled: its call had run for {} ms, past the {} ms its \
+                 reader's frame interval allows, so its helper process was ended. ",
+                    call_under_way.function_node_name,
+                    call_has_run_for.as_millis(),
+                    watchdog_budget.as_millis(),
+                ),
+                (Some(call_under_way), None)
+                    if call_under_way.function_node_calls_under_way <= 1 =>
+                {
+                    format!(
+                        "function node `{}` crashed its helper process during its call. ",
+                        call_under_way.function_node_name,
+                    )
+                }
+                (Some(call_under_way), None) => format!(
+                    "its helper process died with {} function-node calls under way, the oldest \
+                     to `{}`, so which crashed it is not known. ",
+                    call_under_way.function_node_calls_under_way, call_under_way.function_node_name,
+                ),
+                (None, _) => String::new(),
+            };
         tracing::error!(
-            "[{}] its helper process (pid={helper_process_id}) died; taking its process group \
+            "[{}] its helper process (pid={helper_process_id}) {}; taking its process group \
              down with it",
             self.processor_display_name,
+            if the_helper_died {
+                "died"
+            } else {
+                "stalled in a function node"
+            },
         );
         let how_the_helper_process_ended = self
             .take_the_helper_process_group_down()
@@ -1392,14 +1491,73 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
                 tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
             })
             .unwrap_or_default();
+        let the_call_is_known_to_have_lost_the_helper = stalled_function_node_call.is_some()
+            || function_node_call_under_way
+                .as_ref()
+                .is_some_and(|call_under_way| call_under_way.function_node_calls_under_way <= 1);
+        self.function_node_call_that_lost_the_helper = function_node_call_under_way
+            .filter(|_| the_call_is_known_to_have_lost_the_helper)
+            .filter(|call_under_way| call_under_way.function_node_id != self.processor_id);
         self.why_the_helper_process_died_on_its_own = Some(format!(
-            "{how_the_helper_process_ended} (pid={helper_process_id}). {}",
+            "{why_the_helper_was_lost}{how_the_helper_process_ended} (pid={helper_process_id}). {}",
             standard_error_tail_as_a_refusal_quotes_it(&standard_error_tail)
         ));
     }
 
     fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
         self.why_the_helper_process_died_on_its_own.clone()
+    }
+
+    fn ask_to_promote_the_function_node_that_lost_the_helper_that_died(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Option<FunctionNodePromotionAwaitedBeforeTheReaderRestarts> {
+        let FunctionNodeCallUnderWayInTheFarSide {
+            function_node_id,
+            function_node_name,
+            ..
+        } = self.function_node_call_that_lost_the_helper.take()?;
+        let why_the_helper_process_died = self.why_the_helper_process_died_on_its_own.clone()?;
+        if self.child.is_some() {
+            self.take_the_helper_process_group_down();
+        }
+        // The links the promotion wires into this reader ride its next setup
+        // command only once the envelope no longer answers for the dead helper.
+        self.link_wiring
+            .reopen_for_a_new_far_side_in_place_of_one_that_died();
+        let promotion_request_number = self
+            .link_wiring
+            .await_a_function_node_promotion_out_of_its_islands();
+        if let Err(refusal) = ctx
+            .runtime()
+            .request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+                &function_node_id.as_str().into(),
+                &self.processor_id.as_str().into(),
+                promotion_request_number,
+                &why_the_helper_process_died,
+            )
+        {
+            self.link_wiring
+                .give_up_the_function_node_promotion_out_of_its_islands_unless_claimed();
+            tracing::warn!(
+                "[{}] function node `{function_node_name}` stays in its islands: its promotion \
+                 could not be asked for: {refusal}",
+                self.processor_display_name
+            );
+            return None;
+        }
+        let shutdown_escalation = self
+            .the_stream_this_helper_belongs_to
+            .shutdown_escalation
+            .clone();
+        Some(FunctionNodePromotionAwaitedBeforeTheReaderRestarts {
+            reader_link_wiring: Arc::clone(&self.link_wiring),
+            reader_name: self.processor_display_name.clone(),
+            function_node_name,
+            longest_wait_for_a_compile_to_claim_it:
+                LONGEST_WAIT_FOR_A_COMPILE_TO_CLAIM_A_FUNCTION_NODE_PROMOTION,
+            stop_waiting: Box::new(move || shutdown_escalation.is_requested()),
+        })
     }
 
     fn restart_the_out_of_process_helper_that_died(
@@ -1582,6 +1740,7 @@ pub(crate) fn spawn_host_for_processor_node(
         bridge: None,
         child_is_gone: false,
         why_the_helper_process_died_on_its_own: None,
+        function_node_call_that_lost_the_helper: None,
         shutdown_was_already_asked_of_this_helper: false,
         what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches {
             catalog_entries_of_its_output_ports: Arc::clone(node.catalog_entries_of_output_ports()),
@@ -1597,6 +1756,44 @@ pub(crate) fn spawn_host_for_processor_node(
         #[cfg(target_os = "macos")]
         surface_share_admission_of_the_helper_process: None,
     }
+}
+
+/// Build the host of a function node promoted out of its readers' islands:
+/// its helper runs the node as its processor, driven the way its promotion
+/// says, and numbers it first on its function-node call breadcrumb.
+pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
+    function_node_import_path: &str,
+    descriptor: &ProcessorDescriptor,
+    node: &ProcessorNode,
+    stream_environment: &StreamEnvironment,
+    processor_interpreter_lend_directory: &Path,
+    the_stream_this_helper_belongs_to: LoadedStreamAHelperProcessBelongsTo,
+) -> Result<ProcessorInterpreterSpawnHostProcessor> {
+    let promotion = node
+        .get::<FunctionNodePromotedToItsOwnProcessComponent>()
+        .ok_or_else(|| {
+            Error::Configuration(format!(
+                "function node `{}` has no process of its own until it is promoted out of its \
+                 readers' islands",
+                node.id
+            ))
+        })?;
+    let host = spawn_host_for_processor_node(
+        function_node_import_path,
+        descriptor,
+        ExecutionConfig::new(promotion.process_execution),
+        node,
+        stream_environment,
+        processor_interpreter_lend_directory,
+        the_stream_this_helper_belongs_to,
+    );
+    host.link_wiring
+        .number_the_function_node_its_far_side_runs_as_its_processor(
+            node.id.as_str(),
+            &node.display_name,
+            descriptor.function_node_state_fields.clone(),
+        );
+    Ok(host)
 }
 
 #[cfg(test)]
@@ -1944,10 +2141,23 @@ sys.exit(0)
     }
 
     fn spawn_host_for_test() -> ProcessorInterpreterSpawnHostProcessor {
+        spawn_host_for_test_driven_in(ProcessExecution::Reactive)
+    }
+
+    fn spawn_host_for_test_driven_in(
+        child_process_execution: ProcessExecution,
+    ) -> ProcessorInterpreterSpawnHostProcessor {
         let import_path =
             crate::core::descriptors::ProcessorClassImportPath::new("my_app.filters:BlurProcessor")
                 .unwrap();
-        let node = ProcessorNode::new(import_path.clone(), "BlurProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            import_path.clone(),
+            None,
+            "BlurProcessor",
+            None,
+            vec![],
+            vec![],
+        );
         let mut host = spawn_host_for_processor_node(
             "my_app.filters:BlurProcessor",
             &ProcessorDescriptor::new(
@@ -1955,7 +2165,7 @@ sys.exit(0)
                 import_path,
                 "a test double",
             ),
-            ExecutionConfig::new(ProcessExecution::Reactive),
+            ExecutionConfig::new(child_process_execution),
             &node,
             &stream_environment_for_test(),
             Path::new(LEND_DIRECTORY_FOR_TEST),
@@ -1982,7 +2192,14 @@ sys.exit(0)
             import_path.clone(),
             "a test double",
         );
-        let node = ProcessorNode::new(import_path, "PollingSinkProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            import_path,
+            None,
+            "PollingSinkProcessor",
+            None,
+            vec![],
+            vec![],
+        );
 
         for child_execution in [
             ProcessExecution::Continuous { interval_ms: 5 },
@@ -2469,6 +2686,187 @@ sys.exit(0)
         }
     }
 
+    /// A host whose helper writes on a board its envelope holds, with one
+    /// island of the function node `lfo-1` recorded for its setup command.
+    fn a_spawn_host_whose_helper_calls_function_node_lfo_1() -> (
+        ProcessorInterpreterSpawnHostProcessor,
+        Arc<crate::iceoryx2::HelperProcessLossCountBoardWriter>,
+        crate::iceoryx2::Iceoryx2Node,
+    ) {
+        a_spawn_host_driven_in_whose_helper_calls_function_node_lfo_1(ProcessExecution::Reactive)
+    }
+
+    fn a_spawn_host_driven_in_whose_helper_calls_function_node_lfo_1(
+        child_process_execution: ProcessExecution,
+    ) -> (
+        ProcessorInterpreterSpawnHostProcessor,
+        Arc<crate::iceoryx2::HelperProcessLossCountBoardWriter>,
+        crate::iceoryx2::Iceoryx2Node,
+    ) {
+        let host = spawn_host_for_test_driven_in(child_process_execution);
+        let (board, board_writer, helper_node) =
+            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(
+                &[],
+                &[],
+            );
+        host.link_wiring
+            .helper_placed_processor_loss_counts()
+            .hold_the_board_of_this_spawn(board);
+        host.link_wiring
+            .record_a_function_node_island_on_the_setup_command(serde_json::json!({
+                "input_port": "brightness",
+                "link_id": "L-island",
+                "output": {"node": "Plfo1", "port": "result"},
+                "nodes": [{"node": "Plfo1", "name": "lfo-1", "import_path": "ops:lfo", "links_into": []}],
+            }))
+            .expect("an island rides the setup command before setup begins");
+        (host, board_writer, helper_node)
+    }
+
+    fn a_stand_in_helper_in_its_own_process_group(shell_command: &str) -> Child {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", shell_command])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
+        command.spawn().expect("sh starts")
+    }
+
+    /// A helper whose function-node call runs past the watchdog's budget is
+    /// ended as though it crashed, and the reason names the node that stalled.
+    ///
+    /// Fail-without-fix: read only whether the process exited and a helper
+    /// spinning inside a compiled body holds its reader for ever.
+    #[test]
+    fn a_function_node_call_past_the_watchdog_budget_ends_its_helper_naming_the_node() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_whose_helper_calls_function_node_lfo_1();
+        host.child = Some(a_stand_in_helper_in_its_own_process_group("sleep 30"));
+        let started_long_enough_ago = (MediaClock::now().as_nanos() as u64)
+            .saturating_sub(Duration::from_secs(5).as_nanos() as u64);
+        board_writer.note_a_function_node_call_started(0, started_long_enough_ago);
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        assert!(host.child.is_none(), "the stalled helper was not ended");
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the stall is kept for the restart, as a crash would be");
+        assert!(why.starts_with("function node `lfo-1` stalled"), "{why}");
+        assert!(why.contains("past the 250 ms"), "{why}");
+    }
+
+    /// A continuous reader's budget is three of its frame intervals once they
+    /// pass the floor: a call is left running past the floor and inside them,
+    /// and ended past them.
+    #[test]
+    fn a_continuous_readers_watchdog_budget_is_three_of_its_frame_intervals() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_driven_in_whose_helper_calls_function_node_lfo_1(
+                ProcessExecution::Continuous { interval_ms: 200 },
+            );
+        host.child = Some(a_stand_in_helper_in_its_own_process_group("sleep 30"));
+        let started_ago = |ago: Duration| {
+            (MediaClock::now().as_nanos() as u64).saturating_sub(ago.as_nanos() as u64)
+        };
+
+        let inside_the_budget = board_writer
+            .note_a_function_node_call_started(0, started_ago(Duration::from_millis(400)));
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+        assert!(
+            host.child.is_some(),
+            "a call 400 ms in is inside a 600 ms budget"
+        );
+        assert_eq!(host.why_the_out_of_process_helper_died_on_its_own(), None);
+        board_writer.note_the_function_node_call_returned(inside_the_budget);
+
+        board_writer.note_a_function_node_call_started(0, started_ago(Duration::from_millis(900)));
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+        assert!(
+            host.child.is_none(),
+            "a call 900 ms in is past a 600 ms budget"
+        );
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the stall is kept for the restart");
+        assert!(why.contains("past the 600 ms"), "{why}");
+    }
+
+    /// A call still inside its budget leaves the helper running.
+    #[test]
+    fn a_function_node_call_inside_the_watchdog_budget_leaves_its_helper_running() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_whose_helper_calls_function_node_lfo_1();
+        host.child = Some(a_stand_in_helper_in_its_own_process_group("sleep 30"));
+        board_writer.note_a_function_node_call_started(0, MediaClock::now().as_nanos() as u64);
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        assert!(host.child.is_some());
+        assert_eq!(host.why_the_out_of_process_helper_died_on_its_own(), None);
+        host.take_the_helper_process_group_down();
+    }
+
+    /// A helper that died inside a function-node call is reported as that
+    /// node's crash.
+    #[test]
+    fn a_helper_that_died_inside_a_function_node_call_names_the_node() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_whose_helper_calls_function_node_lfo_1();
+        let child = a_stand_in_helper_in_its_own_process_group("exit 134");
+        let helper_process_id = child.id();
+        host.child = Some(child);
+        board_writer.note_a_function_node_call_started(0, MediaClock::now().as_nanos() as u64);
+        assert!(
+            a_helper_process_becomes_collectable_within(helper_process_id, Duration::from_secs(5)),
+            "the stand-in helper never exited"
+        );
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the death is kept for the restart");
+        assert!(
+            why.starts_with("function node `lfo-1` crashed its helper process during its call"),
+            "{why}"
+        );
+        assert!(why.contains("exit status: 134"), "{why}");
+    }
+
+    /// A helper that died with two calls under way blames neither: the board
+    /// names the older, which need not be the one that crashed.
+    #[test]
+    fn a_helper_that_died_with_two_function_node_calls_under_way_blames_neither() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_whose_helper_calls_function_node_lfo_1();
+        let child = a_stand_in_helper_in_its_own_process_group("exit 134");
+        let helper_process_id = child.id();
+        host.child = Some(child);
+        let now = MediaClock::now().as_nanos() as u64;
+        board_writer.note_a_function_node_call_started(0, now);
+        board_writer.note_a_function_node_call_started(0, now + 1);
+        assert!(
+            a_helper_process_becomes_collectable_within(helper_process_id, Duration::from_secs(5)),
+            "the stand-in helper never exited"
+        );
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the death is kept for the restart");
+        assert!(
+            why.starts_with(
+                "its helper process died with 2 function-node calls under way, the oldest to \
+                 `lfo-1`, so which crashed it is not known"
+            ),
+            "{why}"
+        );
+    }
+
     /// A descendant still holding the pipe cannot stall the refusal: the wait
     /// gives up at its deadline with what had arrived.
     #[test]
@@ -2680,12 +3078,6 @@ sys.exit(0)
                 Path::new(LEND_DIRECTORY_FOR_TEST),
             )
             .expect("the test directories hold no path-list separator");
-        let compile_command = super::super::stream_function_compile_in_the_projects_interpreter::stream_function_compile_command(
-            Path::new("/home/someone/my_app"),
-            None,
-            Path::new(LEND_DIRECTORY_FOR_TEST),
-        )
-        .expect("the test directories hold no path-list separator");
         for (command_kind, command) in [
             ("bootstrap", &bootstrap_command),
             ("describe", &describe_command),
@@ -2705,12 +3097,6 @@ sys.exit(0)
                 assert_eq!(entry, expected, "{name} on the {command_kind} command");
             }
         }
-        let compile_arguments: Vec<&OsStr> = compile_command.get_args().collect();
-        assert_eq!(
-            compile_arguments.first().copied(),
-            Some(OsStr::new("-I")),
-            "the compile ignores every PYTHON* variable: {compile_arguments:?}"
-        );
 
         let project_directory = tempfile::tempdir().expect("a project directory");
         let started = stream_interpreter_command_in_its_project_directory(

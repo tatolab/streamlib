@@ -12,24 +12,24 @@ removed.
 
 A stream reaches the runtime only as a user's does: `tatolab run --dir`
 queues a load of a project, prints the action and returns — the runtime
-compiles every `@stream` of its `stream.py`, records each stream and runs it
+reads each graph document of the project, records each stream and runs it
 until `tatolab stop` or `tatolab rm` — or `tatolab dev`, which queues the load
 and follows the project's log. What a test hands a loading fixture —
 `stream_or_graph` — is one of:
 
 - a `@stream` function of one of the suite's `*_streams.py` (or other non-test)
-  modules, run as a one-stream project of its own: a `stream.py` delegating to
-  it beside links to the suite's modules, and a `.venv` linked to the suite
-  venv. Its display name is set with `tatolab rename` once it loads. A function
-  defined in a test module, inside another function or built at run time is
-  refused by name: move it to a `*_streams.py` module, taking what varies from
+  modules, compiled in this process and run as a one-stream project of its own:
+  its graph document beside links to the suite's modules, and a `.venv` linked to
+  the suite venv. Its display name is set with `tatolab rename` once it loads. A
+  function defined in a test module, inside another function or built at run time
+  is refused by name: move it to a `*_streams.py` module, taking what varies from
   its config;
 - a graph written by hand, a dict or its text verbatim — refusal tests, or a
-  graph compiled in this process — run from a project of its own whose
-  `.venv/bin/python` prints it as the compile document, naming
-  `project_directory` (default: the suite directory) as the directory its Python
-  node types are described and run from, and execs `processor_interpreter`
-  (default: the suite venv's) for every other invocation;
+  graph compiled in this process — written as the graph document of a project:
+  `project_directory` when one is given, the directory its Python node types are
+  described and run from, else one of its own linked to the suite's modules; the
+  project's `.venv/bin/python` execs `processor_interpreter` (default: the suite
+  venv's);
 - `TatolabRunOfAProject(working_directory, dir_as_typed=None)`, a project run as it is.
 
 Fixtures, each documented where it is defined:
@@ -102,6 +102,7 @@ from stream_runs_on_tatolabd import (
     TatolabRunOfAProject,
     write_a_hand_written_graph_project,
     write_a_one_stream_project_of_a_suite_stream_function,
+    write_the_graph_documents_the_stream_py_compiles_to,
 )
 
 #: Set to 1 to run the tests an `awaiting_macos_parity` mark would not run on
@@ -422,8 +423,8 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS, occurrence: int = 1
     ) -> "dict[str, str]":
         """Follow the `occurrence`-th load this verb queued to its end, and answer the one stream
-        it took in, running — its `stream_id`, `display_name`, `project_directory` and
-        `stream_function`; a load that failed, or took in a failed stream, fails the test with
+        it took in, running — its `stream_id`, `display_name`, `project_directory`, `project`
+        and `stream_asset`; a load that failed, or took in a failed stream, fails the test with
         why."""
         ended_action = self.action_once_ended(timeout=timeout, occurrence=occurrence)
         assert ended_action["state"] == "done", (
@@ -450,7 +451,8 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
             "stream_id": stream_id,
             "display_name": listed_stream["display_name"],
             "project_directory": listed_stream["location"]["project_directory"],
-            "stream_function": listed_stream["location"]["stream_function"],
+            "project": listed_stream["location"]["project"],
+            "stream_asset": listed_stream["location"]["stream_asset"],
         }
 
     def failed_stream(
@@ -927,8 +929,9 @@ def make_tatolab_project(tmp_path: Path) -> "Callable[..., Path]":
 
     `make_tatolab_project(files={relative_path: text}, directory_name="app") -> Path`:
     each file is written under the project, and `.venv` points at the suite
-    venv's root, so the runtime compiles the project's stream in
-    `<project>/.venv/bin/python`, holding `tatolab-stream` and nothing of the runtime.
+    venv's root, so the project's Python nodes run in `<project>/.venv/bin/python`,
+    holding `tatolab-stream` and nothing of the runtime. A `stream.py` among the files
+    is compiled in the suite venv to the project's graph documents.
     """
 
     def make(files: "dict[str, str] | None" = None, directory_name: str = "app") -> Path:
@@ -939,6 +942,8 @@ def make_tatolab_project(tmp_path: Path) -> "Callable[..., Path]":
             project_file = project_directory / relative_path
             project_file.parent.mkdir(parents=True, exist_ok=True)
             project_file.write_text(text, encoding="utf-8")
+        if "stream.py" in (files or {}):
+            write_the_graph_documents_the_stream_py_compiles_to(project_directory)
         return project_directory
 
     return make
