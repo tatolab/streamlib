@@ -107,6 +107,17 @@ def spread_around(x: float) -> Spread:
     return Spread(centre=x)
 
 
+@dataclass(frozen=True)
+class SpreadWithAFactoryWidth:
+    centre: float = 0.0
+    width: float = field(default_factory=lambda: 1.0)
+
+
+@node.function
+def spread_with_a_factory_width(x: float) -> SpreadWithAFactoryWidth:
+    return SpreadWithAFactoryWidth(centre=x)
+
+
 _SEEDS_HANDED_OUT = itertools.count(7)
 
 
@@ -253,6 +264,11 @@ def test_a_body_that_raises_answers_the_refused_status():
 
 def test_a_body_may_omit_a_field_its_dataclass_defaults():
     assert call_the_evaluate_entry(compiled(spread_around), [3.0], [], [])[0] == [3.0, 1.0]
+
+
+def test_a_factory_default_in_a_dataclass_the_body_builds_is_refused_by_name():
+    with pytest.raises(FunctionNodeDoesNotCompile, match="`width` defaults through `default_factory`"):
+        compiled(spread_with_a_factory_width)
 
 
 def test_an_int_default_an_f64_cannot_hold_exactly_is_refused():

@@ -283,9 +283,10 @@ def compile_function_node_to_its_evaluate_entry(
 
     constructor_by_dataclass = {
         dataclass_lowered: numba.njit(
-            _a_constructor_keeping_the_dataclass_defaults(dataclass_lowered, named_tuple)
+            _a_constructor_keeping_the_dataclass_defaults(import_path, dataclass_lowered, named_tuple)
         )
         for dataclass_lowered, named_tuple in named_tuple_by_dataclass.items()
+        if dataclass_lowered is not config_class
     }
     body_with_its_dataclasses_lowered = numba.njit(cache=True, error_model="numpy")(
         _the_body_with_its_dataclasses_lowered(body, constructor_by_dataclass)
@@ -395,13 +396,19 @@ def _scalar_field_value_types(
 
 
 def _a_constructor_keeping_the_dataclass_defaults(
-    dataclass_lowered: type, named_tuple: type
+    import_path: str, dataclass_lowered: type, named_tuple: type
 ) -> Callable[..., Any]:
     """A function building `named_tuple` from `dataclass_lowered`'s fields, defaulting
     each field its dataclass gives a plain default; Numba's named tuples take none."""
     constructor_globals: "dict[str, Any]" = {"named_tuple": named_tuple}
     parameters: "list[str]" = []
     for field in dataclasses.fields(dataclass_lowered):
+        if field.default_factory is not dataclasses.MISSING:
+            raise FunctionNodeDoesNotCompile(
+                f"{import_path}'s body builds `{dataclass_lowered.__qualname__}`, whose field "
+                f"`{field.name}` defaults through `default_factory`, and a compiled body cannot "
+                f"call a Python factory. To fix: give `{field.name}` a plain default."
+            )
         if field.default is dataclasses.MISSING:
             parameters.append(field.name)
         else:
