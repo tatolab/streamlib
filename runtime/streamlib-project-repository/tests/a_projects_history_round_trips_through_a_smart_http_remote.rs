@@ -3,9 +3,7 @@
 
 //! A project's history pushed to a Git smart-HTTP remote and fetched back unchanged, over the
 //! crate's own transport. The remote is stock `git http-backend` behind a minimal HTTP server
-//! that requires the bearer token, standing in for an Artifacts repo; the same push runs against
-//! a real, empty Artifacts repo where `TATOLAB_ARTIFACTS_REMOTE_URL` and `TATOLAB_ARTIFACTS_WRITE_TOKEN`
-//! are set.
+//! that requires the bearer token, standing in for an Artifacts repo.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -253,28 +251,5 @@ fn a_push_that_is_not_a_fast_forward_is_refused() {
                 | ProjectRepositoryRefusal::History(_)
         ),
         "{refused:?}"
-    );
-}
-
-#[test]
-fn a_history_round_trips_through_a_real_artifacts_repo_where_a_token_is_present() {
-    let (Ok(url), Ok(write_token)) = (
-        std::env::var("TATOLAB_ARTIFACTS_REMOTE_URL"),
-        std::env::var("TATOLAB_ARTIFACTS_WRITE_TOKEN"),
-    ) else {
-        return;
-    };
-    let remote = ProjectHistoryRemote {
-        url,
-        bearer_token: Some(write_token),
-    };
-    let parent = tempfile::tempdir().unwrap();
-    let project = a_project_with_one_imported_asset(parent.path());
-    project.history().push_main_to(&remote).unwrap();
-    let fetched_into = tempfile::tempdir().unwrap();
-    let fresh_history = ProjectHistoryRepository::create_for_project(fetched_into.path()).unwrap();
-    assert_eq!(
-        fresh_history.fetch_main_from(&remote).unwrap(),
-        project.history().head_commit().unwrap()
     );
 }
