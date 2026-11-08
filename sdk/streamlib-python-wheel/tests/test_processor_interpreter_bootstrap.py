@@ -574,7 +574,7 @@ def test_a_class_stamped_by_hand_without_every_stamp_is_refused_and_the_rest_des
     ] == ["described_nodes:Ticker"]
     assert (
         "cannot describe hand_stamped_nodes:HandStamped: the class `HandStamped` carries no "
-        "`__tatolab_node_execution__`"
+        "`__tatolab_node_kind__`"
     ) in described.stderr
 
 
