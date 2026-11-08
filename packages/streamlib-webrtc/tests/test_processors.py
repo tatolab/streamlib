@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Buffer, Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -124,9 +125,6 @@ RUNTIME_UNIT_DIRECTORY = Path(
 )
 TATOLABD_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolabd"
 TATOLAB_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolab"
-
-#: How the runtime starts a project's interpreter on the compile entry, ahead of its arguments.
-COMPILE_ENTRY_INVOCATION = ("-I", "-m", "tatolab.stream._project_stream_compile_entry")
 
 #: The line `tatolabd` logs as it begins starting a loaded stream.
 STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_id>[^`]+)`")
@@ -323,61 +321,30 @@ def tatolabd_with_no_vulkan_driver(
         tatolabd.stop()
 
 
-def write_a_project_whose_compile_prints(
-    project_directory: Path, graph: "dict[str, Any]"
+def write_a_project_holding_the_graph(
+    project_directory: Path, stream_name: str, graph: "dict[str, Any]"
 ) -> None:
-    """A project whose `.venv/bin/python` hands the runtime `graph` as its compiled stream.
-
-    The compile entry's invocation prints `graph` in the compile document — as
-    the one stream of an every-stream compile when one is asked for —
-    naming this tests directory as the project its Python nodes are described
-    and run from; every other invocation execs this test's interpreter, which
-    holds the extension.
-    """
-    compile_document_file = project_directory / "compile-document.json"
-    every_stream_compile_document_file = project_directory / "every-stream-compile-document.json"
+    """A project whose one graph document, `streams/<stream_name>.graph.json`, holds `graph`,
+    each node given a UUID as the runtime gives one, and whose `.venv/bin/python` execs this
+    test's interpreter, which holds the extension."""
+    streams_directory = project_directory / "streams"
+    streams_directory.mkdir(parents=True)
+    (project_directory / "tatolab-project.json").write_text(
+        json.dumps({"project": str(uuid.uuid4()), "name": "webrtc", "dependencies": []}),
+        encoding="utf-8",
+    )
+    graph_document = {
+        **graph,
+        "asset": str(uuid.uuid4()),
+        "nodes": [{"id": str(uuid.uuid4()), **node} for node in graph["nodes"]],
+    }
+    (streams_directory / f"{stream_name}.graph.json").write_text(
+        json.dumps(graph_document), encoding="utf-8"
+    )
     venv_interpreter = project_directory / ".venv" / "bin" / "python"
     venv_interpreter.parent.mkdir(parents=True)
-    described_project_directory = str(Path(__file__).resolve().parent)
-    stream_function = f"stream:{graph.get('stream', 'main')}"
-    compile_document_file.write_text(
-        json.dumps(
-            {
-                "stream_graph": graph,
-                "project_directory": described_project_directory,
-                "stream_function": stream_function,
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    every_stream_compile_document_file.write_text(
-        json.dumps(
-            {
-                "project_directory": described_project_directory,
-                "streams": [
-                    {
-                        "stream_function": stream_function,
-                        "description": None,
-                        "stream_graph": graph,
-                    }
-                ],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    first, second, third = (shlex.quote(argument) for argument in COMPILE_ENTRY_INVOCATION)
     venv_interpreter.write_text(
-        "#!/bin/sh\n"
-        f'if [ "$1" = {first} ] && [ "$2" = {second} ] && [ "$3" = {third} ]; then\n'
-        '    case " $* " in\n'
-        f"    *' --every-stream '*) exec cat {shlex.quote(str(every_stream_compile_document_file))} ;;\n"
-        f"    *) exec cat {shlex.quote(str(compile_document_file))} ;;\n"
-        "    esac\n"
-        "fi\n"
-        f'exec {shlex.quote(sys.executable)} "$@"\n',
-        encoding="utf-8",
+        f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="utf-8"
     )
     venv_interpreter.chmod(0o755)
 
@@ -397,8 +364,7 @@ def node_names_loaded_by_tatolabd(
     graph = compile_stream_to_graph(stream_function)
     stream_name = stream_function.__name__
     project_directory = working_directory / "project"
-    write_a_project_whose_compile_prints(project_directory, graph)
-    (project_directory / "stream.py").touch()
+    write_a_project_holding_the_graph(project_directory, stream_name, graph)
 
     standard_error_mark = len(tatolabd.standard_error_lines)
     tatolab_run = subprocess.run(
