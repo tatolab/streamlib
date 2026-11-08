@@ -35,7 +35,7 @@ import known_audio_signal_source
 from captured_audio_waveform_recorder import SECONDS_TO_RECORD, CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
 from tatolab.opus import OpusDecoder, OpusEncoder
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 # What the source will ever publish, derived rather than named so it cannot
 # drift when the signal changes.
@@ -54,7 +54,7 @@ PUBLISHED_SECONDS = (
 LONGEST_RECORDABLE_SECONDS = PUBLISHED_SECONDS - 0.02
 
 
-@stream
+@graph_generator
 def known_signal_through_opus_and_back(stream_builder: StreamBuilder) -> None:
     if not os.environ.get("STREAMLIB_CAPTURED_WAVEFORM"):
         raise ValueError("STREAMLIB_CAPTURED_WAVEFORM names no file to write the decoded audio to")

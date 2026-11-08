@@ -1,14 +1,14 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` function `test_processor_config_catalog.py` runs from the suite project."""
+"""The `@graph_generator` function `test_processor_config_catalog.py` runs from the suite project."""
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 import processor_config_catalog_probes as probes
 
 
-@stream
+@graph_generator
 def four_probes_each_configured_its_own_way(stream_builder: StreamBuilder) -> None:
     """Probes configured by a TypedDict, a dataclass and a model, beside one taking none."""
     stream_builder.add(probes.TypedDictConfiguredProbe, config={"width": 320})

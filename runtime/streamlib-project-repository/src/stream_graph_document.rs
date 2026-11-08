@@ -26,6 +26,9 @@ pub struct StreamGraphDocumentNode {
     /// What the studio draws the node with.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub studio: Map<String, Value>,
+    /// The stored output of the graph generator `type` names, on a fragment alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment: Option<Box<Value>>,
 }
 
 fn a_config_naming_no_setting() -> Value {
@@ -517,6 +520,7 @@ mod tests {
             config: json!({}),
             pins: Map::new(),
             studio: Map::new(),
+            fragment: None,
         }
     }
 

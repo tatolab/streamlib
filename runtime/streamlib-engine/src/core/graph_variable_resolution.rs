@@ -247,6 +247,7 @@ impl GraphVariablesAsDrawn {
                         },
                     },
                     components,
+                    fragment: None,
                 },
             );
         }
@@ -1009,6 +1010,7 @@ mod tests {
             components: serde_json::Map::new(),
             pins: serde_json::Map::new(),
             studio: serde_json::Map::new(),
+            fragment: None,
         }
     }
 

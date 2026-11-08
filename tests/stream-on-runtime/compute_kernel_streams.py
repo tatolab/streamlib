@@ -7,7 +7,7 @@ A kernel probe needs no upstream: it acquires both surfaces itself and reports
 from `setup`, so its stream is one node.
 """
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from compute_kernel_probes import (
     AcquiredTextureImpliesCopyUsageProbe,
@@ -22,46 +22,46 @@ from compute_kernel_probes import (
 )
 
 
-@stream
+@graph_generator
 def read_one_write_another_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(ReadOneWriteAnotherProbe)
 
 
-@stream
+@graph_generator
 def binding_refusal_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(BindingRefusalProbe)
 
 
-@stream
+@graph_generator
 def texture_backed_pixels_reach_the_cpu_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(TextureBackedPixelsReachTheCpuProbe)
 
 
-@stream
+@graph_generator
 def texture_cpu_door_raise_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(TextureCpuDoorRaiseProbe)
 
 
-@stream
+@graph_generator
 def acquired_texture_implies_copy_usage_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(AcquiredTextureImpliesCopyUsageProbe)
 
 
-@stream
+@graph_generator
 def shader_source_refusal_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(ShaderSourceRefusalProbe)
 
 
-@stream
+@graph_generator
 def two_pass_batch_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(TwoPassBatchProbe)
 
 
-@stream
+@graph_generator
 def batch_exception_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(BatchExceptionProbe)
 
 
-@stream
+@graph_generator
 def batch_refusal_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(BatchRefusalProbe)

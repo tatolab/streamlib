@@ -1162,6 +1162,7 @@ fn graph_operation_for_the_request(
                     config: Value::Object(config.unwrap_or_default()),
                     pins: pins.unwrap_or_default(),
                     studio: studio.unwrap_or_default(),
+                    fragment: None,
                 },
                 links: Vec::new(),
             })

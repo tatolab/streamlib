@@ -13,7 +13,7 @@ import pytest
 import tatolab.stream
 from tatolab.stream import _built_in_nodes
 from tatolab.stream._built_in_node import BuiltInNode
-from tatolab.stream._stream_graph_builder import compile_stream_to_graph, stream
+from tatolab.stream._stream_graph_builder import graph_generator, run_graph_generator
 
 BUILT_IN_NODE_TYPE_PREFIX = "tatolab.stream:"
 
@@ -54,7 +54,7 @@ def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
         tatolab.stream.ChannelsToRecords()  # pyright: ignore[reportCallIssue]
 
 
-@stream
+@graph_generator
 def a_channels_to_records_conversion(stream_builder: tatolab.stream.StreamBuilder) -> None:
     stream_builder.add(
         _built_in_nodes.ChannelsToRecords,
@@ -63,7 +63,7 @@ def a_channels_to_records_conversion(stream_builder: tatolab.stream.StreamBuilde
 
 
 def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
-    graph = compile_stream_to_graph(a_channels_to_records_conversion)
+    graph = run_graph_generator(a_channels_to_records_conversion)
 
     assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
         ("channelstorecords", "tatolab.stream:ChannelsToRecords"),
@@ -71,7 +71,7 @@ def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
     assert graph["nodes"][0]["config"] == {"channel_names": ["level"]}
 
 
-@stream
+@graph_generator
 def a_control_value_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> None:
     to_channels = stream_builder.add(
         tatolab.stream.RecordsToChannels,
@@ -91,7 +91,7 @@ def a_control_value_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> 
 
 
 def test_the_conversion_built_ins_compile_with_no_runtime_installed():
-    graph = compile_stream_to_graph(a_control_value_round_trip)
+    graph = run_graph_generator(a_control_value_round_trip)
 
     assert [node["type"] for node in graph["nodes"]] == [
         "tatolab.stream:RecordsToChannels",

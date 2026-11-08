@@ -15,23 +15,23 @@ from tatolab.stream import (
     ScaledStreamClock,
     SteppedStreamClock,
     StreamBuilder,
-    compile_stream_to_graph,
-    stream,
+    run_graph_generator,
+    graph_generator,
 )
 
 
-@stream
+@graph_generator
 def on_the_machine_clock(stream_builder: StreamBuilder) -> None:
     stream_builder.add(FrameInverter)
 
 
-@stream
+@graph_generator
 def in_slow_motion(stream_builder: StreamBuilder) -> None:
     stream_builder.run_on_clock(ScaledStreamClock(scale=0.5))
     stream_builder.add(FrameInverter)
 
 
-@stream
+@graph_generator
 def stepped_for_a_test(stream_builder: StreamBuilder) -> None:
     stream_builder.run_on_clock(
         SteppedStreamClock(step_ns=1_000_000, pace=2.0, stop_after_steps=30)
@@ -39,29 +39,29 @@ def stepped_for_a_test(stream_builder: StreamBuilder) -> None:
     stream_builder.add(FrameInverter)
 
 
-@stream
+@graph_generator
 def names_real_time(stream_builder: StreamBuilder) -> None:
     stream_builder.run_on_clock(RealTimeStreamClock())
     stream_builder.add(FrameInverter)
 
 
-@stream
+@graph_generator
 def names_its_clock_twice(stream_builder: StreamBuilder) -> None:
     stream_builder.run_on_clock(ScaledStreamClock(scale=0.5))
     stream_builder.run_on_clock(ScaledStreamClock(scale=0.25))
 
 
-@stream
+@graph_generator
 def names_a_number_as_its_clock(stream_builder: StreamBuilder) -> None:
     stream_builder.run_on_clock(0.5)  # type: ignore[arg-type]
 
 
 def test_a_stream_naming_no_clock_carries_no_clock_key() -> None:
-    assert "clock" not in compile_stream_to_graph(on_the_machine_clock)
+    assert "clock" not in run_graph_generator(on_the_machine_clock)
 
 
 def test_a_scaled_clock_compiles_to_the_clock_key_beside_the_stream() -> None:
-    graph = compile_stream_to_graph(in_slow_motion)
+    graph = run_graph_generator(in_slow_motion)
 
     assert list(graph) == ["stream", "clock", "nodes", "links"]
     assert graph["clock"] == {
@@ -73,7 +73,7 @@ def test_a_scaled_clock_compiles_to_the_clock_key_beside_the_stream() -> None:
 
 
 def test_a_stepped_clock_compiles_every_field() -> None:
-    assert compile_stream_to_graph(stepped_for_a_test)["clock"] == {
+    assert run_graph_generator(stepped_for_a_test)["clock"] == {
         "mode": "stepped",
         "step_ns": 1_000_000,
         "pace": 2.0,
@@ -82,17 +82,17 @@ def test_a_stepped_clock_compiles_every_field() -> None:
 
 
 def test_naming_real_time_compiles_to_the_real_mode() -> None:
-    assert compile_stream_to_graph(names_real_time)["clock"] == {"mode": "real"}
+    assert run_graph_generator(names_real_time)["clock"] == {"mode": "real"}
 
 
 def test_a_stream_names_its_clock_once() -> None:
     with pytest.raises(ValueError, match="names its clock once"):
-        compile_stream_to_graph(names_its_clock_twice)
+        run_graph_generator(names_its_clock_twice)
 
 
 def test_run_on_clock_refuses_anything_but_a_clock() -> None:
     with pytest.raises(TypeError, match="ScaledStreamClock"):
-        compile_stream_to_graph(names_a_number_as_its_clock)
+        run_graph_generator(names_a_number_as_its_clock)
 
 
 @pytest.mark.parametrize("scale", [0, -1.0, math.inf, math.nan])

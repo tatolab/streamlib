@@ -52,7 +52,7 @@ from helper_process_observation import (
 )
 from local_api_client import RUNNING_NODE_STATE
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
-from tatolab.stream import StreamBuilder, compile_stream_to_graph
+from tatolab.stream import StreamBuilder, run_graph_generator
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -763,7 +763,7 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
     )
 
     tatolabd = start_tatolabd_running_stream(
-        compile_stream_to_graph(stale_build_labelled_source),
+        run_graph_generator(stale_build_labelled_source),
         project_directory=child_startup_directory,
     )
     stream_id = tatolabd.await_the_latest_stream_loaded()

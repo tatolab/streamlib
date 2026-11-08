@@ -40,14 +40,14 @@ STREAM_TARGET_FUNCTION_SEPARATOR = ":"
 PROCESS_MAIN_MODULE_NAME = "__main__"
 
 STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE = (
-    "A stream is a module-level function decorated `@stream` that adds and links "
-    "its nodes on the `StreamBuilder` it is given:\n"
+    "A stream is filled by a module-level function decorated `@graph_generator` that adds "
+    "and links its nodes on the `StreamBuilder` it is given:\n"
     "\n"
     "    from tatolab.h264 import H264Encoder\n"
-    "    from tatolab.stream import StreamBuilder, stream\n"
+    "    from tatolab.stream import StreamBuilder, graph_generator\n"
     "    from tatolab.testpattern import TestPatternSource\n"
     "\n"
-    "    @stream\n"
+    "    @graph_generator\n"
     "    def main(stream_builder: StreamBuilder) -> None:\n"
     "        source = stream_builder.add(TestPatternSource)\n"
     "        encoder = stream_builder.add(H264Encoder)\n"
@@ -60,7 +60,7 @@ class ProjectStreamCompileRefusalError(Exception):
 
 
 class StreamFunctionNotDefinedRefusalError(ProjectStreamCompileRefusalError):
-    """A target naming a function the imported entry does not define as a `@stream`."""
+    """A target naming a function the imported entry does not define as a `@graph_generator`."""
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ def resolve_app_entry_file(verb: str, anchor_directory: Path) -> Path:
         raise ProjectStreamCompileRefusalError(
             f"no `{DEFAULT_STREAM_ENTRY_FILE_NAME}` in `{anchor_directory}`, only an "
             f"`{APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING}`\n"
-            f"`tatolab {verb}` loads the @stream functions of "
+            f"`tatolab {verb}` loads the @graph_generator functions of "
             f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}`, and never reads "
             f"`{APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING}`.\n"
             f"{STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE}"

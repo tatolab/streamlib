@@ -41,20 +41,20 @@ IDENTITY_STABILITY_STREAM_SOURCE = '''\
 """One stream, adding one class."""
 
 from identity_stable_processor import IdentityStableProcessor
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 
-@stream
+@graph_generator
 def identity_stability(stream_builder: StreamBuilder) -> None:
     """The stream the project loads."""
     stream_builder.add(IdentityStableProcessor)
 '''
 
 IMPORTABLE_PROCESSOR_STREAM_SOURCE = '''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 
-@stream
+@graph_generator
 def an_importable_processor(stream_builder: StreamBuilder) -> None:
     """The same stream, one import line different — the fix the refusal names."""
     from zero_argument_process_processor import ZeroArgumentProcess

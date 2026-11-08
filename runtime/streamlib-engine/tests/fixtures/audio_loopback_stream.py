@@ -23,7 +23,7 @@ from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
 from tatolab.microphone import MicrophoneSource
 from tatolab.speaker import SpeakerSink
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 
 def _sink_and_capture_device_from_the_environment() -> tuple[str | None, str]:
@@ -37,7 +37,7 @@ def _sink_and_capture_device_from_the_environment() -> tuple[str | None, str]:
     return sink, capture_device_id
 
 
-@stream
+@graph_generator
 def known_signal_played_and_captured_back(stream_builder: StreamBuilder) -> None:
     sink, capture_device_id = _sink_and_capture_device_from_the_environment()
 

@@ -33,7 +33,7 @@ import pytest
 
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from runtime_process_under_test import RuntimeProcessUnderTest
-from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, run_graph_generator, graph_generator
 from tatolab.testpattern import TestPatternSource
 from tatolab.virtualcamera import VirtualCameraSink
 
@@ -309,33 +309,33 @@ def _add_a_test_pattern_into_virtual_cameras(
         stream_builder.connect(pattern.output("video"), sink.input("video"))
 
 
-@stream
+@graph_generator
 def a_virtual_camera_sink_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(VirtualCameraSink)
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_a_loopback_camera_this_machine_may_refuse(
     stream_builder: StreamBuilder,
 ) -> None:
     _add_a_test_pattern_into_virtual_cameras(stream_builder, [REFUSED_CAMERA_NAME], "v4l2loopback")
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_a_camera_on_the_pipewire_door(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into_virtual_cameras(
         stream_builder, [PIPEWIRE_DOOR_CAMERA_NAME], "pipewire"
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_two_loopback_cameras(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into_virtual_cameras(
         stream_builder, [FIRST_LOOPBACK_CAMERA_NAME, SECOND_LOOPBACK_CAMERA_NAME], "v4l2loopback"
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_a_loopback_camera_read_back_as_yuyv(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -355,7 +355,7 @@ def a_test_pattern_into_a_loopback_camera_read_back_as_yuyv(
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
-    graph = compile_stream_to_graph(a_virtual_camera_sink_alone)
+    graph = run_graph_generator(a_virtual_camera_sink_alone)
     assert [node["name"] for node in graph["nodes"]] == ["virtualcamerasink"]
 
     outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
@@ -379,7 +379,7 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
     fails with the sink's own text naming the verb, and the engine — still
     hosting the source — shuts down cleanly rather than dying."""
     tatolabd = start_tatolabd_running_stream(
-        compile_stream_to_graph(a_test_pattern_into_a_loopback_camera_this_machine_may_refuse)
+        run_graph_generator(a_test_pattern_into_a_loopback_camera_this_machine_may_refuse)
     )
 
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
@@ -431,7 +431,7 @@ def test_the_pipewire_door_opens_where_a_daemon_answers_and_is_refused_by_name_e
     created and a GStreamer consumer reads frames from it; where none does — a CI container — setup refuses naming the door and why,
     and the source keeps running beside it."""
     tatolabd = start_tatolabd_running_stream(
-        compile_stream_to_graph(a_test_pattern_into_a_camera_on_the_pipewire_door)
+        run_graph_generator(a_test_pattern_into_a_camera_on_the_pipewire_door)
     )
 
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
@@ -467,7 +467,7 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
     assert not video_nodes_named(camera_name), "a stale camera carries this run's name"
 
     tatolabd = start_tatolabd_running_stream(
-        compile_stream_to_graph(a_test_pattern_into_two_loopback_cameras)
+        run_graph_generator(a_test_pattern_into_two_loopback_cameras)
     )
     tatolabd.local_api_client().await_every_node_running(
         stream=tatolabd.await_the_latest_stream_loaded(),
@@ -503,7 +503,7 @@ def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(
     camera_name = FRAMES_CAMERA_NAME
     width, height = FRAMES_CAMERA_WIDTH, FRAMES_CAMERA_HEIGHT
     tatolabd = start_tatolabd_running_stream(
-        compile_stream_to_graph(a_test_pattern_into_a_loopback_camera_read_back_as_yuyv)
+        run_graph_generator(a_test_pattern_into_a_loopback_camera_read_back_as_yuyv)
     )
     tatolabd.local_api_client().await_every_node_running(
         stream=tatolabd.await_the_latest_stream_loaded(),

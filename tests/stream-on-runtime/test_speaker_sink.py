@@ -37,7 +37,7 @@ from tatolab.speaker import (
     SPEAKER_SAMPLE_RATE,
     SPEAKER_WINDOW_SIZE,
 )
-from tatolab.stream import compile_stream_to_graph
+from tatolab.stream import run_graph_generator
 
 READINESS_TIMEOUT_SECONDS = 10.0
 PLAYBACK_READINESS_TIMEOUT_SECONDS = 20.0
@@ -70,7 +70,7 @@ def the_speakers_settled_window_contract(graph: dict, speaker_node_name: str) ->
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
-    graph = compile_stream_to_graph(one_speaker_sink_left_unnamed)
+    graph = run_graph_generator(one_speaker_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == [SPEAKER_NODE_NAME]
 
     outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)

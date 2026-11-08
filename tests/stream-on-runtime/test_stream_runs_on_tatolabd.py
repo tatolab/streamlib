@@ -36,7 +36,7 @@ from stream_runs_on_tatolabd import (
     write_the_graph_documents_the_stream_py_compiles_to,
 )
 from tatolab.stream import StreamBuilder
-from tatolab.stream._stream_graph_builder import compile_stream_to_graph
+from tatolab.stream._stream_graph_builder import run_graph_generator
 
 WRAPPER_INVOCATION_TIMEOUT_SECONDS = 30.0
 
@@ -67,7 +67,7 @@ def test_a_suite_stream_function_runs_as_a_one_stream_project_holding_its_graph_
     )
     stream_asset = graph_document.pop("asset")
     assert graph_document == graph_nodes_holding_a_uuid_each(
-        compile_stream_to_graph(named_pattern_into_a_named_sink), stream_asset
+        run_graph_generator(named_pattern_into_a_named_sink), stream_asset
     )
     assert stream_id_of_a_one_stream_project(
         project_directory, named_pattern_into_a_named_sink
@@ -173,17 +173,17 @@ def test_a_stream_py_compiles_to_one_graph_document_per_stream_keeping_each_asse
     tmp_path: Path,
 ):
     (tmp_path / "stream.py").write_text(
-        "from tatolab.stream import StreamBuilder, stream\n\n\n"
-        "@stream\ndef camera(stream_builder: StreamBuilder) -> None: ...\n\n\n"
-        "@stream\ndef preview(stream_builder: StreamBuilder) -> None: ...\n",
+        "from tatolab.stream import StreamBuilder, graph_generator\n\n\n"
+        "@graph_generator\ndef camera(stream_builder: StreamBuilder) -> None: ...\n\n\n"
+        "@graph_generator\ndef preview(stream_builder: StreamBuilder) -> None: ...\n",
         encoding="utf-8",
     )
 
     assert write_the_graph_documents_the_stream_py_compiles_to(tmp_path) == ["camera", "preview"]
     camera_id = json.loads(graph_document_path_of(tmp_path, "camera").read_text())["asset"]
     (tmp_path / "stream.py").write_text(
-        "from tatolab.stream import StreamBuilder, stream\n\n\n"
-        "@stream\ndef camera(stream_builder: StreamBuilder) -> None: ...\n",
+        "from tatolab.stream import StreamBuilder, graph_generator\n\n\n"
+        "@graph_generator\ndef camera(stream_builder: StreamBuilder) -> None: ...\n",
         encoding="utf-8",
     )
 

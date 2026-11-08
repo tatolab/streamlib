@@ -48,11 +48,11 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 # The stream the test launches: one test pattern source and nothing else. Everything
 # downstream of it is added live.
 STREAM_WITH_ONE_PATTERN_SOURCE = '''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     stream_builder.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
 '''

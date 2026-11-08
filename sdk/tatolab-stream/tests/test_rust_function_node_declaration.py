@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from tatolab.stream import RustFunctionNode, StreamBuilder, compile_stream_to_graph, node, stream
+from tatolab.stream import RustFunctionNode, StreamBuilder, run_graph_generator, node, graph_generator
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
@@ -163,13 +163,13 @@ def test_a_declaration_missing_a_key_names_it():
         node.rust_function(declaration)
 
 
-@stream
+@graph_generator
 def ramp_stream(stream_builder: StreamBuilder) -> None:
     stream_builder.add(Ramp, config={"gain": 1.0})
 
 
 def test_a_stream_adds_it_by_its_import_path():
-    graph = compile_stream_to_graph(ramp_stream)
+    graph = run_graph_generator(ramp_stream)
     assert [graph_node["type"] for graph_node in graph["nodes"]] == [f"{__name__}:Ramp"]
 
 

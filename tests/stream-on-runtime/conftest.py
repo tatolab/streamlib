@@ -17,7 +17,7 @@ until `tatolab stop` or `tatolab rm` — or `tatolab dev`, which queues the load
 and follows the project's log. What a test hands a loading fixture —
 `stream_or_graph` — is one of:
 
-- a `@stream` function of one of the suite's `*_streams.py` (or other non-test)
+- a `@graph_generator` function of one of the suite's `*_streams.py` (or other non-test)
   modules, compiled in this process and run as a one-stream project of its own:
   its graph document beside links to the suite's modules, and a `.venv` linked to
   the suite venv. Its display name is set with `tatolab rename` once it loads. A
@@ -561,7 +561,7 @@ class TatolabCommandsOfThisTest:
                 processor_interpreter=processor_interpreter,
             ).tatolab_run
         assert project_directory is None and processor_interpreter is None, (
-            "a `@stream` function of the suite runs in a one-stream project of its own; run "
+            "a `@graph_generator` function of the suite runs in a one-stream project of its own; run "
             "another project's stream with `TatolabRunOfAProject`"
         )
         return write_a_one_stream_project_of_a_suite_stream_function(

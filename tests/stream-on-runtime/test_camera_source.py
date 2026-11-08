@@ -21,7 +21,7 @@ from camera_source_streams import (
     a_camera_source_alone,
 )
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
-from tatolab.stream import compile_stream_to_graph
+from tatolab.stream import run_graph_generator
 
 READINESS_TIMEOUT_SECONDS = 10.0
 CAMERA_NODE_NAME = "camerasource"
@@ -33,7 +33,7 @@ CAMERA_NODE_NAME = "camerasource"
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
-    graph = compile_stream_to_graph(a_camera_source_alone)
+    graph = run_graph_generator(a_camera_source_alone)
     assert [node["name"] for node in graph["nodes"]] == [CAMERA_NODE_NAME]
 
     outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)

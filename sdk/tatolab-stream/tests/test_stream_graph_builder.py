@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`@stream`, the `StreamBuilder` and `compile_stream_to_graph`, with no engine.
+"""`@graph_generator`, the `StreamBuilder` and `run_graph_generator`, with no engine.
 
 A stream compiles to its graph as plain data, so every case is a literal
 expectation about that data or a refusal at the line the author wrote.
@@ -37,15 +37,15 @@ from tatolab.stream import (
     Output,
     Packets,
     StreamBuilder,
-    compile_stream_to_graph,
+    run_graph_generator,
     node,
-    stream,
+    graph_generator,
 )
 from tatolab.stream._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     ExposedNameCastsToNothingError,
 )
-from tatolab.stream._stream_graph_builder import is_stream_function
+from tatolab.stream._stream_graph_builder import is_graph_generator
 
 STREAM_GRAPH_BUILDER_SOURCE = (
     Path(tatolab.stream.__file__).resolve().parent / "_stream_graph_builder.py"
@@ -106,7 +106,7 @@ NESTED_CONFIG: "dict[str, Any]" = {
 }
 
 
-@stream
+@graph_generator
 def every_kind_of_node(stream_builder: StreamBuilder) -> None:
     """A `@node.process` class, a nested one and a marker-shaped class.
 
@@ -117,7 +117,7 @@ def every_kind_of_node(stream_builder: StreamBuilder) -> None:
     stream_builder.add(StandInMarker)
 
 
-@stream
+@graph_generator
 def camera_rig(stream_builder: StreamBuilder) -> None:
     """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
     source = stream_builder.add(tatolab.stream.ChannelsToRecords, config=RIG_CHANNELS_TO_RECORDS)
@@ -142,34 +142,34 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(second_inverter.output("video_to_downstream"), monitor.input("Video"))
 
 
-@stream
+@graph_generator
 def a_native_marker(stream_builder: StreamBuilder) -> None:
     stream_builder.add(tatolab.stream.ChannelsToRecords, config=RIG_CHANNELS_TO_RECORDS)
 
 
-@stream
+@graph_generator
 def adds_nothing(stream_builder: StreamBuilder) -> None:
     """A stream whose function adds no node."""
 
 
-@stream
+@graph_generator
 def a_stream_that_raises(stream_builder: StreamBuilder) -> None:
     stream_builder.add(FrameInverter)
     raise THE_STREAM_BUILDING_FAILURE
 
 
-@stream
+@graph_generator
 def a_configured_stream(stream_builder: StreamBuilder) -> None:
     stream_builder.add(StandInMarker, config=NESTED_CONFIG)
 
 
-@stream
+@graph_generator
 def a_stream_with_a_typed_duplicate(stream_builder: StreamBuilder) -> None:
     stream_builder.add(FrameInverter, name="Front Camera")
     stream_builder.add(BrightnessReader, name="front-CAMERA")
 
 
-@stream
+@graph_generator
 def hand_built_references(stream_builder: StreamBuilder) -> None:
     """Every port named through a reference built by hand rather than minted."""
     stream_builder.add(FrameInverter)
@@ -189,7 +189,7 @@ def names_of_nodes_added(stream_builder: StreamBuilder, *node_classes: type) -> 
 
 
 def config_compiled_for(config: "Mapping[str, Any]") -> "dict[str, Any]":
-    """The config `compile_stream_to_graph` records for one node added with `config`."""
+    """The config `run_graph_generator` records for one node added with `config`."""
     namespace: "dict[str, Any]" = {
         "__name__": "rig_streams",
         "StandInMarker": StandInMarker,
@@ -199,7 +199,7 @@ def config_compiled_for(config: "Mapping[str, Any]") -> "dict[str, Any]":
         "def main(stream_builder):\n    stream_builder.add(StandInMarker, config=config_under_test)\n",
         namespace,
     )
-    return compile_stream_to_graph(stream(namespace["main"]))["nodes"][0]["config"]
+    return run_graph_generator(graph_generator(namespace["main"]))["nodes"][0]["config"]
 
 
 def a_config_holding_itself() -> "dict[str, Any]":
@@ -365,7 +365,7 @@ def test_a_stream_name_casting_to_nothing_is_refused_naming_it() -> None:
 
 
 def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None:
-    assert compile_stream_to_graph(every_kind_of_node)["nodes"] == [
+    assert run_graph_generator(every_kind_of_node)["nodes"] == [
         {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
         {"name": "framedarkener", "type": FRAME_DARKENER_TYPE, "config": {}},
         {"name": "standinmarker", "type": StandInMarker.type, "config": {}},
@@ -373,7 +373,7 @@ def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None
 
 
 def test_a_native_marker_is_the_type_its_class_carries() -> None:
-    assert compile_stream_to_graph(a_native_marker)["nodes"] == [
+    assert run_graph_generator(a_native_marker)["nodes"] == [
         {
             "name": "channelstorecords",
             "type": CHANNELS_TO_RECORDS_TYPE,
@@ -535,7 +535,7 @@ def test_an_add_refused_for_its_config_records_nothing(config: Any) -> None:
 
 
 def test_config_is_normalised_to_plain_json() -> None:
-    config = compile_stream_to_graph(a_configured_stream)["nodes"][0]["config"]
+    config = run_graph_generator(a_configured_stream)["nodes"][0]["config"]
 
     assert config == {
         "title": "Rig",
@@ -550,7 +550,7 @@ def test_config_is_normalised_to_plain_json() -> None:
 
 
 def test_a_node_with_no_config_records_an_empty_object() -> None:
-    graph = compile_stream_to_graph(every_kind_of_node)
+    graph = run_graph_generator(every_kind_of_node)
 
     assert [each_node["config"] for each_node in graph["nodes"]] == [{}, {}, {}]
 
@@ -890,7 +890,7 @@ def test_a_hand_built_reference_given_a_name_that_is_not_a_string_is_refused() -
 
 
 def test_a_hand_built_reference_reaches_the_graph_cast() -> None:
-    assert compile_stream_to_graph(hand_built_references) == {
+    assert run_graph_generator(hand_built_references) == {
         "stream": "hand_built_references",
         "nodes": [
             {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
@@ -915,7 +915,7 @@ def test_references_are_immutable_values() -> None:
 
 
 def test_a_stream_compiles_to_its_graph() -> None:
-    graph = compile_stream_to_graph(camera_rig)
+    graph = run_graph_generator(camera_rig)
 
     assert graph == {
         "stream": "camera_rig",
@@ -962,7 +962,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
 
 
 def test_a_compiled_graph_has_exactly_the_three_keys() -> None:
-    graph = compile_stream_to_graph(every_kind_of_node)
+    graph = run_graph_generator(every_kind_of_node)
 
     assert list(graph) == ["stream", "nodes", "links"]
     assert graph["stream"] == "every_kind_of_node"
@@ -970,7 +970,7 @@ def test_a_compiled_graph_has_exactly_the_three_keys() -> None:
 
 
 def test_a_stream_that_adds_nothing_compiles_to_an_empty_graph() -> None:
-    assert compile_stream_to_graph(adds_nothing) == {
+    assert run_graph_generator(adds_nothing) == {
         "stream": "adds_nothing",
         "nodes": [],
         "links": [],
@@ -978,39 +978,39 @@ def test_a_stream_that_adds_nothing_compiles_to_an_empty_graph() -> None:
 
 
 def test_each_compile_returns_a_fresh_graph() -> None:
-    first = compile_stream_to_graph(a_configured_stream)
+    first = run_graph_generator(a_configured_stream)
     first["nodes"][0]["config"]["overlay"]["labels"].append("mutated")
 
-    assert compile_stream_to_graph(a_configured_stream)["nodes"][0]["config"][
+    assert run_graph_generator(a_configured_stream)["nodes"][0]["config"][
         "overlay"
     ]["labels"] == ["left", "right"]
 
 
 def test_a_stream_function_that_raises_propagates_its_exception_unchanged() -> None:
     with pytest.raises(StreamBuildingFailure) as raised:
-        compile_stream_to_graph(a_stream_that_raises)
+        run_graph_generator(a_stream_that_raises)
 
     assert raised.value is THE_STREAM_BUILDING_FAILURE
 
 
 def test_a_builder_refusal_inside_a_stream_function_propagates() -> None:
     with pytest.raises(ValueError, match="'front-CAMERA'"):
-        compile_stream_to_graph(a_stream_with_a_typed_duplicate)
+        run_graph_generator(a_stream_with_a_typed_duplicate)
 
 
 def test_a_function_that_is_not_a_stream_is_refused_naming_the_decorator() -> None:
-    with pytest.raises(TypeError, match="decorate it with @stream"):
-        compile_stream_to_graph(not_decorated)
+    with pytest.raises(TypeError, match="decorate it with @graph_generator"):
+        run_graph_generator(not_decorated)
 
 
 def test_stream_stamps_identity_name_and_description() -> None:
-    assert getattr(every_kind_of_node, "__streamlib_stream_identity__") == (
+    assert getattr(every_kind_of_node, "__streamlib_graph_generator_identity__") == (
         "test_stream_graph_builder:every_kind_of_node"
     )
-    assert getattr(every_kind_of_node, "__streamlib_stream_name__") == (
+    assert getattr(every_kind_of_node, "__streamlib_graph_generator_name__") == (
         "every_kind_of_node"
     )
-    assert getattr(every_kind_of_node, "__streamlib_stream_description__") == (
+    assert getattr(every_kind_of_node, "__streamlib_graph_generator_description__") == (
         "A `@node.process` class, a nested one and a marker-shaped class.\n\n"
         "The second line of the description."
     )
@@ -1021,31 +1021,31 @@ def test_stream_returns_the_function_it_declares_unchanged() -> None:
     exec("def main(stream_builder):\n    pass\n", namespace)
     undeclared_function = namespace["main"]
 
-    assert stream(undeclared_function) is undeclared_function
+    assert graph_generator(undeclared_function) is undeclared_function
 
 
 def test_a_stream_with_no_docstring_has_an_empty_description() -> None:
-    assert getattr(a_stream_that_raises, "__streamlib_stream_description__") == ""
+    assert getattr(a_stream_that_raises, "__streamlib_graph_generator_description__") == ""
 
 
 def test_a_stream_in_the_entry_file_is_named_from_main() -> None:
     entry_file_namespace: "dict[str, Any]" = {"__name__": "__main__"}
     exec("def main(stream_builder):\n    pass\n", entry_file_namespace)
 
-    entry_file_stream = stream(entry_file_namespace["main"])
+    entry_file_stream = graph_generator(entry_file_namespace["main"])
 
     assert (
-        getattr(entry_file_stream, "__streamlib_stream_identity__") == "__main__:main"
+        getattr(entry_file_stream, "__streamlib_graph_generator_identity__") == "__main__:main"
     )
-    assert getattr(entry_file_stream, "__streamlib_stream_name__") == "main"
+    assert getattr(entry_file_stream, "__streamlib_graph_generator_name__") == "main"
 
 
 @pytest.mark.parametrize(
     "misuse",
     [
-        lambda: stream(),  # pyright: ignore[reportCallIssue]
-        lambda: stream(name="rig"),  # pyright: ignore[reportCallIssue]
-        lambda: stream(not_decorated, name="rig"),  # pyright: ignore[reportCallIssue]
+        lambda: graph_generator(),  # pyright: ignore[reportCallIssue]
+        lambda: graph_generator(name="rig"),  # pyright: ignore[reportCallIssue]
+        lambda: graph_generator(not_decorated, name="rig"),  # pyright: ignore[reportCallIssue]
     ],
     ids=["no-arguments", "a-name", "a-function-and-a-name"],
 )
@@ -1056,8 +1056,7 @@ def test_stream_called_with_arguments_is_refused_naming_the_bare_form(
         misuse()
 
     assert str(refusal.value).startswith(
-        "@stream takes no arguments: the name is the function's, overridden at load "
-        "with `--name`"
+        "@graph_generator takes no arguments: the name is the function's."
     )
     assert "`def main(stream_builder: StreamBuilder) -> None:`" in str(refusal.value)
 
@@ -1067,10 +1066,10 @@ def test_a_nested_function_is_refused_as_not_module_level() -> None:
         stream_builder.add(FrameInverter)
 
     with pytest.raises(TypeError) as refusal:
-        stream(main)
+        graph_generator(main)
 
     message = str(refusal.value)
-    assert "a stream is a module-level function" in message
+    assert "a graph generator is a module-level function" in message
     assert "<locals>.main" in message
 
 
@@ -1079,10 +1078,10 @@ def test_a_method_is_refused_as_not_module_level() -> None:
     exec("class Streams:\n    def main(stream_builder):\n        pass\n", namespace)
 
     with pytest.raises(TypeError) as refusal:
-        stream(namespace["Streams"].main)
+        graph_generator(namespace["Streams"].main)
 
     message = str(refusal.value)
-    assert "a stream is a module-level function" in message
+    assert "a graph generator is a module-level function" in message
     assert "`rig_streams:Streams.main`" in message
 
 
@@ -1090,30 +1089,49 @@ def test_a_method_is_refused_as_not_module_level() -> None:
     "source",
     [
         "def main():\n    pass\n",
-        "def main(stream, extra):\n    pass\n",
-        "def main(stream, *, extra=1):\n    pass\n",
         "def main(*streams):\n    pass\n",
         "def main(*, stream):\n    pass\n",
         "def main(**streams):\n    pass\n",
+        "def main(stream, radius, /):\n    pass\n",
+        "def main(stream, *radii):\n    pass\n",
+        "def main(stream, **settings):\n    pass\n",
     ],
     ids=[
         "none",
-        "two",
-        "a-keyword-too",
         "var-positional",
         "keyword-only",
         "var-keyword",
+        "a-second-positional-only",
+        "var-positional-settings",
+        "var-keyword-settings",
     ],
 )
-def test_a_function_not_taking_exactly_one_positional_parameter_is_refused(
+def test_a_function_not_taking_the_builder_then_named_settings_is_refused(
     source: str,
 ) -> None:
     namespace: "dict[str, Any]" = {"__name__": "rig_streams"}
     exec(source, namespace)
 
-    with pytest.raises(TypeError, match="exactly one positional parameter") as refusal:
-        stream(namespace["main"])
-    assert "(stream_builder: StreamBuilder) -> None:" in str(refusal.value)
+    with pytest.raises(TypeError, match="as its one positional parameter") as refusal:
+        graph_generator(namespace["main"])
+    assert "(stream_builder: StreamBuilder, radius: int = 4) -> None:" in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def main(stream_builder, radius):\n    pass\n",
+        "def main(stream_builder, radius=4, *, tint='warm'):\n    pass\n",
+    ],
+    ids=["a-setting", "a-keyword-only-setting"],
+)
+def test_a_function_taking_the_builder_then_named_settings_is_a_graph_generator(
+    source: str,
+) -> None:
+    namespace: "dict[str, Any]" = {"__name__": "rig_streams"}
+    exec(source, namespace)
+
+    assert is_graph_generator(graph_generator(namespace["main"]))
 
 
 @pytest.mark.parametrize(
@@ -1125,11 +1143,11 @@ def test_a_callable_that_is_not_a_plain_function_is_refused_as_what_it_is(
     callable_but_not_a_plain_function: Any,
 ) -> None:
     with pytest.raises(TypeError) as refusal:
-        stream(callable_but_not_a_plain_function)
+        graph_generator(callable_but_not_a_plain_function)
 
     message = str(refusal.value)
-    assert message.startswith("@stream decorates a plain module-level function")
-    assert "@stream takes no arguments" not in message
+    assert message.startswith("@graph_generator decorates a plain module-level function")
+    assert "@graph_generator takes no arguments" not in message
 
 
 @pytest.mark.parametrize(
@@ -1141,11 +1159,11 @@ def test_what_is_not_callable_is_refused_naming_the_bare_form(
     not_callable: Any,
 ) -> None:
     with pytest.raises(TypeError) as refusal:
-        stream(not_callable)
+        graph_generator(not_callable)
 
     message = str(refusal.value)
-    assert message.startswith("@stream decorates a plain module-level function")
-    assert "@stream takes no arguments: the name is the function's" in message
+    assert message.startswith("@graph_generator decorates a plain module-level function")
+    assert "@graph_generator takes no arguments: the name is the function's" in message
 
 
 @pytest.mark.parametrize(
@@ -1164,23 +1182,23 @@ def test_stream_stacked_over_a_class_member_decorator_is_refused_naming_it(
     namespace: "dict[str, Any]" = {
         "__name__": "rig_streams",
         "functools": functools,
-        "stream": stream,
+        "graph_generator": graph_generator,
     }
 
     with pytest.raises(TypeError) as refusal:
         exec(
-            f"@stream\n@{class_member_decorator}\ndef main(stream_builder):\n    pass\n",
+            f"@graph_generator\n@{class_member_decorator}\ndef main(stream_builder):\n    pass\n",
             namespace,
         )
 
     message = str(refusal.value)
-    assert message.startswith("@stream decorates a plain module-level function")
+    assert message.startswith("@graph_generator decorates a plain module-level function")
     assert (
         f"is of type `{descriptor_type_as_written}`, which makes a class member of what it "
-        f"wraps. Put `@stream` on a plain module-level `def`, with no "
+        f"wraps. Put `@graph_generator` on a plain module-level `def`, with no "
         f"`@{descriptor_type_as_written}` under it."
     ) in message
-    assert "@stream takes no arguments" not in message
+    assert "@graph_generator takes no arguments" not in message
 
 
 def test_a_lambda_is_refused_naming_def() -> None:
@@ -1188,7 +1206,7 @@ def test_a_lambda_is_refused_naming_def() -> None:
     exec("main = lambda stream: None\n", namespace)
 
     with pytest.raises(TypeError, match="`def`"):
-        stream(namespace["main"])
+        graph_generator(namespace["main"])
 
 
 @pytest.mark.parametrize(
@@ -1205,15 +1223,15 @@ def test_a_function_whose_call_runs_none_of_its_body_is_refused(source: str) -> 
     exec(source, namespace)
 
     with pytest.raises(TypeError, match="runs none of its body"):
-        stream(namespace["main"])
+        graph_generator(namespace["main"])
 
 
-def test_is_stream_function_tells_a_stream_from_everything_else() -> None:
-    assert is_stream_function(every_kind_of_node)
-    assert not is_stream_function(names_of_nodes_added)
-    assert not is_stream_function(UndecoratedFilter)
-    assert not is_stream_function(None)
-    assert not is_stream_function("every_kind_of_node")
+def test_is_graph_generator_tells_a_stream_from_everything_else() -> None:
+    assert is_graph_generator(every_kind_of_node)
+    assert not is_graph_generator(names_of_nodes_added)
+    assert not is_graph_generator(UndecoratedFilter)
+    assert not is_graph_generator(None)
+    assert not is_graph_generator("every_kind_of_node")
 
 
 def test_the_builder_is_on_the_public_surface_and_the_cli_helper_is_not() -> None:
@@ -1221,12 +1239,13 @@ def test_the_builder_is_on_the_public_surface_and_the_cli_helper_is_not() -> Non
         "NodeInputPortReference",
         "NodeOutputPortReference",
         "NodeReference",
+        "GraphFragmentReference",
         "StreamBuilder",
-        "compile_stream_to_graph",
-        "stream",
+        "graph_generator",
+        "run_graph_generator",
     ):
         assert public_name in tatolab.stream.__all__
-    assert "is_stream_function" not in tatolab.stream.__all__
+    assert "is_graph_generator" not in tatolab.stream.__all__
 
 
 def test_the_builder_is_not_importable_as_stream() -> None:

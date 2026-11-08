@@ -55,12 +55,12 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 from processors.marked_frame_sink import MarkedFrameSink
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     source = stream_builder.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
     sink = stream_builder.add(MarkedFrameSink, name="sink")

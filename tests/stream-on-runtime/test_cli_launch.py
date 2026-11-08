@@ -81,11 +81,11 @@ MINIMUM_FRAMES_FOR_LIVE_VIDEO = 120
 TEST_PATTERN_SOURCE_NODE_TYPE = "tatolab.testpattern:TestPatternSource"
 
 STREAM_WITH_ONE_TEST_PATTERN_SOURCE = '''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
 '''
@@ -111,11 +111,11 @@ FIRST_FRAME_REPORTER_MODULE = STREAM_ON_RUNTIME_SUITE_DIRECTORY / "first_frame_r
 # project, and the scaffold covers the packaged one.
 STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     source = stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
     for _ in range(%d):
@@ -557,11 +557,11 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     app_directory = make_tatolab_project(
         {
             "stream.py": (
-                "from tatolab.stream import StreamBuilder, stream\n"
+                "from tatolab.stream import StreamBuilder, graph_generator\n"
     "from tatolab.testpattern import TestPatternSource\n"
                 "\n"
                 "\n"
-                "@stream\n"
+                "@graph_generator\n"
                 "def main(stream_builder: StreamBuilder) -> None:\n"
                 "    stream_builder.add(TestPatternSource)\n"
             )
@@ -872,10 +872,10 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     app_directory = make_tatolab_project(
         {
             "stream.py": (
-                "from tatolab.stream import ChannelsToRecords, StreamBuilder, stream\n"
+                "from tatolab.stream import ChannelsToRecords, StreamBuilder, graph_generator\n"
                 "\n"
                 "\n"
-                "@stream\n"
+                "@graph_generator\n"
                 "def main(stream_builder: StreamBuilder) -> None:\n"
                 "    stream_builder.add(\n"
                 '        ChannelsToRecords, config={"channel_names": 7}\n'
@@ -902,16 +902,16 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
 
 
 STREAM_PY_WITH_TWO_STREAMS = (
-    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.stream import StreamBuilder, graph_generator\n"
     "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
-    "@stream\n"
+    "@graph_generator\n"
     "def camera(stream_builder: StreamBuilder) -> None:\n"
     "    stream_builder.add(TestPatternSource)\n"
     "\n"
     "\n"
-    "@stream\n"
+    "@graph_generator\n"
     "def preview(stream_builder: StreamBuilder) -> None:\n"
     "    stream_builder.add(TestPatternSource)\n"
 )
