@@ -7,6 +7,7 @@
 //! remove and rename a stream; list what the runtime holds; and re-load the recorded streams
 //! at start.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -32,11 +33,11 @@ use super::runtime::{
     what_interrupted_a_load,
 };
 use super::{
-    CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, LoadedStreamInThisRuntime,
-    LoadedStreamTag, OptionsForLoadingOneStream, PendingStreamActionKind, Runner,
-    StreamEnvironment, StreamLoadObservingInterrupts, StreamLocation, StreamRecord,
-    StreamRecordAsRead, StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
-    is_the_machines_shutdown_requested,
+    CrashOfThePreviousRuntimeRun, FunctionNodeState, HowThePreviousRuntimeRunEnded,
+    LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream,
+    PendingStreamActionKind, Runner, StreamEnvironment, StreamLoadObservingInterrupts,
+    StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordReadFailure,
+    StreamRecordsInTheStateDirectory, is_the_machines_shutdown_requested,
 };
 use crate::core::context::{CaptureDeviceAccessPrompting, StreamClockReading};
 use crate::core::error::PrivacyGatedCaptureDevice;
@@ -405,7 +406,7 @@ pub enum StreamReloadAtTheStart {
 /// action run at a time.
 #[derive(Default)]
 pub(crate) struct StreamActionsOfTheEngine {
-    stream_records: OnceLock<StreamRecordsInTheStateDirectory>,
+    stream_records: OnceLock<Arc<StreamRecordsInTheStateDirectory>>,
     /// Held across an action's check, load and record, and across the re-load
     /// at the runtime's start of one record, its venv made included — never
     /// across a load's venv or compile.
@@ -424,6 +425,8 @@ struct OneStreamAStreamActionLoads<'load> {
     graph: &'load GraphSnapshot,
     stream_environment: StreamEnvironment,
     capture_device_access_prompting: CaptureDeviceAccessPrompting,
+    /// The function-node states the record kept at the stream's last end.
+    function_node_states_recorded: BTreeMap<String, FunctionNodeState>,
     /// Abandons the load once it reports true.
     is_interrupted: &'load dyn Fn() -> bool,
 }
@@ -439,6 +442,7 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
             graph,
             stream_environment: record.stream_environment(),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
+            function_node_states_recorded: record.function_node_states(),
             is_interrupted: &is_the_machines_shutdown_requested,
         }
     }
@@ -476,17 +480,35 @@ impl Runner {
                 stream_records.streams_directory().display()
             )));
         }
-        let stream_records = StreamRecordsInTheStateDirectory::open(streams_directory)?;
+        let stream_records = Arc::new(StreamRecordsInTheStateDirectory::open(streams_directory)?);
         self.stream_actions
             .stream_records
-            .set(stream_records)
+            .set(Arc::clone(&stream_records))
             .map_err(|_| {
                 Error::Configuration(format!(
                     "this runtime was handed a streams directory twice at once; it records its \
                      streams in {} only",
                     streams_directory.display()
                 ))
-            })
+            })?;
+        self.engine_resources_shared_by_every_stream
+            .function_node_states_carried_for_every_stream
+            .record_the_states_of_each_stream_at_its_end_through(Arc::new(
+                move |stream_id, states| {
+                    if let Err(not_recorded) = stream_records
+                        .change_the_record(stream_id, |record| {
+                            record.keep_the_function_node_states(&states)
+                        })
+                    {
+                        tracing::warn!(
+                            "the stream `{stream_id}` ended, and its function nodes' state was \
+                             not recorded, so a restart of this runtime starts them from their \
+                             defaults: {not_recorded}"
+                        );
+                    }
+                },
+            ));
+        Ok(())
     }
 
     /// Read the request's project — its project file and each stream asset's graph document
@@ -1032,10 +1054,12 @@ impl Runner {
             .filter(|loaded| the_same_directory(loaded.project_directory(), project_directory))
             .collect();
         let mut not_forgotten = Vec::new();
+        let mut ids_of_the_records_forgotten = Vec::new();
         if let Some(stream_records) = self.stream_records() {
             for stream_id in self.ids_of_every_record_of_the_project(project_directory) {
-                if let Err(not_removed) = stream_records.remove(&stream_id) {
-                    not_forgotten.push(not_removed.to_string());
+                match stream_records.remove(&stream_id) {
+                    Ok(_) => ids_of_the_records_forgotten.push(stream_id),
+                    Err(not_removed) => not_forgotten.push(not_removed.to_string()),
                 }
             }
         }
@@ -1043,6 +1067,11 @@ impl Runner {
             &loaded_of_the_project,
             "its owner removed its project",
         );
+        for stream_id in ids_of_the_records_forgotten {
+            self.engine_resources_shared_by_every_stream
+                .function_node_states_carried_for_every_stream
+                .forget_the_stream(&stream_id);
+        }
         progress.finish(if not_forgotten.is_empty() {
             Ok(Vec::new())
         } else {
@@ -1788,7 +1817,7 @@ impl Runner {
     // =========================================================================
 
     fn stream_records(&self) -> Option<&StreamRecordsInTheStateDirectory> {
-        self.stream_actions.stream_records.get()
+        self.stream_actions.stream_records.get().map(Arc::as_ref)
     }
 
     fn stream_record_of_the_id(&self, stream_id: &str) -> Result<Option<StreamRecordAsRead>> {
@@ -2263,8 +2292,15 @@ impl Runner {
             graph,
             stream_environment,
             capture_device_access_prompting,
+            function_node_states_recorded,
             is_interrupted,
         } = stream_to_load;
+        self.engine_resources_shared_by_every_stream
+            .function_node_states_carried_for_every_stream
+            .carry_the_recorded_states_unless_some_are_carried(
+                stream_id,
+                function_node_states_recorded,
+            );
         let stream = match self.load_stream_held_as_unless_interrupted(
             graph,
             OptionsForLoadingOneStream::in_stream_environment(stream_environment)

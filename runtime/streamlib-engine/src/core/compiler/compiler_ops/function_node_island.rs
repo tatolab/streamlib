@@ -187,7 +187,8 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 ///
 /// Wire contract with the helper bootstrap: `{"input_port", "link_id",
 /// "output": {"node", "port"}, "nodes": [{"node", "name", "import_path",
-/// "config", "links_into": [{"port", "from": {"node", "port"}}]}]}`.
+/// "config", "links_into": [{"port", "from": {"node", "port"}}]}]}`, and a
+/// stateful node's `"state_fields"` beside its `"node"`.
 pub(crate) fn the_island_feeding_a_link(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -284,14 +285,32 @@ fn place_a_function_node_after_what_it_reads(
     on_the_path_from_the_output.pop();
 
     placed.insert(node_id.clone());
-    nodes_each_after_what_it_reads.push(serde_json::json!({
+    let mut island_node = serde_json::json!({
         "node": node_id.to_string(),
         "name": node_name,
         "import_path": import_path,
         "config": config,
         "links_into": links_into,
-    }));
+    });
+    let state_fields = the_state_fields_of_a_function_node(graph, &node.processor_type);
+    if !state_fields.is_empty() {
+        island_node["state_fields"] = serde_json::json!(state_fields);
+    }
+    nodes_each_after_what_it_reads.push(island_node);
     Ok(())
+}
+
+/// The state record fields a function node of `node_type` carries; none for a
+/// stateless one.
+pub(crate) fn the_state_fields_of_a_function_node(
+    graph: &Graph,
+    node_type: &crate::core::descriptors::ProcessorClassImportPath,
+) -> Vec<String> {
+    graph
+        .node_types_this_stream_resolves()
+        .descriptor(node_type)
+        .map(|descriptor| descriptor.function_node_state_fields)
+        .unwrap_or_default()
 }
 
 /// Refuse, before a commit changes anything, an edit to an island a reader

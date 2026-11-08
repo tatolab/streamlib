@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The blackboard a helper process mirrors its loss counts and its step
-//! progress onto, and what its parent reads `graph`'s `metrics` and the step
-//! ledger off.
+//! The blackboard a helper process mirrors its loss counts, its step progress,
+//! its function-node call breadcrumb and its stateful function nodes' state
+//! onto, and what its parent reads `graph`'s `metrics`, the step ledger and
+//! each function node's state off.
 //!
 //! One board per helper spawn: the parent creates it before the child starts
 //! and holds it until the next spawn's board replaces it, then adds what it
@@ -24,9 +25,10 @@ use iceoryx2::prelude::*;
 use iceoryx2::service::port_factory::blackboard::PortFactory as BlackboardPortFactory;
 use parking_lot::Mutex;
 use streamlib_ipc_types::{
-    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessLossCountBoardKey,
-    HelperProcessStepProgressBoardEntry, InboundLinkLossCountBoardSlot,
-    MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortBagCountBoardEntry,
+    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessFunctionNodeStateBoardEntry,
+    HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
+    InboundLinkLossCountBoardSlot, MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortBagCountBoardEntry,
+    STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS,
 };
 
 use crate::core::error::{Error, Result};
@@ -106,6 +108,14 @@ struct HelperProcessLossCountBoardReadHandles {
         HelperProcessLossCountBoardKey,
         HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
     >,
+    function_node_states: Vec<(
+        u32,
+        EntryHandle<
+            ipc_threadsafe::Service,
+            HelperProcessLossCountBoardKey,
+            HelperProcessFunctionNodeStateBoardEntry,
+        >,
+    )>,
     _reader: Reader<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
@@ -115,6 +125,7 @@ impl HelperProcessLossCountBoard {
     pub(crate) fn reading(
         service_name: String,
         output_port_names: Vec<String>,
+        stateful_function_node_breadcrumb_numbers: Vec<u32>,
         service: HelperProcessLossCountBoardService,
     ) -> Result<Self> {
         let reader = service.reader_builder().create().map_err(|refusal| {
@@ -144,6 +155,17 @@ impl HelperProcessLossCountBoard {
         let function_node_call_breadcrumb = reader
             .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB)
             .map_err(unreadable_entry)?;
+        let function_node_states = stateful_function_node_breadcrumb_numbers
+            .into_iter()
+            .map(|breadcrumb_number| {
+                reader
+                    .entry(&HelperProcessLossCountBoardKey::function_node_state(
+                        breadcrumb_number,
+                    ))
+                    .map(|entry| (breadcrumb_number, entry))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(unreadable_entry)?;
         Ok(Self {
             service_name,
             board_read_handles: HelperProcessLossCountBoardReadHandles {
@@ -151,6 +173,7 @@ impl HelperProcessLossCountBoard {
                 output_ports,
                 step_progress,
                 function_node_call_breadcrumb,
+                function_node_states,
                 _reader: reader,
                 _service: service,
             },
@@ -198,6 +221,20 @@ impl HelperProcessLossCountBoard {
     ) -> HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
         *self.board_read_handles.function_node_call_breadcrumb.get()
     }
+
+    /// What the helper last wrote of the state of the function node numbered
+    /// `function_node_breadcrumb_number`; `None` for a node this board carries
+    /// no state entry for.
+    pub fn function_node_state_entry(
+        &self,
+        function_node_breadcrumb_number: u32,
+    ) -> Option<HelperProcessFunctionNodeStateBoardEntry> {
+        self.board_read_handles
+            .function_node_states
+            .iter()
+            .find(|(breadcrumb_number, _)| *breadcrumb_number == function_node_breadcrumb_number)
+            .map(|(_, entry)| *entry.get())
+    }
 }
 
 // =============================================================================
@@ -242,12 +279,27 @@ struct HelperProcessStepProgressBoardEntryBeingWritten {
     last_written: HelperProcessStepProgressBoardEntry,
 }
 
+/// One stateful function node's state entry, and how many times it was
+/// written.
+struct HelperProcessFunctionNodeStateBoardEntryBeingWritten {
+    entry: EntryHandleMut<
+        ipc_threadsafe::Service,
+        HelperProcessLossCountBoardKey,
+        HelperProcessFunctionNodeStateBoardEntry,
+    >,
+    state_writes: u64,
+}
+
 /// The writer and its entry handles, dropped together.
 struct HelperProcessLossCountBoardWriteHandles {
     inbound_link_slots: Vec<Mutex<InboundLinkLossCountBoardSlotBeingWritten>>,
     output_ports: Vec<(String, Mutex<OutputPortBagCountBoardEntryBeingWritten>)>,
     step_progress: Mutex<HelperProcessStepProgressBoardEntryBeingWritten>,
     function_node_call_breadcrumb: Mutex<FunctionNodeCallsUnderWayInThisHelper>,
+    function_node_states: Vec<(
+        u32,
+        Mutex<HelperProcessFunctionNodeStateBoardEntryBeingWritten>,
+    )>,
     _writer: Writer<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
@@ -257,6 +309,7 @@ impl HelperProcessLossCountBoardWriter {
     pub(crate) fn writing(
         service_name: String,
         output_port_names: &[String],
+        stateful_function_node_breadcrumb_numbers: &[u32],
         service: HelperProcessLossCountBoardService,
     ) -> Result<Self> {
         let writer = service.writer_builder().create().map_err(|refusal| {
@@ -315,6 +368,25 @@ impl HelperProcessLossCountBoardWriter {
                 })
             })
             .map_err(unwritable_entry)?;
+        let function_node_states = stateful_function_node_breadcrumb_numbers
+            .iter()
+            .map(|&breadcrumb_number| {
+                writer
+                    .entry(&HelperProcessLossCountBoardKey::function_node_state(
+                        breadcrumb_number,
+                    ))
+                    .map(|entry| {
+                        (
+                            breadcrumb_number,
+                            Mutex::new(HelperProcessFunctionNodeStateBoardEntryBeingWritten {
+                                entry,
+                                state_writes: 0,
+                            }),
+                        )
+                    })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(unwritable_entry)?;
         Ok(Self {
             service_name,
             board_write_handles: HelperProcessLossCountBoardWriteHandles {
@@ -322,6 +394,7 @@ impl HelperProcessLossCountBoardWriter {
                 output_ports,
                 step_progress,
                 function_node_call_breadcrumb,
+                function_node_states,
                 _writer: writer,
                 _service: service,
             },
@@ -461,6 +534,53 @@ impl HelperProcessLossCountBoardWriter {
             .calls_under_way
             .retain(|(call_under_way, _)| *call_under_way != call);
         calls.write_the_oldest_call_under_way();
+    }
+
+    /// Whether this board carries a state entry for the function node
+    /// numbered `function_node_breadcrumb_number`.
+    pub fn carries_a_state_entry_for(&self, function_node_breadcrumb_number: u32) -> bool {
+        self.board_write_handles
+            .function_node_states
+            .iter()
+            .any(|(breadcrumb_number, _)| *breadcrumb_number == function_node_breadcrumb_number)
+    }
+
+    /// Write the state the last call of the function node numbered
+    /// `function_node_breadcrumb_number` returned, refused for a node this
+    /// board carries no state entry for and for a state past what an entry
+    /// holds.
+    pub fn write_the_state_of_a_function_node(
+        &self,
+        function_node_breadcrumb_number: u32,
+        state_values: &[f64],
+    ) -> Result<()> {
+        let Some((_, entry_being_written)) = self
+            .board_write_handles
+            .function_node_states
+            .iter()
+            .find(|(breadcrumb_number, _)| *breadcrumb_number == function_node_breadcrumb_number)
+        else {
+            return Err(Error::Configuration(format!(
+                "the loss-count board '{}' carries no state entry for the function node \
+                 numbered {function_node_breadcrumb_number}",
+                self.service_name
+            )));
+        };
+        let mut entry_being_written = entry_being_written.lock();
+        let state_writes = entry_being_written.state_writes.wrapping_add(1).max(1);
+        let Some(entry) =
+            HelperProcessFunctionNodeStateBoardEntry::holding(state_values, state_writes)
+        else {
+            return Err(Error::Configuration(format!(
+                "the function node numbered {function_node_breadcrumb_number} has a state of \
+                 {} numbers, and a state entry holds at most \
+                 {STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS}",
+                state_values.len()
+            )));
+        };
+        entry_being_written.entry.update_with_copy(entry);
+        entry_being_written.state_writes = state_writes;
+        Ok(())
     }
 
     fn write_on_the_step_progress_entry(
@@ -977,6 +1097,20 @@ impl HelperPlacedProcessorLossCounts {
             .map(HelperProcessLossCountBoard::function_node_call_breadcrumb_entry)
     }
 
+    /// What the current spawn's helper last wrote of the state of the function
+    /// node numbered `function_node_breadcrumb_number`, read off the board it
+    /// wrote even after it died; `None` before any spawn's board exists or for
+    /// a node the board carries no state entry for.
+    pub fn function_node_state_its_helper_wrote(
+        &self,
+        function_node_breadcrumb_number: u32,
+    ) -> Option<HelperProcessFunctionNodeStateBoardEntry> {
+        self.board
+            .lock()
+            .as_ref()?
+            .function_node_state_entry(function_node_breadcrumb_number)
+    }
+
     /// This processor's dropped bags across every inbound link, each read for
     /// its link's own wiring.
     pub fn total_dropped_bag_count(&self) -> u64 {
@@ -993,6 +1127,7 @@ impl HelperPlacedProcessorLossCounts {
 #[cfg(test)]
 pub(crate) fn a_loss_count_board_and_its_helpers_writer_for_this_test_process(
     output_port_names: &[&str],
+    stateful_function_node_breadcrumb_numbers: &[u32],
 ) -> (
     HelperProcessLossCountBoard,
     Arc<HelperProcessLossCountBoardWriter>,
@@ -1007,11 +1142,19 @@ pub(crate) fn a_loss_count_board_and_its_helpers_writer_for_this_test_process(
         .map(|name| name.to_string())
         .collect();
     let board = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
-        .create_helper_process_loss_count_board(&service_name, output_port_names.clone())
+        .create_helper_process_loss_count_board(
+            &service_name,
+            output_port_names.clone(),
+            stateful_function_node_breadcrumb_numbers.to_vec(),
+        )
         .expect("the parent creates its helper's board");
     let helper_node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
     let writer = helper_node
-        .open_helper_process_loss_count_board_writer(&service_name, &output_port_names)
+        .open_helper_process_loss_count_board_writer(
+            &service_name,
+            &output_port_names,
+            stateful_function_node_breadcrumb_numbers,
+        )
         .expect("the helper opens the board its parent named");
     (board, Arc::new(writer), helper_node)
 }
@@ -1033,7 +1176,7 @@ mod tests {
     #[test]
     fn a_count_written_on_a_claimed_slot_is_what_the_parent_reads() {
         let (board, writer, _helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"], &[]);
 
         let mirror = writer
             .claim_inbound_link_slot(slot_and_generation(3, 7))
@@ -1081,7 +1224,7 @@ mod tests {
     #[test]
     fn a_write_from_a_wiring_the_slot_has_moved_past_lands_nothing() {
         let (board, writer, _helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
         let first_wiring = writer
             .claim_inbound_link_slot(slot_and_generation(0, 1))
             .unwrap();
@@ -1107,7 +1250,7 @@ mod tests {
     #[test]
     fn an_output_port_claimed_again_starts_from_zero_and_its_earlier_mirror_lands_nothing() {
         let (board, writer, _helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"], &[]);
         let video_entry = || {
             board
                 .output_port_entry("video")
@@ -1127,7 +1270,7 @@ mod tests {
     #[test]
     fn the_last_counts_stay_readable_after_the_helpers_writer_is_gone() {
         let (board, writer, helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"], &[]);
         writer
             .claim_inbound_link_slot(slot_and_generation(1, 4))
             .unwrap()
@@ -1194,7 +1337,7 @@ mod tests {
     #[test]
     fn the_parent_reads_each_entry_only_for_the_wiring_it_assigned() {
         let (board, writer, _helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"], &[]);
         let counts = HelperPlacedProcessorLossCounts::default();
         counts.hold_the_board_of_this_spawn(board);
         let refused_bags_of_video = || counts.loss_count_snapshot().refused_bags_by_output_port;
@@ -1263,7 +1406,7 @@ mod tests {
         let inbound = counts.assign_inbound_link_slot("L-in", false).unwrap();
         let video_channel = counts.note_outbound_link("video", "L-out");
         let (dead_helpers_board, dead_helpers_writer, dead_helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"], &[]);
         counts.hold_the_board_of_this_spawn(dead_helpers_board);
         dead_helpers_writer
             .claim_inbound_link_slot(inbound)
@@ -1277,7 +1420,7 @@ mod tests {
         drop(dead_helper_node);
 
         let (new_helpers_board, new_helpers_writer, _new_helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"], &[]);
         counts.hold_the_board_of_this_spawn(new_helpers_board);
         assert_eq!(counts.total_dropped_bag_count(), 6);
         new_helpers_writer
@@ -1310,7 +1453,7 @@ mod tests {
     #[test]
     fn a_links_taken_bags_are_read_off_its_slot_less_the_ones_counted_lost_after_taking() {
         let (board, writer, _helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
         let counts = HelperPlacedProcessorLossCounts::default();
         counts.hold_the_board_of_this_spawn(board);
         let inbound = counts.assign_inbound_link_slot("L-in", false).unwrap();
@@ -1330,7 +1473,7 @@ mod tests {
         let counts = HelperPlacedProcessorLossCounts::default();
         assert_eq!(counts.step_progress_its_helper_wrote(), None);
         let (board, writer, _helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
         counts.hold_the_board_of_this_spawn(board);
 
         writer.note_a_callback_started();
@@ -1356,7 +1499,7 @@ mod tests {
         );
 
         let (restarted_helpers_board, _restarted_writer, _restarted_helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
         counts.hold_the_board_of_this_spawn(restarted_helpers_board);
         assert_eq!(
             counts
@@ -1375,7 +1518,7 @@ mod tests {
             None
         );
         let (board, writer, helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
         counts.hold_the_board_of_this_spawn(board);
         let breadcrumb_under_way = || {
             counts
@@ -1410,7 +1553,7 @@ mod tests {
     fn concurrent_function_node_calls_each_keep_their_breadcrumb_and_the_board_names_the_oldest() {
         let counts = HelperPlacedProcessorLossCounts::default();
         let (board, writer, _helper_node) =
-            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
         counts.hold_the_board_of_this_spawn(board);
         let breadcrumb_under_way = || {
             counts

@@ -285,6 +285,9 @@ impl LoadedStreamInThisRuntime {
                 teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
                 log_route: Arc::clone(&log_route),
                 capture_device_access_prompting,
+                function_node_states: engine_resources_shared_by_every_stream
+                    .function_node_states_carried_for_every_stream
+                    .of_the_stream(&stream_id),
             }),
             processor_interpreter_launch_record: Arc::new(
                 ProcessorInterpreterLaunchRecordOfOneStream::new(
@@ -849,14 +852,17 @@ impl LoadedStreamInThisRuntime {
         );
     }
 
-    /// Write this stream's records to its project's log, let go of the
-    /// stream, then mark it ended — so a waiter that wakes finds them on disk
-    /// whole.
+    /// Write this stream's records to its project's log and its function-node
+    /// states to its record, let go of the stream, then mark it ended — so a
+    /// waiter that wakes finds them on disk whole.
     fn let_go_of_this_stream_then_mark_it_ended(
         self: Arc<Self>,
         how_it_ended: HowALoadedStreamEnded,
     ) {
         self.log_route().write_every_record_it_emitted_and_sync();
+        self.engine_resources_shared_by_every_stream
+            .function_node_states_carried_for_every_stream
+            .record_the_states_of_a_stream_that_ended(self.stream_id());
         let the_end_of_this_stream = Arc::clone(&self.the_end_of_this_stream);
         drop(self);
         the_end_of_this_stream.mark(how_it_ended);
@@ -1068,15 +1074,66 @@ impl LoadedStreamInThisRuntime {
             .machine_name
             .name()
             .to_string();
-        let mut graph_response = self
-            .compiler
-            .scope(|graph, _tx| graph.to_graph_response(machine_name));
+        let (mut graph_response, function_node_names_by_node_uuid) =
+            self.compiler.scope(|graph, _tx| {
+                let function_node_names_by_node_uuid: HashMap<String, String> = graph
+                    .traversal()
+                    .v(())
+                    .iter()
+                    .filter(|node| {
+                        matches!(
+                            node.node_kind(),
+                            Some(crate::core::descriptors::NodeKind::Function { .. })
+                        )
+                    })
+                    .map(|node| (node.node_uuid.to_string(), node.display_name.clone()))
+                    .collect();
+                (
+                    graph.to_graph_response(machine_name),
+                    function_node_names_by_node_uuid,
+                )
+            });
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
+        self.render_the_state_of_each_stateful_function_node_into(
+            &mut graph_response.nodes,
+            &function_node_names_by_node_uuid,
+        );
         self.graph_only_nodes_as_drawn
             .lock()
             .render_into(&mut graph_response);
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
+    }
+
+    /// Render, under each stateful function node's `function_node_state`
+    /// component, each field of the state its stream carries now.
+    fn render_the_state_of_each_stateful_function_node_into(
+        &self,
+        nodes: &mut [crate::core::json_schema::ProcessorNodeOutput],
+        function_node_names_by_node_uuid: &HashMap<String, String>,
+    ) {
+        let function_node_states = &self.this_streams_identity_and_handles.function_node_states;
+        for node in nodes {
+            let Some(state) =
+                function_node_names_by_node_uuid
+                    .get(&node.id)
+                    .and_then(|function_node_name| {
+                        function_node_states.the_current_state_of(function_node_name)
+                    })
+            else {
+                continue;
+            };
+            let state_by_field: serde_json::Map<String, serde_json::Value> = state
+                .state_fields
+                .into_iter()
+                .zip(state.state_values)
+                .map(|(state_field, state_value)| (state_field, serde_json::json!(state_value)))
+                .collect();
+            node.components.insert(
+                "function_node_state".to_string(),
+                serde_json::Value::Object(state_by_field),
+            );
+        }
     }
 
     /// Every reference edge the configs of `nodes` hold, under the keys their

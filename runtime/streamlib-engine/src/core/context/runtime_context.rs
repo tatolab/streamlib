@@ -39,6 +39,10 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     /// Whether the stream's capture devices may ask the user for access
     /// nobody has answered yet.
     pub(crate) capture_device_access_prompting: super::CaptureDeviceAccessPrompting,
+    /// The state of each of the stream's stateful function nodes, carried
+    /// across its helpers and its loads.
+    pub(crate) function_node_states:
+        Arc<crate::core::runtime::FunctionNodeStatesCarriedForOneStream>,
 }
 
 #[derive(Clone)]
@@ -225,6 +229,14 @@ impl RuntimeContext {
         &self,
     ) -> super::CaptureDeviceAccessPrompting {
         self.loaded_stream.capture_device_access_prompting
+    }
+
+    /// The state of each stateful function node of the stream this context
+    /// serves, carried across its helpers and its loads.
+    pub(crate) fn this_streams_function_node_states(
+        &self,
+    ) -> &Arc<crate::core::runtime::FunctionNodeStatesCarriedForOneStream> {
+        &self.loaded_stream.function_node_states
     }
 
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocess

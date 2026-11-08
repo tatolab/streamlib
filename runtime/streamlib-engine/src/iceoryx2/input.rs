@@ -2156,7 +2156,10 @@ mod tests {
     #[test]
     fn every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted() {
         let (board, board_writer, _helper_node) =
-            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(
+                &[],
+                &[],
+            );
         let mailboxes = InputMailboxesInner::new();
 
         let (plain_publisher, plain_subscriber) = open_channel_for_one_link("mirrored/plain", 5);

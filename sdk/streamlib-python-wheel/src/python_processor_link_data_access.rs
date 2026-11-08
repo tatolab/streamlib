@@ -17,7 +17,7 @@
 //! thread.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
@@ -75,6 +75,10 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// The board this helper's loss counts are mirrored onto for its parent,
     /// once its setup opened the one the parent named.
     loss_count_board_writer: OnceLock<Arc<HelperProcessLossCountBoardWriter>>,
+    /// The state each stateful function node this helper calls resumes from,
+    /// by breadcrumb number, as the setup command's board carries it; a node
+    /// it names no state for starts from its state record's defaults.
+    function_node_states_resumed_from: OnceLock<HashMap<u32, Vec<f64>>>,
     /// The wake on each publish of this helper's stream clock, once its setup
     /// found the stream stepped.
     stream_clock_board_publish_listener: OnceLock<StreamClockBoardPublishListener>,
@@ -108,6 +112,7 @@ impl PythonProcessorLinkDataAccess {
             output_writer: OnceLock::new(),
             iceoryx2_node: OnceLock::new(),
             loss_count_board_writer: OnceLock::new(),
+            function_node_states_resumed_from: OnceLock::new(),
             stream_clock_board_publish_listener: OnceLock::new(),
             declared_input_ports: parking_lot::Mutex::new(HashSet::new()),
             declared_output_ports: parking_lot::Mutex::new(HashSet::new()),
@@ -128,6 +133,18 @@ impl PythonProcessorLinkDataAccess {
         &self,
     ) -> Option<&HelperProcessLossCountBoardWriter> {
         self.loss_count_board_writer.get().map(Arc::as_ref)
+    }
+
+    /// The state the function node numbered `function_node_breadcrumb_number`
+    /// resumes from, when its stream carries one for it.
+    pub(crate) fn the_state_a_function_node_resumes_from(
+        &self,
+        function_node_breadcrumb_number: u32,
+    ) -> Option<Vec<f64>> {
+        self.function_node_states_resumed_from
+            .get()?
+            .get(&function_node_breadcrumb_number)
+            .cloned()
     }
 
     /// The loss-count board this helper writes, shared with what notes on it
@@ -1074,22 +1091,35 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// Open the loss-count board the parent created for this spawn, so every
-    /// link wired from here on mirrors its counts onto it.
+    /// link wired from here on mirrors its counts onto it and every stateful
+    /// function node writes its state on it.
     ///
     /// `output_port_names` is the board's output-port section in key order, as
-    /// the setup command lists it.
+    /// the setup command lists it; `function_node_states` names each stateful
+    /// function node's entry by breadcrumb number, beside the state it resumes
+    /// from as f64 bit patterns, `None` for its state record's defaults.
+    #[pyo3(signature = (service_name, output_port_names, function_node_states = Vec::new()))]
     fn open_loss_count_board(
         &self,
         python: Python<'_>,
         service_name: &str,
         output_port_names: Vec<String>,
+        function_node_states: Vec<(u32, Option<Vec<u64>>)>,
     ) -> PyResult<()> {
         let Some(node) = self.iceoryx2_node.get() else {
             return Err(not_a_helper_process_data_plane_error());
         };
+        let stateful_function_node_breadcrumb_numbers: Vec<u32> = function_node_states
+            .iter()
+            .map(|(breadcrumb_number, _)| *breadcrumb_number)
+            .collect();
         let board_writer = python
             .detach(|| {
-                node.open_helper_process_loss_count_board_writer(service_name, &output_port_names)
+                node.open_helper_process_loss_count_board_writer(
+                    service_name,
+                    &output_port_names,
+                    &stateful_function_node_breadcrumb_numbers,
+                )
             })
             .map_err(|open_failure| PyRuntimeError::new_err(open_failure.to_string()))?;
         self.loss_count_board_writer
@@ -1099,7 +1129,24 @@ impl PythonProcessorLinkDataAccess {
                     "this helper already mirrors its loss counts onto a board, so the board \
                      {service_name:?} cannot be opened as a second"
                 ))
+            })?;
+        let function_node_states_resumed_from = function_node_states
+            .into_iter()
+            .filter_map(|(breadcrumb_number, resumes_from_f64_bits)| {
+                Some((
+                    breadcrumb_number,
+                    resumes_from_f64_bits?
+                        .into_iter()
+                        .map(f64::from_bits)
+                        .collect(),
+                ))
             })
+            .collect();
+        // Set once, beside the board the `set` above already admitted once.
+        let _ = self
+            .function_node_states_resumed_from
+            .set(function_node_states_resumed_from);
+        Ok(())
     }
 
     /// Open this node's publisher and one destination notifier for a link
@@ -3637,11 +3684,11 @@ mod tests {
         Python::attach(|python| {
             let board_name = format!("wiring{}_steps/loss-counts", std::process::id());
             let parent_board = Iceoryx2Node::for_this_test_process()
-                .create_helper_process_loss_count_board(&board_name, Vec::new())
+                .create_helper_process_loss_count_board(&board_name, Vec::new(), Vec::new())
                 .unwrap();
             let helper = helper_plane();
             helper
-                .open_loss_count_board(python, &board_name, Vec::new())
+                .open_loss_count_board(python, &board_name, Vec::new(), Vec::new())
                 .expect("the helper opens the board its parent named");
 
             helper.note_a_step_callback_started();
@@ -3722,12 +3769,16 @@ mod tests {
             let board_name = format!("wiring{}_board/loss-counts", std::process::id());
             let output_ports = vec!["frames_to_downstream".to_string()];
             let parent_board = Iceoryx2Node::for_this_test_process()
-                .create_helper_process_loss_count_board(&board_name, output_ports.clone())
+                .create_helper_process_loss_count_board(
+                    &board_name,
+                    output_ports.clone(),
+                    Vec::new(),
+                )
                 .unwrap();
             let source = helper_plane();
             let destination = helper_plane();
             destination
-                .open_loss_count_board(python, &board_name, output_ports)
+                .open_loss_count_board(python, &board_name, output_ports, Vec::new())
                 .expect("the helper opens the board its parent named");
 
             destination

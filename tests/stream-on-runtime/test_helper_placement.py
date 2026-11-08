@@ -10,6 +10,7 @@ pid a bag was produced in is not `tatolabd`'s.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,7 +20,9 @@ import pytest
 from conftest import TatolabdUnderTest
 from helper_placement_processors import (
     MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE,
+    COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES,
     RAW_MESSAGE_PAYLOAD_BYTES,
+    STEPPED_LFO_STEP_MS,
 )
 from helper_placement_streams import (
     dies_abruptly_beside_a_survivor_pair,
@@ -33,6 +36,8 @@ from helper_placement_streams import (
     only_labelled_source_into_sink,
     raw_message_payload_source_into_sink,
     reaped_labelled_source_into_sink,
+    stateful_counter_into_python_sink_that_dies_once,
+    two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock,
     stale_build_labelled_source,
     two_labelled_sources_each_into_its_own_sink,
 )
@@ -354,6 +359,93 @@ def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reade
     assert not tatolabd.marker_payloads("FUNCTION_NODE_VALUES_READ"), (
         f"no value reaches the reader while the node spins:\n{tatolabd.recent_stderr()}"
     )
+
+
+def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a_restart(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A stateful function node's state belongs to its stream, not to the
+    process that evaluates it.
+
+    The counter starts at one in its reader's first helper, which takes itself
+    down at twenty; the reader's next helper resumes the count where the dead
+    one left it, `graph` shows the count the node holds, and a stop and start
+    of the stream resumes it again.
+
+    Fail-without-fix: with the state kept only in the helper, each new helper
+    counts from one again, and its reader dies at twenty every time.
+    """
+    tatolabd = start_tatolabd_running_stream(stateful_counter_into_python_sink_that_dies_once)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_read_of_the_first_helper = tatolabd.await_marker("FIRST_COUNT_READ")
+    count_its_helper_died_at = tatolabd.await_marker("FRESH_COUNT_SINK_ABOUT_TO_DIE")["count"]
+    first_read_of_the_restarted_helper = tatolabd.await_marker("FIRST_COUNT_READ", occurrence=2)
+    local_api = tatolabd.local_api_client()
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    counter = next(node for node in graph["nodes"] if node["name"] == "counter")
+    count_the_graph_showed = counter["components"]["function_node_state"]["calls"]
+    queued_stop = local_api.call_tool("stop_stream", {"stream": stream_id})
+    assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
+    queued_start = local_api.call_tool("start_stream", {"stream": stream_id})
+    assert local_api.stream_action_once_ended(queued_start["action"])["state"] == "done"
+    first_read_after_the_restart = tatolabd.await_marker("FIRST_COUNT_READ", occurrence=3)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert first_read_of_the_first_helper["count"] == 1.0, first_read_of_the_first_helper
+    assert count_its_helper_died_at >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES
+    assert first_read_of_the_restarted_helper["pid"] != first_read_of_the_first_helper["pid"]
+    assert first_read_of_the_restarted_helper["count"] > count_its_helper_died_at, (
+        f"the reader's new helper resumes the count its dead one reached, "
+        f"{count_its_helper_died_at}, and first read {first_read_of_the_restarted_helper}"
+    )
+    assert count_the_graph_showed >= first_read_of_the_restarted_helper["count"], (
+        f"`graph` shows the count the node holds: {counter['components']}"
+    )
+    assert first_read_after_the_restart["count"] > count_the_graph_showed, (
+        f"a stop and start resumes the count from {count_the_graph_showed}, and the reader "
+        f"first read {first_read_after_the_restart}"
+    )
+    assert len(tatolabd.marker_payloads("FRESH_COUNT_SINK_ABOUT_TO_DIE")) == 1, (
+        f"only the fresh count reaches twenty:\n{tatolabd.recent_stderr()}"
+    )
+
+
+def test_a_stateful_function_node_replays_the_same_values_on_a_stepped_clock(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """The state a stateful node carries is a parameter, not a side effect.
+
+    Two runs of the same `Lfo` island, each in its own reader's helper, read
+    the same value at each step: the one the step's stream time gives, a sine
+    advanced by exactly one step of stream time per step, whatever the machine
+    took to run it.
+
+    Fail-without-fix: with the node's state or time taken from anywhere but
+    its parameters, the two runs drift apart and off the step's sine.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock
+    )
+    first_run = tatolabd.await_marker("STEPPED_LFO_VALUES_READ")
+    second_run = tatolabd.await_marker("STEPPED_LFO_VALUES_READ", occurrence=2)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert first_run["pid"] != second_run["pid"], (first_run, second_run)
+    assert first_run["steps"] == second_run["steps"], (
+        f"two runs of one stateful island on one stepped clock read different values: "
+        f"{first_run['steps']} and {second_run['steps']}"
+    )
+    first_step_read = first_run["steps"][0][0]
+    lfo_rate_hz = 1.0
+    for step_index, value in first_run["steps"]:
+        stream_seconds_since_the_first_read = (step_index - first_step_read) * STEPPED_LFO_STEP_MS / 1000
+        expected = math.sin(2.0 * math.pi * ((lfo_rate_hz * stream_seconds_since_the_first_read) % 1.0))
+        assert value == pytest.approx(expected, abs=1e-9), (
+            f"at step {step_index} the LFO read {value}, and one step of stream time a step "
+            f"puts it at {expected}: {first_run['steps']}"
+        )
 
 
 def test_no_helper_survives_the_app(start_tatolabd_running_stream: StartTatolabdRunningStream):

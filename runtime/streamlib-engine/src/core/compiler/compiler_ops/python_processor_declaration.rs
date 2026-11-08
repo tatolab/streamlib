@@ -18,6 +18,7 @@ use crate::core::descriptors::{
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::core::processors::refuse_catalog_entries_hang_does_not_read;
 use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
+use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
@@ -30,6 +31,7 @@ const DESCRIBED_PACED_BY_REAL_TIME_KEY: &str = "paced_by_real_time";
 const DESCRIBED_CONFIG_SCHEMA_KEY: &str = "config_schema";
 const DESCRIBED_INPUT_PORTS_KEY: &str = "input_ports";
 const DESCRIBED_OUTPUT_PORTS_KEY: &str = "output_ports";
+const DESCRIBED_STATE_FIELDS_KEY: &str = "state_fields";
 
 /// Everything the engine needs to register one Python node type and run its
 /// nodes.
@@ -93,6 +95,8 @@ impl PythonProcessorDeclaration {
                 }
                 function_kind @ NodeKind::Function { .. } => {
                     descriptor.node_kind = function_kind;
+                    descriptor.function_node_state_fields =
+                        read_function_node_state_fields(described_node_type)?;
                     HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
                 }
                 NodeKind::Shader => {
@@ -113,6 +117,33 @@ impl PythonProcessorDeclaration {
             how_a_python_node_of_the_type_runs,
         })
     }
+}
+
+/// The fields of a described function node's state record, refused past what
+/// one function node's state entry holds.
+fn read_function_node_state_fields(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<Vec<String>, String> {
+    let state_fields: Vec<String> = described_node_type
+        .get(DESCRIBED_STATE_FIELDS_KEY)
+        .cloned()
+        .ok_or_else(|| format!("{DESCRIBED_STATE_FIELDS_KEY} is missing"))
+        .and_then(|state_fields| {
+            serde_json::from_value(state_fields).map_err(|not_a_list_of_names| {
+                format!(
+                    "{DESCRIBED_STATE_FIELDS_KEY} is not a list of names: {not_a_list_of_names}"
+                )
+            })
+        })?;
+    if state_fields.len() > STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS {
+        return Err(format!(
+            "its state record has {} fields, and a function node's state carries at most \
+             {STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS} numbers; keep fewer fields \
+             in `State[...]`",
+            state_fields.len()
+        ));
+    }
+    Ok(state_fields)
 }
 
 /// The kind a described node type declares: `process`, or `function` beside
@@ -688,6 +719,7 @@ mod tests {
 
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("python");
+        described["state_fields"] = serde_json::json!([]);
         for process_only_field in ["execution", "scheduling_priority", "paced_by_real_time"] {
             described
                 .as_object_mut()
@@ -705,6 +737,35 @@ mod tests {
             function.how_a_python_node_of_the_type_runs,
             HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
         );
+    }
+
+    #[test]
+    fn a_described_function_nodes_state_fields_read_into_its_descriptor_up_to_what_an_entry_holds()
+    {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("python");
+        described["state_fields"] = serde_json::json!(["phase", "cycles"]);
+        assert_eq!(
+            read(&described)
+                .expect("reads")
+                .descriptor
+                .function_node_state_fields,
+            vec!["phase".to_string(), "cycles".to_string()]
+        );
+
+        let one_field_too_many: Vec<String> = (0
+            ..=STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS)
+            .map(|field_index| format!("field_{field_index}"))
+            .collect();
+        described["state_fields"] = serde_json::json!(one_field_too_many);
+        assert!(refusal_of(&described).contains("at most"));
+
+        described
+            .as_object_mut()
+            .expect("an object")
+            .remove("state_fields");
+        assert!(refusal_of(&described).contains("state_fields"));
     }
 
     #[test]

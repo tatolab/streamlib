@@ -140,6 +140,7 @@ from tatolab.stream import (
 )
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
+    NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
     NODE_DECLARATION_LANGUAGE_STAMP,
     FunctionNode,
 )
@@ -863,6 +864,7 @@ DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
     ("function_signature", NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP),
+    ("state_fields", NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP),
 )
 
 
@@ -1397,7 +1399,12 @@ class HelperProcessLifecycle:
             loss_count_board = command.get("loss_count_board")
             if loss_count_board is not None:
                 self._link_data_access.open_loss_count_board(
-                    loss_count_board["service_name"], loss_count_board["output_ports"]
+                    loss_count_board["service_name"],
+                    loss_count_board["output_ports"],
+                    [
+                        (entry["breadcrumb_number"], entry["resumes_from_f64_bits"])
+                        for entry in loss_count_board.get("function_node_states", [])
+                    ],
                 )
             stream_clock = command.get("stream_clock") or {}
             stream_clock_board_service_name = stream_clock.get("board_service_name")
