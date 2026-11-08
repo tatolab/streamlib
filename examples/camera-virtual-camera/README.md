@@ -23,7 +23,7 @@ the module:
 ```json
 {
   "nodes": [
-    {"name": "camerasource", "type": "tatolab.camera:CameraSource", "config": {}},
+    {"name": "camerasource", "type": "tatolab.camera.camera_source:CameraSource", "config": {}},
     {"name": "invertingeffect", "type": "nodes.inverting_effect:InvertingEffect", "config": {}},
     {"name": "passthrough-virtual-camera", "type": "tatolab.virtualcamera:VirtualCameraSink",
      "config": {"name": "Tatolab Camera", "door": "auto"}},

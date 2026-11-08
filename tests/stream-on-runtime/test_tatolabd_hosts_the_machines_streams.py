@@ -81,11 +81,11 @@ BRAVO_STREAM_FUNCTION = "bravo_pattern"
 #: Every project stream here: a test pattern into a node that reads its frames.
 PROJECT_STREAM_SOURCE_TEMPLATE = '''\
 from frame_reader import PatternFrameReader
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 
-@stream
+@graph_generator
 def {stream_function_name}(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
         TestPatternSource, name="pattern", config={{"width": 320, "height": 180}}

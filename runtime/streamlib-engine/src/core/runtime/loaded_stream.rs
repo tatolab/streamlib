@@ -1210,6 +1210,7 @@ impl LoadedStreamInThisRuntime {
                             pins: node.pins.clone(),
                             exposed_config_fields: node.exposed_config_fields.clone(),
                             studio: node.studio.clone(),
+                            fragment: None,
                         },
                         &config_json,
                     )?;

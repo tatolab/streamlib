@@ -17,7 +17,7 @@ from testpattern_module_streams import (
     a_test_pattern_into_an_image_frame_probe,
     a_test_pattern_source_alone,
 )
-from tatolab.stream import compile_stream_to_graph
+from tatolab.stream import run_graph_generator
 
 
 @pytest.mark.requires_gpu
@@ -52,7 +52,7 @@ def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
-    graph = compile_stream_to_graph(a_test_pattern_source_alone)
+    graph = run_graph_generator(a_test_pattern_source_alone)
     assert [node["name"] for node in graph["nodes"]] == ["testpatternsource"]
 
     outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)

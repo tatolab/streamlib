@@ -1,16 +1,16 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_processor_interpreter_lend.py` runs from the suite project."""
+"""The `@graph_generator` functions `test_processor_interpreter_lend.py` runs from the suite project."""
 
 from processor_interpreter_lend_probes import (
     CountsBagsFromUpstreamSink,
     ReportsItsInterpreterSource,
 )
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 
-@stream
+@graph_generator
 def interpreter_reporting_source_into_counting_sink(stream_builder: StreamBuilder) -> None:
     """A source announcing its interpreter into a sink counting what it received."""
     source = stream_builder.add(ReportsItsInterpreterSource)

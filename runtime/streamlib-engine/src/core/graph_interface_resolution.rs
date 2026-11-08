@@ -80,6 +80,43 @@ pub struct GraphInterfaceNodeAsDrawn {
     pub declared_port: GraphInterfacePort,
 }
 
+impl GraphInterfaceNodeAsDrawn {
+    /// The interface node as `graph` renders it, its one port of the family it declares.
+    pub fn rendered_as_a_node(&self) -> ProcessorNodeOutput {
+        let declared = &self.declared_port;
+        let value_port = declared.rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        let (inputs, outputs) = match declared.direction {
+            GraphInterfacePortDirection::Output => (vec![value_port], Vec::new()),
+            GraphInterfacePortDirection::Input => (Vec::new(), vec![value_port]),
+        };
+        let mut components = serde_json::Map::new();
+        components.insert(
+            GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
+            declared.as_component(),
+        );
+        ProcessorNodeOutput {
+            id: self
+                .node
+                .id
+                .map(|node_uuid| node_uuid.to_string())
+                .unwrap_or_default(),
+            processor_type: self.node.processor_type.clone(),
+            kind: None,
+            language: None,
+            name: cast_or_as_written(&self.node.name),
+            config: Some(self.node.config.clone()),
+            config_checksum: compute_json_checksum(&self.node.config),
+            pins: self.node.pins.clone(),
+            exposed_config_fields: self.node.exposed_config_fields.clone(),
+            studio: self.node.studio.clone(),
+            inputs_waiting_for_a_value: Vec::new(),
+            ports: ProcessorNodePortsOutput { inputs, outputs },
+            components,
+            fragment: None,
+        }
+    }
+}
+
 /// One link with an end on an interface node, as drawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkTouchingAnInterfaceNodeAsDrawn {
@@ -369,53 +406,12 @@ impl GraphInterfaceAsDrawn {
             );
         }
         for interface_node in &self.interface_nodes {
-            let declared = &interface_node.declared_port;
-            let value_port = PortInfoOutput {
-                name: GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
-                description: String::new(),
-                port_kind: PortKindOutput::default(),
-                delivery_profile: None,
-                borrow_quota: None,
-                audio_window: None,
-                stream_facts: None,
-                values_checked: None,
-                family: Some(PortFamilyDeclaration::of_family(declared.family)),
-                pin_default: None,
-            };
-            let (inputs, outputs) = match declared.direction {
-                GraphInterfacePortDirection::Output => (vec![value_port], Vec::new()),
-                GraphInterfacePortDirection::Input => (Vec::new(), vec![value_port]),
-            };
-            let mut components = serde_json::Map::new();
-            components.insert(
-                GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
-                declared.as_component(),
-            );
             let position = interface_node
                 .position_among_the_graphs_nodes
                 .min(graph_response.nodes.len());
-            graph_response.nodes.insert(
-                position,
-                ProcessorNodeOutput {
-                    id: interface_node
-                        .node
-                        .id
-                        .map(|node_uuid| node_uuid.to_string())
-                        .unwrap_or_default(),
-                    processor_type: interface_node.node.processor_type.clone(),
-                    kind: None,
-                    language: None,
-                    name: cast_or_as_written(&interface_node.node.name),
-                    config: Some(interface_node.node.config.clone()),
-                    config_checksum: compute_json_checksum(&interface_node.node.config),
-                    pins: interface_node.node.pins.clone(),
-                    exposed_config_fields: interface_node.node.exposed_config_fields.clone(),
-                    studio: interface_node.node.studio.clone(),
-                    inputs_waiting_for_a_value: Vec::new(),
-                    ports: ProcessorNodePortsOutput { inputs, outputs },
-                    components,
-                },
-            );
+            graph_response
+                .nodes
+                .insert(position, interface_node.rendered_as_a_node());
         }
     }
 
@@ -523,6 +519,22 @@ impl GraphInterfacePort {
                 output.node, output.port, self.interface_node
             )
         })
+    }
+
+    /// A port named `port_name` of the family this port declares, as `graph` renders a port.
+    pub fn rendered_as_a_port_named(&self, port_name: &str) -> PortInfoOutput {
+        PortInfoOutput {
+            name: port_name.to_string(),
+            description: String::new(),
+            port_kind: PortKindOutput::default(),
+            delivery_profile: None,
+            borrow_quota: None,
+            audio_window: None,
+            stream_facts: None,
+            values_checked: None,
+            family: Some(PortFamilyDeclaration::of_family(self.family)),
+            pin_default: None,
+        }
     }
 
     fn as_component(&self) -> serde_json::Value {
@@ -833,6 +845,7 @@ mod tests {
             exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
             inputs_waiting_for_a_value: Vec::new(),
+            fragment: None,
         };
         let mut graph_response: GraphResponse = serde_json::from_value(serde_json::json!({
             "machine": "rig", "nodes": [], "links": [],

@@ -58,7 +58,7 @@ from helper_process_observation import (
 )
 from local_api_client import RUNNING_NODE_STATE
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
-from tatolab.stream import StreamBuilder, compile_stream_to_graph
+from tatolab.stream import StreamBuilder, run_graph_generator
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -664,7 +664,8 @@ def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its
 
     Each reader reads every count in order, so each reads a run of consecutive
     counts from the one counter, and `graph` shows the counter holding a count
-    at least as high as any either read.
+    at least as high as any either read, and that its own helper ran it
+    compiled.
 
     Fail-without-fix: the counter runs inside each reader with a copy of its
     state each, and the stream starts only the two readers' helpers.
@@ -693,6 +694,7 @@ def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its
     assert counter["components"]["function_node_state"]["calls"] >= max(
         first_reader["counts"][-1], second_reader["counts"][-1]
     ), counter["components"]
+    assert counter["components"]["ran_compiled"] is True, counter["components"]
 
 
 def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_tatolab_ops(
@@ -963,7 +965,7 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
     )
 
     tatolabd = start_tatolabd_running_stream(
-        compile_stream_to_graph(stale_build_labelled_source),
+        run_graph_generator(stale_build_labelled_source),
         project_directory=child_startup_directory,
     )
     stream_id = tatolabd.await_the_latest_stream_loaded()

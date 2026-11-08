@@ -18,7 +18,7 @@ Queues the stop and prints its action id at once (`<action> queued: stop of <str
 ```bash
 tatolab rm --dir <project directory>
 ```
-Queues the removal of the whole project (`--dir` defaults to the working directory): every stream of it is unloaded and forgotten, stopped or failed ones included. No verb removes one stream — a `@stream` in `stream.py` runs; comment it out to drop it.
+Queues the removal of the whole project (`--dir` defaults to the working directory): every stream of it is unloaded and forgotten, stopped or failed ones included. No verb removes one stream — a `@graph_generator` in `stream.py` runs; comment it out to drop it.
 
 Ctrl-C on `tatolab dev` or `tatolab logs -f` ends only the following; the stream stays loaded, so `stop` or `rm` it as above. A `tatolab stop` while `dev` runs ends the current load, and `dev` loads again on the next saved edit — end `dev` first to stop for good.
 

@@ -61,26 +61,26 @@ from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.stream import (
     Message,
     StreamBuilder,
-    compile_stream_to_graph,
+    run_graph_generator,
     log,
-    stream,
+    graph_generator,
 )
 from tatolab.stream.stream_facts import PacketsStreamFacts
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
 
-@stream
+@graph_generator
 def the_whip_publisher_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(WhipPublisher, config={"url": "https://example.invalid/x"})
 
 
-@stream
+@graph_generator
 def the_whep_player_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/x"})
 
 
-@stream
+@graph_generator
 def the_publisher_fed_by_both_encoders(stream_builder: StreamBuilder) -> None:
     video_encoder = stream_builder.add(H264Encoder)
     audio_encoder = stream_builder.add(OpusEncoder)
@@ -92,7 +92,7 @@ def the_publisher_fed_by_both_encoders(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
 
 
-@stream
+@graph_generator
 def the_player_feeding_both_decoders(stream_builder: StreamBuilder) -> None:
     player = stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
     video_decoder = stream_builder.add(H264Decoder)
@@ -106,7 +106,7 @@ def the_player_feeding_both_decoders(stream_builder: StreamBuilder) -> None:
     )
 
 
-@stream
+@graph_generator
 def a_publish_and_play_round_trip(stream_builder: StreamBuilder) -> None:
     encoder = stream_builder.add(H264Encoder)
     publisher = stream_builder.add(
@@ -362,7 +362,7 @@ def node_names_loaded_by_tatolabd(
     at the GPU, which the runtime logs, and its unload counts the processors the
     load added. Fails naming what the runtime said when the load is refused.
     """
-    graph = compile_stream_to_graph(stream_function)
+    graph = run_graph_generator(stream_function)
     stream_name = stream_function.__name__
     project_directory = working_directory / "project"
     write_a_project_holding_the_graph(project_directory, stream_name, graph)

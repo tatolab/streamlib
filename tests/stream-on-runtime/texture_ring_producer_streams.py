@@ -4,7 +4,7 @@
 """One stream per texture-ring scenario: a Python frame producer and its
 consumer, each in a processor interpreter of its own."""
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from texture_ring_producer_probes import (
     FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD,
     MINIMUM_INTERVAL_BETWEEN_HELD_FRAME_PUBLISHES_NS,
@@ -18,7 +18,7 @@ from texture_ring_producer_probes import (
 )
 
 
-@stream
+@graph_generator
 def ring_rotation(stream_builder: StreamBuilder) -> None:
     """One frame more than the ring rotates through with its one link, so the
     last one wraps onto the slot the first published from.
@@ -37,7 +37,7 @@ def ring_rotation(stream_builder: StreamBuilder) -> None:
     )
 
 
-@stream
+@graph_generator
 def published_frames_reach_a_downstream_consumer(stream_builder: StreamBuilder) -> None:
     """Python source → Python sink, the direction nothing else covers.
 
@@ -73,14 +73,14 @@ def _add_a_source_holding_its_first_frame_downstream(
     )
 
 
-@stream
+@graph_generator
 def a_claimed_frame_holds_still(stream_builder: StreamBuilder) -> None:
     """The consumer claims the first frame and holds it while the source
     publishes past the ring's whole rotation."""
     _add_a_source_holding_its_first_frame_downstream(stream_builder, ClaimedFrameHoldingSink)
 
 
-@stream
+@graph_generator
 def an_unclaimed_frame_is_recycled(stream_builder: StreamBuilder) -> None:
     """The same schedule with no claim: the first frame's slot is republished."""
     _add_a_source_holding_its_first_frame_downstream(stream_builder, UnclaimedFrameHoldingSink)

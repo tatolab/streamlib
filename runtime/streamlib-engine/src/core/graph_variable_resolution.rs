@@ -250,6 +250,7 @@ impl GraphVariablesAsDrawn {
                         },
                     },
                     components,
+                    fragment: None,
                 },
             );
         }
@@ -1014,6 +1015,7 @@ mod tests {
             exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
             inputs_waiting_for_a_value: Vec::new(),
+            fragment: None,
         }
     }
 

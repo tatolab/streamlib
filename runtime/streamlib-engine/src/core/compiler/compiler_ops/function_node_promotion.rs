@@ -9,7 +9,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use super::function_node_island::{
-    runs_inside_the_read_of_each_node_it_feeds, the_state_fields_of_a_function_node,
+    runs_inside_the_read_of_each_node_it_feeds, the_report_of_how_its_helpers_ran_a_function_node,
+    the_state_fields_of_a_function_node,
 };
 use crate::core::ProcessorUniqueId;
 use crate::core::error::{Error, Result};
@@ -112,17 +113,36 @@ pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_proces
         moved_out_of_the_islands.extend(moved);
     }
     for moved_id in the_promoted_nodes_in_a_stable_order(&moved_out_of_the_islands) {
-        if let Some(node) = graph.traversal_mut().v(&moved_id).first_mut() {
-            node.insert_component_without_rendering_it(
-                FunctionNodePromotedToItsOwnProcessComponent {
-                    process_execution: ProcessExecution::Continuous {
-                        interval_ms: STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS,
-                    },
-                },
-            );
-        }
+        mark_a_function_node_promoted_to_its_own_process(
+            graph,
+            &moved_id,
+            ProcessExecution::Continuous {
+                interval_ms: STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS,
+            },
+        );
     }
     Ok(())
+}
+
+/// Mark `function_node_id` promoted into a helper of its own driven the way
+/// `process_execution` says, sharing the report `graph` renders as its
+/// `ran_compiled` with that helper.
+fn mark_a_function_node_promoted_to_its_own_process(
+    graph: &mut Graph,
+    function_node_id: &ProcessorUniqueId,
+    process_execution: ProcessExecution,
+) {
+    let Some(how_its_own_helper_ran_it) =
+        the_report_of_how_its_helpers_ran_a_function_node(graph, function_node_id)
+    else {
+        return;
+    };
+    if let Some(node) = graph.traversal_mut().v(function_node_id).first_mut() {
+        node.insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
+            process_execution,
+            how_its_own_helper_ran_it,
+        });
+    }
 }
 
 /// The nodes outside any island whose read evaluates `function_node`, through
@@ -289,11 +309,7 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
 
     let mut planned = FunctionNodePromotionPlanned::default();
     for promoted_id in the_promoted_nodes_in_a_stable_order(&promoted) {
-        if let Some(node) = graph.traversal_mut().v(&promoted_id).first_mut() {
-            node.insert_component_without_rendering_it(
-                FunctionNodePromotedToItsOwnProcessComponent { process_execution },
-            );
-        }
+        mark_a_function_node_promoted_to_its_own_process(graph, &promoted_id, process_execution);
         planned.promotion_of_each_node.push((
             promoted_id.clone(),
             FunctionNodePromotionOutOfItsReadersIslands {
@@ -372,7 +388,9 @@ mod tests {
         HowALinkIsWired, how_a_link_is_wired,
         wire_a_link_from_a_function_node_island_into_its_reader,
     };
-    use crate::core::graph::JsonSerializableComponent;
+    use crate::core::graph::{
+        FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode, JsonSerializableComponent,
+    };
 
     const NOTHING_REMOVED: WhatTheCompileCarryingAPromotionRemoves<'static> =
         WhatTheCompileCarryingAPromotionRemoves {
@@ -790,6 +808,103 @@ mod tests {
         assert_eq!(
             how_a_link_is_wired(&graph, &counter_into_the_first_reader).unwrap(),
             HowALinkIsWired::ThroughAChannel
+        );
+    }
+
+    fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &ProcessorUniqueId) -> JsonValue {
+        graph
+            .traversal()
+            .v(node_id)
+            .first()
+            .and_then(|node| node.get::<FunctionNodeRanCompiledComponent>())
+            .map(|component| component.to_json())
+            .expect("a promoted function node carries the report `graph` renders")
+    }
+
+    fn the_report_its_own_helper_notes_on(
+        graph: &Graph,
+        node_id: &ProcessorUniqueId,
+    ) -> std::sync::Arc<HowItsHelpersRanAFunctionNode> {
+        graph
+            .traversal()
+            .v(node_id)
+            .first()
+            .and_then(|node| node.get::<FunctionNodePromotedToItsOwnProcessComponent>())
+            .map(|promotion| std::sync::Arc::clone(&promotion.how_its_own_helper_ran_it))
+            .expect("the node was promoted")
+    }
+
+    /// A stateful node several readers read is evaluated by no reader, so the
+    /// helper of its own is what reports how it ran it.
+    ///
+    /// Fail-without-fix: the node carries no report its own helper notes on,
+    /// and `graph` shows `ran_compiled: null` for as long as it runs.
+    #[test]
+    fn a_stateful_node_two_readers_read_shows_how_its_own_helper_ran_it() {
+        let mut graph = a_graph_resolving_two_stateful_function_node_types();
+        let counter = add_a_node(&mut graph, "test_ops:counter", JsonValue::Null);
+        let first_reader = a_helper_reader_before_its_setup(&mut graph);
+        let second_reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&counter, "result"), (&first_reader, "in1"));
+        link(&mut graph, (&counter, "result"), (&second_reader, "in1"));
+        let added = every_node_of(&graph);
+
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph,
+            &added,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            the_ran_compiled_graph_renders_on(&graph, &counter),
+            JsonValue::Null,
+            "null until its own helper has set up"
+        );
+        the_report_its_own_helper_notes_on(&graph, &counter).note_it_ran_compiled(true);
+        assert_eq!(
+            the_ran_compiled_graph_renders_on(&graph, &counter),
+            JsonValue::Bool(true)
+        );
+    }
+
+    /// A node promoted after a crash shows how its reader ran it until its own
+    /// helper reports, then how its own helper runs it.
+    #[test]
+    fn a_node_promoted_out_of_its_reader_shows_how_its_own_helper_runs_it() {
+        let OneIslandIntoOneReader {
+            mut graph,
+            remap,
+            reader,
+            ..
+        } = one_island_into_one_reader_driven_in(ProcessExecution::Continuous { interval_ms: 25 });
+        graph
+            .traversal()
+            .v(&remap)
+            .first()
+            .and_then(|node| node.get::<FunctionNodeRanCompiledComponent>())
+            .expect("its reader's island attached the report")
+            .0
+            .note_it_ran_compiled(false);
+
+        plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+            &mut graph,
+            &remap,
+            &reader,
+            "function node `remap` crashed its helper process during its call.",
+            &NOTHING_REMOVED,
+        )
+        .unwrap();
+
+        assert_eq!(
+            the_ran_compiled_graph_renders_on(&graph, &remap),
+            JsonValue::Bool(false),
+            "how its reader ran it, until its own helper reports"
+        );
+        the_report_its_own_helper_notes_on(&graph, &remap).note_it_ran_compiled(true);
+        assert_eq!(
+            the_ran_compiled_graph_renders_on(&graph, &remap),
+            JsonValue::Bool(true)
         );
     }
 

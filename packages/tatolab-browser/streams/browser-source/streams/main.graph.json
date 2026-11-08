@@ -52,13 +52,13 @@
       },
       "id": "a3cad400-e92e-4ca4-b63c-59b666280804",
       "name": "browsersource",
-      "type": "tatolab.browser:BrowserSource"
+      "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
       "config": {},
       "id": "852eeac6-1d33-4b0d-8737-20c2a9f6a1d8",
       "name": "browsersourceoutputprobe",
-      "type": "tatolab.browser:BrowserSourceOutputProbe"
+      "type": "tatolab.browser.browser_source_output_probe:BrowserSourceOutputProbe"
     }
   ]
 }

@@ -12,7 +12,7 @@ import errno
 import importlib.metadata
 
 import pytest
-from tatolab.stream import ColorInfo, StreamBuilder, compile_stream_to_graph, stream
+from tatolab.stream import ColorInfo, StreamBuilder, run_graph_generator, graph_generator
 from tatolab.stream._node_config_schema import derive_config_class_json_schema
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_EXECUTION_STAMP,
@@ -68,13 +68,13 @@ def test_the_only_port_is_one_newest_image_input_and_the_node_is_reactive():
     )
 
 
-@stream
+@graph_generator
 def a_virtual_camera(stream_builder: StreamBuilder) -> None:
     stream_builder.add(VirtualCameraSink, config={"name": "Desk cam"})
 
 
 def test_a_stream_names_the_sink_by_the_type_the_module_publishes():
-    graph = compile_stream_to_graph(a_virtual_camera)
+    graph = run_graph_generator(a_virtual_camera)
 
     assert [
         (node["name"], node["type"], node["config"]) for node in graph["nodes"]

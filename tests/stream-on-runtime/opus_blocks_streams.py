@@ -1,25 +1,25 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_opus_blocks.py` runs from the suite project."""
+"""The `@graph_generator` functions `test_opus_blocks.py` runs from the suite project."""
 
 from tatolab.opus import OpusDecoder, OpusEncoder
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from opus_blocks_probes import DecodedAudioBlockProbe, EncodedOpusMediaFrameProbe, StereoToneSource
 
 
-@stream
+@graph_generator
 def an_opus_encoder_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(OpusEncoder)
 
 
-@stream
+@graph_generator
 def an_opus_decoder_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(OpusDecoder)
 
 
-@stream
+@graph_generator
 def stereo_tone_through_the_opus_pair_probed_on_both_links(stream_builder: StreamBuilder) -> None:
     """A stereo tone encoded and decoded back, with no Python in the codec path.
 

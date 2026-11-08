@@ -1,8 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::sync::Arc;
+
 use serde_json::Value as JsonValue;
 
+use super::HowItsHelpersRanAFunctionNode;
 use crate::core::execution::ProcessExecution;
 
 /// Marks a function node moved out of its readers' islands into a helper
@@ -13,6 +16,9 @@ pub struct FunctionNodePromotedToItsOwnProcessComponent {
     /// How the node's own helper drives it: its reader's interval, or the
     /// promotion default for a reader with none.
     pub process_execution: ProcessExecution,
+    /// Where the node's own helper notes how it ran it, the report its
+    /// [`FunctionNodeRanCompiledComponent`](super::FunctionNodeRanCompiledComponent) renders.
+    pub how_its_own_helper_ran_it: Arc<HowItsHelpersRanAFunctionNode>,
 }
 
 /// What moved a function node out of its readers' islands, as `graph` renders

@@ -70,7 +70,7 @@
       },
       "id": "826ee497-bbf3-4e87-ac63-27a4b740c99c",
       "name": "camerasource",
-      "type": "tatolab.camera:CameraSource"
+      "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
       "config": {},
@@ -88,7 +88,7 @@
       },
       "id": "69f34481-fe29-4237-9ae0-79457734e242",
       "name": "browsersource",
-      "type": "tatolab.browser:BrowserSource"
+      "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
       "config": {
@@ -96,7 +96,7 @@
       },
       "id": "70df0e99-82af-4838-a321-79fa887dbb24",
       "name": "browsersourceoutputprobe",
-      "type": "tatolab.browser:BrowserSourceOutputProbe"
+      "type": "tatolab.browser.browser_source_output_probe:BrowserSourceOutputProbe"
     }
   ]
 }

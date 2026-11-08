@@ -36,7 +36,7 @@ from opus_blocks_streams import (
 )
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.opus import OpusDecoder, OpusEncoder
-from tatolab.stream import compile_stream_to_graph
+from tatolab.stream import run_graph_generator
 
 TWO_OPUS_MARKERS = [OpusEncoder, OpusDecoder]
 
@@ -79,7 +79,7 @@ ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS = {
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]", marker_class
 ):
-    graph = compile_stream_to_graph(ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS[marker_class])
+    graph = run_graph_generator(ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS[marker_class])
     [marker_node] = [
         node
         for node in graph["nodes"]

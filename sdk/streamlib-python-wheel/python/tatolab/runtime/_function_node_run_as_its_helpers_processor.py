@@ -81,6 +81,22 @@ def the_processor_class_a_promoted_function_node_runs_as(
     return declared
 
 
+def ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs(
+    processor_class: Any,
+) -> "dict[str, bool]":
+    """`{node_id: ran_compiled}` for the function node `processor_class` runs once promoted; empty for any other class."""
+    if not (
+        isinstance(processor_class, type)
+        and issubclass(processor_class, _FunctionNodeRunAsItsHelpersProcessor)
+    ):
+        return {}
+    return {
+        processor_class._node_id: isinstance(
+            processor_class._prepared, FunctionNodeCompiledToItsEvaluateEntry
+        )
+    }
+
+
 class _FunctionNodeRunAsItsHelpersProcessor:
     """Calls one function node with the newest value on each input and writes its outputs."""
 

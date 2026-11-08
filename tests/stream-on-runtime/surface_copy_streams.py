@@ -6,7 +6,7 @@ which runs in a processor interpreter of its own."""
 
 from typing import Any
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 import surface_copy_probes
@@ -26,12 +26,12 @@ def _wire_a_test_pattern_into_probe(
     stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_frame_landing_probe(stream_builder: StreamBuilder) -> None:
     _wire_a_test_pattern_into_probe(stream_builder, surface_copy_probes.FrameLandingProbe, {})
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_a_frame_landing_probe_skipping_the_copy(stream_builder: StreamBuilder) -> None:
     """The landing check's negative control: the kernel reads a texture nothing copied into."""
     _wire_a_test_pattern_into_probe(
@@ -39,7 +39,7 @@ def a_test_pattern_into_a_frame_landing_probe_skipping_the_copy(stream_builder: 
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_copy_refusal_probe(stream_builder: StreamBuilder) -> None:
     _wire_a_test_pattern_into_probe(stream_builder, surface_copy_probes.CopyRefusalProbe, {})
 

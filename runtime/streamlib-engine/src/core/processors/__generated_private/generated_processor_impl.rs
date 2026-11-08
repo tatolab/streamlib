@@ -13,7 +13,7 @@ use crate::core::Result;
 use crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::HowItsReadersRanAFunctionNode;
+use crate::core::graph::HowItsHelpersRanAFunctionNode;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::FunctionNodeStatesCarriedForOneStream;
@@ -123,7 +123,7 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// Where each function node its islands call is told how its far side ran
     /// it, by the node's id.
     how_its_far_side_ran_each_function_node:
-        std::collections::HashMap<String, Arc<HowItsReadersRanAFunctionNode>>,
+        std::collections::HashMap<String, Arc<HowItsHelpersRanAFunctionNode>>,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -743,7 +743,7 @@ impl OutOfProcessLinkWiringEnvelope {
     /// reports it at the end of its setup.
     pub(crate) fn tell_each_function_node_how_its_far_side_ran_it(
         &self,
-        function_nodes: impl IntoIterator<Item = (String, Arc<HowItsReadersRanAFunctionNode>)>,
+        function_nodes: impl IntoIterator<Item = (String, Arc<HowItsHelpersRanAFunctionNode>)>,
     ) {
         self.recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
@@ -2223,8 +2223,8 @@ mod tests {
     fn each_function_node_is_told_how_the_far_side_ran_it() {
         let envelope =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
-        let how_lfo_ran = Arc::new(HowItsReadersRanAFunctionNode::default());
-        let how_tally_ran = Arc::new(HowItsReadersRanAFunctionNode::default());
+        let how_lfo_ran = Arc::new(HowItsHelpersRanAFunctionNode::default());
+        let how_tally_ran = Arc::new(HowItsHelpersRanAFunctionNode::default());
         envelope.tell_each_function_node_how_its_far_side_ran_it([
             ("lfo-1".to_string(), Arc::clone(&how_lfo_ran)),
             ("tally-1".to_string(), Arc::clone(&how_tally_ran)),

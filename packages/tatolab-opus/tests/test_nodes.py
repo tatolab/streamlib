@@ -26,9 +26,9 @@ from tatolab.stream import (
     ChannelsBlock,
     Input,
     StreamBuilder,
-    compile_stream_to_graph,
+    run_graph_generator,
     log,
-    stream,
+    graph_generator,
 )
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
@@ -40,7 +40,7 @@ NANOSECONDS_PER_WINDOW = SAMPLES_IN_ONE_WINDOW * 1_000_000_000 // OPUS_SAMPLE_RA
 LIBOPUS_PRE_SKIP_SAMPLES = 312
 
 
-@stream
+@graph_generator
 def an_opus_round_trip(stream_builder: StreamBuilder) -> None:
     encoder = stream_builder.add(OpusEncoder, config={"bitrate_bps": 64_000})
     decoder = stream_builder.add(OpusDecoder)
@@ -52,7 +52,7 @@ def nodes_by_type(graph: "dict[str, Any]") -> "dict[str, dict[str, Any]]":
 
 
 def test_each_node_is_named_by_its_own_import_path_in_the_module():
-    graph = compile_stream_to_graph(an_opus_round_trip)
+    graph = run_graph_generator(an_opus_round_trip)
 
     assert set(nodes_by_type(graph)) == {"tatolab.opus:OpusEncoder", "tatolab.opus:OpusDecoder"}
     assert nodes_by_type(graph)["tatolab.opus:OpusEncoder"]["config"] == {"bitrate_bps": 64_000}

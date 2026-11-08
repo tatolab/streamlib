@@ -106,6 +106,21 @@ pub struct ProcessorNodeOutput {
     pub inputs_waiting_for_a_value: Vec<String>,
     /// Runtime components (dynamic, varies based on processor state).
     pub components: serde_json::Map<String, serde_json::Value>,
+    /// What a fragment holds: its graph generator's stored output, each node rendered as this
+    /// node is. A spec key, present on a fragment alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(no_recursion)]
+    pub fragment: Option<GraphFragmentOutput>,
+}
+
+/// The nodes and links a fragment holds, each link end naming a node of the fragment.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct GraphFragmentOutput {
+    /// Every node of the fragment, a fragment it holds rendered as a container in turn.
+    #[schema(no_recursion)]
+    pub nodes: Vec<ProcessorNodeOutput>,
+    /// Every link between those nodes' ports.
+    pub links: Vec<LinkOutput>,
 }
 
 /// Container for processor input and output ports.
@@ -348,6 +363,8 @@ pub enum NodeKindOutput {
     Shader,
     Function,
     Process,
+    /// A graph generator's stored output, flattened into the nodes it holds when it runs.
+    Fragment,
 }
 
 /// The language a function node is written in.
@@ -496,6 +513,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
             inputs_waiting_for_a_value: Vec::new(),
             ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
             components: node.serialize_components(),
+            fragment: None,
         }
     }
 }

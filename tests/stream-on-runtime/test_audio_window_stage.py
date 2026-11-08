@@ -280,12 +280,12 @@ class WindowedMonoConsumer:
 '''
 
 GAPPED_AUDIO_STREAM_SOURCE = '''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from processors.gapped_audio import GappedMonoSource, WindowedMonoConsumer
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     source = stream_builder.add(GappedMonoSource, name="gapped-source")
     consumer = stream_builder.add(WindowedMonoConsumer, name="windowed-consumer")

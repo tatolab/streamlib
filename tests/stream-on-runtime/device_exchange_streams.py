@@ -10,7 +10,7 @@ real camera, whose capture ring and pool are what it holds a frame against.
 """
 
 from tatolab.camera import CameraSource
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 import device_exchange_probes
@@ -29,7 +29,7 @@ def _add_a_test_pattern_into(stream_builder: StreamBuilder, frame_probe_class: t
     stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
-@stream
+@graph_generator
 def camera_into_the_lagged_consumer_probe(stream_builder: StreamBuilder) -> None:
     """The camera's ring re-registers a different texture under one surface id
     every frame, and its pool recycles a slot every few frames — the two ways
@@ -39,32 +39,32 @@ def camera_into_the_lagged_consumer_probe(stream_builder: StreamBuilder) -> None
     stream_builder.connect(camera.output("video"), probe.input("video_from_upstream"))
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_graph_frame_to_torch_probe(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into(stream_builder, device_exchange_probes.GraphFrameToTorchProbe)
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_device_edit_probe(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into(stream_builder, device_exchange_probes.DeviceEditProbe)
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_with_block_edit_probe(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into(stream_builder, device_exchange_probes.WithBlockEditProbe)
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_tensor_outlives_handle_probe(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into(stream_builder, device_exchange_probes.TensorOutlivesHandleProbe)
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_host_side_probe(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into(stream_builder, device_exchange_probes.HostSideProbe)
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_copy_request_refused_at_both_doors_probe(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -73,7 +73,7 @@ def a_test_pattern_into_copy_request_refused_at_both_doors_probe(
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_pixel_buffer_scope_discards_on_raise_probe(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -82,12 +82,12 @@ def a_test_pattern_into_pixel_buffer_scope_discards_on_raise_probe(
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_mlx_reads_the_frame_probe(stream_builder: StreamBuilder) -> None:
     _add_a_test_pattern_into(stream_builder, device_exchange_probes.MlxReadsTheFrameProbe)
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_mlx_writes_the_frame_through_the_write_door_probe(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -96,7 +96,7 @@ def a_test_pattern_into_mlx_writes_the_frame_through_the_write_door_probe(
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_mlx_write_with_a_view_alive_misses_the_frame_probe(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -105,7 +105,7 @@ def a_test_pattern_into_mlx_write_with_a_view_alive_misses_the_frame_probe(
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_mlx_whole_array_assignment_misses_the_frame_probe(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -114,88 +114,88 @@ def a_test_pattern_into_mlx_whole_array_assignment_misses_the_frame_probe(
     )
 
 
-@stream
+@graph_generator
 def dma_buf_export_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.DmaBufExportProbe)
 
 
-@stream
+@graph_generator
 def privileged_capability_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.PrivilegedCapabilityProbe)
 
 
-@stream
+@graph_generator
 def texture_handle_round_trip_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.TextureHandleRoundTripProbe)
 
 
-@stream
+@graph_generator
 def opaque_fd_export_handoff_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.OpaqueFdExportHandoffProbe)
 
 
-@stream
+@graph_generator
 def opaque_fd_pixel_buffer_export_handoff_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.OpaqueFdPixelBufferExportHandoffProbe)
 
 
-@stream
+@graph_generator
 def device_tensor_scope_doubles_a_kernel_output_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.DeviceTensorScopeDoublesAKernelOutputProbe)
 
 
-@stream
+@graph_generator
 def device_tensor_scope_discards_on_raise_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.DeviceTensorScopeDiscardsOnRaiseProbe)
 
 
-@stream
+@graph_generator
 def pooled_texture_export_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.PooledTextureExportProbe)
 
 
-@stream
+@graph_generator
 def device_tensor_scope_takes_every_acquired_texture_probe_alone(
     stream_builder: StreamBuilder,
 ) -> None:
     stream_builder.add(device_exchange_probes.DeviceTensorScopeTakesEveryAcquiredTextureProbe)
 
 
-@stream
+@graph_generator
 def device_tensor_strides_follow_the_row_pitch_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.DeviceTensorStridesFollowTheRowPitchProbe)
 
 
-@stream
+@graph_generator
 def torch_device_write_then_engine_gpu_read_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.TorchDeviceWriteThenEngineGpuReadProbe)
 
 
-@stream
+@graph_generator
 def mlx_device_write_then_engine_gpu_read_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.MlxDeviceWriteThenEngineGpuReadProbe)
 
 
-@stream
+@graph_generator
 def torch_and_mlx_scopes_alternate_in_one_helper_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.TorchAndMlxScopesAlternateInOneHelperProbe)
 
 
-@stream
+@graph_generator
 def torch_tensor_outlives_texture_handle_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.TorchTensorOutlivesTextureHandleProbe)
 
 
-@stream
+@graph_generator
 def mlx_array_outlives_texture_handle_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.MlxArrayOutlivesTextureHandleProbe)
 
 
-@stream
+@graph_generator
 def iosurface_export_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.IOSurfaceExportProbe)
 
 
-@stream
+@graph_generator
 def raw_handle_off_its_platform_refuses_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(device_exchange_probes.RawHandleOffItsPlatformRefusesProbe)

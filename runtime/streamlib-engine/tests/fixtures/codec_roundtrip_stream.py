@@ -24,7 +24,7 @@ from decoded_video_frame_sink import DecodedVideoFrameSink
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
 from tatolab.moq import MoqGateway, MoqTrack, MoqTrackReceive, MoqTrackSend
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
@@ -68,7 +68,7 @@ def _fixture_relay_url() -> str:
     return relay_url
 
 
-@stream
+@graph_generator
 def test_pattern_through_the_encoder_sent_to_the_relay(stream_builder: StreamBuilder) -> None:
     encoder_marker, _ = _ENCODER_AND_DECODER_MARKERS_BY_CODEC[_codec()]
 
@@ -92,7 +92,7 @@ def test_pattern_through_the_encoder_sent_to_the_relay(stream_builder: StreamBui
     stream_builder.connect(encoder.output("encoded_video"), send.input("content"))
 
 
-@stream
+@graph_generator
 def the_senders_encoded_track_through_the_decoder(stream_builder: StreamBuilder) -> None:
     codec = _codec()
     _, decoder_marker = _ENCODER_AND_DECODER_MARKERS_BY_CODEC[codec]

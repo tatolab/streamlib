@@ -1,21 +1,24 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A stream: a `@stream` function over a `StreamBuilder`, compiled to its graph.
+"""A graph generator: a `@graph_generator` function over a `StreamBuilder`, run to the graph it builds.
 
 Pure Python — the standard library, the name cast and the built-in node base,
-nothing native — so a stream module imports and compiles with no engine in the
-process. The graph
-`compile_stream_to_graph` returns is the one `tatolabd` loads, handed over as JSON.
+nothing native — so a generator's module imports and runs with no engine in the
+process. The graph `run_graph_generator` returns is the one `tatolabd` loads,
+handed over as JSON; a generator another one places is stored inside it as a
+fragment.
 """
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import inspect
 import math
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, TypeVar, overload
 
@@ -35,26 +38,34 @@ from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
 from ._port_family_declaration import PortFamily
 
 __all__ = [
+    "GraphFragmentReference",
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
     "NodeReferenceToNodeType",
     "SoleReferrerNodeReferenceToNodeType",
     "StreamBuilder",
-    "compile_stream_to_graph",
-    "is_stream_function",
-    "stream",
+    "graph_generator",
+    "is_graph_generator",
+    "run_graph_generator",
 ]
 
 
-_StreamFunction = TypeVar("_StreamFunction", bound="Callable[[StreamBuilder], object]")
+_GraphGeneratorFunction = TypeVar(
+    "_GraphGeneratorFunction", bound="Callable[..., object]"
+)
 
-_STREAM_IDENTITY_ATTRIBUTE = "__streamlib_stream_identity__"
-_STREAM_NAME_ATTRIBUTE = "__streamlib_stream_name__"
-_STREAM_DESCRIPTION_ATTRIBUTE = "__streamlib_stream_description__"
+_GRAPH_GENERATOR_IDENTITY_ATTRIBUTE = "__streamlib_graph_generator_identity__"
+_GRAPH_GENERATOR_NAME_ATTRIBUTE = "__streamlib_graph_generator_name__"
+_GRAPH_GENERATOR_DESCRIPTION_ATTRIBUTE = "__streamlib_graph_generator_description__"
 
 # The class attribute a built-in node carries the path it is registered under in.
 _BUILT_IN_NODE_TYPE_ATTRIBUTE = "type"
+
+# The import paths the graph document names the interface nodes by: a fragment's ports.
+_GRAPH_INPUT_NODE_TYPE = "tatolab.stream:GraphInput"
+_GRAPH_OUTPUT_NODE_TYPE = "tatolab.stream:GraphOutput"
+_GRAPH_INTERFACE_PORT_CONFIG_KEY = "port"
 
 # The module name CPython gives the file it was launched with; a child process
 # importing this name gets its own entry file instead.
@@ -74,44 +85,55 @@ _MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT = 127 - 1
 # The graph dict, its `nodes` list and the node dict enclose every config.
 _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF = _MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT - 3
 
-_STREAM_TAKES_NO_ARGUMENTS = (
-    "@stream takes no arguments: the name is the function's, overridden at load "
-    "with `--name`. Write `@stream` bare above `def main(stream_builder: StreamBuilder) -> None:`."
+_GRAPH_GENERATOR_TAKES_NO_ARGUMENTS = (
+    "@graph_generator takes no arguments: the name is the function's. Write "
+    "`@graph_generator` bare above `def main(stream_builder: StreamBuilder) -> None:`, "
+    "each parameter after the builder a setting the generator promotes."
 )
 
-# A type checker sees the one-argument signature and flags `@stream()` and
-# `@stream(name=...)` where they are written; the call itself accepts them only
-# to refuse them by name.
+# The keywords `StreamBuilder.add` reads itself, which no generator may promote.
+_KEYWORDS_ADD_TAKES_ITSELF = ("name", "config")
+
+# The generators running in this run, outermost first, by name and identity.
+_GRAPH_GENERATORS_RUNNING: contextvars.ContextVar[tuple[tuple[str, str], ...]] = (
+    contextvars.ContextVar("_GRAPH_GENERATORS_RUNNING", default=())
+)
+
+# A type checker sees the one-argument signature and flags `@graph_generator()`
+# and `@graph_generator(name=...)` where they are written; the call itself
+# accepts them only to refuse them by name.
 if TYPE_CHECKING:
 
-    def stream(stream_function: _StreamFunction, /) -> _StreamFunction:
-        """Mark a module-level function of one `StreamBuilder` as a stream; return it unchanged."""
+    def graph_generator(
+        graph_generator_function: _GraphGeneratorFunction, /
+    ) -> _GraphGeneratorFunction:
+        """Mark a module-level function of a `StreamBuilder` and its promoted settings as a graph generator; return it unchanged."""
         ...
 
 else:
 
-    def stream(stream_function=None, /, **misused_keyword_arguments):
-        """Mark a module-level function of one `StreamBuilder` as a stream; return it unchanged."""
-        if stream_function is None or misused_keyword_arguments:
-            raise TypeError(_STREAM_TAKES_NO_ARGUMENTS)
-        return _stamp_stream_function(stream_function)
+    def graph_generator(graph_generator_function=None, /, **misused_keyword_arguments):
+        """Mark a module-level function of a `StreamBuilder` and its promoted settings as a graph generator; return it unchanged."""
+        if graph_generator_function is None or misused_keyword_arguments:
+            raise TypeError(_GRAPH_GENERATOR_TAKES_NO_ARGUMENTS)
+        return _stamp_graph_generator(graph_generator_function)
 
 
-def _stamp_stream_function(candidate: object) -> FunctionType:
-    stream_function = _the_function_unless_it_cannot_be_a_stream(candidate)
-    module = stream_function.__module__
-    qualname = stream_function.__qualname__
-    setattr(stream_function, _STREAM_IDENTITY_ATTRIBUTE, f"{module}:{qualname}")
-    setattr(stream_function, _STREAM_NAME_ATTRIBUTE, stream_function.__name__)
+def _stamp_graph_generator(candidate: object) -> FunctionType:
+    generator_function = _the_function_unless_it_cannot_be_a_graph_generator(candidate)
+    module = generator_function.__module__
+    qualname = generator_function.__qualname__
+    setattr(generator_function, _GRAPH_GENERATOR_IDENTITY_ATTRIBUTE, f"{module}:{qualname}")
+    setattr(generator_function, _GRAPH_GENERATOR_NAME_ATTRIBUTE, generator_function.__name__)
     setattr(
-        stream_function,
-        _STREAM_DESCRIPTION_ATTRIBUTE,
-        inspect.getdoc(stream_function) or "",
+        generator_function,
+        _GRAPH_GENERATOR_DESCRIPTION_ATTRIBUTE,
+        inspect.getdoc(generator_function) or "",
     )
-    return stream_function
+    return generator_function
 
 
-def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionType:
+def _the_function_unless_it_cannot_be_a_graph_generator(candidate: object) -> FunctionType:
     if not inspect.isfunction(candidate):
         # What a class-member decorator returns: a descriptor, callable only for
         # `staticmethod`.
@@ -120,71 +142,110 @@ def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionTyp
         ):
             descriptor_type_name = _type_name_as_written(candidate)
             raise TypeError(
-                f"@stream decorates a plain module-level function taking one `StreamBuilder`, "
-                f"and {candidate!r} is of type `{descriptor_type_name}`, which makes a class "
-                f"member of what it wraps. Put `@stream` on a plain module-level `def`, "
-                f"with no `@{descriptor_type_name}` under it."
+                f"@graph_generator decorates a plain module-level function taking a "
+                f"`StreamBuilder`, and {candidate!r} is of type `{descriptor_type_name}`, "
+                f"which makes a class member of what it wraps. Put `@graph_generator` on a "
+                f"plain module-level `def`, with no `@{descriptor_type_name}` under it."
             )
-        # Stacked over a `def` or a class `@stream` receives something callable,
-        # and over a class-member decorator the descriptor above, so any other
-        # value reached it as an argument: `@stream("rig")`.
+        # Stacked over a `def` or a class `@graph_generator` receives something
+        # callable, and over a class-member decorator the descriptor above, so any
+        # other value reached it as an argument: `@graph_generator("rig")`.
         sentence_naming_the_bare_form_when_called_with_a_value = (
-            "" if callable(candidate) else f" {_STREAM_TAKES_NO_ARGUMENTS}"
+            "" if callable(candidate) else f" {_GRAPH_GENERATOR_TAKES_NO_ARGUMENTS}"
         )
         raise TypeError(
-            f"@stream decorates a plain module-level function taking one `StreamBuilder`, and "
-            f"{candidate!r} is not one.{sentence_naming_the_bare_form_when_called_with_a_value}"
+            f"@graph_generator decorates a plain module-level function taking a "
+            f"`StreamBuilder`, and {candidate!r} is not one."
+            f"{sentence_naming_the_bare_form_when_called_with_a_value}"
         )
-    stream_function = candidate
-    module = stream_function.__module__
-    qualname = stream_function.__qualname__
-    if stream_function.__name__ == "<lambda>":
+    generator_function = candidate
+    module = generator_function.__module__
+    qualname = generator_function.__qualname__
+    if generator_function.__name__ == "<lambda>":
         raise TypeError(
-            f"a stream is a module-level function defined with `def`; `{module}:{qualname}` "
-            f"is a lambda, which has no name to load it by"
+            f"a graph generator is a module-level function defined with `def`; "
+            f"`{module}:{qualname}` is a lambda, which has no name to load it by"
         )
     if (
-        inspect.iscoroutinefunction(stream_function)
-        or inspect.isgeneratorfunction(stream_function)
-        or inspect.isasyncgenfunction(stream_function)
+        inspect.iscoroutinefunction(generator_function)
+        or inspect.isgeneratorfunction(generator_function)
+        or inspect.isasyncgenfunction(generator_function)
     ):
         raise TypeError(
             f"`{module}:{qualname}` is an `async def` or generator function, so calling it "
-            f"over the builder runs none of its body. A stream is a plain `def` that adds "
-            f"its nodes when called."
+            f"over the builder runs none of its body. A graph generator is a plain `def` "
+            f"that adds its nodes when called."
         )
     if _FUNCTION_LOCAL_MARKER in qualname or "." in qualname:
         raise TypeError(
-            f"a stream is a module-level function, and `{module}:{qualname}` is defined "
-            f"inside a {'function' if _FUNCTION_LOCAL_MARKER in qualname else 'class'}, "
-            f"so nothing can load it by name. Move `{stream_function.__name__}` to module "
-            f"scope."
+            f"a graph generator is a module-level function, and `{module}:{qualname}` is "
+            f"defined inside a "
+            f"{'function' if _FUNCTION_LOCAL_MARKER in qualname else 'class'}, so nothing "
+            f"can load it by name. Move `{generator_function.__name__}` to module scope."
         )
-    parameters = list(inspect.signature(stream_function).parameters.values())
-    if len(parameters) != 1 or parameters[0].kind not in (
+    parameters = list(inspect.signature(generator_function).parameters.values())
+    takes_the_builder_first = bool(parameters) and parameters[0].kind in (
         inspect.Parameter.POSITIONAL_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
-    ):
+    )
+    promoted_settings_are_named = all(
+        parameter.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        for parameter in parameters[1:]
+    )
+    if not (takes_the_builder_first and promoted_settings_are_named):
         raise TypeError(
-            f"a stream function takes exactly one positional parameter, the `StreamBuilder` "
-            f"it builds on — `def {stream_function.__name__}(stream_builder: StreamBuilder) "
-            f"-> None:`; "
-            f"`{module}:{qualname}` is `{stream_function.__name__}"
-            f"{inspect.signature(stream_function)}`"
+            f"a graph generator takes the `StreamBuilder` it builds on as its one "
+            f"positional parameter, then each setting it promotes by name — "
+            f"`def {generator_function.__name__}(stream_builder: StreamBuilder, "
+            f"radius: int = 4) -> None:`; `{module}:{qualname}` is "
+            f"`{generator_function.__name__}{inspect.signature(generator_function)}`"
         )
-    return stream_function
+    settings_add_takes_itself = [
+        parameter.name
+        for parameter in parameters[1:]
+        if parameter.name in _KEYWORDS_ADD_TAKES_ITSELF
+    ]
+    if settings_add_takes_itself:
+        raise TypeError(
+            f"graph generator `{module}:{qualname}` promotes "
+            f"{', '.join(f'`{name}`' for name in settings_add_takes_itself)}, which "
+            f"`stream_builder.add` takes itself — the fragment's name and a node's config — "
+            f"so no placement could set it. Give the setting another name."
+        )
+    return generator_function
 
 
-def is_stream_function(candidate: object) -> TypeGuard[Callable[..., Any]]:
-    """Whether `candidate` is a function `@stream` declared."""
+def is_graph_generator(candidate: object) -> TypeGuard[Callable[..., Any]]:
+    """Whether `candidate` is a function `@graph_generator` declared."""
     return inspect.isfunction(candidate) and all(
         isinstance(getattr(candidate, stamp, None), str)
         for stamp in (
-            _STREAM_IDENTITY_ATTRIBUTE,
-            _STREAM_NAME_ATTRIBUTE,
-            _STREAM_DESCRIPTION_ATTRIBUTE,
+            _GRAPH_GENERATOR_IDENTITY_ATTRIBUTE,
+            _GRAPH_GENERATOR_NAME_ATTRIBUTE,
+            _GRAPH_GENERATOR_DESCRIPTION_ATTRIBUTE,
         )
     )
+
+
+@contextmanager
+def _running_the_graph_generator(generator_function: Callable[..., Any]) -> Iterator[None]:
+    """Mark `generator_function` running for as long as the block runs, refusing one already running higher in this run."""
+    identity: str = getattr(generator_function, _GRAPH_GENERATOR_IDENTITY_ATTRIBUTE)
+    name: str = getattr(generator_function, _GRAPH_GENERATOR_NAME_ATTRIBUTE)
+    running = _GRAPH_GENERATORS_RUNNING.get()
+    if any(running_identity == identity for _, running_identity in running):
+        chain = " → ".join([*(running_name for running_name, _ in running), name])
+        raise ValueError(
+            f"graph generator `{identity}` places itself: {chain}. A generator already "
+            f"running higher in this run is never placed again, so the graph it builds "
+            f"ends; nothing of this run is kept"
+        )
+    token = _GRAPH_GENERATORS_RUNNING.set((*running, (name, identity)))
+    try:
+        yield
+    finally:
+        _GRAPH_GENERATORS_RUNNING.reset(token)
 
 
 class _NodeClassConstructedWithoutConfig(Protocol):
@@ -241,6 +302,38 @@ class NodeReference:
         return NodeInputPortReference(self.name, port_name)
 
 
+@dataclass(frozen=True, slots=True)
+class GraphFragmentReference(NodeReference):
+    """A fragment `StreamBuilder.add` placed: its ports are the Inputs and Outputs its generator's interface nodes declare."""
+
+    input_port_names: tuple[str, ...]
+    output_port_names: tuple[str, ...]
+
+    def output(self, port_name: str) -> NodeOutputPortReference:
+        """Name one of the Outputs the fragment's `GraphOutput` nodes declare."""
+        return NodeOutputPortReference(
+            self.name, self._declared_port(port_name, self.output_port_names, "Output")
+        )
+
+    def input(self, port_name: str) -> NodeInputPortReference:
+        """Name one of the Inputs the fragment's `GraphInput` nodes declare."""
+        return NodeInputPortReference(
+            self.name, self._declared_port(port_name, self.input_port_names, "Input")
+        )
+
+    def _declared_port(
+        self, port_name: str, declared_port_names: tuple[str, ...], port_kind: str
+    ) -> str:
+        cast = _cast_name(port_name, "port name")
+        if cast not in declared_port_names:
+            declared = ", ".join(f"`{name}`" for name in declared_port_names) or "none"
+            raise ValueError(
+                f"fragment `{self.name}` declares no {port_kind} `{cast}`; its graph "
+                f"generator's {port_kind}s are: {declared}"
+            )
+        return cast
+
+
 type NodeReferenceToNodeType[NodeClassTheReferenceNames] = NodeReference
 """A config field holding a reference to a node of `NodeClassTheReferenceNames`, checked at load."""
 
@@ -255,6 +348,17 @@ class _RecordedNode:
     config: dict[str, Any]
     typed_name: str | None
     class_short_name: str
+    fragment: dict[str, Any] | None = field(default=None)
+
+    def as_graph_document_node(self) -> dict[str, Any]:
+        node: dict[str, Any] = {
+            "name": self.name,
+            "type": self.node_type,
+            "config": copy.deepcopy(self.config),
+        }
+        if self.fragment is not None:
+            node["fragment"] = copy.deepcopy(self.fragment)
+        return node
 
     def how_its_name_was_given(self) -> str:
         if self.typed_name is not None:
@@ -263,18 +367,29 @@ class _RecordedNode:
 
 
 class StreamBuilder:
-    """The builder a `@stream` function adds and links nodes on; it runs nothing."""
+    """The builder a `@graph_generator` function adds and links nodes on; it runs nothing."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, placed_as_a_fragment: bool = False) -> None:
         self._name = _cast_name(name, "stream name")
+        self._placed_as_a_fragment = placed_as_a_fragment
         self._recorded_nodes_by_name: dict[str, _RecordedNode] = {}
         self._recorded_links: list[dict[str, dict[str, str]]] = []
         self._stream_clock: StreamClock | None = None
 
     @property
     def name(self) -> str:
-        """The stream's name, cast."""
+        """The name of the stream or fragment being built, cast."""
         return self._name
+
+    @overload
+    def add(
+        self,
+        node_class: _GraphGeneratorPlaced,
+        *,
+        name: str | None = None,
+        config: None = None,
+        **promoted_settings: Any,
+    ) -> GraphFragmentReference: ...
 
     @overload
     def add(
@@ -310,8 +425,20 @@ class StreamBuilder:
         *,
         name: str | None = None,
         config: Mapping[str, Any] | None = None,
+        **promoted_settings: Any,
     ) -> NodeReference:
-        """Record a node of `node_class`, a node class or a `@node.function`, under `name` (cast) or its short name, cast."""
+        """Record a node of `node_class` — a node class, a `@node.function`, or a `@graph_generator` run as a fragment over `promoted_settings` — under `name` (cast) or its short name, cast."""
+        if is_graph_generator(node_class):
+            return self._place_the_graph_generator(
+                node_class, name=name, config=config, promoted_settings=promoted_settings
+            )
+        if promoted_settings:
+            raise TypeError(
+                f"keyword arguments besides `name` and `config` are a graph generator's "
+                f"promoted settings, and {node_class!r} is a node, not a "
+                f"`@graph_generator`: pass its settings as `config={{...}}`. Got "
+                f"{', '.join(f'`{key}`' for key in promoted_settings)}."
+            )
         if not isinstance(node_class, (type, FunctionNode)):
             raise TypeError(_not_a_node_refusal(node_class))
         node_type = _node_type_of(node_class)
@@ -335,6 +462,55 @@ class StreamBuilder:
         )
         self._recorded_nodes_by_name[node_name] = recorded_node
         return NodeReference(node_name)
+
+    def _place_the_graph_generator(
+        self,
+        generator_function: Callable[..., Any],
+        *,
+        name: str | None,
+        config: Mapping[str, Any] | None,
+        promoted_settings: dict[str, Any],
+    ) -> GraphFragmentReference:
+        identity: str = getattr(generator_function, _GRAPH_GENERATOR_IDENTITY_ATTRIBUTE)
+        if config is not None:
+            raise TypeError(
+                f"graph generator `{identity}` takes its promoted settings as keyword "
+                f"arguments of `add`, not `config`: "
+                f"`stream_builder.add({generator_function.__name__}, radius=8)`"
+            )
+        _refuse_settings_the_generator_does_not_promote(generator_function, promoted_settings)
+        node_names_the_settings_reference: list[str] = []
+        promoted_config = _config_as_json_object(
+            promoted_settings, node_names_the_settings_reference
+        )
+        if node_names_the_settings_reference:
+            raise TypeError(
+                f"graph generator `{identity}` is promoted a `NodeReference`, and a node of "
+                f"this graph is not a node of the fragment: promote the setting the node "
+                f"would be built from instead"
+            )
+        node_name = (
+            self._name_a_defaulted_node_takes(generator_function)
+            if name is None
+            else self._typed_name_unless_taken(name)
+        )
+        fragment_builder = StreamBuilder(node_name, placed_as_a_fragment=True)
+        with _running_the_graph_generator(generator_function):
+            generator_function(fragment_builder, **promoted_settings)
+        fragment = fragment_builder._compiled_fragment()
+        self._recorded_nodes_by_name[node_name] = _RecordedNode(
+            name=node_name,
+            node_type=identity,
+            config=promoted_config,
+            typed_name=name,
+            class_short_name=generator_function.__name__,
+            fragment=fragment,
+        )
+        return GraphFragmentReference(
+            node_name,
+            input_port_names=fragment_builder._interface_port_names(_GRAPH_INPUT_NODE_TYPE),
+            output_port_names=fragment_builder._interface_port_names(_GRAPH_OUTPUT_NODE_TYPE),
+        )
 
     def connect(
         self, source: NodeOutputPortReference, destination: NodeInputPortReference
@@ -370,6 +546,11 @@ class StreamBuilder:
                 f"or a `SteppedStreamClock(step_ns=…)`, imported from `tatolab.stream`. "
                 f"Got {stream_clock!r}."
             )
+        if self._placed_as_a_fragment:
+            raise ValueError(
+                f"fragment `{self._name}` is placed in a graph that names its own clock; a "
+                f"generator names a clock only when it fills a stream"
+            )
         if self._stream_clock is not None:
             raise ValueError(
                 f"stream `{self._name}` already runs on {self._stream_clock!r}; a stream "
@@ -390,7 +571,9 @@ class StreamBuilder:
             )
         return cast
 
-    def _name_a_defaulted_node_takes(self, node_class: type | FunctionNode[..., Any]) -> str:
+    def _name_a_defaulted_node_takes(
+        self, node_class: type | FunctionNode[..., Any] | Callable[..., Any]
+    ) -> str:
         cast = cast_exposed_name_to_url_safe(node_class.__name__)
         if cast not in self._recorded_nodes_by_name:
             return cast
@@ -417,37 +600,128 @@ class StreamBuilder:
         self._refuse_a_node_this_stream_does_not_hold(end.node_name)
         return {"node": end.node_name, "port": end.port_name}
 
+    def _interface_port_names(self, interface_node_type: str) -> tuple[str, ...]:
+        return tuple(
+            _cast_name(str(recorded_node.config[_GRAPH_INTERFACE_PORT_CONFIG_KEY]), "port name")
+            for recorded_node in self._recorded_nodes_by_name.values()
+            if recorded_node.node_type == interface_node_type
+            and isinstance(recorded_node.config.get(_GRAPH_INTERFACE_PORT_CONFIG_KEY), str)
+        )
+
+    def _compiled_fragment(self) -> dict[str, Any]:
+        return {
+            "nodes": [
+                recorded_node.as_graph_document_node()
+                for recorded_node in self._recorded_nodes_by_name.values()
+            ],
+            "links": copy.deepcopy(self._recorded_links),
+        }
+
     def _compiled_graph(self) -> dict[str, Any]:
         clock = (
             {}
             if self._stream_clock is None
             else {"clock": self._stream_clock.to_graph_document()}
         )
-        return {
-            "stream": self._name,
-            **clock,
-            "nodes": [
-                {
-                    "name": recorded_node.name,
-                    "type": recorded_node.node_type,
-                    "config": copy.deepcopy(recorded_node.config),
-                }
-                for recorded_node in self._recorded_nodes_by_name.values()
-            ],
-            "links": copy.deepcopy(self._recorded_links),
-        }
+        return {"stream": self._name, **clock, **self._compiled_fragment()}
 
 
-def compile_stream_to_graph(stream_function: Callable[[StreamBuilder], object]) -> dict[str, Any]:
-    """Run a `@stream` function once over a fresh `StreamBuilder` and return the graph it built."""
-    if not is_stream_function(stream_function):
+class _GraphGeneratorPlaced(Protocol):
+    """A `@graph_generator` function `StreamBuilder.add` places as a fragment."""
+
+    def __call__(self, stream_builder: StreamBuilder, /, *args: Any, **kwargs: Any) -> object: ...
+
+
+def run_graph_generator(
+    generator_function: Callable[..., object],
+    *,
+    promoted_settings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run a `@graph_generator` function once over a fresh `StreamBuilder`, filling a stream, and return the graph it built."""
+    if not is_graph_generator(generator_function):
         raise TypeError(
-            f"{stream_function!r} is not a stream: decorate it with @stream — a "
-            f"module-level `def` taking one `StreamBuilder`"
+            f"{generator_function!r} is not a graph generator: decorate it with "
+            f"@graph_generator — a module-level `def` taking a `StreamBuilder`"
         )
-    stream_builder = StreamBuilder(getattr(stream_function, _STREAM_NAME_ATTRIBUTE))
-    stream_function(stream_builder)
-    return stream_builder._compiled_graph()
+    settings = dict(promoted_settings or {})
+    _refuse_settings_the_generator_does_not_promote(generator_function, settings)
+    stream_builder = StreamBuilder(getattr(generator_function, _GRAPH_GENERATOR_NAME_ATTRIBUTE))
+    with _running_the_graph_generator(generator_function):
+        generator_function(stream_builder, **settings)
+    graph = stream_builder._compiled_graph()
+    _refuse_a_fragment_nested_deeper_than_a_graph_document_reads(graph)
+    return graph
+
+
+def _refuse_settings_the_generator_does_not_promote(
+    generator_function: Callable[..., Any], promoted_settings: Mapping[str, Any]
+) -> None:
+    identity: str = getattr(generator_function, _GRAPH_GENERATOR_IDENTITY_ATTRIBUTE)
+    parameters = list(inspect.signature(generator_function).parameters.values())[1:]
+    promoted = {parameter.name: parameter for parameter in parameters}
+    unknown = [key for key in promoted_settings if key not in promoted]
+    missing = [
+        parameter.name
+        for parameter in parameters
+        if parameter.default is inspect.Parameter.empty
+        and parameter.name not in promoted_settings
+    ]
+    if not (unknown or missing):
+        return
+    promoted_listed = ", ".join(f"`{name}`" for name in promoted) or "none"
+    what_is_wrong = []
+    if unknown:
+        what_is_wrong.append(
+            f"it promotes no {', '.join(f'`{key}`' for key in unknown)}"
+        )
+    if missing:
+        what_is_wrong.append(
+            f"{', '.join(f'`{name}`' for name in missing)} has no default and is not given"
+        )
+    raise TypeError(
+        f"graph generator `{identity}`: {'; '.join(what_is_wrong)}. The settings it "
+        f"promotes are: {promoted_listed}"
+    )
+
+
+def _refuse_a_fragment_nested_deeper_than_a_graph_document_reads(graph: dict[str, Any]) -> None:
+    deepest_containers, deepest_fragment_path = _containers_deep_and_the_deepest_fragment(
+        graph, 1, ""
+    )
+    if deepest_containers <= _MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT or not deepest_fragment_path:
+        return
+    raise ValueError(
+        f"fragment `{deepest_fragment_path}` nests {deepest_containers} containers deep from "
+        f"the graph's root, and a graph document nests at most "
+        f"{_MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT}: each fragment a generator places "
+        f"nests three deeper. Place fewer generators inside one another"
+    )
+
+
+def _containers_deep_and_the_deepest_fragment(
+    value: object, containers_deep: int, fragment_path: str
+) -> tuple[int, str]:
+    deepest = (containers_deep, fragment_path)
+    if isinstance(value, dict):
+        children: list[tuple[object, str]] = []
+        for key, child in value.items():
+            if key == "fragment" and isinstance(value.get("name"), str):
+                path = f"{fragment_path}/{value['name']}" if fragment_path else value["name"]
+                children.append((child, path))
+            else:
+                children.append((child, fragment_path))
+    elif isinstance(value, list):
+        children = [(child, fragment_path) for child in value]
+    else:
+        return deepest
+    for child, child_path in children:
+        if isinstance(child, (dict, list)):
+            candidate = _containers_deep_and_the_deepest_fragment(
+                child, containers_deep + 1, child_path
+            )
+            if candidate[0] > deepest[0]:
+                deepest = candidate
+    return deepest
 
 
 def _cast_name(name: str, what_the_name_names: str) -> str:

@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` function `test_inbound_link_naming.py` runs from the suite project."""
+"""The `@graph_generator` function `test_inbound_link_naming.py` runs from the suite project."""
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from inbound_link_naming_processors import (
     FeedsOneValueSource,
@@ -15,7 +15,7 @@ from inbound_link_naming_processors import (
 FEEDER_VALUES = {"firstfeeder": "from-the-first", "secondfeeder": "from-the-second"}
 
 
-@stream
+@graph_generator
 def two_feeders_into_one_port(stream_builder: StreamBuilder) -> None:
     """Both feeders linked into the one `tracks` port, a reporter on its output."""
     sink = stream_builder.add(ReportsWhichLinkEachBagCameFrom)

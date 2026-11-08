@@ -12,11 +12,11 @@ working directory; `--dir` is only how the caller's command spelled it. Whatever
 project's code does, stdout carries exactly one JSON object and the exit code is 0. With
 `--every-stream`, which no TARGET is the same as, the object is one of:
 
-- `{"project_directory", "streams"}` — every `@stream` `stream.py` defines, in definition
+- `{"project_directory", "streams"}` — every `@graph_generator` `stream.py` defines, in definition
   order, each `{"stream_function", "description", "stream_graph"}`, or
   `{"stream_function", "description", "failed_because"}` when that function raised;
 - `{"project_directory", "no_stream_defined_because"}` — `stream.py` imported and defines
-  no `@stream`;
+  no `@graph_generator`;
 - `{"project_directory", "import_failed_because"}` — the entry raised before any stream
   function could be listed, with its traceback.
 
@@ -26,7 +26,7 @@ With a TARGET naming one stream function, the object is one of:
 - `{"project_directory", "stream_function", "failed_because"}` — the stream function
   raised, with its traceback;
 - `{"project_directory", "stream_function", "not_defined_because"}` — the target named
-  a function the entry does not define as a `@stream`;
+  a function the entry does not define as a `@graph_generator`;
 - `{"project_directory", "import_failed_because"}`.
 
 `stream_function` is `<module>:<qualname>`. A refusal of the caller's own target prints
@@ -79,7 +79,7 @@ from ._project_stream_entry_resolution import (
     locate_stream_entry_module,
     resolve_stream_entry,
 )
-from ._stream_graph_builder import compile_stream_to_graph
+from ._stream_graph_builder import run_graph_generator
 
 __all__ = ["main"]
 
@@ -108,7 +108,7 @@ def _launcher_source_file_names() -> frozenset[str]:
     the latter leaves its frames sitting on top of the user's own. The importlib
     frames are the same for a `<module>:<function>` target — `importlib.util` is
     frozen from 3.11 too — and the builder's are the call into the user's
-    `@stream` function.
+    `@graph_generator` function.
     """
     tatolab_stream_package_directory = Path(__file__).parent
     return frozenset(
@@ -153,7 +153,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         prog="python -I -m tatolab.stream._project_stream_compile_entry",
         description=(
             f"Compile a project's streams in its own interpreter, with the anchor directory "
-            f"as the working directory: every @stream function "
+            f"as the working directory: every @graph_generator function "
             f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}` defines, or the one TARGET names, writing "
             f"their stream graphs, or why there are none, to stdout as one JSON object."
         ),
@@ -169,7 +169,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--every-stream",
         action="store_true",
         help=(
-            f"Compile every @stream function {DEFAULT_STREAM_ENTRY_FILE_NAME} defines, in "
+            f"Compile every @graph_generator function {DEFAULT_STREAM_ENTRY_FILE_NAME} defines, in "
             f"definition order; the default when no TARGET is given."
         ),
     )
@@ -258,7 +258,7 @@ def _one_stream_compiled(
 ) -> dict[str, Any]:
     """The stream graph `stream_function` compiles to, or its traceback, under its location."""
     try:
-        stream_graph = compile_stream_to_graph(stream_function)
+        stream_graph = run_graph_generator(stream_function)
     except Exception as compile_failure:  # noqa: BLE001 — reported as the app's own
         return {
             COMPILED_STREAM_FUNCTION_DOCUMENT_KEY: stream_function_located,
@@ -276,7 +276,7 @@ def compile_every_stream_of_the_project(
     anchor_directory: Path,
     anchor_directory_as_typed: Optional[str],
 ) -> dict[str, Any]:
-    """The document a load of the project records: every `@stream` `stream.py` defines,
+    """The document a load of the project records: every `@graph_generator` `stream.py` defines,
     compiled or failed, or why the project gave none."""
     resolved_stream_entry = resolve_stream_entry(verb, anchor_directory, None)
 

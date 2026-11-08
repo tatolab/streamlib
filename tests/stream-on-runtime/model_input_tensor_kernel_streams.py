@@ -11,7 +11,7 @@ extent — so every fit case has a stream of its own.
 
 from typing import Any
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 import model_input_tensor_kernel_probes
@@ -44,22 +44,22 @@ def _wire_a_test_pattern_into_the_matrix_probe(
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_stretch_matrix_probe(stream_builder: StreamBuilder) -> None:
     _wire_a_test_pattern_into_the_matrix_probe(stream_builder, "stretch")
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_letterbox_matrix_probe(stream_builder: StreamBuilder) -> None:
     _wire_a_test_pattern_into_the_matrix_probe(stream_builder, "letterbox")
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_pad_bottom_right_matrix_probe(stream_builder: StreamBuilder) -> None:
     _wire_a_test_pattern_into_the_matrix_probe(stream_builder, "pad_bottom_right")
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_pad_bottom_right_to_multiple_of_16_matrix_probe(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -68,7 +68,7 @@ def a_test_pattern_into_the_pad_bottom_right_to_multiple_of_16_matrix_probe(
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_letterbox_matrix_probe_with_the_wrong_mean(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -78,14 +78,14 @@ def a_test_pattern_into_the_letterbox_matrix_probe_with_the_wrong_mean(
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_non_rgba_source_refusal_probe(stream_builder: StreamBuilder) -> None:
     _wire_a_test_pattern_into_probe(
         stream_builder, model_input_tensor_kernel_probes.NonRgbaSourceRefusalProbe, None
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_the_pad_bottom_right_extent_change_probe(
     stream_builder: StreamBuilder,
 ) -> None:

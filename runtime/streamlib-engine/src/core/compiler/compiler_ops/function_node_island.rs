@@ -21,7 +21,7 @@ use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
     FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
-    GraphWeight, HowItsReadersRanAFunctionNode, Link, LinkState, LinkStateComponent, LinkUniqueId,
+    GraphWeight, HowItsHelpersRanAFunctionNode, Link, LinkState, LinkStateComponent, LinkUniqueId,
     OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
 };
 use crate::core::processors::OutOfProcessLinkWireReply;
@@ -147,7 +147,7 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
         .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(island)?;
     reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
         function_node_ids.iter().filter_map(|function_node_id| {
-            the_report_of_how_its_readers_ran_a_function_node(graph, function_node_id)
+            the_report_of_how_its_helpers_ran_a_function_node(graph, function_node_id)
                 .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
         }),
     );
@@ -210,7 +210,7 @@ pub(crate) fn hand_each_reader_the_island_a_compile_changed(
             )?;
         reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
             function_node_ids.iter().filter_map(|function_node_id| {
-                the_report_of_how_its_readers_ran_a_function_node(graph, function_node_id)
+                the_report_of_how_its_helpers_ran_a_function_node(graph, function_node_id)
                     .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
             }),
         );
@@ -296,17 +296,18 @@ fn mark_an_island_link_by_whether_its_reader_owes_an_answer(
     Ok(())
 }
 
-/// Where `function_node_id`'s readers note how they ran it, which `graph`
-/// renders on the node as `ran_compiled`; attached on its first reader.
-fn the_report_of_how_its_readers_ran_a_function_node(
+/// Where the helpers evaluating `function_node_id` note how they ran it, which
+/// `graph` renders on the node as `ran_compiled`; attached on its first reader
+/// or its promotion, whichever comes first.
+pub(crate) fn the_report_of_how_its_helpers_ran_a_function_node(
     graph: &mut Graph,
     function_node_id: &ProcessorUniqueId,
-) -> Option<std::sync::Arc<HowItsReadersRanAFunctionNode>> {
+) -> Option<std::sync::Arc<HowItsHelpersRanAFunctionNode>> {
     let node = graph.traversal_mut().v(function_node_id).first_mut()?;
     if let Some(component) = node.get::<FunctionNodeRanCompiledComponent>() {
         return Some(std::sync::Arc::clone(&component.0));
     }
-    let how_it_ran = std::sync::Arc::new(HowItsReadersRanAFunctionNode::default());
+    let how_it_ran = std::sync::Arc::new(HowItsHelpersRanAFunctionNode::default());
     node.insert(FunctionNodeRanCompiledComponent(std::sync::Arc::clone(
         &how_it_ran,
     )));

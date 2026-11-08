@@ -50,7 +50,7 @@
       },
       "id": "23f53615-9e59-4438-b89c-3ffb7384bbe2",
       "name": "camerasource",
-      "type": "tatolab.camera:CameraSource"
+      "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
       "config": {
@@ -62,7 +62,7 @@
       },
       "id": "b5b82154-7559-4988-b38b-5d81e7b41157",
       "name": "browsersource",
-      "type": "tatolab.browser:BrowserSource"
+      "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
       "config": {},
@@ -79,7 +79,7 @@
       },
       "id": "d160909f-7e7b-45b1-9bf7-dfef70c02ec6",
       "name": "rivesource",
-      "type": "tatolab.rive:RiveSource"
+      "type": "tatolab.rive.rive_source:RiveSource"
     },
     {
       "config": {
@@ -99,7 +99,7 @@
       },
       "id": "0490bf78-9f52-4959-ad93-c02afbc3e661",
       "name": "alphaovercompositor",
-      "type": "tatolab.compositor:AlphaOverCompositor"
+      "type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor"
     }
   ]
 }

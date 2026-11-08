@@ -20,7 +20,7 @@
       },
       "id": "11701fcd-a2d3-476e-95b3-ce07b37af3ea",
       "name": "camerasource",
-      "type": "tatolab.camera:CameraSource"
+      "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
       "config": {

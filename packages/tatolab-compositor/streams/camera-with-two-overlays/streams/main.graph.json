@@ -50,7 +50,7 @@
       },
       "id": "6dd3d91b-2d49-4cf4-a004-7e550a28dc7a",
       "name": "camerasource",
-      "type": "tatolab.camera:CameraSource"
+      "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
       "config": {
@@ -90,7 +90,7 @@
       },
       "id": "44fa15ca-4a91-437d-a5b3-cf89351951a7",
       "name": "alphaovercompositor",
-      "type": "tatolab.compositor:AlphaOverCompositor"
+      "type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor"
     },
     {
       "config": {
@@ -98,7 +98,7 @@
       },
       "id": "c97a5776-573b-4a90-9a8f-5d7c251bafd0",
       "name": "capturetodownstreamlatencyprobe",
-      "type": "tatolab.camera:CaptureToDownstreamLatencyProbe"
+      "type": "tatolab.camera.capture_to_downstream_latency_probe:CaptureToDownstreamLatencyProbe"
     }
   ]
 }

@@ -12,6 +12,7 @@ pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
+pub mod check_graph_document_node_types;
 pub mod check_iceoryx2_construction;
 pub mod check_module_host_table_surface;
 pub mod check_no_device_api_version_branch;
@@ -180,7 +181,7 @@ type SourceWalkingGate = fn(&Path) -> Result<()>;
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all fifteen in well under a second, and why CI runs them as
+/// lets one process run all sixteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
     ("lint-logging", lint_logging::run),
@@ -224,6 +225,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
     (
         "check-no-tatolab-namespace-package-init",
         check_no_tatolab_namespace_package_init::run,
+    ),
+    (
+        "check-graph-document-node-types",
+        check_graph_document_node_types::run,
     ),
 ];
 
@@ -607,6 +612,12 @@ enum Commands {
     /// regular package.
     CheckNoTatolabNamespacePackageInit,
 
+    /// CI gate holding every graph document's package node types to the module
+    /// that defines each class, as the packages' `tatolab.nodes` entry points
+    /// state it. A type naming a node through its package's re-export
+    /// (`tatolab.camera:CameraSource`) fails here; the runtime refuses it at load.
+    CheckGraphDocumentNodeTypes,
+
     /// Run every source-walking gate in one process and report all failures.
     /// This is what CI's `source-gates` job runs; the per-gate subcommands stay
     /// for narrowing down a failure locally.
@@ -754,6 +765,9 @@ fn main() -> Result<()> {
         }
         Commands::CheckNoTatolabNamespacePackageInit => {
             check_no_tatolab_namespace_package_init::run(&workspace_root()?)?
+        }
+        Commands::CheckGraphDocumentNodeTypes => {
+            check_graph_document_node_types::run(&workspace_root()?)?
         }
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,

@@ -1228,6 +1228,7 @@ fn graph_operation_for_the_request(
                     pins: pins.unwrap_or_default(),
                     exposed_config_fields: exposed_config_fields.unwrap_or_default(),
                     studio: studio.unwrap_or_default(),
+                    fragment: None,
                 },
                 links: Vec::new(),
             })
