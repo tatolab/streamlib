@@ -253,6 +253,10 @@ fn register_the_described_node_type(
     let child_execution_config =
         match how_a_python_node_of_the_type_runs {
             HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
+                node_types_of_the_stream.record_the_execution_a_described_class_declares(
+                    descriptor.processor_class_import_path.clone(),
+                    execution_config.execution,
+                );
                 execution_config
             }
             HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {

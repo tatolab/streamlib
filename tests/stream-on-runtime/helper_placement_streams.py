@@ -17,6 +17,7 @@ from helper_placement_processors import (
     HoldsItsConfiguredLevelCountingItsCalls,
     LabelsTheLevel,
     LevelScaledByItsGain,
+    LendsTheLabelToItsNativeHalf,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
     ReportsEachBatchOfItsConfiguredLevel,
@@ -185,6 +186,16 @@ def level_scaled_by_its_gain_into_python_sink(stream_builder: StreamBuilder) -> 
 def python_sink_reading_the_pin_value_of_its_unlinked_input(stream_builder: StreamBuilder) -> None:
     """A Python class whose one input is linked to nothing, so it reads its pin value."""
     stream_builder.add(ReportsEachBatchOfPinValuesItReadSink, name="sink")
+
+
+@graph_generator
+def function_node_run_as_python_into_a_class_lending_it_to_native_code(
+    stream_builder: StreamBuilder,
+) -> None:
+    """A function node that runs as Python, read by a manual class whose native half reads it."""
+    labeller = stream_builder.add(LabelsTheLevel, name="labeller")
+    lender = stream_builder.add(LendsTheLabelToItsNativeHalf, name="lender")
+    stream_builder.connect(labeller.output("result"), lender.input("label"))
 
 
 @graph_generator

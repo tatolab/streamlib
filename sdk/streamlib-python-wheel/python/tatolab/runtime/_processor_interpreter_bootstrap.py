@@ -171,8 +171,11 @@ from tatolab.runtime._engine import (
     run_the_scheduling_loop_of_this_helper,
 )
 from tatolab.runtime._function_node_compilation import (
+    FunctionNodeDoesNotCompile,
     FunctionNodeIslandsFedToTheirPorts,
+    FunctionNodeRunAsPythonInItsReader,
     feed_each_input_port_from_its_function_node_island,
+    prepare_function_node_to_evaluate,
     the_value_a_config_field_takes,
 )
 from tatolab.runtime._function_node_pool import (
@@ -961,6 +964,14 @@ def _describe_the_processor_class_its_imported_module_defines(
                 f"`{node_declaration_stamp}`, which `{the_decorator_that_stamps_them}` sets; a "
                 f"{what_it_names} stamped by hand is not a node"
             ) from None
+    if described_node_type.get("language") == "python":
+        try:
+            prepared = prepare_function_node_to_evaluate(resolved, import_path)
+        except FunctionNodeDoesNotCompile as refused:
+            raise ProcessorClassNotDescribable(str(refused)) from None
+        described_node_type["runs_as_python"] = isinstance(
+            prepared, FunctionNodeRunAsPythonInItsReader
+        )
     try:
         json.dumps(described_node_type, allow_nan=False)
     except (TypeError, ValueError) as not_json:

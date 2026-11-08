@@ -560,3 +560,19 @@ class ReportsTheLevelRecordsItReadSink:
         self.records_read.append(record)
         if len(self.records_read) == LEVEL_RECORDS_READ_BEFORE_REPORTING:
             report("LEVEL_RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})
+
+
+@node.process(execution="manual")
+class LendsTheLabelToItsNativeHalf:
+    """Lends `label` to native code at setup, as a module's native half does,
+    and reports whether the lend was taken."""
+
+    label = Input(Records, delivery="newest")
+
+    def setup(self, ctx) -> None:
+        try:
+            ctx.open_module_host_table(input_ports=["label"])
+        except ValueError as refused:
+            report("LABEL_LEND", {"pid": os.getpid(), "refused": str(refused)})
+            return
+        report("LABEL_LEND", {"pid": os.getpid(), "refused": None})

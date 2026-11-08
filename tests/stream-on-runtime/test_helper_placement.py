@@ -28,6 +28,7 @@ from helper_placement_streams import (
     clamp_with_its_input_linked_to_nothing_into_python_sink,
     dies_abruptly_beside_a_survivor_pair,
     first_labelled_source_into_sink,
+    function_node_run_as_python_into_a_class_lending_it_to_native_code,
     function_node_run_as_python_into_python_records_sink,
     function_node_run_as_python_that_crashes_into_python_sink,
     function_node_that_spins_forever_into_python_sink,
@@ -477,6 +478,46 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
         f"the function nodes added and removed live got no process of their own:\n"
         f"{tatolabd.recent_stderr()}"
     )
+
+
+def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A Python body a native half reads runs in the pool, so the lend is taken.
+
+    `LabelsTheLevel` gives a `dict`, which no compiled body carries, and its
+    describe says so. Its reader is driven manually, as a class lending ports
+    to native code is, and a native read holds no Python interpreter lock, so
+    the stream places the node in its pool before it runs: the class's port is
+    fed by a channel from the pool, and lending it to native code is taken.
+
+    Fail-without-fix: the island stays inside the class's read, and the lend
+    is refused naming `labeller`.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        function_node_run_as_python_into_a_class_lending_it_to_native_code
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    lend = tatolabd.await_marker("LABEL_LEND")
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    assert lend["refused"] is None, f"the lend was refused: {lend['refused']}"
+    assert len(helper_pids) == 2 and lend["pid"] in helper_pids, (
+        f"a Python body read by a native half started {helper_pids}; the class and one pool "
+        f"get a process:\n{tatolabd.recent_stderr()}"
+    )
+    pools = [
+        node
+        for node in graph["nodes"]
+        if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
+    ]
+    assert len(pools) == 1, f"`graph` shows the stream's one pool: {graph['nodes']}"
+    assert pools[0]["config"]["carries"] == [
+        {"input_port": "island_0", "output_port": "island_0_output", "family": "records"}
+    ], pools[0]
 
 
 def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reader(

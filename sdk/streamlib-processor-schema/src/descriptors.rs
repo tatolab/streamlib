@@ -172,6 +172,10 @@ pub struct ProcessorDescriptor {
     /// type that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Whether a Python function node's body does not compile, so it runs as
+    /// Python and only a reader holding the interpreter's lock can call it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub function_node_runs_as_python: bool,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -196,6 +200,7 @@ impl ProcessorDescriptor {
             paced_by_real_time: false,
             function_node_state_fields: Vec::new(),
             category: None,
+            function_node_runs_as_python: false,
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
