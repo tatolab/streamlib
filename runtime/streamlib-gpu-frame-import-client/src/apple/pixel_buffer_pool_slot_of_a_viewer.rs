@@ -41,10 +41,13 @@ impl PixelBufferPoolSlotOfAViewer {
             .get("handle_type")
             .and_then(|value| value.as_str())
             .unwrap_or("iosurface");
-        if resource_type != "pixel_buffer" || handle_type != "iosurface" {
+        // A GPU image pool registers its slots as `texture`s over the same
+        // IOSurface a pixel-buffer pool registers as a `pixel_buffer`.
+        if !matches!(resource_type, "pixel_buffer" | "texture") || handle_type != "iosurface" {
             return Err(format!(
                 "pool slot {pool_slot_key:?} is registered as a {resource_type:?} over a \
-                 {handle_type:?} handle; a viewer imports IOSurface pixel buffers only"
+                 {handle_type:?} handle; a viewer imports IOSurface-backed pixel buffers and \
+                 textures only"
             ));
         }
         let width = positive_u32_field(reply, pool_slot_key, "width")?;
@@ -149,4 +152,58 @@ fn positive_u32_field(
         .ok_or_else(|| {
             format!("the import of pool slot {pool_slot_key:?} carried no usable {field}")
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn import_reply_registered_as(resource_type: &str, handle_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "resource_type": resource_type,
+            "handle_type": handle_type,
+            "width": 64,
+            "height": 32,
+            "format": "bgra32",
+        })
+    }
+
+    fn refusal_of_a_portless_import(reply: &serde_json::Value) -> String {
+        match PixelBufferPoolSlotOfAViewer::from_the_import_reply("slot", reply, Vec::new()) {
+            Ok(_) => panic!("an import that carried no port was admitted"),
+            Err(refusal) => refusal,
+        }
+    }
+
+    #[test]
+    fn a_texture_or_a_pixel_buffer_over_an_iosurface_is_admitted_to_the_port_check() {
+        for resource_type in ["pixel_buffer", "texture"] {
+            let refusal = refusal_of_a_portless_import(&import_reply_registered_as(
+                resource_type,
+                "iosurface",
+            ));
+            assert!(
+                refusal.contains("did not carry exactly one IOSurface port"),
+                "{resource_type}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_slot_over_another_handle_or_of_another_resource_is_refused_by_its_registration() {
+        for (resource_type, handle_type) in
+            [("texture", "metal_shared_event"), ("buffer", "iosurface")]
+        {
+            let refusal = refusal_of_a_portless_import(&import_reply_registered_as(
+                resource_type,
+                handle_type,
+            ));
+            assert!(
+                refusal.contains(&format!(
+                    "is registered as a {resource_type:?} over a {handle_type:?} handle"
+                )),
+                "{refusal}"
+            );
+        }
+    }
 }
