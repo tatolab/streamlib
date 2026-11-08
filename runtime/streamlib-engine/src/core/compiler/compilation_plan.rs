@@ -26,6 +26,7 @@ pub(super) struct CompilationPlan {
 pub(super) struct FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed {
     pub(super) function_node_id: ProcessorUniqueId,
     pub(super) reader_id: ProcessorUniqueId,
+    pub(super) promotion_request_number: u64,
     pub(super) reason: String,
 }
 

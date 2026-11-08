@@ -199,17 +199,20 @@ struct FunctionNodeNumberedOnTheBreadcrumb {
 #[derive(Default)]
 struct FunctionNodePromotionOutOfTheIslandsOfOneFarSide {
     progress: Mutex<FunctionNodePromotionOutOfTheIslandsProgress>,
+    promotion_requests_awaited: std::sync::atomic::AtomicU64,
     settled: Condvar,
 }
 
-/// A compile plans a promotion only while the host still waits on it, and the
-/// host stops waiting only before a compile has claimed it, so a far side never
-/// starts with islands a promotion goes on to change.
+/// A compile plans a promotion only while the host still waits on that very
+/// request, and the host stops waiting only before a compile has claimed it, so
+/// a far side never starts with islands a promotion goes on to change.
 #[derive(Default)]
 enum FunctionNodePromotionOutOfTheIslandsProgress {
     #[default]
     NotAwaited,
-    AwaitedByTheFarSidesHost,
+    AwaitedByTheFarSidesHost {
+        promotion_request_number: u64,
+    },
     ClaimedByTheCompileCarryingIt,
     Settled(std::result::Result<(), String>),
 }
@@ -550,12 +553,19 @@ impl OutOfProcessLinkWiringEnvelope {
     }
 
     /// Start waiting on a new request to promote a function node out of this
-    /// far side's islands, forgetting how any earlier one ended.
-    pub(crate) fn await_a_function_node_promotion_out_of_its_islands(&self) {
-        *self
-            .function_node_promotion_out_of_its_islands
-            .progress
-            .lock() = FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost;
+    /// far side's islands, forgetting how any earlier one ended; the number
+    /// names the request, which only a compile carrying it may claim.
+    pub(crate) fn await_a_function_node_promotion_out_of_its_islands(&self) -> u64 {
+        let promotion = &self.function_node_promotion_out_of_its_islands;
+        let promotion_request_number = promotion
+            .promotion_requests_awaited
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        *promotion.progress.lock() =
+            FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost {
+                promotion_request_number,
+            };
+        promotion_request_number
     }
 
     /// Stop waiting on the promotion out of this far side's islands unless a
@@ -571,24 +581,29 @@ impl OutOfProcessLinkWiringEnvelope {
             FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt => false,
             FunctionNodePromotionOutOfTheIslandsProgress::Settled(_) => true,
             FunctionNodePromotionOutOfTheIslandsProgress::NotAwaited
-            | FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost => {
+            | FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost { .. } => {
                 *progress = FunctionNodePromotionOutOfTheIslandsProgress::NotAwaited;
                 true
             }
         }
     }
 
-    /// Claim the promotion out of this far side's islands for the compile that
-    /// plans it; `false` when the host is not waiting on one, so the compile
-    /// passes it over.
-    pub(crate) fn claim_the_awaited_function_node_promotion_out_of_its_islands(&self) -> bool {
+    /// Claim request `promotion_request_number` to promote a function node out
+    /// of this far side's islands for the compile that plans it; `false` when
+    /// the host is not waiting on that request, so the compile passes it over.
+    pub(crate) fn claim_the_awaited_function_node_promotion_out_of_its_islands(
+        &self,
+        promotion_request_number: u64,
+    ) -> bool {
         let mut progress = self
             .function_node_promotion_out_of_its_islands
             .progress
             .lock();
         if matches!(
             *progress,
-            FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost
+            FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost {
+                promotion_request_number: awaited,
+            } if awaited == promotion_request_number
         ) {
             *progress = FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt;
             true
@@ -636,7 +651,9 @@ impl OutOfProcessLinkWiringEnvelope {
                 }
                 FunctionNodePromotionOutOfTheIslandsProgress::NotAwaited => return None,
                 FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt
-                | FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost => {}
+                | FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost {
+                    ..
+                } => {}
             }
             if stop_waiting() {
                 return None;
@@ -1159,7 +1176,7 @@ mod tests {
     fn a_promotion_the_host_stopped_waiting_on_is_not_claimed_by_a_late_compile() {
         let envelope =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
-        envelope.await_a_function_node_promotion_out_of_its_islands();
+        let given_up = envelope.await_a_function_node_promotion_out_of_its_islands();
 
         let outcome = envelope.wait_for_the_function_node_promotion_out_of_its_islands_to_settle(
             std::time::Duration::ZERO,
@@ -1167,7 +1184,21 @@ mod tests {
         );
 
         assert_eq!(outcome, None);
-        assert!(!envelope.claim_the_awaited_function_node_promotion_out_of_its_islands());
+        assert!(!envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(given_up));
+    }
+
+    /// A request the host gave up cannot claim the one it awaits after the next
+    /// death: only the compile carrying the awaited request plans a promotion.
+    #[test]
+    fn an_earlier_promotion_request_cannot_claim_the_one_the_host_now_awaits() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        let given_up = envelope.await_a_function_node_promotion_out_of_its_islands();
+        envelope.give_up_the_function_node_promotion_out_of_its_islands_unless_claimed();
+        let awaited_now = envelope.await_a_function_node_promotion_out_of_its_islands();
+
+        assert!(!envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(given_up));
+        assert!(envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(awaited_now));
     }
 
     /// Once a compile claims the promotion, the host waits past its deadline
@@ -1177,8 +1208,8 @@ mod tests {
         let envelope = Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
             ProcessExecution::Reactive,
         ));
-        envelope.await_a_function_node_promotion_out_of_its_islands();
-        assert!(envelope.claim_the_awaited_function_node_promotion_out_of_its_islands());
+        let awaited = envelope.await_a_function_node_promotion_out_of_its_islands();
+        assert!(envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(awaited));
         assert!(
             !envelope.give_up_the_function_node_promotion_out_of_its_islands_unless_claimed(),
             "a claimed promotion is not given up"

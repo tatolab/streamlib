@@ -648,12 +648,14 @@ fn the_plan_these_operations_make(
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                 function_node_id,
                 reader_id,
+                promotion_request_number,
                 reason,
             } => {
                 plan.function_node_promotions.push(
                     FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed {
                         function_node_id,
                         reader_id,
+                        promotion_request_number,
                         reason,
                     },
                 );
@@ -666,9 +668,9 @@ fn the_plan_these_operations_make(
 /// Plan each promotion `plan` holds against `graph_arc`, adding the nodes it
 /// moves to `plan`'s processors to build and their links to its links to wire.
 ///
-/// A promotion is planned only once its reader's host claims it is still
-/// waiting; a refused one settles that reader alone, and the rest of the batch
-/// compiles.
+/// A promotion is planned only once it claims the request its reader's host
+/// still waits on; a refused one settles that reader alone, and the rest of
+/// the batch compiles.
 fn plan_every_function_node_promotion(
     graph_arc: &RwLock<Graph>,
     plan: &mut CompilationPlan,
@@ -690,9 +692,11 @@ fn plan_every_function_node_promotion(
             );
             continue;
         };
-        if !reader_link_wiring.claim_the_awaited_function_node_promotion_out_of_its_islands() {
+        if !reader_link_wiring.claim_the_awaited_function_node_promotion_out_of_its_islands(
+            promotion.promotion_request_number,
+        ) {
             tracing::warn!(
-                "Function node {} is not promoted: {}'s host stopped waiting for it",
+                "Function node {} is not promoted: {}'s host no longer waits on that request",
                 promotion.function_node_id,
                 promotion.reader_id,
             );

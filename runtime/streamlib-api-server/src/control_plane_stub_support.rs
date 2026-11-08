@@ -129,6 +129,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
             &self,
             _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
             _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _promotion_request_number: u64,
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("only a reader's own host asks for a function node's promotion")
@@ -538,6 +539,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             &self,
             _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
             _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _promotion_request_number: u64,
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("only a reader's own host asks for a function node's promotion")

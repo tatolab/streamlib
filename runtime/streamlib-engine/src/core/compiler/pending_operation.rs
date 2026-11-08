@@ -36,6 +36,7 @@ pub enum PendingOperation {
     PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
         function_node_id: ProcessorUniqueId,
         reader_id: ProcessorUniqueId,
+        promotion_request_number: u64,
         reason: String,
     },
 }

@@ -673,6 +673,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         &self,
         function_node_id: &ProcessorUniqueId,
         reader_id: &ProcessorUniqueId,
+        promotion_request_number: u64,
         reason: &str,
     ) -> Result<()> {
         self.compiler.scope(|_graph, tx| {
@@ -680,6 +681,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                 PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                     function_node_id: function_node_id.clone(),
                     reader_id: reader_id.clone(),
+                    promotion_request_number,
                     reason: reason.to_string(),
                 },
             );

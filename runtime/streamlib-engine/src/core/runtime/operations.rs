@@ -152,11 +152,14 @@ pub trait RuntimeOperations: Send + Sync {
     /// it out of that reader's islands into a helper process of its own.
     ///
     /// A request that never blocks: the graph-change listener compiles it, and
-    /// the reader's link wiring learns how the compile ended.
+    /// the reader's link wiring learns how the compile ended. A compile plans
+    /// it only while `promotion_request_number` is the request the reader's
+    /// link wiring still awaits.
     fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
         &self,
         function_node_id: &ProcessorUniqueId,
         reader_id: &ProcessorUniqueId,
+        promotion_request_number: u64,
         reason: &str,
     ) -> Result<()>;
 

@@ -1523,13 +1523,15 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         // command only once the envelope no longer answers for the dead helper.
         self.link_wiring
             .reopen_for_a_new_far_side_in_place_of_one_that_died();
-        self.link_wiring
+        let promotion_request_number = self
+            .link_wiring
             .await_a_function_node_promotion_out_of_its_islands();
         if let Err(refusal) = ctx
             .runtime()
             .request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
                 &function_node_id.as_str().into(),
                 &self.processor_id.as_str().into(),
+                promotion_request_number,
                 &why_the_helper_process_died,
             )
         {
