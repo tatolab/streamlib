@@ -116,6 +116,16 @@ class InterruptedInProcessProbe:
 
 
 @node.process(execution="manual")
+class RaisesInStartProbe:
+    """Sets up, then raises out of `start()`, which must fail its node."""
+
+    frames_to_downstream = Output(Packets)
+
+    def start(self, ctx) -> None:
+        raise FileNotFoundError('could not read "lower_third.riv"')
+
+
+@node.process(execution="manual")
 class InterruptedInSetupProbe:
     """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
     raises on its own, this one is still owed its `teardown()`."""
