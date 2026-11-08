@@ -8,8 +8,9 @@ use serde_json::{Map, json};
 use streamlib_project_repository::{
     PROJECT_CONTENT_STORE_DIRECTORY, PROJECT_FILE_NAME, PROJECT_HISTORY_DIRECTORY,
     PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetKind, ProjectAssetOperation, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectTransaction, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectAssetKind, ProjectAssetOperation, ProjectOperation, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind,
 };
 use uuid::Uuid;
 
@@ -57,7 +58,7 @@ fn import_from(source: &Path, asset_path: &str) -> ProjectAssetChangeRequest {
 
 fn imported_asset(applied: &streamlib_project_repository::AppliedProjectTransaction) -> Uuid {
     match &applied.transaction.operations[0] {
-        ProjectAssetOperation::ImportAsset { asset } => asset.asset,
+        ProjectOperation::Asset(ProjectAssetOperation::ImportAsset { asset }) => asset.asset,
         other => panic!("expected an import, got {other:?}"),
     }
 }
@@ -832,7 +833,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
         Err(ProjectRepositoryRefusal::NoSuchAsset(_))
     ));
     match &deleted.transaction.inverse_operations[..] {
-        [ProjectAssetOperation::ImportAsset { asset }] => {
+        [ProjectOperation::Asset(ProjectAssetOperation::ImportAsset { asset })] => {
             assert!(
                 repository
                     .content_store()

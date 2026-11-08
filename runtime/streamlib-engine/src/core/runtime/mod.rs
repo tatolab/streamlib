@@ -30,6 +30,7 @@ mod runtime_unique_id;
 mod status;
 mod stream_actions_of_this_runtime;
 mod stream_environment;
+mod stream_graph_operation_applied_live;
 mod stream_location_and_id;
 mod stream_step_coordinator;
 

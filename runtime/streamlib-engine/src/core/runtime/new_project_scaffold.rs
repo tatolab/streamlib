@@ -399,6 +399,23 @@ mod tests {
              version of the runtime that created it"
         );
         assert!(rendered_pyproject_toml.contains("name = \"probe-app\""));
+        let rendered_pyproject: toml::Table = toml::from_str(rendered_pyproject_toml).unwrap();
+        let named_indexes = rendered_pyproject["tool"]["uv"]["index"]
+            .as_array()
+            .unwrap();
+        assert_eq!(named_indexes.len(), 1);
+        assert_eq!(named_indexes[0]["name"].as_str(), Some("tatolab"));
+        assert_eq!(
+            named_indexes[0]["url"].as_str(),
+            Some("https://get.tatolab.com/simple/")
+        );
+        assert_eq!(
+            named_indexes[0]
+                .get("explicit")
+                .and_then(toml::Value::as_bool),
+            None,
+            "a non-explicit index is what lets a transitive first-party module resolve from it"
+        );
     }
 
     #[test]

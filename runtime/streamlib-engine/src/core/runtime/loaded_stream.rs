@@ -33,8 +33,8 @@ use crate::core::graph::{
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, StepProgressOfOneNodeComponent,
     cast_exposed_name_to_url_safe,
 };
-use crate::core::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::graph_snapshot::{GraphOnlyNodesAsDrawn, NodeChangeADrawnLinkBlocks};
 use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::media_clock::MediaClock;
@@ -991,11 +991,12 @@ impl LoadedStreamInThisRuntime {
         <Self as RuntimeOperations>::disconnect(self, link_id)
     }
 
-    /// Refuse removing `processor_id` while a drawn link to a variable or
+    /// Refuse `change` to `processor_id` while a drawn link to a variable or
     /// interface node names it.
-    pub(crate) fn refuse_removing_a_node_a_drawn_link_names(
+    pub(crate) fn refuse_a_node_change_a_drawn_link_names(
         &self,
         processor_id: &ProcessorUniqueId,
+        change: NodeChangeADrawnLinkBlocks,
     ) -> Result<()> {
         let Some(node_name) = self.compiler.scope(|graph, _tx| {
             graph
@@ -1008,7 +1009,77 @@ impl LoadedStreamInThisRuntime {
         };
         self.graph_only_nodes_as_drawn
             .lock()
-            .refuse_removing_a_node_a_drawn_link_names(&node_name)
+            .refuse_a_node_change_a_drawn_link_names(&node_name, change)
+    }
+
+    /// Rename the node `processor_id` to `requested_name` cast, answering the cast.
+    pub(crate) fn rename_node(
+        &self,
+        processor_id: &ProcessorUniqueId,
+        requested_name: &str,
+    ) -> Result<String> {
+        self.refuse_a_node_change_a_drawn_link_names(
+            processor_id,
+            NodeChangeADrawnLinkBlocks::Rename,
+        )?;
+        let renamed = self
+            .compiler
+            .scope(|graph, _tx| graph.traversal_mut().rename_v(processor_id, requested_name))?;
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(renamed)
+    }
+
+    /// Set the value on input `input` of the node `processor_id`, `None` taking it off.
+    pub(crate) fn set_pin_value(
+        &self,
+        processor_id: &ProcessorUniqueId,
+        input: &str,
+        value: Option<serde_json::Value>,
+    ) -> Result<()> {
+        self.compiler.scope(|graph, _tx| -> Result<()> {
+            let node = graph
+                .traversal_mut()
+                .v(processor_id)
+                .first_mut()
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+            if !node.has_input(input) {
+                return Err(Error::ProcessorPortNotFound {
+                    processor_id: node.display_name.clone(),
+                    port_name: input.to_string(),
+                    direction: crate::core::PortDirection::Input,
+                });
+            }
+            match value {
+                Some(value) => {
+                    node.pins.insert(input.to_string(), value);
+                }
+                None => {
+                    node.pins.remove(input);
+                }
+            }
+            Ok(())
+        })?;
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
+    }
+
+    /// Replace the studio fields of the node `processor_id` whole.
+    pub(crate) fn set_studio_fields(
+        &self,
+        processor_id: &ProcessorUniqueId,
+        studio: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        self.compiler.scope(|graph, _tx| -> Result<()> {
+            graph
+                .traversal_mut()
+                .v(processor_id)
+                .first_mut()
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?
+                .studio = studio;
+            Ok(())
+        })?;
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
     }
 
     /// Update a processor's configuration, applied at the next commit.

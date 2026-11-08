@@ -9,7 +9,9 @@ use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessorNode,
-    ProcessorTraversalMut, StateComponent, TraversalSourceMut, cast_exposed_name_to_url_safe,
+    ProcessorTraversalMut, ProcessorUniqueId, StateComponent, TraversalSourceMut,
+    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
+    config_node_reference_edges_of_one_node,
 };
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 
@@ -102,6 +104,64 @@ impl<'a> TraversalSourceMut<'a> {
             graph: self.graph,
             ids: vec![node_idx],
         })
+    }
+}
+
+impl TraversalSourceMut<'_> {
+    /// Rename the node `processor_id` to `requested_name` cast, answering the cast; refused
+    /// when another node or a graph-only node holds that name, or a config reference names
+    /// the node by its current name.
+    pub fn rename_v(
+        self,
+        processor_id: &ProcessorUniqueId,
+        requested_name: &str,
+    ) -> Result<String> {
+        let node_index = self
+            .graph
+            .node_indices()
+            .find(|node_index| self.graph[*node_index].id == *processor_id)
+            .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+        let current_name = self.graph[node_index].display_name.clone();
+        let cast = cast_exposed_name_to_url_safe(requested_name)?.into_owned();
+        if cast == current_name {
+            return Ok(cast);
+        }
+        if self.node_names_the_graph_only_nodes_hold.contains(&cast)
+            || self
+                .graph
+                .node_weights()
+                .any(|node| node.display_name == cast)
+        {
+            return Err(Error::NodeNameTaken {
+                name: requested_name.to_string(),
+                cast,
+            });
+        }
+        for node in self.graph.node_weights() {
+            let Some(config) = &node.config else {
+                continue;
+            };
+            for reference in config_node_reference_edges_of_one_node(
+                &node.display_name,
+                config,
+                config_keys_of_a_node_type_holding_a_node_reference(
+                    self.node_types_this_stream_resolves,
+                    &node.processor_type,
+                ),
+            )? {
+                if cast_exposed_name_to_url_safe(&reference.edge.referenced_node)?.as_ref()
+                    == current_name
+                {
+                    return Err(Error::GraphError(format!(
+                        "node `{current_name}` cannot be renamed `{cast}`: node `{}`'s config \
+                         key `{}` names it by its name",
+                        node.display_name, reference.edge.config_key
+                    )));
+                }
+            }
+        }
+        self.graph[node_index].display_name = cast.clone();
+        Ok(cast)
     }
 }
 
