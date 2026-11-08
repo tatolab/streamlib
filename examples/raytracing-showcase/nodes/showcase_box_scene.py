@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The scene both renderers draw, and the GLSL the two of them share.
+"""The scene both renderers draw, and the Slang the two of them share.
 
 One table places ten boxes — a sky, a mirror floor, and eight on a ring. The
 ray tracer's acceleration-structure instances and the `const` arrays the
@@ -14,6 +14,8 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Sequence
+
+from tatolab.stream import ColorInfo
 
 # The camera laps the scene about every twenty seconds and the light about
 # every seven, so the shadows sweep the floor on a period that is not the
@@ -45,6 +47,10 @@ NEAR_PLANE = 0.05
 FAR_PLANE = 500.0
 
 NANOSECONDS_PER_SECOND = 1_000_000_000
+
+# What both renderers' `rgba8_unorm` frames hold: the shaders' colours as
+# display-referred sRGB, which the compositor carries through untouched.
+SHOWCASE_RENDERED_FRAME_COLOUR = ColorInfo(primaries="bt709", transfer="srgb", range="full")
 
 SKY_BOX_INDEX = 0
 FLOOR_BOX_INDEX = 1
@@ -82,7 +88,7 @@ _RING_CUBE_SIZES_AND_COLOURS: tuple[
 )
 
 RING_CUBE_COUNT = len(_RING_CUBE_SIZES_AND_COLOURS)
-# GLSL leaves a shift past the word's width undefined, so a ninth cube would
+# A shift past the word's width is undefined in the shader, so a ninth cube would
 # scramble a draw slot rather than fail; it is refused here instead.
 if RING_CUBE_COUNT * DRAW_ORDER_BITS_PER_CUBE > DRAW_ORDER_WORD_BITS:
     raise ValueError(
@@ -217,7 +223,7 @@ def orbit_azimuths_at(monotonic_ns: int) -> tuple[float, float]:
 
 
 def camera_position_at(camera_azimuth: float) -> tuple[float, float, float]:
-    """Where the camera is, in world space — the CPU twin of the GLSL function."""
+    """Where the camera is, in world space — the CPU twin of the shader's function."""
     return (
         CAMERA_ORBIT_RADIUS * math.sin(camera_azimuth),
         CAMERA_HEIGHT,
@@ -246,129 +252,129 @@ def packed_ring_draw_order_furthest_first(camera_azimuth: float) -> int:
     return packed
 
 
-def _glsl_float(value: float) -> str:
-    """A float GLSL reads as one — `repr` always spells a decimal point."""
+def _slang_float(value: float) -> str:
+    """A float Slang reads as one — `repr` always spells a decimal point."""
     return repr(float(value))
 
 
-def _glsl_vec3_array(name: str, rows: Sequence[Sequence[float]]) -> str:
+def _slang_float3_array(name: str, rows: Sequence[Sequence[float]]) -> str:
     entries = ",\n    ".join(
-        f"vec3({_glsl_float(x)}, {_glsl_float(y)}, {_glsl_float(z)})"
+        f"float3({_slang_float(x)}, {_slang_float(y)}, {_slang_float(z)})"
         for x, y, z in rows
     )
-    return f"const vec3 {name}[{len(rows)}] = vec3[{len(rows)}](\n    {entries});\n\n"
+    return f"static const float3 {name}[{len(rows)}] = {{\n    {entries}\n}};\n\n"
 
 
-def _glsl_int_array(name: str, values: Sequence[int]) -> str:
+def _slang_int_array(name: str, values: Sequence[int]) -> str:
     entries = ", ".join(str(value) for value in values)
-    return f"const int {name}[{len(values)}] = int[{len(values)}]({entries});\n\n"
+    return f"static const int {name}[{len(values)}] = {{ {entries} }};\n\n"
 
 
-# Every number the two renderers must agree on, as `#define`s a shader reads as
-# literals. The function bodies below stay a plain string, so their braces need
-# no doubling.
-_SHOWCASE_SCENE_DEFINES = f"""\
-#define CAMERA_ORBIT_RADIUS {_glsl_float(CAMERA_ORBIT_RADIUS)}
-#define CAMERA_HEIGHT {_glsl_float(CAMERA_HEIGHT)}
-#define CAMERA_LOOK_AT_HEIGHT {_glsl_float(CAMERA_LOOK_AT_HEIGHT)}
-#define CAMERA_FIELD_OF_VIEW_RADIANS {_glsl_float(CAMERA_FIELD_OF_VIEW_RADIANS)}
-#define LIGHT_ORBIT_RADIUS {_glsl_float(LIGHT_ORBIT_RADIUS)}
-#define LIGHT_HEIGHT {_glsl_float(LIGHT_HEIGHT)}
-#define FLOOR_MIRROR_STRENGTH {_glsl_float(FLOOR_MIRROR_STRENGTH)}
-#define AMBIENT_LIGHT {_glsl_float(AMBIENT_LIGHT)}
-#define BOX_EDGE_DARKENING {_glsl_float(BOX_EDGE_DARKENING)}
-#define SHADOW_RAY_BIAS {_glsl_float(SHADOW_RAY_BIAS)}
-#define NEAR_PLANE {_glsl_float(NEAR_PLANE)}
-#define FAR_PLANE {_glsl_float(FAR_PLANE)}
-#define SKY_BOX_INDEX {SKY_BOX_INDEX}
-#define FLOOR_BOX_INDEX {FLOOR_BOX_INDEX}
-#define FIRST_RING_CUBE_BOX_INDEX {FIRST_RING_CUBE_BOX_INDEX}
-#define RING_CUBE_COUNT {RING_CUBE_COUNT}
-#define DRAW_ORDER_BITS_PER_CUBE {DRAW_ORDER_BITS_PER_CUBE}
-#define SKY_ZENITH_COLOUR vec3(0.05, 0.1, 0.4)
-#define SKY_HORIZON_COLOUR vec3(0.85, 0.55, 0.35)
+# Every number the two renderers must agree on, as `static const`s a shader
+# reads as literals. The function bodies below stay a plain string, so their
+# braces need no doubling.
+_SHOWCASE_SCENE_CONSTANTS = f"""\
+static const float CAMERA_ORBIT_RADIUS = {_slang_float(CAMERA_ORBIT_RADIUS)};
+static const float CAMERA_HEIGHT = {_slang_float(CAMERA_HEIGHT)};
+static const float CAMERA_LOOK_AT_HEIGHT = {_slang_float(CAMERA_LOOK_AT_HEIGHT)};
+static const float CAMERA_FIELD_OF_VIEW_RADIANS = {_slang_float(CAMERA_FIELD_OF_VIEW_RADIANS)};
+static const float LIGHT_ORBIT_RADIUS = {_slang_float(LIGHT_ORBIT_RADIUS)};
+static const float LIGHT_HEIGHT = {_slang_float(LIGHT_HEIGHT)};
+static const float FLOOR_MIRROR_STRENGTH = {_slang_float(FLOOR_MIRROR_STRENGTH)};
+static const float AMBIENT_LIGHT = {_slang_float(AMBIENT_LIGHT)};
+static const float BOX_EDGE_DARKENING = {_slang_float(BOX_EDGE_DARKENING)};
+static const float SHADOW_RAY_BIAS = {_slang_float(SHADOW_RAY_BIAS)};
+static const float NEAR_PLANE = {_slang_float(NEAR_PLANE)};
+static const float FAR_PLANE = {_slang_float(FAR_PLANE)};
+static const int SKY_BOX_INDEX = {SKY_BOX_INDEX};
+static const int FLOOR_BOX_INDEX = {FLOOR_BOX_INDEX};
+static const int FIRST_RING_CUBE_BOX_INDEX = {FIRST_RING_CUBE_BOX_INDEX};
+static const int RING_CUBE_COUNT = {RING_CUBE_COUNT};
+static const int DRAW_ORDER_BITS_PER_CUBE = {DRAW_ORDER_BITS_PER_CUBE};
+static const float3 SKY_ZENITH_COLOUR = float3(0.05, 0.1, 0.4);
+static const float3 SKY_HORIZON_COLOUR = float3(0.85, 0.55, 0.35);
 
 """
 
 _SHOWCASE_SCENE_FUNCTIONS = """
-vec3 camera_position_at(float camera_azimuth) {
-    return vec3(CAMERA_ORBIT_RADIUS * sin(camera_azimuth),
-                CAMERA_HEIGHT,
-                CAMERA_ORBIT_RADIUS * cos(camera_azimuth));
+float3 camera_position_at(float camera_azimuth) {
+    return float3(CAMERA_ORBIT_RADIUS * sin(camera_azimuth),
+                  CAMERA_HEIGHT,
+                  CAMERA_ORBIT_RADIUS * cos(camera_azimuth));
 }
 
-vec3 light_position_at(float light_azimuth) {
-    return vec3(LIGHT_ORBIT_RADIUS * sin(light_azimuth),
-                LIGHT_HEIGHT,
-                LIGHT_ORBIT_RADIUS * cos(light_azimuth));
+float3 light_position_at(float light_azimuth) {
+    return float3(LIGHT_ORBIT_RADIUS * sin(light_azimuth),
+                  LIGHT_HEIGHT,
+                  LIGHT_ORBIT_RADIUS * cos(light_azimuth));
 }
 
 // The one camera both halves look through: the ray generator turns a pixel
 // into a ray with this basis, the vertex shader a point into a pixel.
-void showcase_camera_basis(float camera_azimuth, out vec3 eye, out vec3 forward,
-                           out vec3 right, out vec3 up) {
+void showcase_camera_basis(float camera_azimuth, out float3 eye, out float3 forward,
+                           out float3 right, out float3 up) {
     eye = camera_position_at(camera_azimuth);
-    forward = normalize(vec3(0.0, CAMERA_LOOK_AT_HEIGHT, 0.0) - eye);
-    right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
+    forward = normalize(float3(0.0, CAMERA_LOOK_AT_HEIGHT, 0.0) - eye);
+    right = normalize(cross(forward, float3(0.0, 1.0, 0.0)));
     up = cross(right, forward);
 }
 
-vec3 sky_colour_towards(vec3 direction) {
+float3 sky_colour_towards(float3 direction) {
     float height = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
-    return mix(SKY_HORIZON_COLOUR, SKY_ZENITH_COLOUR, height);
+    return lerp(SKY_HORIZON_COLOUR, SKY_ZENITH_COLOUR, height);
 }
 
 // From the object-space position rather than a hit's barycentrics, which a
 // rasterized fragment does not have.
-float box_edge_darkening(vec3 in_unit_cube) {
-    vec3 from_centre = abs(in_unit_cube);
+float box_edge_darkening(float3 in_unit_cube) {
+    float3 from_centre = abs(in_unit_cube);
     // On a face one axis is at 0.5, so the median of the three says how far
     // across the face the point is.
     float across_the_face = max(min(from_centre.x, from_centre.y),
                                 min(max(from_centre.x, from_centre.y), from_centre.z));
-    return mix(1.0, BOX_EDGE_DARKENING, smoothstep(0.46, 0.5, across_the_face));
+    return lerp(1.0, BOX_EDGE_DARKENING, smoothstep(0.46, 0.5, across_the_face));
 }
 
 // `lit_fraction` is how much of the light reaches this point. The rasterizer
 // can only ever pass 1.0.
-vec3 directly_lit_colour(vec3 base_colour, vec3 world_position, vec3 world_normal,
-                         float light_azimuth, float lit_fraction) {
-    vec3 towards_light = normalize(light_position_at(light_azimuth) - world_position);
+float3 directly_lit_colour(float3 base_colour, float3 world_position, float3 world_normal,
+                           float light_azimuth, float lit_fraction) {
+    float3 towards_light = normalize(light_position_at(light_azimuth) - world_position);
     float lambert = max(dot(world_normal, towards_light), 0.0);
     return base_colour * (AMBIENT_LIGHT + (1.0 - AMBIENT_LIGHT) * lambert * lit_fraction);
 }
 
 // The outward normal of the unit-cube face a point sits on.
-vec3 unit_cube_face_normal(vec3 in_unit_cube) {
-    vec3 from_centre = abs(in_unit_cube);
+float3 unit_cube_face_normal(float3 in_unit_cube) {
+    float3 from_centre = abs(in_unit_cube);
     if (from_centre.x > from_centre.y && from_centre.x > from_centre.z) {
-        return vec3(sign(in_unit_cube.x), 0.0, 0.0);
+        return float3(sign(in_unit_cube.x), 0.0, 0.0);
     }
     if (from_centre.y > from_centre.z) {
-        return vec3(0.0, sign(in_unit_cube.y), 0.0);
+        return float3(0.0, sign(in_unit_cube.y), 0.0);
     }
-    return vec3(0.0, 0.0, sign(in_unit_cube.z));
+    return float3(0.0, 0.0, sign(in_unit_cube.z));
 }
 """
 
-SHOWCASE_SCENE_GLSL = (
-    _SHOWCASE_SCENE_DEFINES
-    + _glsl_vec3_array("SHOWCASE_BOX_CENTRES", [box.centre for box in SHOWCASE_BOXES])
-    + _glsl_vec3_array("SHOWCASE_BOX_SIZES", [box.size for box in SHOWCASE_BOXES])
-    + _glsl_vec3_array("SHOWCASE_BOX_COLOURS", [box.colour for box in SHOWCASE_BOXES])
+SHOWCASE_SCENE_SLANG = (
+    _SHOWCASE_SCENE_CONSTANTS
+    + _slang_float3_array("SHOWCASE_BOX_CENTRES", [box.centre for box in SHOWCASE_BOXES])
+    + _slang_float3_array("SHOWCASE_BOX_SIZES", [box.size for box in SHOWCASE_BOXES])
+    + _slang_float3_array("SHOWCASE_BOX_COLOURS", [box.colour for box in SHOWCASE_BOXES])
     + _SHOWCASE_SCENE_FUNCTIONS
 )
 
-# Only the rasterizer reads the mesh as GLSL; the ray tracer gets the same
+# Only the rasterizer reads the mesh as Slang; the ray tracer gets the same
 # triangles through the acceleration structure it built from them.
-SHOWCASE_CUBE_MESH_GLSL = (
-    _glsl_vec3_array(
+SHOWCASE_CUBE_MESH_SLANG = (
+    _slang_float3_array(
         "UNIT_CUBE_CORNERS",
         [
             UNIT_CUBE_CORNER_POSITIONS[corner * 3 : corner * 3 + 3]
             for corner in range(len(UNIT_CUBE_CORNER_POSITIONS) // 3)
         ],
     )
-    + _glsl_int_array("UNIT_CUBE_TRIANGLE_INDICES", UNIT_CUBE_TRIANGLE_INDICES)
-    + _glsl_vec3_array("UNIT_CUBE_FACE_NORMALS", UNIT_CUBE_FACE_NORMALS)
+    + _slang_int_array("UNIT_CUBE_TRIANGLE_INDICES", UNIT_CUBE_TRIANGLE_INDICES)
+    + _slang_float3_array("UNIT_CUBE_FACE_NORMALS", UNIT_CUBE_FACE_NORMALS)
 )
