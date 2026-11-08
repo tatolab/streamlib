@@ -698,4 +698,23 @@ fn an_in_place_import_of_a_file_that_is_another_assets_file_is_refused() {
         }
         other => panic!("expected the alias to be refused, got {other:?}"),
     }
+    let hard_link = fixture.project_directory.join("images/hard-link.png");
+    std::fs::hard_link(
+        fixture.project_directory.join("images/logo.png"),
+        &hard_link,
+    )
+    .unwrap();
+    assert!(matches!(
+        repository.apply_asset_changes(
+            &agent(),
+            vec![import_from(&hard_link, "images/hard-link.png")]
+        ),
+        Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset { .. })
+    ));
+    let reopened = ProjectRepository::open(&fixture.project_directory).unwrap();
+    assert_eq!(reopened.assets().count(), 1);
+    assert_eq!(
+        reopened.asset(holder).unwrap().path.to_string(),
+        "images/logo.png"
+    );
 }

@@ -757,6 +757,18 @@ fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRe
     Ok(())
 }
 
+/// Device and inode decide it, because a case-folding or normalizing filesystem such as APFS
+/// resolves differently spelled paths to one file while `canonicalize` keeps their spellings.
+#[cfg(unix)]
+fn same_file(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(left), std::fs::metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
 fn same_file(left: &Path, right: &Path) -> bool {
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
