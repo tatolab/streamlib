@@ -17,13 +17,13 @@ mod project_repositories_open_in_this_runtime;
 mod project_repository;
 mod project_repository_refusal;
 mod project_stream_document;
-#[cfg(feature = "history")]
 mod project_transaction;
+mod stream_graph_document;
 
 pub use canonical_project_json::canonical_project_json_bytes;
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind,
-    ProjectAssetSidecar, ProjectRelativeAssetPath,
+    ProjectAssetSidecar, ProjectRelativeAssetPath, every_asset_uuid_the_project_holds,
 };
 pub use project_content_store::{
     PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,
@@ -45,11 +45,15 @@ pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
 };
-#[cfg(feature = "history")]
 pub use project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind,
+    ProjectAssetOperation, ProjectOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
+    StreamGraphOperationOnAStream,
+};
+pub use stream_graph_document::{
+    StreamGraphDocument, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
+    StreamGraphDocumentNode, StreamGraphOperation, assets_a_node_config_references,
 };
 
 /// The directory inside a project that holds what the runtime keeps for it: history, content and dependencies.

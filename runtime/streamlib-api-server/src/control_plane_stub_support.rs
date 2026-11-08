@@ -86,6 +86,15 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
+        fn apply_a_stream_graph_operation_live(
+            &self,
+            _graph_operation: ::streamlib_project_repository::StreamGraphOperation,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::streamlib_project_repository::StreamGraphOperation>,
+        > {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn add_processor(
             &self,
             _spec: ::streamlib::sdk::processors::ProcessorSpec,
@@ -139,37 +148,13 @@ macro_rules! graph_mutation_ops_are_unreachable {
 
 pub(crate) use graph_mutation_ops_are_unreachable;
 
-/// One graph mutation a front-end stub saw, with the arguments it was handed.
-#[derive(Debug)]
-pub(crate) enum RecordedGraphMutation {
-    AddProcessor(::streamlib::sdk::processors::ProcessorSpec),
-    RemoveProcessor(::streamlib::sdk::graph::ProcessorUniqueId),
-    Connect(
-        ::streamlib::sdk::graph::OutputLinkPortRef,
-        ::streamlib::sdk::graph::InputLinkPortRef,
-    ),
-    Disconnect(::streamlib::sdk::graph::LinkUniqueId),
-}
-
-/// The graph mutations a front end handed the runtime, in call order.
-pub(crate) type RecordedGraphMutations =
-    ::std::sync::Arc<::parking_lot::Mutex<Vec<RecordedGraphMutation>>>;
-
-/// The id the stub answers every `add_node` with.
-pub(crate) const STUB_ADDED_PROCESSOR_ID: &str = "stub-added-processor";
+/// The graph edits a front end applied live, in call order.
+pub(crate) type RecordedGraphMutations = ::std::sync::Arc<
+    ::parking_lot::Mutex<Vec<::streamlib_project_repository::StreamGraphOperation>>,
+>;
 
 /// The name the stub answers an `add_node` that named none with.
 pub(crate) const STUB_ADDED_NODE_NAME: &str = "stub-added-node";
-
-/// The one node name the stub's lookup refuses; every other resolves to its
-/// cast followed by [`STUB_NODE_ID_SUFFIX`].
-pub(crate) const STUB_ABSENT_NODE_NAME: &str = "absent";
-
-/// What the stub's lookup appends to a node's name to make its id.
-pub(crate) const STUB_NODE_ID_SUFFIX: &str = "-id";
-
-/// The id the stub answers every `connect` with.
-pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 
 /// The name of the machine the stub runtime runs on, and the top-level
 /// `machine` a test arms its graph with — the first part of an address.
@@ -403,104 +388,93 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 /// unknown class.
 pub(crate) type ArmedAddProcessorRefusal = ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
 
-/// Implement the four async graph-mutating [`RuntimeOperations`] methods by
-/// recording the call on a `recorded_graph_mutations` field and answering a
-/// fixed id, so a front-end test can assert its tool reached the matching op
-/// with the arguments the caller sent. An `armed_add_processor_refusal` the
-/// test filled makes the add refuse instead, so a front end's handling of an
-/// engine refusal is testable without an engine. The blocking wrappers and the
-/// one stream's own shutdown request stay unreachable: a front end awaits, it
-/// never blocks a worker, and it asks no stream to shut down.
+/// Implement the graph-mutating [`RuntimeOperations`] methods for a front-end stub: a graph
+/// edit applied live is recorded on a `recorded_graph_mutations` field and answered as applied,
+/// an added node taking its name cast or [`STUB_ADDED_NODE_NAME`], so a front-end test asserts
+/// the operation its tool reached. An `armed_add_processor_refusal` the test filled makes an add
+/// refuse instead, standing in for an engine's refusal. Every other mutation stays unreachable:
+/// a front end edits a graph through the one operation alone, and asks no stream to shut down.
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
         fn add_processor_async(
             &self,
-            spec: ::streamlib::sdk::processors::ProcessorSpec,
+            _spec: ::streamlib::sdk::processors::ProcessorSpec,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
             ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph>,
         > {
-            let name = match spec.display_name.as_deref() {
-                Some(requested_name) => {
-                    ::streamlib::sdk::graph::cast_exposed_name_to_url_safe(requested_name)
-                        .map(|cast| cast.into_owned())
-                }
-                None => Ok($crate::control_plane_stub_support::STUB_ADDED_NODE_NAME.to_string()),
-            };
-            self.recorded_graph_mutations.lock().push(
-                $crate::control_plane_stub_support::RecordedGraphMutation::AddProcessor(spec),
-            );
-            let armed_refusal = self.armed_add_processor_refusal.lock().clone();
-            let answers_after = self.add_processor_answers_after;
-            Box::pin(async move {
-                if let Some(answers_after) = answers_after {
-                    ::tokio::time::sleep(answers_after).await;
-                }
-                match armed_refusal {
-                    Some(refusal) => Err(::streamlib::sdk::error::Error::Configuration(refusal)),
-                    None => Ok(::streamlib::sdk::runtime::NodeInTheGraph {
-                        processor_id: ::streamlib::sdk::graph::ProcessorUniqueId::from(
-                            $crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID,
-                        ),
-                        name: name?,
-                    }),
-                }
-            })
+            unreachable!("the MCP front end edits a graph through `apply_a_stream_graph_operation_live` alone")
         }
         fn the_node_named(
             &self,
-            node_name: &str,
+            _node_name: &str,
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph> {
-            let cast = ::streamlib::sdk::graph::cast_exposed_name_to_url_safe(node_name)?;
-            if cast == $crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME {
-                return Err(::streamlib::sdk::error::Error::ProcessorNotFound(format!(
-                    "no node on this runtime is named {node_name:?}"
-                )));
-            }
-            Ok(::streamlib::sdk::runtime::NodeInTheGraph {
-                processor_id: ::streamlib::sdk::graph::ProcessorUniqueId::from(format!(
-                    "{cast}{}",
-                    $crate::control_plane_stub_support::STUB_NODE_ID_SUFFIX
-                )),
-                name: cast.into_owned(),
-            })
+            unreachable!("the MCP front end names a node by its UUID, never looks one up by name")
         }
         fn remove_processor_async(
             &self,
-            processor_id: ::streamlib::sdk::graph::ProcessorUniqueId,
+            _processor_id: ::streamlib::sdk::graph::ProcessorUniqueId,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
-            self.recorded_graph_mutations.lock().push(
-                $crate::control_plane_stub_support::RecordedGraphMutation::RemoveProcessor(
-                    processor_id,
-                ),
-            );
-            Box::pin(async { Ok(()) })
+            unreachable!("the MCP front end edits a graph through `apply_a_stream_graph_operation_live` alone")
         }
         fn connect_async(
             &self,
-            from: ::streamlib::sdk::graph::OutputLinkPortRef,
-            to: ::streamlib::sdk::graph::InputLinkPortRef,
+            _from: ::streamlib::sdk::graph::OutputLinkPortRef,
+            _to: ::streamlib::sdk::graph::InputLinkPortRef,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
             ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkUniqueId>,
         > {
-            self.recorded_graph_mutations
-                .lock()
-                .push($crate::control_plane_stub_support::RecordedGraphMutation::Connect(from, to));
-            Box::pin(async {
-                Ok(::streamlib::sdk::graph::LinkUniqueId::from(
-                    $crate::control_plane_stub_support::STUB_CREATED_LINK_ID,
-                ))
-            })
+            unreachable!("the MCP front end edits a graph through `apply_a_stream_graph_operation_live` alone")
         }
         fn disconnect_async(
             &self,
-            link_id: ::streamlib::sdk::graph::LinkUniqueId,
+            _link_id: ::streamlib::sdk::graph::LinkUniqueId,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
-            self.recorded_graph_mutations.lock().push(
-                $crate::control_plane_stub_support::RecordedGraphMutation::Disconnect(link_id),
+            unreachable!("the MCP front end edits a graph through `apply_a_stream_graph_operation_live` alone")
+        }
+        fn apply_a_stream_graph_operation_live(
+            &self,
+            graph_operation: ::streamlib_project_repository::StreamGraphOperation,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::streamlib_project_repository::StreamGraphOperation>,
+        > {
+            let mut applied = graph_operation.clone();
+            let mut name_refused = None;
+            if let ::streamlib_project_repository::StreamGraphOperation::AddNode { node, .. } =
+                &mut applied
+            {
+                if node.name.is_empty() {
+                    node.name = $crate::control_plane_stub_support::STUB_ADDED_NODE_NAME.to_string();
+                } else {
+                    match ::streamlib::sdk::graph::cast_exposed_name_to_url_safe(&node.name) {
+                        Ok(cast) => node.name = cast.into_owned(),
+                        Err(refusal) => name_refused = Some(refusal),
+                    }
+                }
+            }
+            let is_an_add = matches!(
+                applied,
+                ::streamlib_project_repository::StreamGraphOperation::AddNode { .. }
             );
-            Box::pin(async { Ok(()) })
+            self.recorded_graph_mutations.lock().push(graph_operation);
+            let armed_refusal = is_an_add
+                .then(|| self.armed_add_processor_refusal.lock().clone())
+                .flatten();
+            let answers_after = is_an_add.then_some(self.add_processor_answers_after).flatten();
+            Box::pin(async move {
+                if let Some(answers_after) = answers_after {
+                    ::tokio::time::sleep(answers_after).await;
+                }
+                if let Some(refusal) = name_refused {
+                    return Err(refusal.into());
+                }
+                match armed_refusal {
+                    Some(refusal) => Err(::streamlib::sdk::error::Error::Configuration(refusal)),
+                    None => Ok(applied),
+                }
+            })
         }
         fn add_processor(
             &self,

@@ -154,12 +154,13 @@ async fn a_mutation_lands_only_in_the_stream_it_names() {
                 "stream": "second",
                 "type": TwoStreamsTestIdleNode::processor_class_import_path().as_str(),
                 "name": "added-to-second",
+                "mode": "live",
             }),
         )
         .await,
     );
 
-    assert_eq!(added["name"], "added-to-second");
+    assert_eq!(added["added_nodes"][0]["name"], "added-to-second");
     assert!(
         node_names_in(&loaded.second.to_json().unwrap()).contains(&"added-to-second".to_string())
     );
@@ -178,7 +179,11 @@ async fn a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
             &tool_call_result(
                 loaded.operations_on_the_loaded_streams(),
                 "remove_node",
-                json!({ "stream": stream_not_loaded, "name": "idle-in-first" }),
+                json!({
+                    "stream": stream_not_loaded,
+                    "node": "00000000-0000-4000-8000-000000000000",
+                    "mode": "live",
+                }),
             )
             .await,
         );
@@ -234,7 +239,7 @@ async fn graph_without_a_stream_renders_both_and_a_one_stream_tool_naming_none_i
         &tool_call_result(
             loaded.operations_on_the_loaded_streams(),
             "remove_node",
-            json!({ "name": "idle-in-first" }),
+            json!({ "node": "00000000-0000-4000-8000-000000000000", "mode": "live" }),
         )
         .await,
     );
@@ -306,9 +311,9 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
     );
 }
 
-/// `connect` takes `stream` and the four ends, and nothing else.
+/// `connect` takes `stream`, its two ends, `mode` and `author`, and nothing else.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_connect_schema_takes_the_stream_and_the_four_ends_and_nothing_else() {
+async fn the_connect_schema_takes_the_stream_its_two_ends_mode_and_author_and_nothing_else() {
     let loaded = AnEngineLoadingTwoStreams::load();
 
     let tools = listed_tools(loaded.operations_on_the_loaded_streams()).await;
@@ -323,10 +328,7 @@ async fn the_connect_schema_takes_the_stream_and_the_four_ends_and_nothing_else(
         .map(String::as_str)
         .collect();
     arguments.sort_unstable();
-    assert_eq!(
-        arguments,
-        ["from_node", "from_port", "stream", "to_node", "to_port"]
-    );
+    assert_eq!(arguments, ["author", "mode", "source", "stream", "target"]);
 }
 
 /// The instructions an agent reads before its first call say both ends of a

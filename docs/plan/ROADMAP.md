@@ -39,6 +39,8 @@ config naming another node, recorded in the graph and checked at load. A variabl
 the five families, so this waits on step 1 in full, through #3201. It is independent of that
 change's phases 1 to 4.
 
+- Landed: #3235 (PR #3242).
+
 ## 3. Graph replacements for expose and preview
 
 Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), tickets 1 and 3.
@@ -53,6 +55,10 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), tickets 1 and 3.
   as typed family fields and hang out of the engine, lands with #3215 so viewers and Properties
   show them; its second ticket, the Packets unit without hang's container, may run beside it.
 
+- Landed: #3213 (PRs #3244 and #3245). #3215's read path landed (PRs #3248 to #3252, #3255
+  and #3286) and Tato Studio's per-family views landed in tatolab-app #166; left are stream
+  facts in the app (tatolab-app #170) and the Image rig preview.
+
 ## 4. Remove the automatic path
 
 Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), ticket 2.
@@ -62,6 +68,7 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), ticket 2.
   gateway nodes, and on #3215, so previews have their replacement before the old page goes.
 - Done when the removal gate passes on every `REMOVED:` bullet of the change and
   `/ship-change` has folded it.
+- Landed: #3214 (PR #3262). The `/ship-change` waits on #3215.
 
 ## 5. Projects and assets
 
@@ -75,6 +82,8 @@ step 4, because `exposed` leaves the spec keys and the stream record there.
 
 Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (transactions),
 #3259 (generators as fragments), #3260 (linked dependencies) and #3152 (the project read).
+
+- Landed: #3256 (PRs #3261 and #3263) and #3257 (PRs #3275 and #3285). #3258 is in progress.
 
 ## 6. New capability: lightweight nodes, then shaders
 
@@ -94,6 +103,9 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
    #3231 (the side-effect check at decoration).
 5. The pool, phase 4: #3237, one pool interpreter per stream for Python function nodes no
    Python class reads. It is required, not optional.
+
+- Landed: #3225, #3228, #3229 and #3232 of item 1, with most of #3224 (PRs #3276 to #3278);
+  item 2 in full, #3222 (PR #3272) and #3223 (PR #3288); and #3230 of item 3 (PR #3292).
 
 Step 6 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
 transaction ticket, #3258, so live edits and pin values are built once, as transactions. Nothing in steps

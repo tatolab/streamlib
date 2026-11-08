@@ -14,8 +14,8 @@ use crate::core::rhi::{Texture, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::{
-    HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanAccess, VulkanBufferLike,
-    VulkanComputeKernel, VulkanStage,
+    HostVulkanDevice, HostVulkanQueueSubmissionsSnapshot, HostVulkanTimelineSemaphore,
+    VulkanAccess, VulkanBufferLike, VulkanComputeKernel, VulkanStage,
 };
 
 /// Image-to-buffer / buffer-to-image copy region.
@@ -138,6 +138,9 @@ pub struct RhiCommandRecorderInner {
     /// raw Vulkan — `DEVICE_LOST` / `OUT_OF_DEVICE_MEMORY` on
     /// `vkQueueSubmit` leaves the fence unsignaled forever.
     submission_in_flight: bool,
+    /// The queue completion timeline value the latest accepted submission
+    /// signals.
+    latest_submission: HostVulkanQueueSubmissionsSnapshot,
     state: Mutex<RecorderState>,
 }
 
@@ -205,6 +208,7 @@ impl RhiCommandRecorderInner {
             command_buffer,
             completion_fence,
             submission_in_flight: false,
+            latest_submission: HostVulkanQueueSubmissionsSnapshot::default(),
             state: Mutex::new(RecorderState::Idle),
         })
     }
@@ -229,10 +233,34 @@ impl RhiCommandRecorderInner {
 
         unsafe {
             if self.submission_in_flight {
-                self.vulkan_device.wait_for_fences_blocking_counted(
-                    &[self.completion_fence],
-                    format_args!("RhiCommandRecorder '{}' at begin()", self.label),
-                )?;
+                // Once the submission's completion timeline value is reached its
+                // work has retired, and the fence signal that may trail it is no
+                // stall on GPU work, so that wait goes uncounted.
+                let already_signaled = self
+                    .device
+                    .get_fence_status(self.completion_fence)
+                    .is_ok_and(|status| status == vk::SuccessCode::SUCCESS);
+                if !already_signaled {
+                    let completion_timeline_reached = self
+                        .vulkan_device
+                        .every_queue_submission_in_snapshot_has_completed(&self.latest_submission)
+                        .unwrap_or(false);
+                    if completion_timeline_reached {
+                        self.device
+                            .wait_for_fences(&[self.completion_fence], true, u64::MAX)
+                            .map_err(|e| {
+                                Error::GpuError(format!(
+                                    "RhiCommandRecorder '{}': wait_for_fences at begin(): {e}",
+                                    self.label
+                                ))
+                            })?;
+                    } else {
+                        self.vulkan_device.wait_for_fences_blocking_counted(
+                            &[self.completion_fence],
+                            format_args!("RhiCommandRecorder '{}' at begin()", self.label),
+                        )?;
+                    }
+                }
                 self.device
                     .reset_fences(&[self.completion_fence])
                     .map_err(|e| {
@@ -650,16 +678,16 @@ impl RhiCommandRecorderInner {
             .signal_semaphore_infos(signals)
             .build();
 
-        unsafe {
+        self.latest_submission = unsafe {
             self.vulkan_device
-                .submit_to_queue(self.queue, &[submit], self.completion_fence)
+                .submit_to_queue_naming_its_completion(self.queue, &[submit], self.completion_fence)
                 .map_err(|e| {
                     Error::GpuError(format!(
                         "RhiCommandRecorder '{}': submit_to_queue: {e}",
                         self.label
                     ))
-                })?;
-        }
+                })?
+        };
 
         self.submission_in_flight = true;
 
@@ -757,6 +785,25 @@ impl RhiCommandRecorderInner {
         self.drain_completion_fence("wait_for_completion")
     }
 
+    /// Host-block until this recorder's most recent submission drains, by
+    /// waiting on the queue completion timeline value it signals rather than
+    /// on the recorder's fence, so the wait needs nothing but this snapshot.
+    /// No-op when nothing is in flight.
+    #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
+    pub fn wait_for_completion_on_the_queue_completion_timeline(&self) -> Result<()> {
+        if !self.submission_in_flight {
+            return Ok(());
+        }
+        self.vulkan_device
+            .wait_for_queue_submissions_blocking_counted(
+                &self.latest_submission,
+                format_args!(
+                    "RhiCommandRecorder '{}' on the queue completion timeline",
+                    self.label
+                ),
+            )
+    }
+
     /// Wait out the in-flight submission, then reset the fence and clear the
     /// in-flight flag so the next `begin()` has nothing left to wait for.
     ///
@@ -833,16 +880,16 @@ impl RhiCommandRecorderInner {
                 .build(),
         };
 
-        unsafe {
+        self.latest_submission = unsafe {
             self.vulkan_device
-                .submit_to_queue(self.queue, &[submit], self.completion_fence)
+                .submit_to_queue_naming_its_completion(self.queue, &[submit], self.completion_fence)
                 .map_err(|e| {
                     Error::GpuError(format!(
                         "RhiCommandRecorder '{}': submit_to_queue: {e}",
                         self.label
                     ))
-                })?;
-        }
+                })?
+        };
 
         // Only mark in-flight AFTER the queue accepted the submission.
         // If submit failed (or any earlier step did), the flag stays
@@ -1226,6 +1273,19 @@ impl RhiCommandRecorder {
     /// between handing the queue its work and waiting on it.
     pub fn wait_for_completion(&mut self) -> Result<()> {
         self.host_inner_mut().wait_for_completion()
+    }
+
+    /// Block until the most recent submission drains, on the queue completion
+    /// timeline. See
+    /// [`RhiCommandRecorderInner::wait_for_completion_on_the_queue_completion_timeline`].
+    pub fn wait_for_completion_on_the_queue_completion_timeline(&mut self) -> Result<()> {
+        self.host_inner_mut()
+            .wait_for_completion_on_the_queue_completion_timeline()
+    }
+
+    /// The queue submission the latest accepted submit made.
+    pub(crate) fn latest_submission(&mut self) -> HostVulkanQueueSubmissionsSnapshot {
+        self.host_inner_mut().latest_submission
     }
 
     // -------------------------------------------------------------------------

@@ -1,0 +1,170 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+use streamlib_project_repository::{
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+};
+use uuid::Uuid;
+
+use super::LoadedStreamInThisRuntime;
+use super::operations::RuntimeOperations;
+use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::graph::{LinkUniqueId, ProcessorUniqueId, cast_exposed_name_to_url_safe};
+use crate::core::processors::ProcessorSpec;
+use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
+
+impl LoadedStreamInThisRuntime {
+    /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
+    /// it as applied: an added node under the name it took.
+    pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
+        &self,
+        graph_operation: StreamGraphOperation,
+    ) -> Result<StreamGraphOperation> {
+        match graph_operation {
+            StreamGraphOperation::AddNode { mut node, links } => {
+                let mut spec = ProcessorSpec::new(
+                    ProcessorClassImportPath::new(&node.node_type).map_err(|refusal| {
+                        Error::GraphError(format!("node {} `type`: {refusal}", node.id))
+                    })?,
+                    node.config.clone(),
+                )
+                .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone())
+                .with_node_uuid(node.id);
+                if !node.name.is_empty() {
+                    spec = spec.with_display_name(node.name.clone());
+                }
+                let added = self.add_processor_async(spec).await?;
+                node.name = added.name;
+                for link in &links {
+                    if let Err(refusal) = self.connect_the_link(link).await {
+                        if let Err(not_removed) = self
+                            .remove_processor_async(added.processor_id.clone())
+                            .await
+                        {
+                            tracing::error!(
+                                node = %node.id,
+                                %not_removed,
+                                "could not take out a node whose links were refused"
+                            );
+                        }
+                        return Err(refusal);
+                    }
+                }
+                Ok(StreamGraphOperation::AddNode { node, links })
+            }
+            StreamGraphOperation::RemoveNode { node, links } => {
+                let processor_id = self.the_processor_of_the_node(node.id)?;
+                self.remove_processor_async(processor_id).await?;
+                Ok(StreamGraphOperation::RemoveNode { node, links })
+            }
+            StreamGraphOperation::Connect { link } => {
+                self.connect_the_link(&link).await?;
+                Ok(StreamGraphOperation::Connect { link })
+            }
+            StreamGraphOperation::Disconnect { link } => {
+                let link_id = self.the_link_between(&link)?;
+                self.disconnect_async(link_id).await?;
+                Ok(StreamGraphOperation::Disconnect { link })
+            }
+            StreamGraphOperation::SetNodeConfig { node, from, to } => {
+                self.update_processor_config(&self.the_processor_of_the_node(node)?, &to)?;
+                Ok(StreamGraphOperation::SetNodeConfig { node, from, to })
+            }
+            StreamGraphOperation::SetPinValue {
+                node,
+                input,
+                from,
+                to,
+            } => {
+                self.set_pin_value(&self.the_processor_of_the_node(node)?, &input, to.clone())?;
+                Ok(StreamGraphOperation::SetPinValue {
+                    node,
+                    input,
+                    from,
+                    to,
+                })
+            }
+            StreamGraphOperation::RenameNode { node, from, to } => {
+                let renamed = self.rename_node(&self.the_processor_of_the_node(node)?, &to)?;
+                Ok(StreamGraphOperation::RenameNode {
+                    node,
+                    from,
+                    to: renamed,
+                })
+            }
+            StreamGraphOperation::SetStudioFields { node, from, to } => {
+                self.set_studio_fields(&self.the_processor_of_the_node(node)?, to.clone())?;
+                Ok(StreamGraphOperation::SetStudioFields { node, from, to })
+            }
+        }
+    }
+
+    /// The processor the node whose UUID is `node` runs as, refused naming the nodes the
+    /// stream holds when none has it.
+    fn the_processor_of_the_node(&self, node: Uuid) -> Result<ProcessorUniqueId> {
+        self.compiler.scope(|graph, _tx| {
+            let nodes: Vec<_> = graph.traversal().v(()).iter().collect();
+            nodes
+                .iter()
+                .find(|held| held.node_uuid == node)
+                .map(|held| held.id.clone())
+                .ok_or_else(|| {
+                    let held: Vec<String> = nodes
+                        .iter()
+                        .map(|held| format!("{} `{}`", held.node_uuid, held.display_name))
+                        .collect();
+                    Error::GraphError(format!(
+                        "stream `{}` holds no node {node}. It holds: {}",
+                        self.stream_id(),
+                        if held.is_empty() {
+                            "no node".to_string()
+                        } else {
+                            held.join(", ")
+                        }
+                    ))
+                })
+        })
+    }
+
+    async fn connect_the_link(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {
+        let from = OutputLinkPortRef::new(
+            self.the_processor_of_the_node(link.source.node)?,
+            &link.source.port,
+        );
+        let to = InputLinkPortRef::new(
+            self.the_processor_of_the_node(link.target.node)?,
+            &link.target.port,
+        );
+        self.connect_async(from, to).await
+    }
+
+    /// The live link `link` names by its ends.
+    fn the_link_between(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {
+        let source = self.the_processor_of_the_node(link.source.node)?;
+        let target = self.the_processor_of_the_node(link.target.node)?;
+        let end = |end: &StreamGraphDocumentLinkEnd| format!("{}/{}", end.node, end.port);
+        let source_port = cast_exposed_name_to_url_safe(&link.source.port)?;
+        let target_port = cast_exposed_name_to_url_safe(&link.target.port)?;
+        self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(&source)
+                .out_e()
+                .iter()
+                .find(|held| {
+                    held.source.port_name() == source_port
+                        && *held.target.processor_id() == target
+                        && held.target.port_name() == target_port
+                })
+                .map(|held| held.id.clone())
+                .ok_or_else(|| {
+                    Error::GraphError(format!(
+                        "stream `{}` holds no link {} -> {}",
+                        self.stream_id(),
+                        end(&link.source),
+                        end(&link.target)
+                    ))
+                })
+        })
+    }
+}

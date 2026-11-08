@@ -265,6 +265,33 @@ impl crate::core::ManualProcessor for MockSourceTakingOneSetting::Processor {
     }
 }
 
+/// The one setting [`MockSourceReadingAnImageAsset`] takes: the image, by asset reference.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct MockSourceReadingAnImageAssetConfig {
+    #[serde(default)]
+    pub image: Option<serde_json::Value>,
+}
+
+/// Mock source whose config names an image asset `{"asset": "<uuid>"}`.
+#[crate::processor(
+    execution = manual,
+    config = crate::core::test_support::MockSourceReadingAnImageAssetConfig,
+    output("video", family = Image),
+)]
+pub(crate) struct MockSourceReadingAnImageAsset;
+
+impl crate::core::ManualProcessor for MockSourceReadingAnImageAsset::Processor {
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Mock source whose `setup()` refuses, as a capture device does, when its
 /// stream may not ask the user for an access nobody has answered.
 #[crate::processor(
@@ -323,6 +350,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockProcessorWithACamelCaseOutputPort::Processor>();
         PROCESSOR_REGISTRY.register::<MockSourceTakingOneSetting::Processor>();
+        PROCESSOR_REGISTRY.register::<MockSourceReadingAnImageAsset::Processor>();
         PROCESSOR_REGISTRY.register::<MockSourceRefusingAnAccessNobodyAskedFor::Processor>();
     });
 }

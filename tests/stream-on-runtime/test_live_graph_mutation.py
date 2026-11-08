@@ -166,6 +166,40 @@ def link_with_id(graph: dict, link_id: str) -> "dict | None":
     return next((link for link in graph["links"] if link["id"] == link_id), None)
 
 
+def link_end(node_uuid: str, port: str) -> "dict[str, str]":
+    """One end of a link as the graph tools name it: a node's UUID and a port name."""
+    return {"node": node_uuid, "port": port}
+
+
+def add_node_live(local_api: LocalApiClient, stream_id: str, arguments: dict) -> "dict[str, str]":
+    """Add a node to the running stream alone, and answer its `node` UUID and `name`."""
+    answered = local_api.call_tool("add_node", {**arguments, "stream": stream_id, "mode": "live"})
+    (added,) = answered["added_nodes"]
+    return added
+
+
+def connect_live(
+    local_api: LocalApiClient,
+    stream_id: str,
+    source: "dict[str, str]",
+    target: "dict[str, str]",
+) -> str:
+    """Link `source` to `target` in the running stream alone, and answer the new link's id."""
+    local_api.call_tool(
+        "connect", {"stream": stream_id, "source": source, "target": target, "mode": "live"}
+    )
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    name_of = {node["id"]: node["name"] for node in graph["nodes"]}
+    matches = [
+        link["id"]
+        for link in graph["links"]
+        if link["source"] == {"node": name_of[source["node"]], "port": source["port"]}
+        and link["target"] == {"node": name_of[target["node"]], "port": target["port"]}
+    ]
+    assert len(matches) == 1, f"expected the one new link in {graph['links']}"
+    return matches[0]
+
+
 def await_link_state(
     local_api: LocalApiClient, stream_id: str, link_id: str, wanted: str
 ) -> str:
@@ -290,35 +324,31 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     # been running for a while.
     (app_directory / "processors" / "live_added_effect.py").write_text(LIVE_ADDED_EFFECT_SOURCE)
 
-    added = local_api.call_tool(
-        "add_node",
+    added = add_node_live(
+        local_api,
+        stream_id,
         {
-            "stream": stream_id,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
             "name": "effect",
         },
     )
-    assert added == {"name": "effect"}
+    assert added["name"] == "effect"
 
     graph_after_add = local_api.call_tool("graph", {"stream": stream_id})
     effect = node_named(graph_after_add, "effect")
+    assert effect["id"] == added["node"], "the node keeps the UUID `add_node` answered"
     assert effect["type"] == f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}"
     assert effect["config"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
     assert [port["name"] for port in effect["ports"]["inputs"]] == ["video_from_upstream"]
     assert [port["name"] for port in effect["ports"]["outputs"]] == ["video_to_downstream"]
 
-    connected = local_api.call_tool(
-        "connect",
-        {
-            "stream": stream_id,
-            "from_node": "pattern",
-            "from_port": "video",
-            "to_node": "effect",
-            "to_port": "video_from_upstream",
-        },
+    upstream_link_id = connect_live(
+        local_api,
+        stream_id,
+        link_end(pattern["id"], "video"),
+        link_end(added["node"], "video_from_upstream"),
     )
-    upstream_link_id = connected["link_id"]
 
     graph_after_connect = local_api.call_tool("graph", {"stream": stream_id})
     upstream_link = link_with_id(graph_after_connect, upstream_link_id)
@@ -341,58 +371,50 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     # A second consumer on the SAME source output port: the channel was
     # created for the first link, and iceoryx2 pins its subscriber count then,
     # so this is the late subscriber the fixed sizing exists for.
-    second = local_api.call_tool(
-        "add_node",
+    second = add_node_live(
+        local_api,
+        stream_id,
         {
-            "stream": stream_id,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
             "name": "second-effect",
         },
     )
-    local_api.call_tool(
-        "connect",
-        {
-            "stream": stream_id,
-            "from_node": "pattern",
-            "from_port": "video",
-            "to_node": second["name"],
-            "to_port": "video_from_upstream",
-        },
+    connect_live(
+        local_api,
+        stream_id,
+        link_end(pattern["id"], "video"),
+        link_end(second["node"], "video_from_upstream"),
     )
     tatolabd.await_marker("SECOND_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
 
     # A node added live, consuming the helper's output: the output side of a
     # helper that already ran its setup, and a destination whose notify
     # service is created after the source was already publishing.
-    downstream = local_api.call_tool(
-        "add_node",
+    downstream = add_node_live(
+        local_api,
+        stream_id,
         {
-            "stream": stream_id,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "DOWNSTREAM_EFFECT_SAW_A_FRAME"},
             "name": "downstream-effect",
         },
     )
-    local_api.call_tool(
-        "connect",
-        {
-            "stream": stream_id,
-            "from_node": "effect",
-            "from_port": "video_to_downstream",
-            "to_node": downstream["name"],
-            "to_port": "video_from_upstream",
-        },
+    connect_live(
+        local_api,
+        stream_id,
+        link_end(added["node"], "video_to_downstream"),
+        link_end(downstream["node"], "video_from_upstream"),
     )
     tatolabd.await_marker("DOWNSTREAM_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
     assert bags_written_on(local_api, stream_id, "effect", "video_to_downstream") > 0
 
     # A native built-in added live, by the type `graph` reports for one: its
     # class in `tatolab.stream`, resolved apart from a project's processors.
-    live_added_channels_to_records = local_api.call_tool(
-        "add_node",
+    live_added_channels_to_records = add_node_live(
+        local_api,
+        stream_id,
         {
-            "stream": stream_id,
             "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
             "config": {"channel_names": ["level"]},
             "name": "live-added-channels-to-records",
@@ -403,7 +425,15 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         == "Running"
     )
 
-    local_api.call_tool("disconnect", {"stream": stream_id, "link_id": upstream_link_id})
+    local_api.call_tool(
+        "disconnect",
+        {
+            "stream": stream_id,
+            "source": link_end(pattern["id"], "video"),
+            "target": link_end(added["node"], "video_from_upstream"),
+            "mode": "live",
+        },
+    )
     graph_after_disconnect = local_api.call_tool("graph", {"stream": stream_id})
     assert link_with_id(graph_after_disconnect, upstream_link_id) is None
     # Nothing feeds the effect any more, so nothing leaves it — once the frame
@@ -417,9 +447,10 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         == written_once_starved
     ), "bags still leave a disconnected effect"
 
-    assert local_api.call_tool("remove_node", {"stream": stream_id, "name": "effect"}) == {
-        "removed_name": "effect"
-    }
+    removed = local_api.call_tool(
+        "remove_node", {"stream": stream_id, "node": added["node"], "mode": "live"}
+    )
+    assert [operation["operation"] for operation in removed["operations"]] == ["remove_node"]
     graph_after_remove = local_api.call_tool("graph", {"stream": stream_id})
     assert all(node["name"] != "effect" for node in graph_after_remove["nodes"])
     assert all(
@@ -504,25 +535,18 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     local_api, stream_id = pattern_stream.local_api, pattern_stream.stream_id
     pattern = node_named(local_api.call_tool("graph", {"stream": stream_id}), "pattern")
 
-    sink = local_api.call_tool(
-        "add_node",
-        {
-            "stream": stream_id,
-            "type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}",
-            "name": "sink",
-        },
+    sink = add_node_live(
+        local_api,
+        stream_id,
+        {"type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}", "name": "sink"},
     )
 
-    connect_seconds, connected = seconds_taken_by(
-        lambda: local_api.call_tool(
-            "connect",
-            {
-                "stream": stream_id,
-                "from_node": pattern["name"],
-                "from_port": "video",
-                "to_node": sink["name"],
-                "to_port": "video_from_upstream",
-            },
+    connect_seconds, connected_link_id = seconds_taken_by(
+        lambda: connect_live(
+            local_api,
+            stream_id,
+            link_end(pattern["id"], "video"),
+            link_end(sink["node"], "video_from_upstream"),
         )
     )
     assert connect_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
@@ -535,13 +559,13 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     assert graph_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
         f"graph took {graph_seconds:.1f}s, waiting on a helper still importing"
     )
-    link_while_importing = link_with_id(graph_while_importing, connected["link_id"])
+    link_while_importing = link_with_id(graph_while_importing, connected_link_id)
     assert link_while_importing is not None
     assert link_while_importing["state"] in ("pending", "wired"), link_while_importing
 
     add_seconds, _ = seconds_taken_by(
-        lambda: local_api.call_tool(
-            "add_node", {"stream": stream_id, "type": pattern["type"], "name": "second-pattern"}
+        lambda: add_node_live(
+            local_api, stream_id, {"type": pattern["type"], "name": "second-pattern"}
         )
     )
     assert add_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
@@ -549,7 +573,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     )
 
     assert await_node_state(local_api, stream_id, "sink", "Running") == "Running"
-    assert await_link_state(local_api, stream_id, connected["link_id"], "wired") == "wired", (
+    assert await_link_state(local_api, stream_id, connected_link_id, "wired") == "wired", (
         "the link connected during the import is wired once the helper is up"
     )
 
@@ -572,7 +596,8 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     local_api, stream_id = pattern_stream.local_api, pattern_stream.stream_id
 
     refusal = local_api.call_tool_refusal(
-        "add_node", {"stream": stream_id, "type": "processors.no_such_module:Missing"}
+        "add_node",
+        {"stream": stream_id, "type": "processors.no_such_module:Missing", "mode": "live"},
     )
     assert re.search(r"no_such_module|No module named", refusal), refusal
 
@@ -581,14 +606,14 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
         "a refused add must leave the running graph as it was"
     )
 
+    pattern = node_named(graph, "pattern")
     port_refusal = local_api.call_tool_refusal(
         "connect",
         {
             "stream": stream_id,
-            "from_node": "pattern",
-            "from_port": "no_such_port",
-            "to_node": "pattern",
-            "to_port": "video",
+            "source": link_end(pattern["id"], "no_such_port"),
+            "target": link_end(pattern["id"], "video"),
+            "mode": "live",
         },
     )
     assert "no_such_port" in port_refusal

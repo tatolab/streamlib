@@ -3,7 +3,7 @@ name: Release Extension Wheel
 # One extension wheel per platform the runtime runs on — manylinux and Apple
 # Silicon — built the way a third party would build one: its own standalone
 # maturin project, its own lockfile, no engine crate linked. Both are kept as
-# this run's `pypi-distribution-*` artifacts, which reusable-distributions.yml uploads
+# this run's `release-distribution-*` artifacts, which reusable-distributions.yml uploads
 # to PyPI. Called once per extension by reusable-distributions.yml.
 on:
   workflow_call:
@@ -209,9 +209,10 @@ jobs:
       # a release build resolving PEP 639 globs that are symlinks out of the
       # project root.
       #
-      # `--no-index` beside this run's `tatolab-stream`, which PyPI does not
-      # hold until the upload: the extension's declared floor has to admit the
-      # `tatolab-stream` published beside it.
+      # This run's `tatolab-stream` first, with `--no-index`, since PyPI does not
+      # hold it until the upload: the extension's declared floor has to admit the
+      # `tatolab-stream` published beside it. The wheel then installs with the
+      # index on, so a third-party dependency it declares (`numpy`) resolves.
       - name: The wheel installs beside this release's tatolab-stream, imports, and carries its notices
         env:
           EXTENSION_DISTRIBUTION_NAME: ${{ inputs.extension_distribution_name }}
@@ -220,7 +221,8 @@ jobs:
           python3 -m venv /tmp/extension-wheel-check
           /tmp/extension-wheel-check/bin/pip install 'msgpack>=1.0'
           /tmp/extension-wheel-check/bin/pip install \
-            --no-index --find-links /tmp/tatolab-stream-distribution \
+            --no-index --find-links /tmp/tatolab-stream-distribution tatolab-stream
+          /tmp/extension-wheel-check/bin/pip install \
             "${{ inputs.extension_package_directory }}"/dist/*.whl
           # Read through importlib.metadata, so a file present in the repo and
           # absent from the wheel fails rather than passes.
@@ -243,10 +245,10 @@ jobs:
           print(distribution_name, 'exports', ', '.join(exported))
           "
 
-      # reusable-distributions.yml uploads every `pypi-distribution-*` artifact of the run.
+      # reusable-distributions.yml uploads every `release-distribution-*` artifact of the run.
       - name: Keep the wheel for the upload
         uses: actions/upload-artifact@v6
         with:
-          name: pypi-distribution-${{ inputs.extension_distribution_name }}-${{ matrix.platform }}
+          name: release-distribution-${{ inputs.extension_distribution_name }}-${{ matrix.platform }}
           path: ${{ inputs.extension_package_directory }}/dist/*.whl
           if-no-files-found: error

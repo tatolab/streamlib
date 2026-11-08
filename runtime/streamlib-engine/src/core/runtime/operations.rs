@@ -77,6 +77,13 @@ pub trait RuntimeOperations: Send + Sync {
     /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>>;
 
+    /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
+    /// it as applied: an added node under the name it took.
+    fn apply_a_stream_graph_operation_live(
+        &self,
+        graph_operation: streamlib_project_repository::StreamGraphOperation,
+    ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
+
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 

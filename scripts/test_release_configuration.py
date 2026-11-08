@@ -139,7 +139,7 @@ class ReleasingEveryDistributionOnTheOneVersion(unittest.TestCase):
             # pure-Python one keeps its distributions as its own artifact.
             self.assertTrue(
                 f"extension_distribution_name: {distribution_name}\n" in release_workflow
-                or f"name: pypi-distribution-{distribution_name}\n" in release_workflow,
+                or f"name: release-distribution-{distribution_name}\n" in release_workflow,
                 f"{RELEASE_TO_PYPI_WORKFLOW_RELATIVE_PATH} never builds {distribution_name}",
             )
 
