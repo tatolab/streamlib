@@ -340,15 +340,27 @@ def test_an_island_feeds_its_port_one_f64_sample_evaluated_at_the_read():
     assert 0.0 <= brightness <= 1.0
 
 
-def test_an_unlinked_input_with_no_default_is_refused_by_name():
+def test_an_island_with_an_input_no_value_reaches_holds_until_a_later_feed_gives_it_one():
     island = an_island_of_lfo_then_remap_feeding("brightness")
+    linked_x = island["nodes"][1]["links_into"]
     island["nodes"][1]["links_into"] = []
-    with pytest.raises(FunctionNodeDoesNotCompile, match="input `x` is linked to nothing"):
-        feed_each_input_port_from_its_function_node_island(
-            _engine.open_node_link_data_access_for_helper_process(),
-            [island],
-            _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
-        )
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["brightness"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__
+    )
+    assert fed.ran_compiled_by_node_id == {}, "a held island runs nothing"
+    assert data_plane.read_from_input_port("brightness") is None
+
+    island["nodes"][1]["links_into"] = linked_x
+    fed.feed_an_input_port_from_its_island(island)
+    assert data_plane.read_from_input_port("brightness") is not None
+
+    island["nodes"][1]["links_into"] = []
+    fed.feed_an_input_port_from_its_island(island)
+    assert data_plane.read_from_input_port("brightness") is None, (
+        "an island fed again with an input no value reaches stops feeding its port"
+    )
 
 
 def an_island_of_one_node(
@@ -1072,14 +1084,18 @@ def test_an_unlinked_input_takes_its_pin_value_before_its_default():
     assert the_value_read_from(data_plane, "level") == 2.0, "x pinned to 0.5 over 0..4"
 
 
-def test_an_input_with_no_link_pin_or_default_is_refused_naming_all_three():
-    island = an_island_of_one_node("level", f"{__name__}:remap", None, "remap-1")
-    with pytest.raises(FunctionNodeDoesNotCompile, match="linked to nothing, has no pin value"):
-        feed_each_input_port_from_its_function_node_island(
-            _engine.open_node_link_data_access_for_helper_process(),
-            [island],
-            _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
-        )
+def test_an_island_node_input_with_no_link_pin_or_default_holds_its_port():
+    import_path = f"{__name__}:remap"
+    island = an_island_of_one_node("level", import_path, None, "remap-1")
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["level"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], {import_path: remap}.__getitem__
+    )
+    assert data_plane.read_from_input_port("level") is None
+    island["nodes"][0]["pins"] = {"x": 0.5, "high": 4.0}
+    fed.feed_an_input_port_from_its_island(island)
+    assert the_value_read_from(data_plane, "level") == 2.0
 
 
 def test_a_pin_value_that_is_not_a_number_is_refused_by_name():

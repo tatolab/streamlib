@@ -235,6 +235,7 @@ impl GraphVariablesAsDrawn {
                     config_checksum: compute_json_checksum(&variable_node.config),
                     pins: variable_node.pins.clone(),
                     studio: variable_node.studio.clone(),
+                    inputs_waiting_for_a_value: Vec::new(),
                     ports: ProcessorNodePortsOutput {
                         inputs: if is_a_setter {
                             vec![value_port.clone()]
@@ -1010,6 +1011,7 @@ mod tests {
             components: serde_json::Map::new(),
             pins: serde_json::Map::new(),
             studio: serde_json::Map::new(),
+            inputs_waiting_for_a_value: Vec::new(),
         }
     }
 

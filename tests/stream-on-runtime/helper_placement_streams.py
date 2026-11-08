@@ -163,6 +163,14 @@ def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBui
 
 
 @stream
+def clamp_with_its_input_linked_to_nothing_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Clamp`, its `x` linked to nothing and unpinned, read by a Python class."""
+    clamp = stream_builder.add(Clamp, name="clamp")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(clamp.output("result"), sink.input("brightness"))
+
+
+@stream
 def python_sink_reading_the_pin_value_of_its_unlinked_input(stream_builder: StreamBuilder) -> None:
     """A Python class whose one input is linked to nothing, so it reads its pin value."""
     stream_builder.add(ReportsEachBatchOfPinValuesItReadSink, name="sink")

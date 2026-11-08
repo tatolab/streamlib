@@ -138,13 +138,29 @@ class FunctionNodeIslandsFedToTheirPorts:
         }
 
     def feed_an_input_port_from_its_island(self, island: "dict[str, Any]") -> None:
-        """Prepare every node of `island` and feed it to its input port, in place of any island feeding it."""
+        """Prepare every node of `island` and feed it to its input port, in place of any island feeding it.
+
+        An island with a node input that no value reaches holds instead: its
+        port is fed nothing until a later feed gives each input a value.
+        """
         input_port = island["input_port"]
         self._refuse_a_stateful_node_another_port_holds(island)
         prepared_by_node_id = {
             island_node["node"]: self._prepared(island_node["import_path"])
             for island_node in island["nodes"]
         }
+        inputs_waiting_for_a_value = _the_island_node_inputs_no_value_reaches(
+            island["nodes"], prepared_by_node_id
+        )
+        if inputs_waiting_for_a_value:
+            self.stop_feeding_an_input_port(input_port)
+            log.info(
+                "the island feeding this input port holds until each of its function node "
+                "inputs has a value",
+                input_port=input_port,
+                inputs_waiting_for_a_value=inputs_waiting_for_a_value,
+            )
+            return
         node_index_by_node_id = {
             island_node["node"]: node_index for node_index, island_node in enumerate(island["nodes"])
         }
@@ -550,6 +566,27 @@ def _refuse_a_stateful_node_two_islands_hold(
         )
 
 
+def _the_island_node_inputs_no_value_reaches(
+    island_nodes: "list[dict[str, Any]]",
+    prepared_by_node_id: "dict[str, FunctionNodeReadyToEvaluate]",
+) -> "list[str]":
+    """Each `node.input` of `island_nodes` linked to nothing, with no pin value and declaring no default."""
+    inputs_no_value_reaches: "list[str]" = []
+    for island_node in island_nodes:
+        node_id = island_node["node"]
+        prepared = prepared_by_node_id[node_id]
+        linked_input_ports = {link["port"] for link in island_node["links_into"]}
+        pinned_input_ports = set(island_node.get("pins") or {})
+        inputs_no_value_reaches.extend(
+            f"{island_node.get('name') or node_id}.{input_port}"
+            for input_port in prepared.input_ports
+            if input_port not in linked_input_ports
+            and input_port not in pinned_input_ports
+            and input_port not in prepared.pin_defaults_by_input_port
+        )
+    return inputs_no_value_reaches
+
+
 def _where_each_input_takes_its_value(
     prepared: FunctionNodeReadyToEvaluate,
     node_id: str,
@@ -578,15 +615,9 @@ def _where_each_input_takes_its_value(
             where_each_input_takes_its_value.append(
                 (None, _a_pin_value_as_f64(node_id, input_port, pin_values_by_input_port[input_port]))
             )
-        elif input_port in prepared.pin_defaults_by_input_port:
+        else:
             where_each_input_takes_its_value.append(
                 (None, prepared.pin_defaults_by_input_port[input_port])
-            )
-        else:
-            raise FunctionNodeDoesNotCompile(
-                f"function node `{node_id}`'s input `{input_port}` is linked to nothing, has no "
-                f"pin value and declares no default, so it has no value to evaluate with. To fix: "
-                f"link it, set its pin, or give its parameter a default."
             )
     return where_each_input_takes_its_value
 

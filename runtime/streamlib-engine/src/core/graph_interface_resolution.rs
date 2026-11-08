@@ -410,6 +410,7 @@ impl GraphInterfaceAsDrawn {
                     config_checksum: compute_json_checksum(&interface_node.node.config),
                     pins: interface_node.node.pins.clone(),
                     studio: interface_node.node.studio.clone(),
+                    inputs_waiting_for_a_value: Vec::new(),
                     ports: ProcessorNodePortsOutput { inputs, outputs },
                     components,
                 },
@@ -829,6 +830,7 @@ mod tests {
             components: serde_json::Map::new(),
             pins: serde_json::Map::new(),
             studio: serde_json::Map::new(),
+            inputs_waiting_for_a_value: Vec::new(),
         };
         let mut graph_response: GraphResponse = serde_json::from_value(serde_json::json!({
             "machine": "rig", "nodes": [], "links": [],

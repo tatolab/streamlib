@@ -526,6 +526,9 @@ impl LoadedStreamInThisRuntime {
                 self.stream_id()
             )));
         }
+        self.compiler.scope_reading(
+            crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_function_node_input_with_no_value_as_the_stream_starts,
+        )?;
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting the stream `{}`", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarting);
