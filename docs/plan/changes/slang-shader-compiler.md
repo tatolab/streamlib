@@ -102,6 +102,9 @@ recorded here so the tickets need not re-derive them.
   script the build calls. A library whose glibc floor is above `manylinux_2_28`, or whose macOS
   minimum is above 26.0, is refused by the stage script, and that floor builds Slang from
   source in its own build image instead.
+  - Linux is that floor: Slang 2026.12's Linux release needs `GLIBCXX_3.4.29`, above
+    `manylinux_2_28`'s 3.4.25, so both libraries build from the pinned tag inside the pinned
+    manylinux_2_28 image, as the bundled lavapipe does. macOS takes the release archive.
 - The portability proof extends to them: a C++ runtime and the system only, signed on macOS.
 - `THIRD-PARTY-NOTICES.md` names Slang's licence and the projects it carries.
 

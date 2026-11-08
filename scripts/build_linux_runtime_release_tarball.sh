@@ -36,10 +36,11 @@ if [ "${1:-}" != "--inside-manylinux" ]; then
 		echo "the workspace has uncommitted changes: the tarball would not be $streamlib_commit" >&2
 		exit 1
 	}
-	# In a container of its own, so the pinned LLVM it installs never meets the
-	# toolchain this build installs below; inside, build-runtime's staging is
-	# then a cache hit.
+	# Each in a container of its own, so the pinned LLVM the driver installs
+	# never meets the toolchain this build installs below; inside,
+	# build-runtime's staging is then a cache hit.
 	bash "$workspace_root/scripts/stage_linux_bundled_vulkan_driver.sh"
+	bash "$workspace_root/scripts/stage_slang_compiler_libraries.sh" --fill-the-cache-only
 	exec docker run --rm \
 		--volume "$workspace_root:/workspace" \
 		--volume "$output_directory:/output" \

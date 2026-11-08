@@ -333,11 +333,13 @@ jobs:
           echo "VK_ADD_DRIVER_FILES=$bundled_vulkan_driver_directory/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$bundled_vulkan_driver_directory" >> "$GITHUB_ENV"
 
-      - name: Cache the Slang compiler release
+      # Slang takes minutes to build in manylinux; the staging script reuses a
+      # build whose key matches, and these two files are the key.
+      - name: Cache the Slang compiler build
         uses: actions/cache@v5
         with:
-          path: target/slang_compiler_release_cache
-          key: slang-compiler-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh') }}
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
 
       # The engine opens the Slang compiler at run time; a debug build's tests
       # find it where this stages it under target/.
@@ -523,6 +525,13 @@ jobs:
           path: target/linux_bundled_vulkan_driver_cache
           key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
 
+      - name: Cache the Slang compiler build
+        if: steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second
       # replaces the first in place, so each is packed before the next build.
@@ -700,8 +709,8 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/cache@v5
         with:
-          path: target/slang_compiler_release_cache
-          key: slang-compiler-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh') }}
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
 
       # The engine opens the Slang compiler at run time; a debug build's tests
       # find it where this stages it under target/.
