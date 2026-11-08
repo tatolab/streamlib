@@ -5532,7 +5532,17 @@ name = "tatolab-module-sdk"
 version = "1.12.0"
 dependencies = [
  "pyo3",
+ "tatolab-module-sdk-macros",
  "tracing",
+]
+
+[[package]]
+name = "tatolab-module-sdk-macros"
+version = "1.12.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

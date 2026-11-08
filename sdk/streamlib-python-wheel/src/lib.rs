@@ -38,6 +38,14 @@ mod python_surface_share_service_for_tests;
 
 #[pymodule]
 fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add(
+        "MODULE_HOST_TABLE_ABI_MAJOR",
+        tatolab_module_sdk::MODULE_HOST_TABLE_ABI_MAJOR,
+    )?;
+    module.add(
+        "MODULE_HOST_TABLE_ABI_MINOR",
+        tatolab_module_sdk::MODULE_HOST_TABLE_ABI_MINOR,
+    )?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
     module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;

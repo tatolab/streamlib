@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import sys
 import typing
+from collections.abc import Mapping
 from typing import Any, Callable, NoReturn, Optional, ParamSpec, TypeVar, overload
 
 from .catalog import AudioEntry, BinaryEntry, JsonEntry, TextEntry, VideoEntry
@@ -29,6 +31,7 @@ from ._exposed_name_cast import (
     cast_exposed_name_to_url_safe,
 )
 from ._function_node_declaration import FunctionNode, declare_function_node
+from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
 from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
     derive_config_class_json_schema,
@@ -345,6 +348,19 @@ class NodeDeclarationDecorator:
         if node_function is None:
             return apply_to_function
         return apply_to_function(node_function)
+
+    def rust_function(self, native_declaration: "Mapping[str, Any]") -> "RustFunctionNode":
+        """Declare a function node a module wrote in Rust with `#[function_node]`.
+
+        Takes what its native half's `<function>_function_node_declaration()
+        .to_python_declaration(py)` built, and is assigned at module scope to
+        the node's short name, its import path: `Lerp = node.rust_function(_native.Lerp)`.
+        """
+        return declare_rust_function_node(
+            native_declaration,
+            module_name=sys._getframe(1).f_globals["__name__"],  # pyright: ignore[reportPrivateUsage]
+            declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
+        )
 
     def process(
         self,

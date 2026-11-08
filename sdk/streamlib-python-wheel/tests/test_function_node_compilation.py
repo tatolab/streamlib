@@ -198,7 +198,7 @@ def test_a_stateless_body_runs_compiled_with_its_pins_in_signature_order():
 
 def test_a_stateful_body_reads_time_and_its_state_and_writes_its_next_state():
     lfo_compiled = compiled(lfo)
-    assert lfo_compiled.initial_state_values_for_one_node("lfo-1") == [0.0, 0.0]
+    assert lfo_compiled.initial_state_values == (0.0, 0.0)
     outputs, state = call_the_evaluate_entry(lfo_compiled, [1.0], [], [0.0, 0.0], 1_000_000_000)
     assert outputs == [0.0] and state == [0.0, 1_000_000_000.0]
     outputs, state = call_the_evaluate_entry(lfo_compiled, [1.0], [], state, 1_250_000_000)
@@ -490,3 +490,124 @@ def test_a_promoted_function_node_with_a_port_named_like_a_runner_member_is_refu
             "passes-1",
             data_plane,
         )
+
+
+@_EVALUATE_ENTRY_TYPE
+def _weighted_sum_counting_its_calls_evaluate_entry(
+    input_values: Any, config_values: Any, state_values: Any, output_values: Any, now_ns: int
+) -> int:
+    output_values[0] = input_values[0] * config_values[0] + input_values[1]
+    state_values[0] = state_values[0] + 1.0
+    return 0
+
+
+def a_rust_function_node_declaration(**overrides: Any) -> "dict[str, Any]":
+    declaration: "dict[str, Any]" = {
+        "short_name": "WeightedSumCountingItsCalls",
+        "description": "`x` times the config's weight, plus `bias`.",
+        "input_pins": [
+            {"port": "x", "value_type": "float", "pin_default": None},
+            {"port": "bias", "value_type": "float", "pin_default": 0.25},
+        ],
+        "output_ports": [{"name": "result", "value_type": "float"}],
+        "config_fields": [{"name": "weight", "value_type": "float", "default": 2.0}],
+        "state_fields": [{"name": "calls", "value_type": "int", "default": 10.0}],
+        "stream_time_parameter": None,
+        "state_parameter": "previous",
+        "config_parameter": "config",
+        "evaluate_entry_address": ctypes.cast(
+            _weighted_sum_counting_its_calls_evaluate_entry, ctypes.c_void_p
+        ).value,
+        "module_host_table_abi_major": _engine.MODULE_HOST_TABLE_ABI_MAJOR,
+        "module_host_table_abi_minor": _engine.MODULE_HOST_TABLE_ABI_MINOR,
+    }
+    declaration.update(overrides)
+    return declaration
+
+
+WeightedSumCountingItsCalls = node.rust_function(a_rust_function_node_declaration())
+
+
+def test_a_rust_function_node_is_read_from_its_declaration_and_never_compiled():
+    rust_compiled = compiled(WeightedSumCountingItsCalls)
+    assert rust_compiled.evaluate_entry_address == (
+        WeightedSumCountingItsCalls.rust_function_node_declaration.evaluate_entry_address
+    )
+    assert rust_compiled.input_ports == ("x", "bias")
+    assert rust_compiled.pin_defaults_by_input_port == {"bias": 0.25}
+    assert rust_compiled.output_ports == ("result",)
+    assert rust_compiled.config_fields == ("weight",)
+    assert rust_compiled.config_field_defaults == {"weight": 2.0}
+    assert rust_compiled.state_fields == ("calls",)
+    assert rust_compiled.initial_state_values == (10.0,)
+    assert rust_compiled.is_stateful
+    assert not rust_compiled.body_loaded_from_numbas_cache
+    assert call_the_evaluate_entry(rust_compiled, [3.0, 1.0], [2.0], [10.0]) == ([7.0], [11.0])
+
+
+@pytest.mark.parametrize(
+    ("major_offset", "minor_offset", "refusal"),
+    [(1, 0, "another major"), (0, 1, "newer than")],
+)
+def test_a_rust_function_node_built_for_a_table_this_runtime_does_not_serve_is_refused(
+    major_offset: int, minor_offset: int, refusal: str
+):
+    built_for_another_table = node.rust_function(
+        a_rust_function_node_declaration(
+            module_host_table_abi_major=_engine.MODULE_HOST_TABLE_ABI_MAJOR + major_offset,
+            module_host_table_abi_minor=_engine.MODULE_HOST_TABLE_ABI_MINOR + minor_offset,
+        )
+    )
+    with pytest.raises(FunctionNodeDoesNotCompile, match=refusal):
+        compile_function_node_to_its_evaluate_entry(
+            built_for_another_table, f"{__name__}:WeightedSumCountingItsCalls"
+        )
+
+
+def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_port():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["weighted"], [])
+    island = {
+        "input_port": "weighted",
+        "link_id": "L-mixed-island",
+        "output": {"node": "weighted-1", "port": "result"},
+        "nodes": [
+            {
+                "node": "lfo-1",
+                "breadcrumb_number": 0,
+                "import_path": f"{__name__}:lfo",
+                "config": None,
+                "links_into": [],
+            },
+            {
+                "node": "tally-1",
+                "breadcrumb_number": 1,
+                "import_path": f"{__name__}:tally",
+                "config": None,
+                "links_into": [{"port": "x", "from": {"node": "lfo-1", "port": "result"}}],
+            },
+            {
+                "node": "weighted-1",
+                "breadcrumb_number": 2,
+                "import_path": f"{__name__}:WeightedSumCountingItsCalls",
+                "config": {"weight": 4.0},
+                "links_into": [{"port": "x", "from": {"node": "tally-1", "port": "result"}}],
+            },
+        ],
+    }
+    function_nodes_by_import_path = {
+        f"{__name__}:lfo": lfo,
+        f"{__name__}:tally": tally,
+        f"{__name__}:WeightedSumCountingItsCalls": WeightedSumCountingItsCalls,
+    }
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], function_nodes_by_import_path.__getitem__
+    )
+
+    payload = data_plane.read_from_input_port("weighted")
+    assert payload is not None
+    (weighted,) = struct.unpack("<d", bytes(payload))
+    assert weighted == pytest.approx(3 * 4.0 + 0.25), (
+        "`tally` hands the Rust node 3, which it weights by its config's 4 and moves by its "
+        "`bias` pin's 0.25"
+    )
