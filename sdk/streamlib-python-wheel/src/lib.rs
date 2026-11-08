@@ -11,7 +11,7 @@ mod darwin_close_on_exec_kqueue;
 #[cfg(unix)]
 mod helper_process_native_escalate_channel;
 mod python_bag_conversion;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod python_class_from_source_for_tests;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
