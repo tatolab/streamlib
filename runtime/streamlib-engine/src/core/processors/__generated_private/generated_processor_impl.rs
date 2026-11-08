@@ -81,6 +81,7 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// Each stateful function node its far side calls, whose state its board
     /// carries.
     stateful_function_nodes_its_far_side_calls: Vec<StatefulFunctionNodeItsFarSideCalls>,
+    runs_a_function_node_as_its_processor: bool,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -372,6 +373,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     function_node_islands_feeding_its_input_ports: Vec::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
+                    runs_a_function_node_as_its_processor: false,
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
@@ -626,6 +628,7 @@ impl OutOfProcessLinkWiringEnvelope {
         let breadcrumb_number =
             recorded.the_breadcrumb_number_of_a_function_node(function_node_id, function_node_name);
         recorded.note_a_stateful_function_node(breadcrumb_number, function_node_name, state_fields);
+        recorded.runs_a_function_node_as_its_processor = true;
         debug_assert_eq!(
             breadcrumb_number,
             crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR
@@ -789,13 +792,34 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// Forget the function node island `link_id` carries, so no later setup
-    /// command carries it.
+    /// Forget the function node island `link_id` carries, and each stateful
+    /// node no island left carries, so no later setup command or board carries
+    /// them and no later spawn takes their state over from the helper that
+    /// evaluates them now.
     pub(crate) fn forget_a_function_node_island(&self, link_id: &str) {
-        self.recorded_links_and_how_the_next_reaches_the_far_side
-            .lock()
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        recorded
             .function_node_islands_feeding_its_input_ports
             .retain(|island| link_id_of(island).as_deref() != Some(link_id));
+        let runs_a_function_node_as_its_processor = recorded.runs_a_function_node_as_its_processor;
+        let breadcrumb_numbers_still_carried: std::collections::HashSet<u64> = recorded
+            .function_node_islands_feeding_its_input_ports
+            .iter()
+            .filter_map(|island| island.get("nodes").and_then(JsonValue::as_array))
+            .flatten()
+            .filter_map(|node| node.get("breadcrumb_number").and_then(JsonValue::as_u64))
+            .collect();
+        recorded
+            .stateful_function_nodes_its_far_side_calls
+            .retain(|stateful| {
+                (runs_a_function_node_as_its_processor
+                    && stateful.breadcrumb_number
+                        == crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR)
+                    || breadcrumb_numbers_still_carried
+                        .contains(&u64::from(stateful.breadcrumb_number))
+            });
     }
 
     /// Forget one link, in both directions, on disconnect, and ask a far side
@@ -1429,6 +1453,63 @@ mod tests {
             function_node_states.the_current_state_of("lfo"),
             Some(the_lfo_at(0.75)),
             "the reader letting its helper go never takes the state back"
+        );
+    }
+
+    /// A reader whose island moved out with its stateful node carries no
+    /// entry for that node on its next spawn's board, so the node's own helper
+    /// stays the one whose state the stream carries.
+    #[test]
+    fn a_readers_spawn_after_its_island_moved_out_never_takes_the_moved_nodes_state_over() {
+        let reader = an_envelope_whose_island_calls_a_stateful_lfo();
+        let function_node_states = Arc::new(FunctionNodeStatesCarriedForOneStream::default());
+        let parent_node = Iceoryx2Node::for_this_test_process();
+        reader.forget_a_function_node_island("L-island");
+        let promoted =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        promoted.number_the_function_node_its_far_side_runs_as_its_processor(
+            "P-lfo",
+            "lfo",
+            vec!["phase".to_string()],
+        );
+        promoted.forget_a_function_node_island("L-an-island-feeding-the-promoted-node");
+        let promoted_board = promoted
+            .create_the_loss_count_board_for_this_helper_spawn_on(
+                &parent_node,
+                &function_node_states,
+                "P-lfo",
+                Vec::new(),
+            )
+            .unwrap();
+        let promoted_helper_node = Iceoryx2Node::for_this_test_process();
+        promoted_helper_node
+            .open_helper_process_loss_count_board_writer(
+                promoted_board["service_name"].as_str().unwrap(),
+                &[],
+                &[0],
+            )
+            .unwrap()
+            .write_the_state_of_a_function_node(0, &[0.25])
+            .unwrap();
+
+        let readers_board = reader
+            .create_the_loss_count_board_for_this_helper_spawn_on(
+                &parent_node,
+                &function_node_states,
+                "P-reader",
+                Vec::new(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            readers_board["function_node_states"],
+            serde_json::json!([]),
+            "the reader evaluates the moved node no more"
+        );
+        assert_eq!(
+            function_node_states.the_current_state_of("lfo"),
+            Some(the_lfo_at(0.25)),
+            "the moved node's own helper stays the one whose state the stream carries"
         );
     }
 

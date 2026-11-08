@@ -1074,29 +1074,42 @@ impl LoadedStreamInThisRuntime {
             .machine_name
             .name()
             .to_string();
-        let (mut graph_response, function_node_names_by_node_uuid) =
+        let (mut graph_response, stateful_function_nodes_by_node_uuid) =
             self.compiler.scope(|graph, _tx| {
-                let function_node_names_by_node_uuid: HashMap<String, String> = graph
-                    .traversal()
-                    .v(())
-                    .iter()
-                    .filter(|node| {
-                        matches!(
-                            node.node_kind(),
-                            Some(crate::core::descriptors::NodeKind::Function { .. })
-                        )
-                    })
-                    .map(|node| (node.node_uuid.to_string(), node.display_name.clone()))
-                    .collect();
+                let stateful_function_nodes_by_node_uuid: HashMap<String, (String, Vec<String>)> =
+                    graph
+                        .traversal()
+                        .v(())
+                        .iter()
+                        .filter(|node| {
+                            matches!(
+                                node.node_kind(),
+                                Some(crate::core::descriptors::NodeKind::Function { .. })
+                            )
+                        })
+                        .map(|node| {
+                            (
+                                node.node_uuid.to_string(),
+                                (
+                                    node.display_name.clone(),
+                                    crate::core::compiler::compiler_ops::function_node_island::the_state_fields_of_a_function_node(
+                                        graph,
+                                        &node.processor_type,
+                                    ),
+                                ),
+                            )
+                        })
+                        .filter(|(_, (_, state_fields))| !state_fields.is_empty())
+                        .collect();
                 (
                     graph.to_graph_response(machine_name),
-                    function_node_names_by_node_uuid,
+                    stateful_function_nodes_by_node_uuid,
                 )
             });
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
         self.render_the_state_of_each_stateful_function_node_into(
             &mut graph_response.nodes,
-            &function_node_names_by_node_uuid,
+            &stateful_function_nodes_by_node_uuid,
         );
         self.graph_only_nodes_as_drawn
             .lock()
@@ -1106,21 +1119,22 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Render, under each stateful function node's `function_node_state`
-    /// component, each field of the state its stream carries now.
+    /// component, each field of the state its stream carries now for the
+    /// state fields the node declares.
     fn render_the_state_of_each_stateful_function_node_into(
         &self,
         nodes: &mut [crate::core::json_schema::ProcessorNodeOutput],
-        function_node_names_by_node_uuid: &HashMap<String, String>,
+        stateful_function_nodes_by_node_uuid: &HashMap<String, (String, Vec<String>)>,
     ) {
         let function_node_states = &self.this_streams_identity_and_handles.function_node_states;
         for node in nodes {
-            let Some(state) =
-                function_node_names_by_node_uuid
-                    .get(&node.id)
-                    .and_then(|function_node_name| {
-                        function_node_states.the_current_state_of(function_node_name)
-                    })
-            else {
+            let Some(state) = stateful_function_nodes_by_node_uuid.get(&node.id).and_then(
+                |(function_node_name, state_fields)| {
+                    function_node_states
+                        .the_current_state_of(function_node_name)
+                        .filter(|state| &state.state_fields == state_fields)
+                },
+            ) else {
                 continue;
             };
             let state_by_field: serde_json::Map<String, serde_json::Value> = state

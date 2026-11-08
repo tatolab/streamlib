@@ -1068,9 +1068,7 @@ impl Runner {
             "its owner removed its project",
         );
         for stream_id in ids_of_the_records_forgotten {
-            self.engine_resources_shared_by_every_stream
-                .function_node_states_carried_for_every_stream
-                .forget_the_stream(&stream_id);
+            self.forget_the_function_node_states_of_the_stream(&stream_id);
         }
         progress.finish(if not_forgotten.is_empty() {
             Ok(Vec::new())
@@ -2119,13 +2117,16 @@ impl Runner {
                 unload_a_stream_an_action_took_back(&loaded, "its graph document is gone");
             }
             match stream_records.remove(&record.stream_id) {
-                Ok(_) => tracing::info!(
-                    "the stream `{}` is forgotten: no graph document of {} holds its stream \
-                     asset {} any more",
-                    record.stream_id,
-                    project.project_directory.display(),
-                    record.location.stream_asset
-                ),
+                Ok(_) => {
+                    self.forget_the_function_node_states_of_the_stream(&record.stream_id);
+                    tracing::info!(
+                        "the stream `{}` is forgotten: no graph document of {} holds its stream \
+                         asset {} any more",
+                        record.stream_id,
+                        project.project_directory.display(),
+                        record.location.stream_asset
+                    )
+                }
                 Err(not_removed) => tracing::error!(
                     "the stream `{}` has no graph document any more, and its record was not \
                      removed: {not_removed}",
@@ -2442,6 +2443,15 @@ impl Runner {
         })
     }
 
+    /// Forget the function node states this runtime carries for `stream_id`,
+    /// whose record is gone, so a stream recorded again under that id starts
+    /// its function nodes from their defaults.
+    fn forget_the_function_node_states_of_the_stream(&self, stream_id: &str) {
+        self.engine_resources_shared_by_every_stream
+            .function_node_states_carried_for_every_stream
+            .forget_the_stream(stream_id);
+    }
+
     /// Unload and forget the stream of `project`'s stream asset `stream_asset`, whose graph
     /// document was deleted, answering its id; `None` when the runtime records none.
     pub fn forget_the_stream_of_a_deleted_stream_asset(
@@ -2472,6 +2482,7 @@ impl Runner {
             unload_a_stream_an_action_took_back(&loaded, "its stream asset was deleted");
         }
         stream_records.remove(&record.stream_id)?;
+        self.forget_the_function_node_states_of_the_stream(&record.stream_id);
         Ok(Some(record.stream_id))
     }
 
