@@ -29,7 +29,7 @@ macos-deployment-target = "26.0"
 
 [tool.pyright]
 include = ["python", "streams"]
-extraPaths = ["python", "../streamlib-h264/python"]
+extraPaths = ["python"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."

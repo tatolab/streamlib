@@ -1,18 +1,17 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A 1080p camera with two overlays composited over it, encoded and exposed, with the composite's frame rate logged.
+"""A 1080p camera with two overlays composited over it, seen in a viewer, with the composite's frame rate logged.
 
-Watch it at http://127.0.0.1:4446/watch/<machine>/main. The camera wheel's
+Watch the compositor's `video` in Tato Studio's viewer. The camera wheel's
 `CaptureToDownstreamLatencyProbe` after the compositor reports the composite's
 frame rate and its capture-to-read latency in the project's log.
 """
 
-from tatolab.stream import Exposure, StreamBuilder, stream
+from tatolab.stream import StreamBuilder, stream
 
 from tatolab.camera import CameraSource, CaptureToDownstreamLatencyProbe
 from tatolab.compositor import AlphaOverCompositor
-from tatolab.h264 import H264Encoder
 from tatolab.testpattern import TestPatternSource
 
 # A V4L2 node such as `/dev/video0`; `None` opens the first capture device found.
@@ -52,7 +51,4 @@ def main(stream_builder: StreamBuilder) -> None:
     probe = stream_builder.add(
         CaptureToDownstreamLatencyProbe, config={"camera_label": "composited"}
     )
-    encoder = stream_builder.add(H264Encoder)
     stream_builder.connect(compositor.output("video"), probe.input("video_from_upstream"))
-    stream_builder.connect(compositor.output("video"), encoder.input("video"))
-    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)

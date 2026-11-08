@@ -1,20 +1,19 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A raymarched WebGL scene at 1080p60 with a transparent HTML lower third composited over it, encoded and exposed.
+"""A raymarched WebGL scene at 1080p60 with a transparent HTML lower third composited over it, seen in a viewer.
 
 Both pages are tabs in the machine's one browser host. `scene_page.html` draws
 a full-screen fragment shader every frame; `overlay_page.html` paints a lower
-third over transparency, which the compositor lays over the scene. Watch it at
-http://127.0.0.1:4446/watch/<machine>/main; the probe on the scene reports its
-frame rate in the project's log.
+third over transparency, which the compositor lays over the scene. Watch the
+compositor's `video` in Tato Studio's viewer; the probe on the scene reports
+its frame rate in the project's log.
 """
 
 from pathlib import Path
 
 from tatolab.compositor import AlphaOverCompositor
-from tatolab.h264 import H264Encoder
-from tatolab.stream import Exposure, StreamBuilder, stream
+from tatolab.stream import StreamBuilder, stream
 
 from tatolab.browser import BrowserSource, BrowserSourceOutputProbe
 
@@ -30,7 +29,7 @@ OVERLAY_HEIGHT = 240
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
-    """The scene on `layer_0`, the lower third on `layer_1`, encoded and exposed."""
+    """The scene on `layer_0`, the lower third on `layer_1`."""
     scene = stream_builder.add(
         BrowserSource,
         config={"url": SCENE_PAGE_URL, "width": CANVAS_WIDTH, "height": CANVAS_HEIGHT, "frame_rate": 60},
@@ -61,7 +60,3 @@ def main(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(scene.output("audio"), probe.input("audio_from_browser"))
     stream_builder.connect(scene.output("events"), probe.input("events_from_browser"))
     stream_builder.connect(probe.output("data_to_browser"), scene.input("data"))
-
-    encoder = stream_builder.add(H264Encoder)
-    stream_builder.connect(compositor.output("video"), encoder.input("video"))
-    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)
