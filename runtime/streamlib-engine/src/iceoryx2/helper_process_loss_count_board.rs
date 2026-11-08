@@ -25,13 +25,16 @@ use iceoryx2::prelude::*;
 use iceoryx2::service::port_factory::blackboard::PortFactory as BlackboardPortFactory;
 use parking_lot::Mutex;
 use streamlib_ipc_types::{
-    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessFunctionNodeStateBoardEntry,
-    HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
-    InboundLinkLossCountBoardSlot, MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortBagCountBoardEntry,
+    FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED,
+    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessFunctionNodeOverrunBoardEntry,
+    HelperProcessFunctionNodeStateBoardEntry, HelperProcessLossCountBoardKey,
+    HelperProcessStepProgressBoardEntry, InboundLinkLossCountBoardSlot,
+    MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortBagCountBoardEntry,
     STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS,
 };
 
 use crate::core::error::{Error, Result};
+use crate::core::media_clock::MediaClock;
 
 /// The inbound-link slots every board declares: one per inbound link a
 /// destination may hold.
@@ -108,6 +111,11 @@ struct HelperProcessLossCountBoardReadHandles {
         HelperProcessLossCountBoardKey,
         HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
     >,
+    function_node_overrun: EntryHandle<
+        ipc_threadsafe::Service,
+        HelperProcessLossCountBoardKey,
+        HelperProcessFunctionNodeOverrunBoardEntry,
+    >,
     function_node_states: Vec<(
         u32,
         EntryHandle<
@@ -155,6 +163,9 @@ impl HelperProcessLossCountBoard {
         let function_node_call_breadcrumb = reader
             .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB)
             .map_err(unreadable_entry)?;
+        let function_node_overrun = reader
+            .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_OVERRUN)
+            .map_err(unreadable_entry)?;
         let function_node_states = stateful_function_node_breadcrumb_numbers
             .into_iter()
             .map(|breadcrumb_number| {
@@ -173,6 +184,7 @@ impl HelperProcessLossCountBoard {
                 output_ports,
                 step_progress,
                 function_node_call_breadcrumb,
+                function_node_overrun,
                 function_node_states,
                 _reader: reader,
                 _service: service,
@@ -220,6 +232,12 @@ impl HelperProcessLossCountBoard {
         &self,
     ) -> HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
         *self.board_read_handles.function_node_call_breadcrumb.get()
+    }
+
+    /// The function node the helper named for overrunning its frame interval,
+    /// if it named one.
+    pub fn function_node_overrun_entry(&self) -> HelperProcessFunctionNodeOverrunBoardEntry {
+        *self.board_read_handles.function_node_overrun.get()
     }
 
     /// What the helper last wrote of the state of the function node numbered
@@ -360,14 +378,21 @@ impl HelperProcessLossCountBoardWriter {
             .map_err(unwritable_entry)?;
         let function_node_call_breadcrumb = writer
             .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB)
-            .map(|breadcrumb_entry| {
-                Mutex::new(FunctionNodeCallsUnderWayInThisHelper {
-                    breadcrumb_entry,
-                    calls_under_way: Vec::new(),
-                    next_call_number: 0,
-                })
-            })
             .map_err(unwritable_entry)?;
+        let overrun_entry = writer
+            .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_OVERRUN)
+            .map_err(unwritable_entry)?;
+        let function_node_call_breadcrumb = Mutex::new(FunctionNodeCallsUnderWayInThisHelper {
+            breadcrumb_entry: function_node_call_breadcrumb,
+            calls_under_way: Vec::new(),
+            next_call_number: 0,
+            overruns: FunctionNodeCallOverrunsInThisHelper {
+                overrun_entry,
+                frame_interval_ns: None,
+                overrunning_calls_running_by_function_node: BTreeMap::new(),
+                named_a_function_node: false,
+            },
+        });
         let function_node_states = stateful_function_node_breadcrumb_numbers
             .iter()
             .map(|&breadcrumb_number| {
@@ -526,14 +551,49 @@ impl HelperProcessLossCountBoardWriter {
 
     /// Note `call` returned.
     pub fn note_the_function_node_call_returned(&self, call: FunctionNodeCallUnderWayInThisHelper) {
+        self.note_the_function_node_call_returned_at(call, MediaClock::now().as_nanos() as u64);
+    }
+
+    /// Note `call` returned at `call_returned_at_monotonic_ns`, and name its
+    /// node on the overrun entry once its calls overran the frame interval
+    /// [`FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED`]
+    /// times running.
+    pub fn note_the_function_node_call_returned_at(
+        &self,
+        call: FunctionNodeCallUnderWayInThisHelper,
+        call_returned_at_monotonic_ns: u64,
+    ) {
         let mut calls = self
             .board_write_handles
             .function_node_call_breadcrumb
             .lock();
+        let returned = calls
+            .calls_under_way
+            .iter()
+            .find(|(call_under_way, _)| *call_under_way == call)
+            .map(|(_, breadcrumb)| *breadcrumb);
         calls
             .calls_under_way
             .retain(|(call_under_way, _)| *call_under_way != call);
         calls.write_the_oldest_call_under_way();
+        if let Some(returned) = returned {
+            calls.overruns.time_the_call_that_returned(
+                returned.function_node_breadcrumb_number,
+                call_returned_at_monotonic_ns.saturating_sub(returned.call_started_at_monotonic_ns),
+            );
+        }
+    }
+
+    /// Time every function-node call from now on against `frame_interval`.
+    pub fn time_each_function_node_call_against_the_frame_interval(
+        &self,
+        frame_interval: std::time::Duration,
+    ) {
+        self.board_write_handles
+            .function_node_call_breadcrumb
+            .lock()
+            .overruns
+            .frame_interval_ns = Some(frame_interval.as_nanos() as u64);
     }
 
     /// Whether this board carries a state entry for the function node
@@ -722,6 +782,53 @@ struct FunctionNodeCallsUnderWayInThisHelper {
         HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
     )>,
     next_call_number: u64,
+    overruns: FunctionNodeCallOverrunsInThisHelper,
+}
+
+/// How many calls running each function node overran the frame interval its
+/// helper was given, and the entry the first to reach the limit is named on.
+struct FunctionNodeCallOverrunsInThisHelper {
+    overrun_entry: EntryHandleMut<
+        ipc_threadsafe::Service,
+        HelperProcessLossCountBoardKey,
+        HelperProcessFunctionNodeOverrunBoardEntry,
+    >,
+    frame_interval_ns: Option<u64>,
+    overrunning_calls_running_by_function_node: BTreeMap<u32, (u32, u64)>,
+    named_a_function_node: bool,
+}
+
+impl FunctionNodeCallOverrunsInThisHelper {
+    fn time_the_call_that_returned(&mut self, function_node_breadcrumb_number: u32, call_ns: u64) {
+        let Some(frame_interval_ns) = self.frame_interval_ns else {
+            return;
+        };
+        if self.named_a_function_node {
+            return;
+        }
+        if call_ns <= frame_interval_ns {
+            self.overrunning_calls_running_by_function_node
+                .remove(&function_node_breadcrumb_number);
+            return;
+        }
+        let (overrunning_calls_running, longest_overrunning_call_ns) = self
+            .overrunning_calls_running_by_function_node
+            .entry(function_node_breadcrumb_number)
+            .or_insert((0, 0));
+        *overrunning_calls_running += 1;
+        *longest_overrunning_call_ns = (*longest_overrunning_call_ns).max(call_ns);
+        if *overrunning_calls_running
+            >= FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED
+        {
+            self.overrun_entry
+                .update_with_copy(HelperProcessFunctionNodeOverrunBoardEntry {
+                    longest_overrunning_call_ns: *longest_overrunning_call_ns,
+                    function_node_breadcrumb_number,
+                    reserved: 0,
+                });
+            self.named_a_function_node = true;
+        }
+    }
 }
 
 impl FunctionNodeCallsUnderWayInThisHelper {
@@ -1083,6 +1190,17 @@ impl HelperPlacedProcessorLossCounts {
             .lock()
             .as_ref()
             .map(HelperProcessLossCountBoard::step_progress_entry)
+    }
+
+    /// What the current spawn's helper last wrote on its function-node overrun
+    /// entry; `None` before any spawn's board exists.
+    pub fn function_node_overrun_its_helper_wrote(
+        &self,
+    ) -> Option<HelperProcessFunctionNodeOverrunBoardEntry> {
+        self.board
+            .lock()
+            .as_ref()
+            .map(HelperProcessLossCountBoard::function_node_overrun_entry)
     }
 
     /// What the current spawn's helper last wrote of the function-node call it
@@ -1543,6 +1661,65 @@ mod tests {
             breadcrumb_under_way(),
             Some(5),
             "the parent reads the call a helper died in off the board it holds"
+        );
+    }
+
+    /// A node is named once three of its calls running overran the frame
+    /// interval: a call inside it starts the count again, another node's
+    /// overruns count apart, and a board told no interval names nobody.
+    #[test]
+    fn a_function_node_is_named_once_three_of_its_calls_running_overrun_the_frame_interval() {
+        let (board, writer, _helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
+        let call_lasting = |function_node_breadcrumb_number: u32, call_ms: u64| {
+            let started_at = 1_000_000_000;
+            let call = writer
+                .note_a_function_node_call_started(function_node_breadcrumb_number, started_at);
+            writer.note_the_function_node_call_returned_at(call, started_at + call_ms * 1_000_000);
+        };
+
+        for _ in 0..4 {
+            call_lasting(1, 50);
+        }
+        assert_eq!(
+            board
+                .function_node_overrun_entry()
+                .function_node_that_overran(),
+            None,
+            "a helper told no frame interval times nothing"
+        );
+
+        writer.time_each_function_node_call_against_the_frame_interval(
+            std::time::Duration::from_millis(10),
+        );
+        call_lasting(1, 15);
+        call_lasting(1, 25);
+        call_lasting(1, 5);
+        call_lasting(1, 15);
+        call_lasting(2, 40);
+        call_lasting(1, 15);
+        assert_eq!(
+            board
+                .function_node_overrun_entry()
+                .function_node_that_overran(),
+            None,
+            "a call inside the interval starts the count again, and another node's overrun \
+             counts apart"
+        );
+
+        call_lasting(1, 30);
+        let overrun = board.function_node_overrun_entry();
+        assert_eq!(overrun.function_node_that_overran(), Some(1));
+        assert_eq!(overrun.longest_overrunning_call_ns, 30_000_000);
+
+        call_lasting(2, 40);
+        call_lasting(2, 40);
+        assert_eq!(
+            board
+                .function_node_overrun_entry()
+                .function_node_that_overran(),
+            Some(1),
+            "the first node named stays named"
         );
     }
 

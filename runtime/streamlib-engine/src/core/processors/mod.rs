@@ -32,6 +32,7 @@ pub use __generated_private::{
 
 pub(crate) use __generated_private::{
     FunctionNodeCallUnderWayInTheFarSide, FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
+    FunctionNodeThatOverranItsFarSidesFrameInterval,
 };
 pub use empty_config::EmptyConfig;
 pub(crate) use node_types_one_stream_resolves::HowANodeOfADescribedTypeRuns;

@@ -354,6 +354,16 @@ pub(crate) struct FunctionNodeCallUnderWayInTheFarSide {
     pub(crate) function_node_calls_under_way: u32,
 }
 
+/// A function node whose calls overran its far side's frame interval too many
+/// times running, as the far side's overrun entry names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FunctionNodeThatOverranItsFarSidesFrameInterval {
+    pub(crate) function_node_id: String,
+    /// The node's name in the graph, which a person reading a log knows it by.
+    pub(crate) function_node_name: String,
+    pub(crate) longest_overrunning_call: std::time::Duration,
+}
+
 impl FunctionNodeCallUnderWayInTheFarSide {
     /// Whether `other` is this same call, by its node and its start.
     pub(crate) fn is_the_same_call_as(&self, other: &Self) -> bool {
@@ -811,8 +821,40 @@ impl OutOfProcessLinkWiringEnvelope {
         let FunctionNodeNumberedOnTheBreadcrumb {
             function_node_id,
             function_node_name,
-        } = self
-            .recorded_links_and_how_the_next_reaches_the_far_side
+        } = self.function_node_numbered_on_the_breadcrumb(breadcrumb_number);
+        Some(FunctionNodeCallUnderWayInTheFarSide {
+            function_node_id,
+            function_node_name,
+            call_started_at_monotonic_ns: breadcrumb.call_started_at_monotonic_ns,
+            function_node_calls_under_way: breadcrumb.function_node_calls_under_way,
+        })
+    }
+
+    /// The function node the far side named for overrunning its frame
+    /// interval, if it named one.
+    pub(crate) fn function_node_that_overran_its_far_sides_frame_interval(
+        &self,
+    ) -> Option<FunctionNodeThatOverranItsFarSidesFrameInterval> {
+        let overrun = self.loss_counts.function_node_overrun_its_helper_wrote()?;
+        let breadcrumb_number = overrun.function_node_that_overran()?;
+        let FunctionNodeNumberedOnTheBreadcrumb {
+            function_node_id,
+            function_node_name,
+        } = self.function_node_numbered_on_the_breadcrumb(breadcrumb_number);
+        Some(FunctionNodeThatOverranItsFarSidesFrameInterval {
+            function_node_id,
+            function_node_name,
+            longest_overrunning_call: std::time::Duration::from_nanos(
+                overrun.longest_overrunning_call_ns,
+            ),
+        })
+    }
+
+    fn function_node_numbered_on_the_breadcrumb(
+        &self,
+        breadcrumb_number: u32,
+    ) -> FunctionNodeNumberedOnTheBreadcrumb {
+        self.recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
             .function_nodes_by_breadcrumb_number
             .get(breadcrumb_number as usize)
@@ -823,13 +865,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     function_node_id: numbered.clone(),
                     function_node_name: numbered,
                 }
-            });
-        Some(FunctionNodeCallUnderWayInTheFarSide {
-            function_node_id,
-            function_node_name,
-            call_started_at_monotonic_ns: breadcrumb.call_started_at_monotonic_ns,
-            function_node_calls_under_way: breadcrumb.function_node_calls_under_way,
-        })
+            })
     }
 
     /// Start waiting on a new request to promote a function node out of this

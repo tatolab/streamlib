@@ -17,6 +17,7 @@ use crate::core::descriptors::{
     ProcessorClassShortName, ProcessorDescriptor,
 };
 use crate::core::error::{Error, Result};
+use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef,
     LinkCarriedThroughTheFunctionNodePoolComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
@@ -77,7 +78,9 @@ pub(crate) fn the_function_node_pool_descriptor(
 }
 
 /// Whether `link_id` carries an island into a reader that cannot evaluate it:
-/// one that runs in the app process, which runs no node code.
+/// one that runs in the app process, which runs no node code, or a class
+/// driven manually, whose native half reads without the Python interpreter's
+/// lock, fed an island that runs a node as Python.
 fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     let Some(link) = graph.traversal().e(link_id).first() else {
         return false;
@@ -88,17 +91,54 @@ fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     {
         return false;
     }
-    graph
-        .traversal()
-        .v(reader_id)
-        .first()
-        .is_some_and(|reader| {
-            !reader.has::<OutOfProcessLinkWiringComponent>()
-                && !matches!(reader.node_kind(), Some(NodeKind::Function { .. }))
-                && graph
-                    .node_types_this_stream_resolves()
-                    .is_a_natively_compiled_node_type(&reader.processor_type)
-        })
+    let Some(reader) = graph.traversal().v(reader_id).first() else {
+        return false;
+    };
+    if matches!(reader.node_kind(), Some(NodeKind::Function { .. })) {
+        return false;
+    }
+    let node_types = graph.node_types_this_stream_resolves();
+    let runs_in_the_app_process = !reader.has::<OutOfProcessLinkWiringComponent>()
+        && node_types.is_a_natively_compiled_node_type(&reader.processor_type);
+    let is_driven_manually = node_types
+        .the_execution_a_described_class_declares(&reader.processor_type)
+        == Some(ProcessExecution::Manual);
+    runs_in_the_app_process
+        || (is_driven_manually
+            && the_island_upstream_of_runs_a_node_as_python(graph, link.source().processor_id()))
+}
+
+/// Whether `island_output_node` or any function node it reads runs as Python.
+fn the_island_upstream_of_runs_a_node_as_python(
+    graph: &Graph,
+    island_output_node: &ProcessorUniqueId,
+) -> bool {
+    let mut reached = std::collections::HashSet::new();
+    let mut to_follow = vec![island_output_node.clone()];
+    while let Some(following) = to_follow.pop() {
+        if !reached.insert(following.clone()) {
+            continue;
+        }
+        let runs_as_python = graph.traversal().v(&following).first().is_some_and(|node| {
+            graph
+                .node_types_this_stream_resolves()
+                .descriptor(&node.processor_type)
+                .is_some_and(|descriptor| descriptor.function_node_runs_as_python)
+        });
+        if runs_as_python {
+            return true;
+        }
+        to_follow.extend(
+            graph
+                .traversal()
+                .e(())
+                .iter()
+                .filter(|link| link.to_port().processor_id() == &following)
+                .map(|link| link.source().processor_id().clone())
+                .filter(|upstream| runs_inside_the_read_of_each_node_it_feeds(graph, upstream)),
+        );
+    }
+    false
 }
 
 /// The stream's pool node, if it has one.
@@ -133,7 +173,7 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
     let pool_id = match the_function_node_pool_of(graph) {
         Some(running_pool) if !processors_to_add.contains(&running_pool) => {
             return Err(Error::InvalidGraph(format!(
-                "link `{}` feeds a function node island into a reader in the app process, which \
+                "link `{}` feeds a function node island into a reader that cannot evaluate it, which \
                  the stream's function node pool evaluates, and the pool is already running; a \
                  running pool is not re-islanded in this release. To fix: stop the stream and \
                  start it with the edit",
@@ -306,6 +346,7 @@ fn family_name(family: PortFamily) -> &'static str {
 mod tests {
     use super::*;
     use crate::core::compiler::compiler_ops::function_node_island::tests::{
+        a_function_node_type, a_graph_resolving_these_function_node_types,
         a_graph_resolving_three_function_node_types, a_helper_reader_before_its_setup, add_a_node,
         link,
     };
@@ -443,6 +484,94 @@ mod tests {
 
         assert_eq!(the_function_node_pool_of(&graph), None);
         assert_eq!(links_to_add, vec![lfo_into_the_reader]);
+    }
+
+    const A_CLASS_WITH_A_NATIVE_HALF: &str = "test_nodes:ReadsThroughItsNativeHalf";
+
+    /// A graph resolving the pool, `lfo`, a `tally` whose body runs as Python,
+    /// and a class driven manually, as one lending its ports to native code is.
+    fn a_graph_resolving_a_manual_class_and_a_function_node_run_as_python() -> Graph {
+        let mut tally = a_function_node_type("test_ops:tally", &[], &["result"]);
+        tally.function_node_runs_as_python = true;
+        let graph = a_graph_resolving_these_function_node_types([
+            a_function_node_type("test_ops:lfo", &[], &["result"]),
+            tally,
+        ]);
+        let node_types = graph.node_types_this_stream_resolves();
+        let builds_nothing = || -> HowANodeOfADescribedTypeRuns {
+            HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|node| {
+                Err(Error::Configuration(format!(
+                    "`{}` builds no processor in this test",
+                    node.id
+                )))
+            }))
+        };
+        node_types
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                the_function_node_pool_descriptor(None).unwrap(),
+                builds_nothing(),
+            )
+            .unwrap();
+        let mut manual_class = ProcessorDescriptor::new(
+            ProcessorClassShortName::new("ReadsThroughItsNativeHalf").unwrap(),
+            ProcessorClassImportPath::new(A_CLASS_WITH_A_NATIVE_HALF).unwrap(),
+            "a class driven manually for a test",
+        );
+        for input_port in ["from_python", "from_compiled"] {
+            manual_class = manual_class.with_input(PortDescriptor::new(
+                input_port,
+                "",
+                true,
+                PortFamilyDeclaration::of_family(PortFamily::Channels),
+            ));
+        }
+        node_types
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                manual_class,
+                builds_nothing(),
+            )
+            .unwrap();
+        node_types.record_the_execution_a_described_class_declares(
+            ProcessorClassImportPath::new(A_CLASS_WITH_A_NATIVE_HALF).unwrap(),
+            ProcessExecution::Manual,
+        );
+        graph
+    }
+
+    #[test]
+    fn only_the_island_running_python_into_a_manual_class_goes_to_the_pool() {
+        let mut graph = a_graph_resolving_a_manual_class_and_a_function_node_run_as_python();
+        let tally = add_a_node(&mut graph, "test_ops:tally", JsonValue::Null);
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let reader = add_a_node(&mut graph, A_CLASS_WITH_A_NATIVE_HALF, JsonValue::Null);
+        let python_into_the_reader = link(&mut graph, (&tally, "result"), (&reader, "from_python"));
+        let compiled_into_the_reader =
+            link(&mut graph, (&lfo, "result"), (&reader, "from_compiled"));
+        let mut processors_to_add = vec![tally, lfo, reader];
+        let mut links_to_add = vec![
+            python_into_the_reader.clone(),
+            compiled_into_the_reader.clone(),
+        ];
+
+        carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+            &mut graph,
+            &mut processors_to_add,
+            &mut links_to_add,
+        )
+        .unwrap();
+
+        assert!(the_function_node_pool_of(&graph).is_some());
+        assert_eq!(
+            the_links_a_link_is_wired_as(&graph, &python_into_the_reader).len(),
+            2,
+            "the island running Python reaches the class on a channel from the pool"
+        );
+        assert_eq!(
+            the_links_a_link_is_wired_as(&graph, &compiled_into_the_reader),
+            vec![compiled_into_the_reader.clone()],
+            "a compiled island runs inside any read, a native half's included"
+        );
+        assert!(links_to_add.contains(&compiled_into_the_reader));
     }
 
     #[test]
