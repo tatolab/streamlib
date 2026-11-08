@@ -813,7 +813,23 @@ async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
-    let the_ports_viewer = json!({ "stream": live, "node": "source", "port": "video" });
+    let graph = first_text_block_json(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "graph",
+            json!({ "stream": live }),
+        )
+        .await,
+    );
+    let source_id = graph["nodes"]
+        .as_array()
+        .expect("the graph lists its nodes")
+        .iter()
+        .find(|node| node["name"] == "source")
+        .and_then(|node| node["id"].as_str())
+        .expect("the graph lists the source node's id")
+        .to_string();
+    let the_ports_viewer = json!({ "stream": live, "node_id": source_id, "port": "video" });
 
     let over_post = tool_answer(
         &tool_call_result(
@@ -839,7 +855,7 @@ async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
         &tool_call_over_the_connection(
             &client,
             "close_viewer",
-            json!({ "viewer": format!("{live}/source/video") }),
+            json!({ "viewer": format!("{live}/{source_id}/video") }),
         )
         .await,
     )

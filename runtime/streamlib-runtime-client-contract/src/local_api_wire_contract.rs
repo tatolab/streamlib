@@ -387,13 +387,15 @@ pub struct ExposePortToolResult {
 /// the latest message an output port's node wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenViewerToolResult {
-    /// The viewer's id, which `close_viewer` takes: `<stream>/<node>/<port>`.
+    /// The viewer's id, which `close_viewer` takes: `<stream>/<node_id>/<port>`.
     pub viewer: String,
     /// The stream's id.
     pub stream: String,
-    /// The node's name.
-    pub node: String,
-    /// The output port's cast name.
+    /// The node's id, as `graph` lists it.
+    pub node_id: String,
+    /// The node's name: its label, not its identity.
+    pub node_name: String,
+    /// The output port's name.
     pub port: String,
     /// The root of the iceoryx2 domain the port's channel lives in.
     pub iceoryx2_domain_root: String,

@@ -94,7 +94,7 @@ pub trait RuntimeOperations: Send + Sync {
         port_name: String,
     ) -> BoxFuture<'_, Result<ExposedOutputPortSubscription>>;
 
-    /// Hold output port `port_name` of node `node_name` open for a viewer,
+    /// Hold output port `port_name` of node `node_id` open for a viewer,
     /// answering how the viewer subscribes to its channel's reserved slot from
     /// its own process. No node is added and the graph is not changed; the
     /// channel stays open until what this answers drops. Refused while the
@@ -103,7 +103,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// surface-sharing service while the viewer stays open.
     fn open_a_viewer_of_an_output_port(
         &self,
-        node_name: String,
+        node_id: ProcessorUniqueId,
         port_name: String,
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
