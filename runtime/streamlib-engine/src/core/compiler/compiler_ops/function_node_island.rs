@@ -160,8 +160,8 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 /// node it calls, each after the nodes it reads.
 ///
 /// Wire contract with the helper bootstrap: `{"input_port", "link_id",
-/// "output": {"node", "port"}, "nodes": [{"node", "import_path", "config",
-/// "links_into": [{"port", "from": {"node", "port"}}]}]}`.
+/// "output": {"node", "port"}, "nodes": [{"node", "name", "import_path",
+/// "config", "links_into": [{"port", "from": {"node", "port"}}]}]}`.
 pub(crate) fn the_island_feeding_a_link(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -220,6 +220,7 @@ fn place_a_function_node_after_what_it_reads(
         .first()
         .ok_or_else(|| Error::ProcessorNotFound(node_id.to_string()))?;
     let import_path = node.processor_type.to_string();
+    let node_name = node.display_name.clone();
     let config = node.config.clone().unwrap_or(JsonValue::Null);
 
     on_the_path_from_the_output.push(node_id.clone());
@@ -259,6 +260,7 @@ fn place_a_function_node_after_what_it_reads(
     placed.insert(node_id.clone());
     nodes_each_after_what_it_reads.push(serde_json::json!({
         "node": node_id.to_string(),
+        "name": node_name,
         "import_path": import_path,
         "config": config,
         "links_into": links_into,

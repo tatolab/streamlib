@@ -1428,13 +1428,13 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
                 (Some(call_under_way), Some((call_has_run_for, watchdog_budget))) => format!(
                     "function node `{}` stalled: its call had run for {} ms, past the {} ms its \
                  reader's frame interval allows, so its helper process was ended. ",
-                    call_under_way.function_node_id,
+                    call_under_way.function_node_name,
                     call_has_run_for.as_millis(),
                     watchdog_budget.as_millis(),
                 ),
                 (Some(call_under_way), None) => format!(
                     "function node `{}` crashed its helper process during its call. ",
-                    call_under_way.function_node_id,
+                    call_under_way.function_node_name,
                 ),
                 (None, _) => String::new(),
             };
@@ -2582,8 +2582,8 @@ sys.exit(0)
             .record_a_function_node_island_on_the_setup_command(serde_json::json!({
                 "input_port": "brightness",
                 "link_id": "L-island",
-                "output": {"node": "lfo-1", "port": "result"},
-                "nodes": [{"node": "lfo-1", "import_path": "ops:lfo", "links_into": []}],
+                "output": {"node": "Plfo1", "port": "result"},
+                "nodes": [{"node": "Plfo1", "name": "lfo-1", "import_path": "ops:lfo", "links_into": []}],
             }))
             .expect("an island rides the setup command before setup begins");
         (host, board_writer, helper_node)

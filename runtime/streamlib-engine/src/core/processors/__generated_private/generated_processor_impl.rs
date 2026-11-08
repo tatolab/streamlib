@@ -76,7 +76,7 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     function_node_islands_feeding_its_input_ports: Vec<JsonValue>,
     /// Each function node its islands call, by the breadcrumb number its far
     /// side writes while calling it.
-    function_nodes_by_breadcrumb_number: Vec<String>,
+    function_nodes_by_breadcrumb_number: Vec<FunctionNodeNumberedOnTheBreadcrumb>,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -124,17 +124,26 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         never_opened
     }
 
-    /// The breadcrumb number of `function_node_id`, the one it was first given.
-    fn the_breadcrumb_number_of_a_function_node(&mut self, function_node_id: &str) -> u32 {
+    /// The breadcrumb number of `function_node_id`, named `function_node_name`
+    /// in the graph: the one it was first given.
+    fn the_breadcrumb_number_of_a_function_node(
+        &mut self,
+        function_node_id: &str,
+        function_node_name: &str,
+    ) -> u32 {
         let position = match self
             .function_nodes_by_breadcrumb_number
             .iter()
-            .position(|numbered| numbered == function_node_id)
+            .position(|numbered| numbered.function_node_id == function_node_id)
         {
             Some(position) => position,
             None => {
-                self.function_nodes_by_breadcrumb_number
-                    .push(function_node_id.to_string());
+                self.function_nodes_by_breadcrumb_number.push(
+                    FunctionNodeNumberedOnTheBreadcrumb {
+                        function_node_id: function_node_id.to_string(),
+                        function_node_name: function_node_name.to_string(),
+                    },
+                );
                 self.function_nodes_by_breadcrumb_number.len() - 1
             }
         };
@@ -176,11 +185,21 @@ fn refuse_every_link_waiting_behind_the_setup_command(
     }
 }
 
+/// One function node a far side's islands call, by its id and its name in the
+/// graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FunctionNodeNumberedOnTheBreadcrumb {
+    function_node_id: String,
+    function_node_name: String,
+}
+
 /// A call to one function node a far side had under way, as its breadcrumb
 /// names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FunctionNodeCallUnderWayInTheFarSide {
     pub(crate) function_node_id: String,
+    /// The node's name in the graph, which a person reading a log knows it by.
+    pub(crate) function_node_name: String,
     pub(crate) call_started_at_monotonic_ns: u64,
 }
 
@@ -375,8 +394,12 @@ impl OutOfProcessLinkWiringEnvelope {
                         let Some(node_id) = node.get("node").and_then(JsonValue::as_str) else {
                             continue;
                         };
+                        let node_name = node
+                            .get("name")
+                            .and_then(JsonValue::as_str)
+                            .unwrap_or(node_id);
                         let breadcrumb_number =
-                            recorded.the_breadcrumb_number_of_a_function_node(node_id);
+                            recorded.the_breadcrumb_number_of_a_function_node(node_id, node_name);
                         node["breadcrumb_number"] = JsonValue::from(breadcrumb_number);
                     }
                 }
@@ -409,15 +432,25 @@ impl OutOfProcessLinkWiringEnvelope {
             .loss_counts
             .function_node_call_breadcrumb_its_helper_wrote()?;
         let breadcrumb_number = breadcrumb.function_node_whose_call_is_under_way()?;
-        let function_node_id = self
+        let FunctionNodeNumberedOnTheBreadcrumb {
+            function_node_id,
+            function_node_name,
+        } = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
             .function_nodes_by_breadcrumb_number
             .get(breadcrumb_number as usize)
             .cloned()
-            .unwrap_or_else(|| format!("numbered {breadcrumb_number}"));
+            .unwrap_or_else(|| {
+                let numbered = format!("numbered {breadcrumb_number}");
+                FunctionNodeNumberedOnTheBreadcrumb {
+                    function_node_id: numbered.clone(),
+                    function_node_name: numbered,
+                }
+            });
         Some(FunctionNodeCallUnderWayInTheFarSide {
             function_node_id,
+            function_node_name,
             call_started_at_monotonic_ns: breadcrumb.call_started_at_monotonic_ns,
         })
     }
