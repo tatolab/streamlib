@@ -117,5 +117,5 @@ def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
 def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuilder) -> None:
     """A function node whose compiled call never returns, inside the read of a Python class."""
     spinner = stream_builder.add(SpinsForever, name="spinner")
-    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
+    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(spinner.output("result"), sink.input("brightness"))

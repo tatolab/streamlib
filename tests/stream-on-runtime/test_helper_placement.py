@@ -300,34 +300,59 @@ def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_proce
     )
 
 
-def test_a_function_node_call_that_never_returns_ends_its_reader_naming_the_node(
+def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reader(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """A stalled function-node call is handled as a crash.
+    """A stalled function-node call is handled as a crash, and the node leaves its reader.
 
     No thread can pre-empt a compiled call, so the reader's helper is held
     inside it. The engine reads the call's breadcrumb off the helper's board,
-    ends the helper once the call has run past its watchdog budget, names the
-    node that stalled, and starts a new helper.
+    ends the helper once the call has run past its watchdog budget, and names
+    the node that stalled. Before the reader's next helper starts, the node
+    moves into a helper process of its own, which `graph` shows under its
+    `metrics`: the reader's new helper evaluates it no more, so the next stall
+    is the node's own helper's, and the reader keeps running through it.
 
-    Fail-without-fix: read only whether the process exited and the reader is
-    held for ever, with nothing logged.
+    Fail-without-fix: with no move, the reader's every new helper calls the
+    node again and stalls, and `graph` shows no promotion.
     """
     tatolabd = start_tatolabd_running_stream(function_node_that_spins_forever_into_python_sink)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
     first_helper_pid = tatolabd.await_marker("FUNCTION_NODE_SINK_STARTED")["pid"]
     stall_line = tatolabd.await_stderr_containing("stalled: its call had run for")
+    tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
     restarted_helper_pid = tatolabd.await_marker("FUNCTION_NODE_SINK_STARTED", occurrence=2)["pid"]
+    stall_line_of_the_nodes_own_helper = tatolabd.await_stderr_containing(
+        "[spinner] its helper process (pid="
+    )
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    sink_starts = len(tatolabd.marker_payloads("FUNCTION_NODE_SINK_STARTED"))
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
     assert restarted_helper_pid != first_helper_pid, (
         f"the stalled helper is replaced by a new process:\n{tatolabd.recent_stderr()}"
     )
-    assert "function node `spinner" in stall_line, (
+    assert "function node `spinner` stalled" in stall_line, (
         f"the stall must name the node whose call never returned: {stall_line}"
     )
+    assert "stalled in a function node" in stall_line_of_the_nodes_own_helper, (
+        f"once moved, the node stalls in its own helper: {stall_line_of_the_nodes_own_helper}"
+    )
+    assert sink_starts == 2, (
+        f"the reader's helper started {sink_starts} times; once the node moved out, its stall "
+        f"no longer ends the reader's helper:\n{tatolabd.recent_stderr()}"
+    )
+    assert len(set(helper_process_ids_started_in(tatolabd.stderr_text))) >= 3, (
+        f"the reader's two helpers and the node's own:\n{tatolabd.recent_stderr()}"
+    )
+    spinner = next(node for node in graph["nodes"] if node["name"] == "spinner")
+    promotion = spinner["components"]["metrics"]["promoted_out_of_its_readers_islands"]
+    assert promotion["promotions"] == 1, promotion
+    assert promotion["after_crashing_the_helper_of"] == "sink", promotion
+    assert "function node `spinner` stalled" in promotion["reason"], promotion
     assert not tatolabd.marker_payloads("FUNCTION_NODE_VALUES_READ"), (
-        f"no read can return while the node spins:\n{tatolabd.recent_stderr()}"
+        f"no value reaches the reader while the node spins:\n{tatolabd.recent_stderr()}"
     )
 
 

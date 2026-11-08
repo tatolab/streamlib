@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 use super::GeneratedProcessor;
 use crate::core::ProcessorDescriptor;
@@ -193,6 +193,72 @@ struct FunctionNodeNumberedOnTheBreadcrumb {
     function_node_name: String,
 }
 
+/// Where the request to promote a function node out of one far side's islands
+/// stands, which the far side's host waits on before it starts the far side
+/// standing in for the one that function node crashed.
+#[derive(Default)]
+struct FunctionNodePromotionOutOfTheIslandsOfOneFarSide {
+    progress: Mutex<FunctionNodePromotionOutOfTheIslandsProgress>,
+    promotion_requests_awaited: std::sync::atomic::AtomicU64,
+    settled: Condvar,
+}
+
+/// A compile plans a promotion only while the host still waits on that very
+/// request, and the host stops waiting only before a compile has claimed it, so
+/// a far side never starts with islands a promotion goes on to change.
+#[derive(Default)]
+enum FunctionNodePromotionOutOfTheIslandsProgress {
+    #[default]
+    NotAwaited,
+    AwaitedByTheFarSidesHost {
+        promotion_request_number: u64,
+    },
+    ClaimedByTheCompileCarryingIt,
+    Settled(std::result::Result<(), String>),
+}
+
+/// A promotion of a function node out of a reader's islands that the reader's
+/// host asked for, waited on without holding the reader so the compile that
+/// carries it is never kept from the reader.
+pub struct FunctionNodePromotionAwaitedBeforeTheReaderRestarts {
+    pub(crate) reader_link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
+    pub(crate) reader_name: String,
+    pub(crate) function_node_name: String,
+    pub(crate) longest_wait_for_a_compile_to_claim_it: std::time::Duration,
+    pub(crate) stop_waiting: Box<dyn Fn() -> bool + Send>,
+}
+
+impl FunctionNodePromotionAwaitedBeforeTheReaderRestarts {
+    /// Wait for the promotion to settle, and log how it ended.
+    pub(crate) fn wait_until_it_settles(self) {
+        let Self {
+            reader_link_wiring,
+            reader_name,
+            function_node_name,
+            longest_wait_for_a_compile_to_claim_it,
+            stop_waiting,
+        } = self;
+        match reader_link_wiring.wait_for_the_function_node_promotion_out_of_its_islands_to_settle(
+            longest_wait_for_a_compile_to_claim_it,
+            stop_waiting,
+        ) {
+            Some(Ok(())) => tracing::info!(
+                "[{reader_name}] function node `{function_node_name}` was promoted out of its \
+                 islands into a helper process of its own"
+            ),
+            Some(Err(refusal)) => tracing::warn!(
+                "[{reader_name}] function node `{function_node_name}` stays in its islands: its \
+                 promotion was refused: {refusal}"
+            ),
+            None => tracing::warn!(
+                "[{reader_name}] function node `{function_node_name}` stays in its islands: no \
+                 compile took its promotion up within {} s",
+                longest_wait_for_a_compile_to_claim_it.as_secs()
+            ),
+        }
+    }
+}
+
 /// A call to one function node a far side had under way, as its breadcrumb
 /// names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +295,7 @@ pub struct OutOfProcessLinkWiringEnvelope {
     loss_counts: Arc<HelperPlacedProcessorLossCounts>,
     output_frames_kept_by_its_output_links: Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
     far_side_process_execution: ProcessExecution,
+    function_node_promotion_out_of_its_islands: FunctionNodePromotionOutOfTheIslandsOfOneFarSide,
 }
 
 impl std::fmt::Debug for OutOfProcessLinkWiringEnvelope {
@@ -270,6 +337,7 @@ impl OutOfProcessLinkWiringEnvelope {
             loss_counts: Arc::default(),
             output_frames_kept_by_its_output_links: Arc::default(),
             far_side_process_execution,
+            function_node_promotion_out_of_its_islands: Default::default(),
         }
     }
 
@@ -433,6 +501,24 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
+    /// Number `function_node_id` first on the breadcrumb, as the function node
+    /// its far side runs as its processor once promoted out of its readers'
+    /// islands; the nodes of the islands feeding it are numbered after it.
+    pub(crate) fn number_the_function_node_its_far_side_runs_as_its_processor(
+        &self,
+        function_node_id: &str,
+        function_node_name: &str,
+    ) {
+        let breadcrumb_number = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .the_breadcrumb_number_of_a_function_node(function_node_id, function_node_name);
+        debug_assert_eq!(
+            breadcrumb_number,
+            crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR
+        );
+    }
+
     /// The function node its far side last noted a call under way to, read
     /// off the current spawn's board even after the far side died.
     pub(crate) fn function_node_call_its_far_side_has_under_way(
@@ -464,6 +550,130 @@ impl OutOfProcessLinkWiringEnvelope {
             call_started_at_monotonic_ns: breadcrumb.call_started_at_monotonic_ns,
             function_node_calls_under_way: breadcrumb.function_node_calls_under_way,
         })
+    }
+
+    /// Start waiting on a new request to promote a function node out of this
+    /// far side's islands, forgetting how any earlier one ended; the number
+    /// names the request, which only a compile carrying it may claim.
+    pub(crate) fn await_a_function_node_promotion_out_of_its_islands(&self) -> u64 {
+        let promotion = &self.function_node_promotion_out_of_its_islands;
+        let promotion_request_number = promotion
+            .promotion_requests_awaited
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        *promotion.progress.lock() =
+            FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost {
+                promotion_request_number,
+            };
+        promotion_request_number
+    }
+
+    /// Stop waiting on the promotion out of this far side's islands unless a
+    /// compile has claimed it; `true` when the host may start its far side.
+    pub(crate) fn give_up_the_function_node_promotion_out_of_its_islands_unless_claimed(
+        &self,
+    ) -> bool {
+        let mut progress = self
+            .function_node_promotion_out_of_its_islands
+            .progress
+            .lock();
+        match *progress {
+            FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt => false,
+            FunctionNodePromotionOutOfTheIslandsProgress::Settled(_) => true,
+            FunctionNodePromotionOutOfTheIslandsProgress::NotAwaited
+            | FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost { .. } => {
+                *progress = FunctionNodePromotionOutOfTheIslandsProgress::NotAwaited;
+                true
+            }
+        }
+    }
+
+    /// Claim request `promotion_request_number` to promote a function node out
+    /// of this far side's islands for the compile that plans it; `false` when
+    /// the host is not waiting on that request, so the compile passes it over.
+    pub(crate) fn claim_the_awaited_function_node_promotion_out_of_its_islands(
+        &self,
+        promotion_request_number: u64,
+    ) -> bool {
+        let mut progress = self
+            .function_node_promotion_out_of_its_islands
+            .progress
+            .lock();
+        if matches!(
+            *progress,
+            FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost {
+                promotion_request_number: awaited,
+            } if awaited == promotion_request_number
+        ) {
+            *progress = FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Say how the promotion a compile claimed out of this far side's islands
+    /// ended: `Err` names why it was refused or why the compile failed. An
+    /// outcome for a promotion no compile claimed is dropped.
+    pub(crate) fn settle_the_function_node_promotion_out_of_its_islands(
+        &self,
+        outcome: std::result::Result<(), String>,
+    ) {
+        let promotion = &self.function_node_promotion_out_of_its_islands;
+        let mut progress = promotion.progress.lock();
+        if matches!(
+            *progress,
+            FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt
+        ) {
+            *progress = FunctionNodePromotionOutOfTheIslandsProgress::Settled(outcome);
+            promotion.settled.notify_all();
+        }
+    }
+
+    /// How the awaited promotion out of this far side's islands ended. Waits
+    /// up to `longest_wait` for a compile to claim it and then for as long as
+    /// that compile runs, giving up early once `stop_waiting` says so; `None`
+    /// when no compile claimed it in time, or the wait was stopped.
+    pub(crate) fn wait_for_the_function_node_promotion_out_of_its_islands_to_settle(
+        &self,
+        longest_wait: std::time::Duration,
+        stop_waiting: impl Fn() -> bool,
+    ) -> Option<std::result::Result<(), String>> {
+        const STOP_WAITING_POLL_INTERVAL: std::time::Duration =
+            std::time::Duration::from_millis(100);
+        let promotion = &self.function_node_promotion_out_of_its_islands;
+        let wait_ends_at = std::time::Instant::now() + longest_wait;
+        let mut progress = promotion.progress.lock();
+        loop {
+            match &*progress {
+                FunctionNodePromotionOutOfTheIslandsProgress::Settled(outcome) => {
+                    return Some(outcome.clone());
+                }
+                FunctionNodePromotionOutOfTheIslandsProgress::NotAwaited => return None,
+                FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt
+                | FunctionNodePromotionOutOfTheIslandsProgress::AwaitedByTheFarSidesHost {
+                    ..
+                } => {}
+            }
+            if stop_waiting() {
+                return None;
+            }
+            let now = std::time::Instant::now();
+            let claimed = matches!(
+                *progress,
+                FunctionNodePromotionOutOfTheIslandsProgress::ClaimedByTheCompileCarryingIt
+            );
+            if !claimed && now >= wait_ends_at {
+                *progress = FunctionNodePromotionOutOfTheIslandsProgress::NotAwaited;
+                return None;
+            }
+            let next_look = if claimed {
+                STOP_WAITING_POLL_INTERVAL
+            } else {
+                STOP_WAITING_POLL_INTERVAL.min(wait_ends_at - now)
+            };
+            promotion.settled.wait_for(&mut progress, next_look);
+        }
     }
 
     /// Forget the function node island `link_id` carries, so no later setup
@@ -786,6 +996,16 @@ pub trait DynGeneratedProcessor: Send + 'static {
         None
     }
 
+    /// Ask to promote the function node whose call lost this processor's
+    /// helper out of its islands, before the helper is restarted; `None` when
+    /// no call is known to have lost it, or the promotion could not be asked.
+    fn ask_to_promote_the_function_node_that_lost_the_helper_that_died(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Option<FunctionNodePromotionAwaitedBeforeTheReaderRestarts> {
+        None
+    }
+
     /// Start a new helper process, with a new processor instance in it, in
     /// place of one that died on its own: the same node, its current config
     /// and every link it holds, then `run`.
@@ -948,6 +1168,66 @@ mod tests {
                 link_wiring_entry(link_id, "port"),
             )
             .expect("a far side that is not gone takes the link");
+    }
+
+    /// A host that stopped waiting leaves no promotion for a late compile to
+    /// claim, so its restarted far side keeps the islands it started with.
+    #[test]
+    fn a_promotion_the_host_stopped_waiting_on_is_not_claimed_by_a_late_compile() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        let given_up = envelope.await_a_function_node_promotion_out_of_its_islands();
+
+        let outcome = envelope.wait_for_the_function_node_promotion_out_of_its_islands_to_settle(
+            std::time::Duration::ZERO,
+            || false,
+        );
+
+        assert_eq!(outcome, None);
+        assert!(!envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(given_up));
+    }
+
+    /// A request the host gave up cannot claim the one it awaits after the next
+    /// death: only the compile carrying the awaited request plans a promotion.
+    #[test]
+    fn an_earlier_promotion_request_cannot_claim_the_one_the_host_now_awaits() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        let given_up = envelope.await_a_function_node_promotion_out_of_its_islands();
+        envelope.give_up_the_function_node_promotion_out_of_its_islands_unless_claimed();
+        let awaited_now = envelope.await_a_function_node_promotion_out_of_its_islands();
+
+        assert!(!envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(given_up));
+        assert!(envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(awaited_now));
+    }
+
+    /// Once a compile claims the promotion, the host waits past its deadline
+    /// for how it ends.
+    #[test]
+    fn a_claimed_promotion_is_waited_on_past_the_deadline_until_it_settles() {
+        let envelope = Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+            ProcessExecution::Reactive,
+        ));
+        let awaited = envelope.await_a_function_node_promotion_out_of_its_islands();
+        assert!(envelope.claim_the_awaited_function_node_promotion_out_of_its_islands(awaited));
+        assert!(
+            !envelope.give_up_the_function_node_promotion_out_of_its_islands_unless_claimed(),
+            "a claimed promotion is not given up"
+        );
+        let settling_envelope = Arc::clone(&envelope);
+        let settler = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            settling_envelope
+                .settle_the_function_node_promotion_out_of_its_islands(Err("refused".to_string()));
+        });
+
+        let outcome = envelope.wait_for_the_function_node_promotion_out_of_its_islands_to_settle(
+            std::time::Duration::ZERO,
+            || false,
+        );
+
+        settler.join().unwrap();
+        assert_eq!(outcome, Some(Err("refused".to_string())));
     }
 
     /// A disconnected link leaves the envelope in both directions, and only

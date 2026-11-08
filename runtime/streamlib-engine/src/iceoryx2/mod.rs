@@ -91,6 +91,7 @@ pub use message_group_loss_recovery_gate::{
     MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
 };
 pub use payload::MessageGroupBoundary;
+pub use streamlib_ipc_types::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
 
 pub(crate) use node::ChannelSizing;
 pub use node::{

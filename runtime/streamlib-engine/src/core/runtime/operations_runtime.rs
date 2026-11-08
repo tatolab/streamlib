@@ -669,6 +669,28 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         Ok(())
     }
 
+    fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
+        &self,
+        function_node_id: &ProcessorUniqueId,
+        reader_id: &ProcessorUniqueId,
+        promotion_request_number: u64,
+        reason: &str,
+    ) -> Result<()> {
+        self.compiler.scope(|_graph, tx| {
+            tx.log(
+                PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
+                    function_node_id: function_node_id.clone(),
+                    reader_id: reader_id.clone(),
+                    promotion_request_number,
+                    reason: reason.to_string(),
+                },
+            );
+        });
+        self.loaded_stream_identity()
+            .publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
+    }
+
     fn to_json(&self) -> Result<serde_json::Value> {
         LoadedStreamInThisRuntime::to_json(self)
     }

@@ -6,7 +6,9 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::PendingOperation;
-use crate::core::compiler::compilation_plan::CompilationPlan;
+use crate::core::compiler::compilation_plan::{
+    CompilationPlan, FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed,
+};
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
@@ -15,6 +17,11 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     the_function_nodes_among, unwire_a_link_from_a_function_node_island_into_its_reader,
     wire_a_call_inside_a_function_node_island,
     wire_a_link_from_a_function_node_island_into_its_reader,
+};
+use crate::core::compiler::compiler_ops::function_node_promotion::{
+    FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
+    plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
+    record_each_promotion_on_its_nodes_metrics,
 };
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
@@ -26,8 +33,8 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
-    LinkUniqueId, OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle,
-    ProcessorUniqueId, StateComponent,
+    LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
+    ProcessorReadyBarrierHandle, ProcessorUniqueId, StateComponent,
 };
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -141,20 +148,49 @@ impl Compiler {
     ///
     /// A removal whose thread outlived its budget still removes the processor
     /// and lets the rest of the batch compile; the call then fails naming it.
+    /// Each reader a promotion names learns how it ended, so its host stops
+    /// waiting to start the helper that replaces the one a function node crashed.
     fn compile(
         graph_arc: Arc<RwLock<Graph>>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
         abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
     ) -> Result<()> {
+        let readers_awaiting_a_promotion: Vec<ProcessorUniqueId> = operations
+            .iter()
+            .filter_map(|operation| match operation {
+                PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
+                    reader_id,
+                    ..
+                } => Some(reader_id.clone()),
+                _ => None,
+            })
+            .collect();
         let mut result = CompileResult::default();
-        Self::compile_counting_into(
-            graph_arc,
+        let compiled = Self::compile_counting_into(
+            Arc::clone(&graph_arc),
             operations,
             runtime_ctx,
             abandoned_processor_threads,
             &mut result,
-        )
+        );
+        if !readers_awaiting_a_promotion.is_empty() {
+            let outcome = compiled.as_ref().copied().map_err(ToString::to_string);
+            let graph = graph_arc.read();
+            for reader_id in &readers_awaiting_a_promotion {
+                if let Some(reader_link_wiring) = graph
+                    .traversal()
+                    .v(reader_id)
+                    .first()
+                    .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+                {
+                    reader_link_wiring
+                        .0
+                        .settle_the_function_node_promotion_out_of_its_islands(outcome.clone());
+                }
+            }
+        }
+        compiled
     }
 
     /// Compile `operations` against `graph_arc`, counting what it did into
@@ -172,6 +208,7 @@ impl Compiler {
         // 1. Validate and categorize operations
         // =====================================================================
         let mut plan = the_plan_these_operations_make(&graph_arc, operations);
+        let promotions_planned = plan_every_function_node_promotion(&graph_arc, &mut plan);
 
         // A processor removal cascades its incident links out of the graph
         // (petgraph `remove_node`), so a link queued for wiring against a
@@ -346,6 +383,10 @@ impl Compiler {
                     state.transition_to_only_from(ProcessorState::Pending, ProcessorState::Running);
                 }
             }
+        }
+
+        for promotion_planned in &promotions_planned {
+            record_each_promotion_on_its_nodes_metrics(&mut graph_arc.write(), promotion_planned);
         }
 
         // =====================================================================
@@ -604,9 +645,101 @@ fn the_plan_these_operations_make(
             } => {
                 plan.config_updates.push((processor_id, config_to_apply));
             }
+            PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
+                function_node_id,
+                reader_id,
+                promotion_request_number,
+                reason,
+            } => {
+                plan.function_node_promotions.push(
+                    FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed {
+                        function_node_id,
+                        reader_id,
+                        promotion_request_number,
+                        reason,
+                    },
+                );
+            }
         }
     }
     plan
+}
+
+/// Plan each promotion `plan` holds against `graph_arc`, adding the nodes it
+/// moves to `plan`'s processors to build and their links to its links to wire.
+///
+/// A promotion is planned only once it claims the request its reader's host
+/// still waits on; a refused one settles that reader alone, and the rest of
+/// the batch compiles.
+fn plan_every_function_node_promotion(
+    graph_arc: &RwLock<Graph>,
+    plan: &mut CompilationPlan,
+) -> Vec<FunctionNodePromotionPlanned> {
+    let mut promotions_planned = Vec::new();
+    for promotion in std::mem::take(&mut plan.function_node_promotions) {
+        let Some(reader_link_wiring) = graph_arc
+            .read()
+            .traversal()
+            .v(&promotion.reader_id)
+            .first()
+            .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+            .map(|component| Arc::clone(&component.0))
+        else {
+            tracing::warn!(
+                "Function node {} is not promoted: its reader {} runs no helper process",
+                promotion.function_node_id,
+                promotion.reader_id,
+            );
+            continue;
+        };
+        if !reader_link_wiring.claim_the_awaited_function_node_promotion_out_of_its_islands(
+            promotion.promotion_request_number,
+        ) {
+            tracing::warn!(
+                "Function node {} is not promoted: {}'s host no longer waits on that request",
+                promotion.function_node_id,
+                promotion.reader_id,
+            );
+            continue;
+        }
+        let promotion_planned =
+            match plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+                &mut graph_arc.write(),
+                &promotion.function_node_id,
+                &promotion.reader_id,
+                &promotion.reason,
+                &WhatTheCompileCarryingAPromotionRemoves {
+                    processors: &plan.processors_to_remove,
+                    links: &plan.links_to_remove,
+                },
+            ) {
+                Ok(promotion_planned) => promotion_planned,
+                Err(refusal) => {
+                    reader_link_wiring.settle_the_function_node_promotion_out_of_its_islands(Err(
+                        refusal.to_string(),
+                    ));
+                    continue;
+                }
+            };
+        tracing::info!(
+            "Promoting function node {} and {} downstream of it out of {}'s islands",
+            promotion.function_node_id,
+            promotion_planned.processors_to_add.len() - 1,
+            promotion.reader_id,
+        );
+        for processor_id in &promotion_planned.processors_to_add {
+            if !plan.processors_to_add.contains(processor_id) {
+                plan.processors_to_add.push(processor_id.clone());
+            }
+        }
+        for link_id in &promotion_planned.links_to_add {
+            if !plan.links_to_add.contains(link_id) {
+                plan.links_to_add.push(link_id.clone());
+            }
+        }
+        promotions_planned.push(promotion_planned);
+    }
+    promotions_planned
 }
 
 /// Whether an `AddLink` names a link this graph has already wired — or handed

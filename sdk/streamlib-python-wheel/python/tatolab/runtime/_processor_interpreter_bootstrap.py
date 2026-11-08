@@ -171,6 +171,9 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeCompiledToItsEvaluateEntry,
     feed_each_input_port_from_its_function_node_island,
 )
+from tatolab.runtime._function_node_run_as_its_helpers_processor import (
+    the_processor_class_a_promoted_function_node_runs_as,
+)
 from tatolab.runtime._processor_hosting import (
     apply_configuration,
     construct_processor_instance,
@@ -1826,6 +1829,10 @@ def run_one_processor_until_its_parent_tears_it_down() -> None:
     try:
         processor_class = load_processor_class(import_path)
         link_data_access = open_node_link_data_access_for_helper_process()
+        if isinstance(processor_class, FunctionNode):
+            processor_class = the_processor_class_a_promoted_function_node_runs_as(
+                processor_class, import_path, processor_id, link_data_access
+            )
     except Exception as startup_failure:
         engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(

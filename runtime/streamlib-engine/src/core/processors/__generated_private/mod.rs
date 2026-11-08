@@ -13,3 +13,6 @@ pub use generated_processor::GeneratedProcessor;
 pub use generated_processor_impl::{
     DynGeneratedProcessor, OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWiringEnvelope,
 };
+pub(crate) use generated_processor_impl::{
+    FunctionNodeCallUnderWayInTheFarSide, FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
+};

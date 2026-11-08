@@ -18,8 +18,9 @@ use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight, Link, LinkState,
-    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
+    FunctionNodePromotedToItsOwnProcessComponent, Graph, GraphEdgeWithComponents,
+    GraphNodeWithComponents, GraphWeight, Link, LinkState, LinkStateComponent, LinkUniqueId,
+    OutOfProcessLinkWiringComponent,
 };
 
 /// How the compiler wires one link, by the kinds of its two ends.
@@ -33,18 +34,31 @@ pub(crate) enum HowALinkIsWired {
     AsTheIslandItsReaderEvaluatesAtEachRead,
 }
 
-/// Whether `node_id` is a function node.
-pub(crate) fn is_a_function_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
-    graph
-        .traversal()
-        .v(node_id)
-        .first()
-        .and_then(|node| node.node_kind())
-        .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+/// Whether `node_id` is a function node that runs inside the read of each
+/// node it feeds: every function node, until one is promoted to a process of
+/// its own.
+pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
+    graph: &Graph,
+    node_id: &ProcessorUniqueId,
+) -> bool {
+    graph.traversal().v(node_id).first().is_some_and(|node| {
+        node.node_kind()
+            .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+            && !node.has::<FunctionNodePromotedToItsOwnProcessComponent>()
+    })
+}
+
+/// Whether `node_id` is a function node, inside its readers' islands or
+/// promoted out of them.
+fn is_a_function_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
+    graph.traversal().v(node_id).first().is_some_and(|node| {
+        node.node_kind()
+            .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+    })
 }
 
 /// How `link_id` is wired, refusing a link into a function node from a node
-/// that is not one.
+/// that is not one, whether or not the function node was promoted.
 pub(crate) fn how_a_link_is_wired(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -53,9 +67,19 @@ pub(crate) fn how_a_link_is_wired(
     let source_id = link.source().processor_id();
     let destination_id = link.to_port().processor_id();
     match (
-        is_a_function_node(graph, source_id),
-        is_a_function_node(graph, destination_id),
+        runs_inside_the_read_of_each_node_it_feeds(graph, source_id),
+        runs_inside_the_read_of_each_node_it_feeds(graph, destination_id),
     ) {
+        (false, false)
+            if is_a_function_node(graph, destination_id)
+                && !is_a_function_node(graph, source_id) =>
+        {
+            Err(Error::InvalidLink(format!(
+                "link `{link_id}` feeds function node `{destination_id}` from `{source_id}`, \
+                 which is not a function node; a function node's inputs come from other \
+                 function nodes or from its pins in this release"
+            )))
+        }
         (false, false) => Ok(HowALinkIsWired::ThroughAChannel),
         (true, true) => Ok(HowALinkIsWired::AsACallInsideAFunctionNodeIsland),
         (true, false) => Ok(HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead),
@@ -114,7 +138,9 @@ fn is_fed_by_a_node_that_is_not_a_function_node(
         .e(())
         .iter()
         .filter(|link| link.to_port().processor_id() == node_id)
-        .any(|link| !is_a_function_node(graph, link.source().processor_id()))
+        .any(|link| {
+            !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+        })
 }
 
 /// Unwire `link_id`, from a function node into its reader: forget the island
@@ -233,7 +259,7 @@ fn place_a_function_node_after_what_it_reads(
     let mut links_into: Vec<JsonValue> = Vec::with_capacity(links_into_this_node.len());
     for link_into in links_into_this_node {
         let upstream_id = link_into.source().processor_id();
-        if !is_a_function_node(graph, upstream_id) {
+        if !runs_inside_the_read_of_each_node_it_feeds(graph, upstream_id) {
             return Err(Error::InvalidLink(format!(
                 "function node `{node_id}` reads `{upstream_id}`, which is not a function \
                  node; an island's inputs come from other function nodes or from its pins in \
@@ -283,13 +309,13 @@ pub(crate) fn refuse_an_edit_to_an_island_a_running_reader_evaluates(
     config_updates: &[(ProcessorUniqueId, JsonValue)],
 ) -> Result<()> {
     let is_a_running_reader = |node_id: &ProcessorUniqueId| {
-        !is_a_function_node(graph, node_id)
+        !runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
             && !processors_to_add.contains(node_id)
             && !processors_to_remove.contains(node_id)
     };
     let the_running_reader_an_edit_reaches = |link: &Link| {
         let destination_id = link.to_port().processor_id();
-        let readers_reached = if is_a_function_node(graph, destination_id) {
+        let readers_reached = if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
             the_readers_a_function_node_feeds(graph, destination_id)
         } else {
             HashSet::from([destination_id.clone()])
@@ -301,8 +327,9 @@ pub(crate) fn refuse_an_edit_to_an_island_a_running_reader_evaluates(
         let link = link_in(graph, link_id)?;
         refuse_a_second_link_into_a_port_an_island_feeds(graph, link)?;
         refuse_an_island_into_a_port_declaring_an_audio_window(graph, link)?;
-        let touches_an_island = is_a_function_node(graph, link.source().processor_id())
-            || is_a_function_node(graph, link.to_port().processor_id());
+        let touches_an_island =
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+                || runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().processor_id());
         if touches_an_island
             && let Some(running_reader_id) = the_running_reader_an_edit_reaches(link)
         {
@@ -314,7 +341,7 @@ pub(crate) fn refuse_an_edit_to_an_island_a_running_reader_evaluates(
     }
     for link_id in links_to_remove {
         let link = link_in(graph, link_id)?;
-        if is_a_function_node(graph, link.source().processor_id()) {
+        if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()) {
             if let Some(running_reader_id) = the_running_reader_an_edit_reaches(link) {
                 return Err(an_edit_to_a_running_readers_island(
                     &format!("removing `{link_id}`"),
@@ -335,7 +362,7 @@ pub(crate) fn refuse_an_edit_to_an_island_a_running_reader_evaluates(
         }
     }
     for removed_id in processors_to_remove {
-        if is_a_function_node(graph, removed_id)
+        if runs_inside_the_read_of_each_node_it_feeds(graph, removed_id)
             && let Some(running_reader_id) = the_readers_a_function_node_feeds(graph, removed_id)
                 .into_iter()
                 .find(&is_a_running_reader)
@@ -347,7 +374,7 @@ pub(crate) fn refuse_an_edit_to_an_island_a_running_reader_evaluates(
         }
     }
     for (updated_id, _) in config_updates {
-        if is_a_function_node(graph, updated_id) {
+        if runs_inside_the_read_of_each_node_it_feeds(graph, updated_id) {
             return Err(Error::Config(format!(
                 "function node `{updated_id}`'s config goes to each reader of its island when \
                  that reader starts, and a running reader is not re-islanded in this release, \
@@ -383,9 +410,9 @@ fn refuse_a_second_link_into_a_port_an_island_feeds(graph: &Graph, link: &Link) 
                 && other_link.to_port().port_name() == link.to_port().port_name()
         })
         .collect();
-    let an_island_feeds_the_port = links_into_the_port
-        .iter()
-        .any(|link_into| is_a_function_node(graph, link_into.source().processor_id()));
+    let an_island_feeds_the_port = links_into_the_port.iter().any(|link_into| {
+        runs_inside_the_read_of_each_node_it_feeds(graph, link_into.source().processor_id())
+    });
     if links_into_the_port.len() > 1 && an_island_feeds_the_port {
         return Err(Error::InvalidLink(format!(
             "`{}`'s input `{}` is fed by {} links, and one comes from a function node; an \
@@ -406,7 +433,7 @@ fn refuse_an_island_into_a_port_declaring_an_audio_window(
     graph: &Graph,
     link: &Link,
 ) -> Result<()> {
-    if !is_a_function_node(graph, link.source().processor_id()) {
+    if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()) {
         return Ok(());
     }
     let reader_id = link.to_port().processor_id();
@@ -450,7 +477,7 @@ fn the_readers_a_function_node_feeds(
                 continue;
             }
             let destination_id = link.to_port().processor_id();
-            if is_a_function_node(graph, destination_id) {
+            if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
                 function_nodes_to_follow.push(destination_id.clone());
             } else {
                 readers.insert(destination_id.clone());
@@ -485,12 +512,12 @@ fn is_reactive_and_left_fed_only_by_islands(
         })
         .collect();
     runs_reactively
-        && links_left_into_the_reader
-            .iter()
-            .any(|link| is_a_function_node(graph, link.source().processor_id()))
-        && links_left_into_the_reader
-            .iter()
-            .all(|link| is_a_function_node(graph, link.source().processor_id()))
+        && links_left_into_the_reader.iter().any(|link| {
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+        })
+        && links_left_into_the_reader.iter().all(|link| {
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+        })
 }
 
 /// The function nodes among `node_ids`, which are never prepared or spawned.
@@ -500,7 +527,7 @@ pub(crate) fn the_function_nodes_among<'a>(
 ) -> HashSet<ProcessorUniqueId> {
     node_ids
         .into_iter()
-        .filter(|node_id| is_a_function_node(graph, node_id))
+        .filter(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id))
         .cloned()
         .collect()
 }
@@ -514,7 +541,7 @@ fn link_in<'graph>(graph: &'graph Graph, link_id: &LinkUniqueId) -> Result<&'gra
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
@@ -528,7 +555,7 @@ mod tests {
         ProcessorSpec,
     };
 
-    fn a_function_node_type(
+    pub(crate) fn a_function_node_type(
         import_path: &str,
         input_ports: &[&str],
         output_ports: &[&str],
@@ -563,7 +590,7 @@ mod tests {
     }
 
     /// A graph resolving `lfo`, `remap` and `mix`, three function node types.
-    fn a_graph_resolving_three_function_node_types() -> Graph {
+    pub(crate) fn a_graph_resolving_three_function_node_types() -> Graph {
         let node_types = NodeTypesOneStreamResolves::new();
         for descriptor in [
             a_function_node_type("test_ops:lfo", &[], &["result"]),
@@ -573,7 +600,14 @@ mod tests {
             node_types
                 .register_a_type_described_in_this_streams_processor_interpreter(
                     descriptor,
-                    HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds,
+                    HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                        processor_once_promoted_to_its_own_process: Box::new(|node| {
+                            Err(Error::Configuration(format!(
+                                "`{}` builds no processor in this test",
+                                node.id
+                            )))
+                        }),
+                    },
                 )
                 .unwrap();
         }
@@ -581,7 +615,11 @@ mod tests {
         Graph::new_resolving_node_types_through(Arc::new(node_types))
     }
 
-    fn add_a_node(graph: &mut Graph, import_path: &str, config: JsonValue) -> ProcessorUniqueId {
+    pub(crate) fn add_a_node(
+        graph: &mut Graph,
+        import_path: &str,
+        config: JsonValue,
+    ) -> ProcessorUniqueId {
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
@@ -595,7 +633,7 @@ mod tests {
             .clone()
     }
 
-    fn link(
+    pub(crate) fn link(
         graph: &mut Graph,
         from: (&ProcessorUniqueId, &str),
         to: (&ProcessorUniqueId, &str),
@@ -612,14 +650,14 @@ mod tests {
             .clone()
     }
 
-    fn a_helper_reader_before_its_setup(graph: &mut Graph) -> ProcessorUniqueId {
+    pub(crate) fn a_helper_reader_before_its_setup(graph: &mut Graph) -> ProcessorUniqueId {
         a_helper_reader_before_its_setup_driven_in(
             graph,
             ProcessExecution::Continuous { interval_ms: 10 },
         )
     }
 
-    fn a_helper_reader_before_its_setup_driven_in(
+    pub(crate) fn a_helper_reader_before_its_setup_driven_in(
         graph: &mut Graph,
         far_side_process_execution: ProcessExecution,
     ) -> ProcessorUniqueId {
@@ -642,7 +680,10 @@ mod tests {
         reader_id
     }
 
-    fn reader_setup_command_ports(graph: &Graph, reader_id: &ProcessorUniqueId) -> JsonValue {
+    pub(crate) fn reader_setup_command_ports(
+        graph: &Graph,
+        reader_id: &ProcessorUniqueId,
+    ) -> JsonValue {
         graph
             .traversal()
             .v(reader_id)
