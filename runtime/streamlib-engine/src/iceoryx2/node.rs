@@ -11,8 +11,6 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use iceoryx2::port::publisher::Publisher;
-use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::service::builder::publish_subscribe::{
     Builder as PublishSubscribeServiceBuilder, PublishSubscribeOpenError,
     PublishSubscribeOpenOrCreateError,
@@ -31,12 +29,20 @@ use super::{
     MAX_PUBLISHERS_PER_CHANNEL,
 };
 use crate::core::error::{Error, Result};
+pub use streamlib_ipc_types::{
+    ChannelDataServiceLoanedSample, ChannelDataServicePublisher, ChannelDataServiceSample,
+    ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError,
+    ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, engine_owned_iceoryx2_prefix_for_this_user,
+};
+use streamlib_ipc_types::{
+    ChannelDataServicePortFactory, Iceoryx2DomainRefusal, channel_data_service_builder,
+    create_the_reserved_slot_subscriber_of,
+};
 use streamlib_ipc_types::{
     HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
     InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry, StreamClockBoardEntry,
     StreamClockBoardKey,
 };
-use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
 /// Nodes a channel or notify service admits per subscriber or notifier slot.
 ///
@@ -88,64 +94,27 @@ const DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL: std::time::Duration =
 /// The environment variable a parent hands its helper the iceoryx2 domain root in.
 pub const ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ICEORYX2_DOMAIN_ROOT";
 
-/// The most bytes a domain root and its prefix may take together.
-///
-/// iceoryx2 names its Unix sockets `<root>/<prefix><entity file name>`, and a
-/// socket path must fit `sun_path` (108 bytes on Linux, 104 on macOS) with room
-/// for the longest name iceoryx2 appends. Past this the first listener fails late
-/// as an opaque `ResourceCreationFailed`.
-pub const ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES: usize =
-    if cfg!(target_os = "macos") { 58 } else { 63 };
-
-/// The file prefix every engine-owned iceoryx2 node of this OS user shares.
-pub fn engine_owned_iceoryx2_prefix_for_this_user() -> String {
-    format!("sl{}_", current_process_uid())
-}
-
 /// The iceoryx2 configuration every engine-owned node, and every static iceoryx2
 /// call, uses — built from the library defaults, never from iceoryx2's lookup path.
 pub fn engine_owned_iceoryx2_config(domain_root: &std::path::Path) -> Result<Config> {
     iceoryx2_config_for_domain(domain_root, &engine_owned_iceoryx2_prefix_for_this_user())
 }
 
-/// Build the configuration for the domain named by `domain_root` and `prefix`.
-///
-/// iceoryx2 keeps file-backed state under the root but names its POSIX shared
-/// memory from the prefix alone, so two domains are disjoint only when their
-/// prefixes differ too.
+/// The configuration of the domain named by `domain_root` and `prefix`; see
+/// [`streamlib_ipc_types::iceoryx2_config_for_domain`].
 pub(crate) fn iceoryx2_config_for_domain(
     domain_root: &std::path::Path,
     prefix: &str,
 ) -> Result<Config> {
-    let root_bytes = domain_root.as_os_str().as_encoded_bytes();
-    let root_and_prefix_bytes = root_bytes.len() + prefix.len();
-    if root_and_prefix_bytes > ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES {
-        return Err(Error::Configuration(format!(
-            "the iceoryx2 domain root {} with prefix {prefix} takes {root_and_prefix_bytes} bytes, \
-             past the {ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES}-byte budget a Unix socket \
-             path leaves them; set XDG_RUNTIME_DIR to a shorter directory",
-            domain_root.display()
-        )));
-    }
+    streamlib_ipc_types::iceoryx2_config_for_domain(domain_root, prefix)
+        .map_err(engine_error_of_an_iceoryx2_domain_refusal)
+}
 
-    let mut config = Config::default();
-    // `Iceoryx2Node::open_or_create_service` gets past a shallow service whose
-    // only holder died by leaning on this reclaim.
-    config.global.service.cleanup_dead_nodes_on_open = true;
-    config
-        .global
-        .set_root_path(&Path::new(root_bytes).map_err(|refusal| {
-            Error::Configuration(format!(
-                "the iceoryx2 domain root {} is not a path iceoryx2 accepts: {refusal:?}",
-                domain_root.display()
-            ))
-        })?);
-    config.global.prefix = FileName::new(prefix.as_bytes()).map_err(|refusal| {
-        Error::Configuration(format!(
-            "the iceoryx2 domain prefix {prefix} is not a file name iceoryx2 accepts: {refusal:?}"
-        ))
-    })?;
-    Ok(config)
+fn engine_error_of_an_iceoryx2_domain_refusal(refusal: Iceoryx2DomainRefusal) -> Error {
+    match refusal {
+        Iceoryx2DomainRefusal::Configuration(reason) => Error::Configuration(reason),
+        Iceoryx2DomainRefusal::NodeCreation(reason) => Error::Runtime(reason),
+    }
 }
 
 /// Reclaim what every dead iceoryx2 node in the engine-owned domain still holds,
@@ -216,24 +185,8 @@ pub(crate) fn create_iceoryx2_node_in_domain(
     prefix: &str,
     node_name: &str,
 ) -> Result<Node<ipc_threadsafe::Service>> {
-    let config = iceoryx2_config_for_domain(domain_root, prefix)?;
-    let node_name = NodeName::new(node_name).map_err(|refusal| {
-        Error::Configuration(format!(
-            "'{node_name}' is not an iceoryx2 node name: {refusal:?}"
-        ))
-    })?;
-    NodeBuilder::new()
-        .config(&config)
-        .name(&node_name)
-        .signal_handling_mode(SignalHandlingMode::Disabled)
-        .create::<ipc_threadsafe::Service>()
-        .map_err(|failure| {
-            Error::Runtime(format!(
-                "failed to create iceoryx2 node '{}' in the domain rooted at {}: {failure:?}",
-                node_name.as_str(),
-                domain_root.display()
-            ))
-        })
+    streamlib_ipc_types::create_iceoryx2_node_in_domain(domain_root, prefix, node_name)
+        .map_err(engine_error_of_an_iceoryx2_domain_refusal)
 }
 
 /// The sizing a channel data service is created with, and that every opener
@@ -255,30 +208,6 @@ pub(crate) const fn channel_subscriber_max_borrowed_samples(
 ) -> usize {
     channel_service_creation_depth + MAX_INPUT_PORT_BORROW_QUOTA + 1
 }
-
-/// The publisher of a channel data service: payload cache lines under the
-/// channel sample user header.
-pub type ChannelDataServicePublisher =
-    Publisher<ipc_threadsafe::Service, [DataChannelPayloadCacheLine], DataChannelSampleUserHeader>;
-
-/// A subscriber to a channel data service: payload cache lines under the
-/// channel sample user header.
-pub type ChannelDataServiceSubscriber =
-    Subscriber<ipc_threadsafe::Service, [DataChannelPayloadCacheLine], DataChannelSampleUserHeader>;
-
-/// One sample a channel subscriber received.
-pub type ChannelDataServiceSample = iceoryx2::sample::Sample<
-    ipc_threadsafe::Service,
-    [DataChannelPayloadCacheLine],
-    DataChannelSampleUserHeader,
->;
-
-/// One sample a channel publisher loaned, not yet sent.
-pub type ChannelDataServiceLoanedSample = iceoryx2::sample_mut::SampleMut<
-    ipc_threadsafe::Service,
-    [DataChannelPayloadCacheLine],
-    DataChannelSampleUserHeader,
->;
 
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
@@ -637,21 +566,6 @@ fn iceoryx2_service_name_of(service_name: &str) -> Result<ServiceName> {
     })
 }
 
-/// The channel data service builder: payload cache lines under
-/// [`DataChannelSampleUserHeader`], the one type pair every opener presents.
-fn channel_data_service_builder(
-    node: &Node<ipc_threadsafe::Service>,
-    service_name: &ServiceName,
-) -> PublishSubscribeServiceBuilder<
-    [DataChannelPayloadCacheLine],
-    DataChannelSampleUserHeader,
-    ipc_threadsafe::Service,
-> {
-    node.service_builder(service_name)
-        .publish_subscribe::<[DataChannelPayloadCacheLine]>()
-        .user_header::<DataChannelSampleUserHeader>()
-}
-
 /// The channel data service builder carrying the whole channel policy every
 /// opener presents — the fixed slot counts, the creation depth, and the
 /// borrow, no-history and safe-overflow limits iceoryx2 verifies on each open.
@@ -742,11 +656,7 @@ fn channel_data_service_built_by_something_other_than_this_engine(
 
 /// Handle to an iceoryx2 channel data service.
 pub struct Iceoryx2Service {
-    inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
-        ipc_threadsafe::Service,
-        [DataChannelPayloadCacheLine],
-        DataChannelSampleUserHeader,
-    >,
+    inner: ChannelDataServicePortFactory,
 }
 
 impl Iceoryx2Service {
@@ -827,28 +737,8 @@ impl Iceoryx2Service {
         &self,
         ring_depth: usize,
     ) -> std::result::Result<ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError> {
-        use iceoryx2::port::subscriber::SubscriberCreateError;
-        self.inner
-            .subscriber_builder()
-            .buffer_size(ring_depth)
-            .create()
-            .map_err(|e| match e {
-                SubscriberCreateError::ExceedsMaxSupportedSubscribers => {
-                    ChannelReservedSlotSubscribeError::ReservedSlotOccupied
-                }
-                other => ChannelReservedSlotSubscribeError::Transport(format!("{:?}", other)),
-            })
+        create_the_reserved_slot_subscriber_of(&self.inner, ring_depth)
     }
-}
-
-/// Why creating a channel's reserved-slot subscriber failed.
-#[derive(Debug)]
-pub enum ChannelReservedSlotSubscribeError {
-    /// Every subscriber slot on the channel is held — iceoryx2 refused the
-    /// create with `ExceedsMaxSupportedSubscribers`.
-    ReservedSlotOccupied,
-    /// Any other iceoryx2 subscriber-create failure, rendered for the log.
-    Transport(String),
 }
 
 /// Handle to an iceoryx2 Event service used for fd-multiplexed wakeups.
@@ -881,6 +771,7 @@ mod tests {
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::iceoryx2::InboundLinkName;
     use crate::iceoryx2::channel_sample_test_support::{TestChannelSample, stamped_payload_of};
+    use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
 
     fn unique_service_name(tag: &str) -> String {
         format!(

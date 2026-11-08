@@ -6,16 +6,14 @@
 //! channel's reserved slot from its own process, reading the latest message
 //! the port's node wrote without changing the stream's graph.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use iceoryx2::identifiers::UniquePublisherId;
-
 use super::LoadedStreamInThisRuntime;
 use super::exposed_output_port_subscription::{
-    ExposedOutputPortSourceWiring, LossTallyOfAReservedSlotReader,
-    the_running_node_and_its_output_port, the_source_wiring_its_answer_says,
+    ExposedOutputPortSourceWiring, the_running_node_and_its_output_port,
+    the_source_wiring_its_answer_says,
 };
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
@@ -23,14 +21,6 @@ use crate::core::compiler::compiler_ops::{
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::OutputLinkPortRef;
-use crate::iceoryx2::{
-    ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError, Iceoryx2Node, Iceoryx2Service,
-    MessageReadFromInputPort, data_channel_payload_bytes_of,
-};
-
-/// The ring a viewer's subscriber takes: one sample, so a viewer always reads
-/// the latest message and the channel overwrites what it fell behind on.
-pub const OUTPUT_PORT_VIEWER_RING_DEPTH: usize = 1;
 
 /// How long an open waits for a helper process to open the port it runs.
 const A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN: Duration = Duration::from_secs(10);
@@ -246,85 +236,6 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
-/// A viewer's subscriber on an output port's channel, in the viewer's own
-/// process: each read answers the latest message the port's node wrote and how
-/// many it skipped since the read before.
-pub struct OutputPortViewerReader {
-    subscriber: ChannelDataServiceSubscriber,
-    loss_tally: LossTallyOfAReservedSlotReader<UniquePublisherId>,
-    _service: Iceoryx2Service,
-    _iceoryx2_node: Iceoryx2Node,
-}
-
-impl OutputPortViewerReader {
-    /// Subscribe to the reserved slot of channel `channel_service_name` in the
-    /// iceoryx2 domain rooted at `iceoryx2_domain_root`, from an iceoryx2 node of
-    /// this process named `viewer_node_name`.
-    pub fn subscribe(
-        iceoryx2_domain_root: &Path,
-        channel_service_name: &str,
-        viewer_node_name: &str,
-    ) -> Result<Self> {
-        let iceoryx2_node = Iceoryx2Node::new(iceoryx2_domain_root, viewer_node_name)?;
-        let service = iceoryx2_node
-            .open_existing_channel_service(channel_service_name)?
-            .ok_or_else(|| {
-                Error::Link(format!(
-                    "channel `{channel_service_name}` is not open, so a viewer has nothing to \
-                     read: open the viewer first, and keep it open while it reads"
-                ))
-            })?;
-        let subscriber = service
-            .create_reserved_slot_subscriber(OUTPUT_PORT_VIEWER_RING_DEPTH)
-            .map_err(|refusal| match refusal {
-                ChannelReservedSlotSubscribeError::ReservedSlotOccupied => {
-                    Error::ReservedPublisherSubscriberSlotOccupied(channel_service_name.to_string())
-                }
-                ChannelReservedSlotSubscribeError::Transport(detail) => Error::Runtime(format!(
-                    "a viewer could not subscribe to the reserved slot of channel \
-                     '{channel_service_name}': {detail}"
-                )),
-            })?;
-        Ok(Self {
-            subscriber,
-            loss_tally: LossTallyOfAReservedSlotReader::default(),
-            _service: service,
-            _iceoryx2_node: iceoryx2_node,
-        })
-    }
-
-    /// The latest message the port's node wrote since the read before, or
-    /// `None` when it wrote nothing since. Its `lost_since_last_read` counts
-    /// every message written in between that the viewer did not read.
-    pub fn read_the_latest_message(&mut self) -> Result<Option<MessageReadFromInputPort>> {
-        let mut latest: Option<MessageReadFromInputPort> = None;
-        loop {
-            let sample = self.subscriber.receive().map_err(|receive_failure| {
-                Error::Runtime(format!(
-                    "a viewer's subscriber failed to receive: {receive_failure:?}"
-                ))
-            })?;
-            let Some(sample) = sample else {
-                break;
-            };
-            let Some(mut message) = self.loss_tally.message_from_a_bag_headed(
-                sample.origin(),
-                *sample.user_header(),
-                data_channel_payload_bytes_of(sample.payload()),
-            ) else {
-                continue;
-            };
-            if let Some(passed_over) = latest.take() {
-                message.lost_since_last_read = message
-                    .lost_since_last_read
-                    .saturating_add(passed_over.lost_since_last_read + 1);
-            }
-            latest = Some(message);
-        }
-        Ok(latest)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     //! A viewer against a loaded stream read as running without the GPU
@@ -334,6 +245,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use serde_json::Value;
+
+    use streamlib_ipc_types::{MessageReadFromAReservedSlot, OutputPortViewerReader};
 
     use super::*;
     use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
@@ -445,9 +358,7 @@ mod tests {
         (graph["links"].clone(), graph["exposed"].clone())
     }
 
-    fn the_next_message_read(
-        reader: &mut OutputPortViewerReader,
-    ) -> crate::iceoryx2::MessageReadFromInputPort {
+    fn the_next_message_read(reader: &mut OutputPortViewerReader) -> MessageReadFromAReservedSlot {
         let gave_up_at = Instant::now() + ARRIVES_WITHIN;
         loop {
             if let Some(message) = reader.read_the_latest_message().expect("the viewer reads") {
@@ -618,7 +529,7 @@ mod tests {
             .clone()
             .expect("Linux hands every viewer the surface-sharing socket");
         assert_eq!(
-            Path::new(&surface_share_address),
+            std::path::Path::new(&surface_share_address),
             camera._runner.surface_socket_path()
         );
         let mut reader = OutputPortViewerReader::subscribe(
