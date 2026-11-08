@@ -2010,7 +2010,7 @@ mod tests {
         .expect_err("a name-stripped blob cannot be bound by name");
         let msg = format!("{err}");
         assert!(
-            msg.contains("carries no name") && msg.contains("glslc -g"),
+            msg.contains("carries no name") && msg.contains("Slang source"),
             "the refusal must name the cause and the fix, got: {msg}"
         );
     }

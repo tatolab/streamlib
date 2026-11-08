@@ -241,14 +241,14 @@ def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
 
     Asserting "the probe does not shell out" by *reading* the probe proves
     nothing durable — someone adds a `subprocess.run(["slangc", ...])` later and
-    every test still passes. So `slangc`, `glslc` and `glslangValidator` are
+    every test still passes. So `slangc` and `glslangValidator` are
     shadowed with stubs that exit 127 and say so, and `tatolabd` plus the
     processor interpreter it spawns inherit that PATH. A kernel still builds, so
     the compiler that built it is the one the runtime carries.
     """
     sabotaged = tmp_path / "no-shader-toolchain"
     sabotaged.mkdir()
-    for tool in ("slangc", "glslc", "glslangValidator"):
+    for tool in ("slangc", "glslangValidator"):
         stub = sabotaged / tool
         stub.write_text(
             f"#!/bin/sh\necho '{tool} was invoked; the engine must not shell out' >&2\nexit 127\n"

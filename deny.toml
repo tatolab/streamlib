@@ -145,6 +145,11 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
+name = "streamlib-slang-shader-compiler"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
 name = "streamlib-macros"
 expression = "BUSL-1.1"
 license-files = []

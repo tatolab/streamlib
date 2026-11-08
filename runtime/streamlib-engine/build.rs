@@ -5,9 +5,9 @@
 
 //! Build script: wherever the Vulkan RHI is compiled, compiles the Vulkan
 //! compute, vertex, fragment, and ray-tracing shaders this crate ships
-//! (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to SPIR-V via
-//! `glslc` and stages the artifacts in `OUT_DIR` for `include_bytes!` to
-//! consume at compile time; on Linux compiles the PipeWire shims against the
+//! (`vulkan/rhi/shaders/*.slang`) to SPIR-V through the Slang compiler and
+//! stages the artifacts in `OUT_DIR` for `include_bytes!` to consume at
+//! compile time; on Linux compiles the PipeWire shims against the
 //! vendored PipeWire/SPA headers; and stamps the engine's build id, which a
 //! helper process checks against its parent's.
 
@@ -134,221 +134,156 @@ fn compile_pipewire_shims() {
         .compile("streamlib_pipewire_shims");
 }
 
-/// `glslc -O` strips every `OpName`, and a binding with no reflected name
-/// cannot be dispatched against by name. Debug info is what carries the
-/// shader's own spelling of each binding through to `rspirv-reflect`.
-///
-/// Applied uniformly — production shaders included — so "engine-compiled
-/// SPIR-V keeps its binding names" is one rule with no exceptions list to
-/// maintain. The cost is accepted deliberately: `-g` roughly doubles each
-/// blob (it embeds the GLSL source, not just names), and changing the bytes
-/// changes each driver pipeline-cache filename once, so the first run after
-/// an upgrade recompiles pipelines cold.
-const KEEP_BINDING_NAMES: &str = "-g";
-
+/// Compile every shader the engine ships to SPIR-V through the Slang compiler
+/// the workspace stages, with the run-time compiler's settings, into `OUT_DIR`
+/// under the name its `include_bytes!` site reads.
 fn compile_shaders() {
     use std::path::{Path, PathBuf};
-    use std::process::Command;
+    use streamlib_slang_shader_compiler::{
+        ShaderCompilationTargetStage as Stage, SlangPreprocessorMacro, compile_a_slang_shader_file,
+        open_the_workspace_staged_slang_compiler, workspace_staged_slang_compiler_library,
+    };
 
-    // Per-stage shader sources. Each entry produces one SPIR-V module
-    // consumed via `include_bytes!(concat!(env!("OUT_DIR"), …))`.
-    // Add new kernels (compute, vertex, fragment) here.
-    let shaders: &[(&str, &str, &str)] = &[
+    const SHADER_DIRECTORY: &str = "src/vulkan/rhi/shaders";
+    let shaders: &[(&str, Stage, &str)] = &[
         // Trivial pipelines built+dropped at device init to force the
         // driver's shader-compiler init in a controlled state — see
         // HostVulkanDevice::prewarm_pipeline_compiler /
         // prewarm_graphics_pipeline.
+        ("prewarm_compute.slang", Stage::Compute, "prewarm.spv"),
+        ("prewarm_vertex.slang", Stage::Vertex, "prewarm.vert.spv"),
         (
-            "src/vulkan/rhi/shaders/prewarm.comp",
-            "prewarm.spv",
-            "compute",
-        ),
-        (
-            "src/vulkan/rhi/shaders/prewarm.vert",
-            "prewarm.vert.spv",
-            "vertex",
-        ),
-        (
-            "src/vulkan/rhi/shaders/prewarm.frag",
+            "prewarm_fragment.slang",
+            Stage::Fragment,
             "prewarm.frag.spv",
-            "fragment",
         ),
         (
-            "src/vulkan/rhi/shaders/color_convert_nv12_buffer_to_rgba.comp",
+            "color_convert_nv12_buffer_to_rgba.slang",
+            Stage::Compute,
             "color_convert_nv12_buffer_to_rgba.spv",
-            "compute",
         ),
         (
-            "src/vulkan/rhi/shaders/color_convert_yuyv_buffer_to_rgba.comp",
+            "color_convert_yuyv_buffer_to_rgba.slang",
+            Stage::Compute,
             "color_convert_yuyv_buffer_to_rgba.spv",
-            "compute",
         ),
         (
-            "src/vulkan/rhi/shaders/color_convert_rgba_image_to_yuyv_buffer.comp",
+            "color_convert_rgba_image_to_yuyv_buffer.slang",
+            Stage::Compute,
             "color_convert_rgba_image_to_yuyv_buffer.spv",
-            "compute",
         ),
         (
-            "src/vulkan/rhi/shaders/color_convert_rgba_image_to_nv12_buffer.comp",
+            "color_convert_rgba_image_to_nv12_buffer.slang",
+            Stage::Compute,
             "color_convert_rgba_image_to_nv12_buffer.spv",
-            "compute",
         ),
         (
-            "src/vulkan/rhi/shaders/color_convert_rgba_image_to_rgba_image.comp",
+            "color_convert_rgba_image_to_rgba_image.slang",
+            Stage::Compute,
             "color_convert_rgba_image_to_rgba_image.spv",
-            "compute",
+        ),
+        ("tone_curve.slang", Stage::Compute, "tone_curve.spv"),
+        (
+            "offscreen_blit_vertex.slang",
+            Stage::Vertex,
+            "offscreen_blit_vertex.slang.spv",
         ),
         (
-            "src/vulkan/rhi/shaders/tone_curve.comp",
-            "tone_curve.spv",
-            "compute",
-        ),
-        (
-            "src/vulkan/rhi/shaders/offscreen_blit.vert",
-            "offscreen_blit.vert.spv",
-            "vertex",
-        ),
-        (
-            "src/vulkan/rhi/shaders/offscreen_blit.frag",
-            "offscreen_blit.frag.spv",
-            "fragment",
+            "offscreen_blit_fragment.slang",
+            Stage::Fragment,
+            "offscreen_blit_fragment.slang.spv",
         ),
         // The read-one-write-another conformance shader for named N-binding
         // compute dispatch.
         (
-            "src/vulkan/rhi/shaders/test_read_one_write_another.comp",
+            "test_read_one_write_another.slang",
+            Stage::Compute,
             "test_read_one_write_another.spv",
-            "compute",
         ),
-    ];
-
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
-    // `-I` for the converter common header. New compute shaders share
-    // closed-form transfer / matrix math via `#include`.
-    let shader_include_dir = "src/vulkan/rhi/shaders";
-    println!(
-        "cargo:rerun-if-changed={}/color_convert_common.glsl",
-        shader_include_dir
-    );
-
-    for (src, dst, stage) in shaders {
-        let src_path = Path::new(src);
-        let dst_path: PathBuf = Path::new(&out_dir).join(dst);
-
-        println!("cargo:rerun-if-changed={}", src);
-
-        let status = Command::new("glslc")
-            .arg(format!("-fshader-stage={stage}"))
-            .arg(KEEP_BINDING_NAMES)
-            .arg("-O")
-            .arg("-I")
-            .arg(shader_include_dir)
-            .arg(src_path)
-            .arg("-o")
-            .arg(&dst_path)
-            .status()
-            .expect("Failed to run glslc. Install the Vulkan SDK or ensure glslc is in PATH.");
-
-        assert!(status.success(), "glslc failed to compile {}", src);
-    }
-
-    // Standalone test shader for the SampledImage binding kind.
-    {
-        let test_sampled_image_src = "src/vulkan/rhi/shaders/test_sampled_image.comp";
-        println!("cargo:rerun-if-changed={}", test_sampled_image_src);
-        let dst_path: PathBuf = Path::new(&out_dir).join("test_sampled_image.spv");
-        let status = Command::new("glslc")
-            .arg("-fshader-stage=compute")
-            .arg(KEEP_BINDING_NAMES)
-            .arg("-O")
-            .arg(Path::new(test_sampled_image_src))
-            .arg("-o")
-            .arg(&dst_path)
-            .status()
-            .expect("Failed to run glslc for test_sampled_image.comp");
-        assert!(
-            status.success(),
-            "glslc failed to compile test_sampled_image.comp"
-        );
-    }
-
-    // Parameterized test shaders: one .comp source compiled multiple times with
-    // different `-DINPUT_COUNT=N` defines, producing one SPIR-V variant per
-    // value. Used by parameterized descriptor-management tests.
-    let test_blend_src = "src/vulkan/rhi/shaders/test_blend.comp";
-    println!("cargo:rerun-if-changed={}", test_blend_src);
-    for &n in &[1u32, 2, 4, 8] {
-        let dst_path: PathBuf = Path::new(&out_dir).join(format!("test_blend_{n}.spv"));
-        let status = Command::new("glslc")
-            .arg("-fshader-stage=compute")
-            .arg(KEEP_BINDING_NAMES)
-            .arg("-O")
-            .arg(format!("-DINPUT_COUNT={n}"))
-            .arg(Path::new(test_blend_src))
-            .arg("-o")
-            .arg(&dst_path)
-            .status()
-            .expect("Failed to run glslc for test_blend.comp");
-        assert!(
-            status.success(),
-            "glslc failed to compile test_blend.comp with INPUT_COUNT={n}"
-        );
-    }
-
-    // Ray-tracing shaders. Need Vulkan 1.2 + SPIR-V 1.4 minimum for the
-    // `SPV_KHR_ray_tracing` opcodes; `glslc`'s default target is
-    // Vulkan 1.0 / SPIR-V 1.0 which silently drops `GL_EXT_ray_tracing`.
-    let rt_shaders: &[(&str, &str, &str)] = &[
+        // The SampledImage binding kind's test shader.
         (
-            "src/vulkan/rhi/shaders/raytracing_test.rgen",
+            "test_sampled_image.slang",
+            Stage::Compute,
+            "test_sampled_image.spv",
+        ),
+        (
+            "raytracing_test_ray_generation.slang",
+            Stage::RayGeneration,
             "raytracing_test.rgen.spv",
-            "rgen",
         ),
         (
-            "src/vulkan/rhi/shaders/raytracing_test.rmiss",
+            "raytracing_test_ray_miss.slang",
+            Stage::RayMiss,
             "raytracing_test.rmiss.spv",
-            "rmiss",
         ),
         (
-            "src/vulkan/rhi/shaders/raytracing_test.rchit",
+            "raytracing_test_ray_closest_hit.slang",
+            Stage::RayClosestHit,
             "raytracing_test.rchit.spv",
-            "rchit",
         ),
         (
-            "src/vulkan/rhi/shaders/raytracing_showcase.rgen",
+            "raytracing_showcase_ray_generation.slang",
+            Stage::RayGeneration,
             "raytracing_showcase.rgen.spv",
-            "rgen",
         ),
         (
-            "src/vulkan/rhi/shaders/raytracing_showcase.rmiss",
+            "raytracing_showcase_ray_miss.slang",
+            Stage::RayMiss,
             "raytracing_showcase.rmiss.spv",
-            "rmiss",
         ),
         (
-            "src/vulkan/rhi/shaders/raytracing_showcase.rchit",
+            "raytracing_showcase_ray_closest_hit.slang",
+            Stage::RayClosestHit,
             "raytracing_showcase.rchit.spv",
-            "rchit",
         ),
     ];
+    // Imported by the color converters and the tone curve.
+    const SHARED_SHADER_MODULES: &[&str] = &["color_convert_common.slang"];
 
-    for (src, dst, stage) in rt_shaders {
-        let src_path = Path::new(src);
-        let dst_path: PathBuf = Path::new(&out_dir).join(dst);
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_staged_slang_compiler_library(&workspace_root).display()
+    );
+    let slang_compiler = open_the_workspace_staged_slang_compiler(&workspace_root)
+        .unwrap_or_else(|refusal| panic!("{refusal}"));
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let module_search_directories = [PathBuf::from(SHADER_DIRECTORY)];
+    for shared_shader_module in SHARED_SHADER_MODULES {
+        println!("cargo:rerun-if-changed={SHADER_DIRECTORY}/{shared_shader_module}");
+    }
 
-        println!("cargo:rerun-if-changed={}", src);
+    let compile = |source_file_name: &str,
+                   stage: Stage,
+                   preprocessor_macros: &[SlangPreprocessorMacro<'_>],
+                   compiled_file_name: &str| {
+        let source_path = Path::new(SHADER_DIRECTORY).join(source_file_name);
+        println!("cargo:rerun-if-changed={}", source_path.display());
+        compile_a_slang_shader_file(
+            &slang_compiler,
+            &source_path,
+            stage,
+            &module_search_directories,
+            preprocessor_macros,
+            &out_dir.join(compiled_file_name),
+        )
+        .unwrap_or_else(|refusal| panic!("{refusal}"));
+    };
+    for (source_file_name, stage, compiled_file_name) in shaders {
+        compile(source_file_name, *stage, &[], compiled_file_name);
+    }
 
-        let status = Command::new("glslc")
-            .arg(format!("-fshader-stage={stage}"))
-            .arg("--target-env=vulkan1.2")
-            .arg("--target-spv=spv1.4")
-            .arg(KEEP_BINDING_NAMES)
-            .arg("-O")
-            .arg(src_path)
-            .arg("-o")
-            .arg(&dst_path)
-            .status()
-            .expect("Failed to run glslc. Install the Vulkan SDK or ensure glslc is in PATH.");
-
-        assert!(status.success(), "glslc failed to compile {}", src);
+    // One source compiled once per input count, for the parameterized
+    // descriptor-management tests.
+    for input_count in ["1", "2", "4", "8"] {
+        compile(
+            "test_blend.slang",
+            Stage::Compute,
+            &[SlangPreprocessorMacro {
+                name: "INPUT_COUNT",
+                value: input_count,
+            }],
+            &format!("test_blend_{input_count}.spv"),
+        );
     }
 }

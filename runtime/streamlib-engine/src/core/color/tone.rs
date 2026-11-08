@@ -3,8 +3,8 @@
 
 //! Closed-form tone-curve reference implementations.
 //!
-//! Mirrors the GLSL implementations in
-//! `vulkan/rhi/shaders/tone_curve.comp` — the GPU dispatch tests use
+//! Mirrors the Slang implementations in
+//! `vulkan/rhi/shaders/tone_curve.slang` — the GPU dispatch tests use
 //! these CPU references to compute expected pixel values that the GPU
 //! output is asserted against. Drift between the two is what those
 //! tests catch.

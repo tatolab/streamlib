@@ -5118,6 +5118,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-io-surface",
  "objc2-metal",
+ "streamlib-slang-shader-compiler",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
@@ -5184,6 +5185,7 @@ dependencies = [
  "streamlib-processor-schema",
  "streamlib-project-repository",
  "streamlib-runtime-client-contract",
+ "streamlib-slang-shader-compiler",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
@@ -5368,6 +5370,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-slang-shader-compiler"
+version = "0.68.34"
+dependencies = [
+ "libloading 0.8.9",
+ "tracing",
+]
+
+[[package]]
 name = "streamlib-surface-adapter"
 version = "0.68.34"
 dependencies = [
@@ -5398,6 +5408,7 @@ dependencies = [
  "serde",
  "serde_json",
  "streamlib",
+ "streamlib-slang-shader-compiler",
 ]
 
 [[package]]
@@ -5414,6 +5425,7 @@ version = "0.68.34"
 dependencies = [
  "libc",
  "streamlib-consumer-rhi",
+ "streamlib-slang-shader-compiler",
  "streamlib-video-bitstream",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
@@ -7106,6 +7118,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "streamlib-slang-shader-compiler",
  "syn 2.0.117",
  "tempfile",
  "toml 0.8.23",

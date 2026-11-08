@@ -760,11 +760,14 @@ mod tests {
     // Reflection is host-side work on bytes the build already produced, so
     // every test here runs without a Vulkan device.
     fn offscreen_blit_vertex_spirv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.vert.spv"))
+        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit_vertex.slang.spv"))
     }
 
     fn offscreen_blit_fragment_spirv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.frag.spv"))
+        include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/offscreen_blit_fragment.slang.spv"
+        ))
     }
 
     #[test]
@@ -797,7 +800,7 @@ mod tests {
             .expect_err("a name-stripped blob cannot be bound by name");
         let message = refusal.to_string();
         assert!(
-            message.contains("carries no name") && message.contains("glslc -g"),
+            message.contains("carries no name") && message.contains("Slang source"),
             "the refusal must name the cause and the fix: {message}"
         );
     }

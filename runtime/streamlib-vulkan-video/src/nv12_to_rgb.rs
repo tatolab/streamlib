@@ -33,7 +33,7 @@ use streamlib_consumer_rhi::h273_color_vui::matrix;
 /// Pre-compiled SPIR-V bytecode for the NV12→RGB compute shader.
 const SHADER_SPIRV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/nv12_to_rgb.spv"));
 
-/// Binding shape of `nv12_to_rgb.comp`:
+/// Binding shape of `nv12_to_rgb.slang`:
 /// - 0: COMBINED_IMAGE_SAMPLER — NV12 input via an immutable YCbCr sampler
 ///   chained at descriptor-set-layout creation time.
 /// - 1: STORAGE_IMAGE — RGBA output (R8G8B8A8_UNORM).
@@ -99,7 +99,7 @@ struct PushConstants {
     resolution: [i32; 2],
 }
 
-/// The `nv12_to_rgb.comp` pipeline and the one descriptor set its dispatch
+/// The `nv12_to_rgb.slang` pipeline and the one descriptor set its dispatch
 /// binds, rewritten before each dispatch: the converter waits on every
 /// dispatch's fence before the next, so the set is never in flight twice.
 struct Nv12ToRgbComputePipeline {

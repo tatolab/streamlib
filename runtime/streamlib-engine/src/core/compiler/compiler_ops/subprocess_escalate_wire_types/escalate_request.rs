@@ -632,7 +632,7 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// GLSL source for the compute shader; the engine compiles it. Mutually
+    /// Slang source for the compute shader; the engine compiles it. Mutually
     /// exclusive with `spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) source: String,
@@ -663,10 +663,9 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     /// so first-inference latency after a host process restart is fast on user-
     /// registered ML kernels.
     ///
-    /// The blob must retain its `OpName` decorations (`glslc -g`): bindings
-    /// resolve by name, so a stripped blob is refused at registration. What
-    /// the engine compiles from `source` keeps them by construction — it emits
-    /// debug info, which carries the names through the optimizer.
+    /// The blob must retain its `OpName` decorations: bindings resolve by
+    /// name, so a stripped blob is refused at registration. What the engine
+    /// compiles from `source` keeps them by construction.
     #[serde(default)]
     pub(crate) spv_hex: String,
 }
@@ -1261,7 +1260,7 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     /// `"main"` host-side.
     pub(crate) fragment_entry_point: String,
 
-    /// GLSL source for the fragment stage. Mutually exclusive with
+    /// Slang source for the fragment stage. Mutually exclusive with
     /// `fragment_spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) fragment_source: String,
@@ -1301,7 +1300,7 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     /// `"main"` host-side.
     pub(crate) vertex_entry_point: String,
 
-    /// GLSL source for the vertex stage. Mutually exclusive with
+    /// Slang source for the vertex stage. Mutually exclusive with
     /// `vertex_spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) vertex_source: String,
@@ -1462,7 +1461,7 @@ pub(crate) struct EscalateRequestRegisterRayTracingKernelStage {
     /// Entry-point name. Empty string is normalized to `"main"` host-side.
     pub(crate) entry_point: String,
 
-    /// GLSL source for this entry's `stage`. Mutually exclusive with
+    /// Slang source for this entry's `stage`. Mutually exclusive with
     /// `spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) source: String,

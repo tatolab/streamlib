@@ -104,7 +104,8 @@ petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
 anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
 cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
 uuid = { version = "1.11", features = ["v4", "v5", "serde"] }  # UUIDs: a node's in its graph document, a pixel buffer pool's
-libloading = "0.8"  # Opens the Slang compiler and Rust dylib plugins at run time
+libloading = "0.8"  # Opens shared libraries at run time
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.34" }  # Compiles kernel sources at run time
 sha2.workspace = true  # SHA-256 hashing (escalate content hashing)
 # A project's files — its project file and its stream assets' graph documents — read and written
 # without its history, so the engine links no libgit2.
@@ -278,6 +279,8 @@ path = "tests/texture_crosses_to_a_helper_on_an_iosurface.rs"
 
 [build-dependencies]
 serde_json = { workspace = true }
+# Compiles the engine's own shaders for `include_bytes!`.
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.34" }
 # Reads the manifests of the crates the engine links through path dependencies,
 # whose edits rotate the engine build id.
 toml = { workspace = true }

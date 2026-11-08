@@ -8,8 +8,7 @@
 //! Python uses a ripgrep-style substring scan. Rust uses a `syn`
 //! AST walk so that `#[cfg(test)]`, `#[allow(clippy::disallowed_macros)]`, and
 //! file-level `#![allow(...)]` are honored exactly as clippy would — without
-//! having to compile the workspace (which would pull in `glslc` via
-//! `runtime/streamlib-engine`'s build script).
+//! having to compile the workspace.
 
 use anyhow::{Context, Result};
 use std::fs;

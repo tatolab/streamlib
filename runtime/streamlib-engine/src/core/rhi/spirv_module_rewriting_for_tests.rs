@@ -4,14 +4,13 @@
 //! Rewriting a compiled SPIR-V module so a test can reach a binding-name
 //! refusal no shader in the tree can express.
 //!
-//! The build compiles only well-formed shaders with `-g`, so a stripped name, a
+//! The build compiles only well-formed shaders with their names kept, so a stripped name, a
 //! slot two stages spell differently, and one name on two slots have no fixture
 //! that produces them. Each is reached by editing the debug and decoration
 //! instructions of a real compiled module.
 
 use super::kernel_binding_names::{
-    OP_SOURCE, OP_SOURCE_CONTINUED, OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT, OP_STRING,
-    SPIRV_HEADER_WORD_COUNT,
+    OP_SOURCE, OP_SOURCE_CONTINUED, OP_STRING, SPIRV_HEADER_WORD_COUNT,
 };
 
 const OP_NAME: u32 = 5;
@@ -19,8 +18,8 @@ const OP_DECORATE: u32 = 71;
 const DECORATION_BINDING: u32 = 33;
 const DECORATION_DESCRIPTOR_SET: u32 = 34;
 
-/// Drop every `OpName` from a module, reproducing what `glslc -O` emits
-/// without `-g`.
+/// Drop every `OpName` from a module, reproducing an optimised compile without
+/// debug info.
 pub(crate) fn strip_every_debug_name_from_spirv_module(spirv: &[u8]) -> Vec<u8> {
     let (stripped, stripped_count) =
         rewrite_spirv_instructions(spirv, |opcode, _| (opcode == OP_NAME).then(Vec::new));
@@ -105,55 +104,69 @@ pub(crate) fn move_binding_to_another_descriptor_set_in_spirv_module(
     moved
 }
 
-/// Give the module's `OpSource` source text and its `OpString` file name the
-/// bytes Ubuntu 24.04's `glslc -g` packs for a non-ASCII character: each of its
-/// bytes sign-extended, so the rest of that word reads `0xFF`.
-pub(crate) fn pack_the_debug_source_strings_as_ubuntu_24_04_glslc_does_for_a_non_ascii_character(
+/// Name a file in the module's `OpSource`, with its source text and its
+/// `OpString` file name packed as SPIRV-Tools 2023.6 packs a non-ASCII
+/// character: each of its bytes sign-extended, so the rest of that word reads
+/// `0xFF`.
+pub(crate) fn pack_the_debug_source_strings_sign_extended_for_a_non_ascii_character(
     spirv: &[u8],
 ) -> Vec<u8> {
     const SOURCE_TEXT_AFTER_AN_EM_DASH: &[u8] = b"// \xe2\xff\xff\xff the";
     const FILE_NAME_AFTER_AN_E_ACUTE: &[u8] = b"caf\xc3\xa9\xff\xff\xffcomp";
-    let (rewritten, rewritten_count) =
-        rewrite_spirv_instructions(spirv, |opcode, instruction| match opcode {
-            OP_SOURCE if instruction.len() >= OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT => {
-                Some(with_literal_bytes(
-                    &instruction[..OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT],
-                    SOURCE_TEXT_AFTER_AN_EM_DASH,
-                ))
-            }
-            OP_STRING => Some(with_literal_bytes(
-                &instruction[..2],
-                FILE_NAME_AFTER_AN_E_ACUTE,
-            )),
-            _ => None,
-        });
-    assert!(
-        rewritten_count >= 2,
-        "the module carries an OpSource naming its file and that file's OpString"
-    );
-    rewritten
+    replace_the_op_source_with_one_naming_a_file(
+        spirv,
+        FILE_NAME_AFTER_AN_E_ACUTE,
+        SOURCE_TEXT_AFTER_AN_EM_DASH,
+        &[],
+    )
 }
 
-/// Split one multi-byte character between the module's `OpSource` source text
-/// and an `OpSourceContinued` after it, so neither literal is UTF-8 alone.
+/// Name a file in the module's `OpSource` and split one multi-byte character
+/// between its source text and an `OpSourceContinued` after it, so neither
+/// literal is UTF-8 alone.
 pub(crate) fn split_a_multi_byte_character_across_op_source_and_op_source_continued(
     spirv: &[u8],
 ) -> Vec<u8> {
-    let (rewritten, rewritten_count) = rewrite_spirv_instructions(spirv, |opcode, instruction| {
-        if opcode != OP_SOURCE || instruction.len() < OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT {
-            return None;
-        }
-        let mut rewritten = with_literal_bytes(
-            &instruction[..OP_SOURCE_WORD_COUNT_WITHOUT_ITS_SOURCE_TEXT],
-            b"// \xe2",
-        );
-        rewritten.extend(with_literal_bytes(&[OP_SOURCE_CONTINUED], b"\x80\x94 the"));
-        Some(rewritten)
-    });
-    assert!(
-        rewritten_count > 0,
-        "the module carries no OpSource naming its file"
-    );
+    replace_the_op_source_with_one_naming_a_file(spirv, b"blend.comp", b"// \xe2", b"\x80\x94 the")
+}
+
+/// Replace the module's `OpSource` with an `OpString` holding `file_name` under
+/// a fresh id and an `OpSource` naming that file with `source_text`, followed
+/// by an `OpSourceContinued` when `continued_source_text` is not empty.
+fn replace_the_op_source_with_one_naming_a_file(
+    spirv: &[u8],
+    file_name: &[u8],
+    source_text: &[u8],
+    continued_source_text: &[u8],
+) -> Vec<u8> {
+    const SPIRV_HEADER_ID_BOUND_WORD_INDEX: usize = 3;
+    let mut words = spirv_module_words(spirv);
+    let file_name_string_id = words[SPIRV_HEADER_ID_BOUND_WORD_INDEX];
+    words[SPIRV_HEADER_ID_BOUND_WORD_INDEX] += 1;
+    let (rewritten, rewritten_count) =
+        rewrite_spirv_instructions(&spirv_module_bytes(&words), |opcode, instruction| {
+            if opcode != OP_SOURCE {
+                return None;
+            }
+            let mut replacement = with_literal_bytes(&[OP_STRING, file_name_string_id], file_name);
+            replacement.extend(with_literal_bytes(
+                &[
+                    OP_SOURCE,
+                    instruction[1],
+                    instruction[2],
+                    file_name_string_id,
+                ],
+                source_text,
+            ));
+            if !continued_source_text.is_empty() {
+                replacement.extend(with_literal_bytes(
+                    &[OP_SOURCE_CONTINUED],
+                    continued_source_text,
+                ));
+            }
+            Some(replacement)
+        });
+    assert!(rewritten_count > 0, "the module carries no OpSource");
     rewritten
 }
 

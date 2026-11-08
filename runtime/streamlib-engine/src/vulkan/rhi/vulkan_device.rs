@@ -1503,7 +1503,7 @@ impl HostVulkanDevice {
     /// a multi-plugin NVIDIA setup (the drone-racer host) across a
     /// dozen-plus cold starts, and watch for a `libnvidia-glcore` /
     /// `vkCreate*Pipelines` SIGSEGV during setup. No crash ⇒ dead weight:
-    /// remove the calls and the `prewarm.comp` / `prewarm.{vert,frag}`
+    /// remove the calls and the `prewarm_compute.slang` / `prewarm_{vertex,fragment}.slang`
     /// shaders. The single-threaded pipeline-create funnel supersedes it
     /// outright; don't grow it (e.g. a ray-tracing probe) on speculation
     /// before necessity is shown.
@@ -1517,7 +1517,7 @@ impl HostVulkanDevice {
         // uniform buffer, sampled texture, storage image) + the spec-min-max
         // 128-byte push block, with enough work that the driver can't
         // fast-path it — forcing the init regardless of which feature
-        // engages codegen. Mirror this in prewarm.comp; don't trim to a
+        // engages codegen. Mirror this in prewarm_compute.slang; don't trim to a
         // specific kernel's shape.
         let descriptor = crate::core::rhi::ComputeKernelDescriptor {
             entry_point: "main",

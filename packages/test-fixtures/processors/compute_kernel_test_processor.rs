@@ -60,7 +60,7 @@ use streamlib::sdk::rhi::{
 };
 
 /// SPIR-V for the `output[i] = input[i] * 2` reference kernel.
-/// Compiled from `shaders/cpu_ref_doubler.comp` by this crate's
+/// Compiled from `shaders/cpu_ref_doubler.slang` by this crate's
 /// `build.rs` and staged at `OUT_DIR/cpu_ref_doubler.spv`.
 #[cfg(target_os = "linux")]
 const CPU_REF_DOUBLER_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/cpu_ref_doubler.spv"));

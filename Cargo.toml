@@ -11,6 +11,7 @@ members = [
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between the engine and streamlib-macros
     "sdk/streamlib-macros",    # Procedural macros — owns the `#[processor]` authoring grammar
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
+    "runtime/streamlib-slang-shader-compiler", # The Slang shader compiler opened by path — the engine compiles kernel sources through it at run time and the build scripts the engine's own shaders
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import (Linux) or IOSurface host-memory import (macOS) + bind + map. Adapters depend on this NOT the full engine, so the FullAccess capability boundary is type-system enforced
     "runtime/streamlib-video-bitstream", # engine-free, GPU-free: H.264 and H.265 Annex-B access units, NAL units and sequence parameter sets — what the codec tiers and codec modules parse streams with
     "runtime/streamlib-vulkan-video", # Vulkan Video encode and decode over any device that names its queues and allocator — the engine's own, or the owned device a codec module codes on in its helper

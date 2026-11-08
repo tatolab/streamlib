@@ -449,13 +449,13 @@ mod tests {
         report
     }
 
-    const A_BOUNDED_STEP: &str = "      - name: Install system dependencies\n        timeout-minutes: 10\n        uses: ./.github/actions/install-linux-engine-build-dependencies\n        with:\n          packages: glslc libvulkan-dev\n";
+    const A_BOUNDED_STEP: &str = "      - name: Install system dependencies\n        timeout-minutes: 10\n        uses: ./.github/actions/install-linux-engine-build-dependencies\n        with:\n          packages: protobuf-compiler libvulkan-dev\n";
 
     #[test]
     fn rejects_a_bare_apt_get_in_a_workflow() {
         let report = scan_workflow_steps(
             "      - name: Install system dependencies\n        \
-             run: |\n          sudo apt-get update\n          sudo apt-get install -y glslc\n",
+             run: |\n          sudo apt-get update\n          sudo apt-get install -y protobuf-compiler\n",
         );
         assert_eq!(
             report.unbounded_apt_invocations.len(),
@@ -483,7 +483,7 @@ mod tests {
         let report = scan_workflow_steps(
             "      - name: Install system dependencies\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
-             with:\n          packages: glslc\n",
+             with:\n          packages: protobuf-compiler\n",
         );
         assert_eq!(
             report.action_calls_without_timeout.len(),
@@ -498,7 +498,7 @@ mod tests {
             "      - name: Something else\n        \
              timeout-minutes: 8\n        run: echo hi\n      - name: Install system dependencies\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
-             with:\n          packages: glslc\n",
+             with:\n          packages: protobuf-compiler\n",
         );
         assert_eq!(
             report.action_calls_without_timeout.len(),
@@ -512,7 +512,7 @@ mod tests {
         let report = scan_workflow_steps(
             "      - name: Install system dependencies\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
-             with:\n          timeout-minutes: 10\n          packages: glslc\n",
+             with:\n          timeout-minutes: 10\n          packages: protobuf-compiler\n",
         );
         assert_eq!(
             report.action_calls_without_timeout.len(),
@@ -545,7 +545,7 @@ mod tests {
         let report = scan_workflow_steps(
             "      - name: Install system dependencies\n        \
              timeout-minutes: 10\n        uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
-             with:\n          packages: glslc\n          extra:\n            - ./.github/actions/install-linux-engine-build-dependencies\n",
+             with:\n          packages: protobuf-compiler\n          extra:\n            - ./.github/actions/install-linux-engine-build-dependencies\n",
         );
         assert!(
             report.action_calls_without_timeout.is_empty(),
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn a_global_flag_between_the_front_end_and_its_subcommand_is_skipped() {
         assert!(line_fetches_packages(
-            "          sudo apt-get -y install glslc"
+            "          sudo apt-get -y install protobuf-compiler"
         ));
         assert!(line_fetches_packages("          apt-get -qq update"));
         // `--` is end-of-options: past it a word is prose, not a subcommand.
@@ -640,7 +640,8 @@ mod tests {
 
     #[test]
     fn skips_a_commented_apt_get() {
-        let report = scan_workflow_steps("      # was: sudo apt-get install -y glslc\n");
+        let report =
+            scan_workflow_steps("      # was: sudo apt-get install -y protobuf-compiler\n");
         assert!(
             report.unbounded_apt_invocations.is_empty(),
             "a comment naming apt-get is not an invocation: {report:?}"
@@ -763,7 +764,7 @@ mod tests {
         ) -> BoundedRetryScriptRun {
             let mut command = Command::new(&self.script);
             command
-                .arg("glslc")
+                .arg("protobuf-compiler")
                 .env("STREAMLIB_APT_GET_COMMAND", &self.apt_get_fixture)
                 .env(
                     "STREAMLIB_APT_MIRROR_SWITCH_COMMAND",

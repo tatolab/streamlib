@@ -144,13 +144,16 @@ The build needs a Rust toolchain and [uv](https://docs.astral.sh/uv/) on `PATH` 
 pinned maturin through `uvx`), plus a native toolchain. On Debian or Ubuntu that is:
 
 ```bash
-sudo apt install pkg-config protobuf-compiler libclang-dev libvulkan-dev glslc python3-dev cmake ninja-build
+sudo apt install pkg-config protobuf-compiler libclang-dev libvulkan-dev python3-dev cmake ninja-build
 ```
 
-On Linux the build first stages a Vulkan loader and Mesa's lavapipe into the lend, built inside the
-release's pinned manylinux image, so it also needs Docker. On macOS it is `glslc` (from shaderc),
-CMake and Ninja, and the build first stages a Vulkan loader and MoltenVK into the lend, so the Mac
-that runs the result needs no Vulkan SDK.
+On Linux the build first stages a Vulkan loader, Mesa's lavapipe and the Slang shader compiler into
+the lend, built inside the release's pinned manylinux image, so it also needs Docker. On macOS it is
+CMake and Ninja, and the build first stages a Vulkan loader, MoltenVK and the Slang shader compiler
+into the lend, so the Mac that runs the result needs no Vulkan SDK. A `cargo build` or `cargo test`
+of the engine on its own compiles the engine's shaders through the Slang compiler
+`bash scripts/stage_slang_compiler_libraries.sh` stages under `target/slang_compiler/`; run it once
+first.
 
 Start a runtime built from source with `tatolabd` in a terminal of its own.
 

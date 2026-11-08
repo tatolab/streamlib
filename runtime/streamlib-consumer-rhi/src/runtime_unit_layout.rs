@@ -87,30 +87,12 @@ pub const BUNDLED_VULKAN_DRIVER_FILE_NAMES: [&str; 3] = [
 /// package — in the wheel and in the lend alike.
 pub const BUNDLED_SLANG_COMPILER_DIRECTORY_NAME: &str = "_slang_compiler";
 
-/// The Slang release the bundled compiler directory carries; Slang loads its
-/// optimiser by a file name that embeds it.
-pub const BUNDLED_SLANG_COMPILER_VERSION: &str = "2026.12";
-
-#[cfg(target_os = "macos")]
-mod bundled_slang_compiler_file_names_on_this_platform {
-    /// The Slang compiler library the engine opens by path.
-    pub const SLANG_COMPILER_LIBRARY_FILE_NAME: &str = "libslang-compiler.dylib";
-
-    /// The SPIR-V optimiser the Slang compiler loads from its own directory.
-    pub const SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME: &str = "libslang-glslang-2026.12.dylib";
-}
-
-#[cfg(target_os = "linux")]
-mod bundled_slang_compiler_file_names_on_this_platform {
-    /// The Slang compiler library the engine opens by path.
-    pub const SLANG_COMPILER_LIBRARY_FILE_NAME: &str = "libslang-compiler.so";
-
-    /// The SPIR-V optimiser the Slang compiler loads from its own directory.
-    pub const SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME: &str = "libslang-glslang-2026.12.so";
-}
+/// The Slang release the bundled compiler directory carries.
+pub const BUNDLED_SLANG_COMPILER_VERSION: &str =
+    streamlib_slang_shader_compiler::SLANG_COMPILER_RELEASE;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub use bundled_slang_compiler_file_names_on_this_platform::{
+pub use streamlib_slang_shader_compiler::{
     SLANG_COMPILER_LIBRARY_FILE_NAME, SLANG_SPIRV_OPTIMISER_LIBRARY_FILE_NAME,
 };
 

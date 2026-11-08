@@ -22,7 +22,7 @@ use crate::core::rhi::Texture;
 
 /// Tone-curve selector for [`ToneMapperPushConstants::tonemap_curve`].
 /// Numeric values must match the `TONE_CURVE_*` constants in
-/// `vulkan/rhi/shaders/tone_curve.comp`.
+/// `vulkan/rhi/shaders/tone_curve.slang`.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToneCurveId {
@@ -107,7 +107,7 @@ impl ToneMapperPushConstants {
 
 /// Byte size of the push-constants block sent to the tone-mapper kernel.
 /// Must match the `layout(push_constant)` size in
-/// `vulkan/rhi/shaders/tone_curve.comp`.
+/// `vulkan/rhi/shaders/tone_curve.slang`.
 pub const TONE_MAPPER_PUSH_CONSTANT_SIZE: u32 =
     std::mem::size_of::<ToneMapperPushConstants>() as u32;
 
@@ -264,8 +264,8 @@ mod tests {
         );
     }
 
-    /// Discriminator values must match the GLSL `TONE_CURVE_*` constants
-    /// in `vulkan/rhi/shaders/tone_curve.comp`. If these disagree, the
+    /// Discriminator values must match the Slang `TONE_CURVE_*` constants
+    /// in `vulkan/rhi/shaders/tone_curve.slang`. If these disagree, the
     /// shader silently picks a different curve or no-ops the dispatch.
     #[test]
     fn tone_curve_id_values_match_shader() {

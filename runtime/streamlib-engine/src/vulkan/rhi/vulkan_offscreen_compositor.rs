@@ -69,15 +69,17 @@ pub struct VulkanOffscreenCompositor {
 }
 
 const OFFSCREEN_BLIT_VERT_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.vert.spv"));
-const OFFSCREEN_BLIT_FRAG_SPV: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.frag.spv"));
+    include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit_vertex.slang.spv"));
+const OFFSCREEN_BLIT_FRAG_SPV: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/offscreen_blit_fragment.slang.spv"
+));
 
 /// The one descriptor-set slot the kernel has: every composition submits and
 /// waits, so a slot's bindings never outlive the draw that staged them.
 const OFFSCREEN_COMPOSITOR_DESCRIPTOR_SET_SLOT: u32 = 0;
 
-/// Push-constant block of `offscreen_blit.frag`: `vec2 scale` + `vec2 offset`.
+/// Push-constant block of `offscreen_blit_fragment.slang`: `vec2 scale` + `vec2 offset`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct OffscreenBlitPushConstants {
@@ -85,7 +87,7 @@ struct OffscreenBlitPushConstants {
     offset: [f32; 2],
 }
 
-/// The vertex-buffer-free fullscreen triangle `offscreen_blit.vert` expects.
+/// The vertex-buffer-free fullscreen triangle `offscreen_blit_vertex.slang` expects.
 const FULLSCREEN_TRIANGLE_DRAW_CALL: DrawCall = DrawCall {
     vertex_count: 3,
     instance_count: 1,
@@ -293,7 +295,7 @@ mod tests {
     }
 
     /// `OffscreenBlitPushConstants` is the wire contract with
-    /// `offscreen_blit.frag`'s 16-byte push-constant block.
+    /// `offscreen_blit_fragment.slang`'s 16-byte push-constant block.
     #[test]
     fn offscreen_blit_push_constants_match_the_shader_block() {
         assert_eq!(std::mem::size_of::<OffscreenBlitPushConstants>(), 16);
