@@ -40,7 +40,6 @@ exclude = ["python/tatolab/browser/cef/**"]
 include = ["python", "streams"]
 extraPaths = [
     "python",
-    "../streamlib-h264/python",
     "../tatolab-camera/python",
     "../tatolab-compositor/python",
     "../tatolab-microphone/python",

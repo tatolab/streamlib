@@ -7,7 +7,6 @@ dependencies = [
     "tatolab-browser",
     "tatolab-camera",
     "tatolab-microphone",
-    "tatolab-h264",
 ]
 
 # The wheels as a third party's stream would take them, built from this checkout
@@ -16,4 +15,3 @@ dependencies = [
 tatolab-browser = { path = "../..", editable = false }
 tatolab-camera = { path = "../../../tatolab-camera", editable = false }
 tatolab-microphone = { path = "../../../tatolab-microphone", editable = false }
-tatolab-h264 = { path = "../../../streamlib-h264", editable = false }

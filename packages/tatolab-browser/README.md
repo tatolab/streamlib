@@ -68,8 +68,8 @@ from a file URL, so a library shipped only as ES modules (three.js r160 and
 later) needs a classic build, inlined modules, or the page served over http.
 
 The probe page animates every frame, plays a 440 Hz tone and answers each
-`data` message from its next animation frame. Watch it at
-`http://127.0.0.1:4446/watch/<machine>/main`; a
+`data` message from its next animation frame. Watch the browser's `video` in
+Tato Studio's viewer; a
 `BrowserSourceOutputProbe: ...` report lands in the project's log every 600
 frames.
 

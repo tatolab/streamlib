@@ -9,8 +9,9 @@
 #               stream's encoder helper is sent SIGKILL. The gate: the runtime
 #               logs that helper's death, the second stream's encoder keeps
 #               writing, the runtime keeps answering, no DEVICE_LOST reaches its
-#               log — and the second stream's track, read at the local relay and
-#               decoded by ffmpeg, holds the engine's H.264 test-pattern drift
+#               log — and the second stream's track, which it sends through the
+#               `tatolab-moq` gateway nodes to a `moq-relay` this script
+#               starts, read there and decoded by ffmpeg, holds the engine's H.264 test-pattern drift
 #               lock (`cargo xtask psnr bar-colors` against the codec rig's
 #               baseline), which proves the module's bitstream is the engine's.
 #
@@ -28,7 +29,10 @@
 # (`tatolab-stream` and a current `maturin develop` of this wheel), and queues
 # its load with `tatolab run --dir` on a `tatolabd` this script starts and stops
 # itself through the engine fixtures' `fixture_runtime_unit.sh`, so it refuses
-# to run while another runtime holds the machine.
+# to run while another runtime holds the machine. The relay each stream's
+# gateway dials is the fixture relay, which this script starts and stops too;
+# its URL reaches the streams as `STREAMLIB_FIXTURE_RELAY_URL` in the runtime's
+# environment.
 #
 # Usage:
 #   packages/streamlib-h264/tests/live/owned_device_encoders.sh isolation [output_dir]
@@ -95,10 +99,19 @@ refuse_while_a_runtime_answers_at_the_local_api_socket \
 VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
     "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and tatolab-testpattern, and \`maturin develop\` this wheel into it"
+
+# Each stream sends its encoder's port through the MoQ gateway module, built
+# from this checkout into that venv when it cannot import it.
+if ! "$VENV_PYTHON" -c 'import tatolab.moq' >/dev/null 2>&1; then
+    say "building tatolab-moq into $PACKAGE_DIR/.venv"
+    VIRTUAL_ENV="$PACKAGE_DIR/.venv" uv pip install --quiet "$REPO_ROOT/packages/tatolab-moq" >&2 \
+        || cannot_run "the MoQ gateway module did not build into $PACKAGE_DIR/.venv"
+fi
 if ! IMPORT_FAILURE="$("$VENV_PYTHON" -c '
 from tatolab.h264 import H264Encoder
+from tatolab.moq import MoqGateway, MoqTrack, MoqTrackSend
 from tatolab.testpattern import TestPatternSource
-_ = (TestPatternSource, H264Encoder)
+_ = (TestPatternSource, H264Encoder, MoqGateway, MoqTrack, MoqTrackSend)
 ' 2>&1)"; then
     say "$IMPORT_FAILURE" >&2
     cannot_run "the venv cannot import this wheel beside tatolab-stream. Rebuild with \`maturin develop --release\`."
@@ -109,11 +122,18 @@ LOG_FILE="$OUTPUT_DIR/runtime.log"
 RUNTIME_STATE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/streamlib-h264-runtime-state-XXXXXX")"
 stop_everything() {
     stop_the_fixture_runtime
+    stop_the_fixture_relay
     rm -rf "$RUNTIME_STATE_HOME"
 }
 trap stop_everything EXIT
 
-if ! RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info,_native=info,tatolab_module=info}" \
+require_the_fixture_relay
+start_the_fixture_relay "$OUTPUT_DIR/relay.log" "$RUNTIME_STATE_HOME/relay" \
+    || fail "could not start the relay the streams send their encoders' tracks to"
+say "Relay:             $FIXTURE_RELAY_URL"
+
+if ! STREAMLIB_FIXTURE_RELAY_URL="$FIXTURE_RELAY_URL" \
+    RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info,_native=info,tatolab_module=info}" \
         start_the_fixture_runtime "$LOG_FILE" "$RUNTIME_STATE_HOME"; then
     fail "could not start the runtime the streams run on"
 fi
@@ -249,11 +269,9 @@ if [ "$MODE" = "isolation" ]; then
     require_tatolab_read_track
     cargo build --release --locked -p xtask > "$OUTPUT_DIR/build.log" 2>&1 \
         || { tail -40 "$OUTPUT_DIR/build.log" >&2; fail "xtask build failed"; }
-    MACHINE_NAME="$(the_machine_name_the_loopback_listing_names)" \
-        || fail "the runtime's loopback listing did not name the machine"
     ENCODED_TRACK_DIR="$OUTPUT_DIR/encoded_track"
-    read_the_track_at_the_local_relay "$MACHINE_NAME/$(stream_name_of 2).hang" \
-        "encoder_2/encoded_video" "$OBJECT_COUNT" "$ENCODED_TRACK_DIR" \
+    read_the_track_at_the_fixture_relay "owned-device-encoder-2.hang" \
+        "encoded_video" "$OBJECT_COUNT" "$ENCODED_TRACK_DIR" \
         2> "$OUTPUT_DIR/read_track.log" \
         || { cat "$OUTPUT_DIR/read_track.log" >&2; fail "the surviving encoder's track did not read"; }
     DECODED_PNG_COUNT="$(decode_the_encoded_track_dump_to_pngs "$ENCODED_TRACK_DIR" h264 \

@@ -33,7 +33,7 @@ stream_builder.connect(lower_third.output("video"), compositor.input("layer_1"))
 ## Run it
 
 `streams/camera-with-two-overlays` is a camera with two test-pattern overlays,
-encoded and exposed, with the camera wheel's latency probe after the compositor
+seen in a viewer, with the camera wheel's latency probe after the compositor
 reporting the composite's frame rate. With this machine's runtime running and a
 camera attached:
 

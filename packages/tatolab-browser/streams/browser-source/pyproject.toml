@@ -2,10 +2,9 @@
 name = "tatolab-browser-browser-source"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.68.32", "tatolab-browser", "tatolab-h264"]
+dependencies = ["tatolab-stream>=0.68.32", "tatolab-browser"]
 
 # The wheels as a third party's stream would take them, built from this checkout
 # rather than an index: ordinary non-editable dependencies.
 [tool.uv.sources]
 tatolab-browser = { path = "../..", editable = false }
-tatolab-h264 = { path = "../../../streamlib-h264", editable = false }

@@ -1,28 +1,23 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A Rive lower third composited over a camera, its text driven by data, encoded and exposed.
+"""A Rive lower third composited over a camera, its text driven by data, seen in a viewer.
 
 Put a `.riv` file named `lower_third.riv` beside this file, or point `RIV_PATH`
 at one, whose artboard's default view-model instance has a string property at
 `TITLE_PROPERTY_PATH`. Once a second the ticker sends a new title on the
 source's `data` input, and `AlphaOverCompositor` lays the animation, transparent
-around the card, over the camera. Watch it at
-http://127.0.0.1:4446/watch/<machine>/main.
+around the card, over the camera. Watch the compositor's `video` in Tato
+Studio's viewer.
 """
 
 from pathlib import Path
 
-from tatolab.stream import (
-    Exposure,
-    StreamBuilder,
-    stream,
-)
+from tatolab.stream import StreamBuilder, stream
 
 from lower_third_title_ticker import LowerThirdTitleTicker
 from tatolab.camera import CameraSource
 from tatolab.compositor import AlphaOverCompositor
-from tatolab.h264 import H264Encoder
 from tatolab.rive import RiveSource
 
 # A V4L2 node such as `/dev/video0`; `None` opens the first capture device found.
@@ -46,7 +41,7 @@ ENTRANCE_TRIGGER_PATHS = ["IN", "OUT"]
 
 @stream
 def main(stream_builder: StreamBuilder) -> None:
-    """The camera on `layer_0` and the lower third over it at 1080p60, encoded and exposed."""
+    """The camera on `layer_0` and the lower third over it at 1080p60."""
     camera_config: dict[str, object] = {"max_width": CANVAS_WIDTH, "max_height": CANVAS_HEIGHT}
     if CAMERA_DEVICE_PATH is not None:
         camera_config["device_path"] = CAMERA_DEVICE_PATH
@@ -82,9 +77,6 @@ def main(stream_builder: StreamBuilder) -> None:
             ],
         },
     )
-    encoder = stream_builder.add(H264Encoder)
     stream_builder.connect(ticker.output("data"), rive.input("data"))
     stream_builder.connect(camera.output("video"), compositor.input("layer_0"))
     stream_builder.connect(rive.output("video"), compositor.input("layer_1"))
-    stream_builder.connect(compositor.output("video"), encoder.input("video"))
-    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)

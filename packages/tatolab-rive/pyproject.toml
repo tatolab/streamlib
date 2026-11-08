@@ -28,7 +28,6 @@ extraPaths = [
     "python",
     "../tatolab-camera/python",
     "../tatolab-compositor/python",
-    "../streamlib-h264/python",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
