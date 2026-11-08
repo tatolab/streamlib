@@ -32,7 +32,7 @@ follow. Rationale: `docs/decisions/project-and-assets.md`.
    that syncs without a runtime build on it later.
 5. Another project's asset is used as a linked dependency pinned to a revision, updated when the
    person chooses and copied only when they fork it; Python stays the language of nodes, and a
-   `@stream` function becomes a generator whose output is stored as a frozen fragment.
+   `@graph_generator` function builds graph, and its output is stored as a frozen fragment.
 
 **A project after this change** (names assume decision 2's recommendation):
 
@@ -123,7 +123,8 @@ API's addressing, the processor model's load path, and adds the project as a sto
   keeps one branch, `main`; stock `git clone` of the history must read it, so an Artifacts remote
   can later take a push unchanged. Its operations follow Artifacts' programmatic model — create,
   fork, import, branch, tag, read a file or a commit by path — so a local project and a hosted
-  one are driven the same way.
+  one are driven the same way. A project works fully offline with no account; adding a remote is
+  one call and never required.
 - **Linked dependencies.** `add_dependency {source, revision}` pins another project — a local
   path, an Artifacts remote or a package that ships a project — at a commit or tag; its history is
   fetched into `.tatolab/dependencies/<project uuid>/`. Its assets are used by reference,
@@ -132,10 +133,11 @@ API's addressing, the processor model's load path, and adds the project as a sto
   transaction; the studio shows when a newer revision exists. `fork_asset` copies one asset into
   this project under a new UUID, recording the asset it came from, and rewrites this project's
   references to it.
-- **Fragments.** `import_stream_generator {stream, generator, config}` runs a `@stream` function
+- **Fragments.** `import_graph_generator {stream, generator, config}` runs a `@graph_generator` function
   by import path in the project's interpreter and stores its output as a fragment: a read-only
   container with its own node UUIDs, whose Graph Input and Output nodes are its ports and whose
-  extra parameters are its promoted config. A re-run refreshes it in place and keeps a node's UUID
+  extra parameters are its promoted config. One generator may be placed any number of times, in any stream, or fill a stream whole; it is
+  never one-to-one with a stream. A re-run refreshes it in place and keeps a node's UUID
   when the node's name in the function's output is unchanged, so links into the fragment survive.
   It flattens at compile under its reference's name; it is stored, never recompiled on a load.
 - **`dev`.** Follows the project's log, re-loads a stream when its document changes on disk, and
@@ -225,13 +227,14 @@ keys and the record there.
 3. **Graph edits are transactions.** The graph operations and `transact`, commit or live, undo
    and redo per author, every tool addressing by UUID, asset references as reference edges. Waits
    on 2.
-4. **A `@stream` generator becomes a frozen fragment.** `import_stream_generator`, the fragment
+4. **A `@graph_generator` function becomes a frozen fragment.** `import_graph_generator`, the
+   decorator replacing `@stream`, the fragment
    in the document and in `graph`, UUIDs kept by name across a re-run, `dev` refreshing fragments.
    Carries the compile-entry REMOVED bullets. Waits on 2.
 5. **Linked dependencies.** `add_dependency` from a local path or an Artifacts remote, read-only
    use of its assets, `update_dependency` and `fork_asset`. Waits on 2.
 6. **A project's node types and generators, listed without running code** (#3152, rewritten):
-   each `@node` class, function and shader node and `@stream` generator in a project and its
+   each `@node` class, function and shader node and `@graph_generator` in a project and its
    dependencies, read from source, over the local API and MCP. Waits on 1.
 
 ## Notes (not in scope)

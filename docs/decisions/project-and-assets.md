@@ -23,7 +23,8 @@ undo and history. Each project has its own Git history, written by a Git engine 
 carries, in a form Cloudflare Artifacts takes as a remote. Large binary content lives in a
 content-addressed store beside history, with only a pointer in it. Another project's asset is a
 linked dependency pinned to a revision, updated by choice and copied only by a fork. Python defines
-node types; a `@stream` function is a generator whose output is stored as a frozen fragment.
+node types; a `@graph_generator` function builds graph, stored as a frozen fragment. A project
+works fully offline; a remote is optional.
 
 ## Rejected alternatives
 

@@ -252,7 +252,7 @@ is meant.
 values, studio fields, links, fragments — and the stream's source of truth. _Avoid_: "stream file",
 "scene", "`stream.py`".
 
-**Fragment** _(crosses)_: a `@stream` generator's output stored in a graph document as one
+**Fragment** _(crosses)_: a `@graph_generator` function's output stored in a graph document as one
 read-only container with its own node UUIDs, refreshed when the generator re-runs. _Avoid_:
 "nested stream", "group".
 
