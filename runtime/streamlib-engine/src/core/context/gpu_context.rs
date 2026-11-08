@@ -4101,20 +4101,20 @@ impl GpuContext {
         Ok(())
     }
 
-    /// Record `batch` into `recorder` and submit it, holding
-    /// `latest_submission_per_compute_kernel` throughout, once every kernel
-    /// it names is free of its previous submission.
+    /// Lock `latest_submission_per_compute_kernel` once no kernel in
+    /// `kernel_keys` has a submission still running, waiting for those
+    /// submissions with the lock released.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn record_and_submit_compute_kernel_batch(
+    fn lock_latest_submissions_once_these_kernels_are_free(
         &self,
-        recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
-        batch: &[BatchedComputeKernelDispatch],
-    ) -> Result<()> {
-        let kernel_keys: Vec<usize> = batch
-            .iter()
-            .map(|dispatch| dispatch.kernel.handle as usize)
-            .collect();
-        let mut latest_submission_per_compute_kernel = loop {
+        kernel_keys: &[usize],
+    ) -> Result<
+        parking_lot::MutexGuard<
+            '_,
+            HashMap<usize, crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot>,
+        >,
+    > {
+        loop {
             let latest_submission_per_compute_kernel =
                 self.latest_submission_per_compute_kernel.lock();
             let previous_submissions_of_these_kernels = kernel_keys
@@ -4131,20 +4131,43 @@ impl GpuContext {
                     &previous_submissions_of_these_kernels,
                 )?
             {
-                break latest_submission_per_compute_kernel;
+                return Ok(latest_submission_per_compute_kernel);
             }
             drop(latest_submission_per_compute_kernel);
             self.device
                 .inner
-                .wait_for_every_queue_submission_in_snapshot(
+                .wait_for_queue_submissions_blocking_counted(
                     &previous_submissions_of_these_kernels,
-                    std::time::Duration::MAX,
+                    format_args!("a compute dispatch waiting for its kernel's previous dispatch"),
                 )?;
-        };
+        }
+    }
 
-        // From here on the recorder is open, and every early return has to
-        // close it or the next batch's begin() refuses.
+    /// Begin `recorder`, then record `batch` into it and submit it while
+    /// holding `latest_submission_per_compute_kernel`, once every kernel it
+    /// names is free of its previous submission.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn record_and_submit_compute_kernel_batch(
+        &self,
+        recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
+        batch: &[BatchedComputeKernelDispatch],
+    ) -> Result<()> {
+        let kernel_keys: Vec<usize> = batch
+            .iter()
+            .map(|dispatch| dispatch.kernel.handle as usize)
+            .collect();
+        // Begun outside the shared lock, since retiring the recorder's
+        // previous submission may wait on its fence. From here on every early
+        // return closes the recording, or the next batch's begin() refuses.
         recorder.begin()?;
+        let mut latest_submission_per_compute_kernel =
+            match self.lock_latest_submissions_once_these_kernels_are_free(&kernel_keys) {
+                Ok(locked) => locked,
+                Err(e) => {
+                    recorder.abort_recording();
+                    return Err(e);
+                }
+            };
         let layout_each_image_landed_in = match Self::record_compute_kernel_batch(recorder, batch) {
             Ok(landed_in) => landed_in,
             Err(e) => {
