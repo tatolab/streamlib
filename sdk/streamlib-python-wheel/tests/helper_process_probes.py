@@ -236,3 +236,24 @@ class IslandReadingProbe:
         LEVELS_THE_ISLAND_READING_PROBE_READ.append(
             None if payload is None else struct.unpack("<d", bytes(payload))[0]
         )
+
+
+GAINS_THE_EXPOSED_GAIN_PROBE_TOOK: "list[float]" = []
+
+
+class ExposedGainProbeConfig(TypedDict, total=False):
+    gain: float
+
+
+@node.process(execution="continuous", interval_ms=5)
+class ExposedGainProbe:
+    """Records the `gain` of each config it is handed; the node exposes `gain` as an input."""
+
+    def __init__(self, config: ExposedGainProbeConfig) -> None:
+        GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.append(config.get("gain", 1.0))
+
+    def configure(self, config: ExposedGainProbeConfig) -> None:
+        GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.append(config.get("gain", 1.0))
+
+    def process(self, ctx) -> None:
+        pass

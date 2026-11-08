@@ -32,6 +32,7 @@ from helper_placement_streams import (
     function_node_run_as_python_that_crashes_into_python_sink,
     function_node_that_spins_forever_into_python_sink,
     function_nodes_read_by_two_native_converters_into_python_records_sink,
+    level_scaled_by_its_gain_into_python_sink,
     lfo_into_python_sink_reporting_each_batch_it_reads,
     python_sink_reading_the_pin_value_of_its_unlinked_input,
     lfo_into_remap_into_python_sink,
@@ -1131,3 +1132,64 @@ def test_a_function_node_linked_live_with_an_input_no_value_reaches_holds_until_
     assert 0.0 <= clamped["lowest"] and clamped["highest"] <= 1.0 and (
         clamped["highest"] - clamped["lowest"] > 0.5
     ), f"a link into `x` wins over its pin, clamped to 0..1, and the class read {clamped}"
+
+
+def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`LevelScaledByItsGain`, its config's `gain` 0.25, read by a running Python
+    class. Exposing `gain` live adds a `gain` input that `graph` shows, and with
+    nothing linked into it the node still reads the config. Linking an `Lfo` into
+    `gain` drives the field, so the class reads the level scaled by the `Lfo`'s
+    -1..1 in place of 0.25.
+    """
+    tatolabd = start_tatolabd_running_stream(level_scaled_by_its_gain_into_python_sink)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), (
+        f"the level 1.0 scaled by the config's gain 0.25, and the class read {configured}"
+    )
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    def the_scaled_node() -> dict:
+        (scaled_node,) = [
+            node
+            for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+            if node["name"] == "scaled"
+        ]
+        return scaled_node
+
+    edit_live(
+        "set_exposed_config_fields",
+        {"node": the_scaled_node()["id"], "exposed_config_fields": ["gain"]},
+    )
+    scaled_node = the_scaled_node()
+    assert scaled_node.get("exposed_config_fields") == ["gain"], scaled_node
+    assert "gain" in [port["name"] for port in scaled_node["ports"]["inputs"]], scaled_node
+    assert "inputs_waiting_for_a_value" not in scaled_node, (
+        f"an exposed field no link drives reads the config, so nothing waits: {scaled_node}"
+    )
+    exposed_unlinked, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert exposed_unlinked["lowest"] == exposed_unlinked["highest"] == pytest.approx(0.25), (
+        f"an exposed field no link drives reads the config, and the class read {exposed_unlinked}"
+    )
+
+    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    edit_live(
+        "connect",
+        {
+            "source": {"node": lfo["node"], "port": "result"},
+            "target": {"node": scaled_node["id"], "port": "gain"},
+        },
+    )
+    driven, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert driven["highest"] - driven["lowest"] > 0.5, (
+        f"the `Lfo` linked into `gain` drives the field in place of 0.25, and the class read {driven}"
+    )

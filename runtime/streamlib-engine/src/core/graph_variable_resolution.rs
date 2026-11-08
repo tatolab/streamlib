@@ -234,6 +234,7 @@ impl GraphVariablesAsDrawn {
                     config: Some(variable_node.config.clone()),
                     config_checksum: compute_json_checksum(&variable_node.config),
                     pins: variable_node.pins.clone(),
+                    exposed_config_fields: variable_node.exposed_config_fields.clone(),
                     studio: variable_node.studio.clone(),
                     inputs_waiting_for_a_value: Vec::new(),
                     ports: ProcessorNodePortsOutput {
@@ -1010,6 +1011,7 @@ mod tests {
             },
             components: serde_json::Map::new(),
             pins: serde_json::Map::new(),
+            exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
             inputs_waiting_for_a_value: Vec::new(),
         }

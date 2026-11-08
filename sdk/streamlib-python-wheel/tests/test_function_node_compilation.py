@@ -1154,3 +1154,82 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
         {feedback_path: pass_the_value_on, add_path: add_a_step}.__getitem__,
     )
     assert [the_value_read_from(data_plane, "count") for _ in range(3)] == [1.0, 2.0, 3.0]
+
+
+@dataclass(frozen=True)
+class SpelledGainConfig:
+    gain: float = 2.0
+
+
+@node.function
+def spell_the_scaled_value(x: float = 4.0, *, config: SpelledGainConfig) -> float:
+    return float(len(f"{x * config.gain:.1f}"))
+
+
+def an_island_whose_gain_a_tally_drives(
+    input_port: str, scaled_import_path: str, scaled_pins: "dict[str, float]"
+) -> "dict[str, Any]":
+    return {
+        "input_port": input_port,
+        "link_id": f"L-{input_port}",
+        "output": {"node": "scaled-1", "port": "result"},
+        "nodes": [
+            {
+                "node": "tally-1",
+                "breadcrumb_number": 0,
+                "import_path": f"{__name__}:tally",
+                "config": None,
+                "pins": {"x": 0.0},
+                "links_into": [],
+            },
+            {
+                "node": "scaled-1",
+                "breadcrumb_number": 1,
+                "import_path": scaled_import_path,
+                "config": {"gain": 10.0},
+                "pins": scaled_pins,
+                "exposed_config_fields": ["gain"],
+                "links_into": [{"port": "gain", "from": {"node": "tally-1", "port": "result"}}],
+            },
+        ],
+    }
+
+
+def test_a_linked_exposed_config_field_drives_a_compiled_node_in_place_of_its_config():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["amplified"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_whose_gain_a_tally_drives("amplified", f"{__name__}:amplify", {"x": 2.0})],
+        {f"{__name__}:tally": tally, f"{__name__}:amplify": amplify}.__getitem__,
+    )
+    assert fed.ran_compiled_by_node_id == {"tally-1": True, "scaled-1": True}
+    assert the_value_read_from(data_plane, "amplified") == 2.0 * 3.0, (
+        "the tally's 3 is the gain, not the config's 10"
+    )
+
+
+def test_a_linked_exposed_config_field_drives_a_node_run_as_python_in_place_of_its_config():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["spelled"], [])
+    scaled_import_path = f"{__name__}:spell_the_scaled_value"
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_whose_gain_a_tally_drives("spelled", scaled_import_path, {})],
+        {f"{__name__}:tally": tally, scaled_import_path: spell_the_scaled_value}.__getitem__,
+    )
+    assert fed.ran_compiled_by_node_id == {"tally-1": True, "scaled-1": False}
+    assert the_value_read_from(data_plane, "spelled") == float(len("12.0")), (
+        "4 scaled by the tally's 3 spells 12.0, not 40.0"
+    )
+
+
+def test_an_exposed_config_field_no_link_drives_reads_the_nodes_config():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["amplified"], [])
+    island = an_island_whose_gain_a_tally_drives("amplified", f"{__name__}:amplify", {"x": 2.0})
+    island["nodes"][1]["links_into"] = []
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], {f"{__name__}:tally": tally, f"{__name__}:amplify": amplify}.__getitem__
+    )
+    assert the_value_read_from(data_plane, "amplified") == 2.0 * 10.0

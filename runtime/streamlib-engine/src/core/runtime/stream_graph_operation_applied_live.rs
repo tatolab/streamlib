@@ -29,6 +29,7 @@ impl LoadedStreamInThisRuntime {
                     node.config.clone(),
                 )
                 .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone())
+                .with_exposed_config_fields(node.exposed_config_fields.clone())
                 .with_node_uuid(node.id);
                 if !node.name.is_empty() {
                     spec = spec.with_display_name(node.name.clone());
@@ -95,6 +96,10 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::SetStudioFields { node, from, to } => {
                 self.set_studio_fields(&self.the_processor_of_the_node(node)?, to.clone())?;
                 Ok(StreamGraphOperation::SetStudioFields { node, from, to })
+            }
+            StreamGraphOperation::SetExposedConfigFields { node, from, to } => {
+                self.set_exposed_config_fields(&self.the_processor_of_the_node(node)?, to.clone())?;
+                Ok(StreamGraphOperation::SetExposedConfigFields { node, from, to })
             }
         }
     }

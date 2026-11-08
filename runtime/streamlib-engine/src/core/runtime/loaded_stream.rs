@@ -1052,6 +1052,14 @@ impl LoadedStreamInThisRuntime {
                     direction: crate::core::PortDirection::Input,
                 });
             }
+            if value.is_some() && node.is_an_exposed_config_field_input(input) {
+                return Err(Error::Configuration(format!(
+                    "input `{input}` of `{}` is a config field it exposes, which reads the node's \
+                     config while no link feeds it, and takes no pin value. To fix: set `{input}` \
+                     in its config",
+                    node.display_name
+                )));
+            }
             match value {
                 Some(value) => {
                     crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read(
@@ -1068,6 +1076,79 @@ impl LoadedStreamInThisRuntime {
                 &[],
             )?;
             crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_pin_values_its_input_ports_read(
+                graph,
+            )
+        })?;
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
+    }
+
+    /// Take `exposed_config_fields` as the config fields the node `processor_id` takes as
+    /// inputs, in place of those it took; a field still linked is refused being taken off.
+    pub(crate) fn set_exposed_config_fields(
+        &self,
+        processor_id: &ProcessorUniqueId,
+        exposed_config_fields: Vec<String>,
+    ) -> Result<()> {
+        self.compiler.scope(|graph, _tx| -> Result<()> {
+            let node = graph
+                .traversal()
+                .v(processor_id)
+                .first()
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+            let declared_ports: Vec<crate::core::graph::PortInfo> = node
+                .ports
+                .inputs
+                .iter()
+                .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
+                .chain(&node.ports.outputs)
+                .cloned()
+                .collect();
+            let exposed_config_field_input_ports =
+                crate::core::graph::the_input_ports_of_the_exposed_config_fields(
+                    &node.display_name,
+                    &node.processor_type,
+                    &self.node_types_this_stream_resolves,
+                    &declared_ports,
+                    &exposed_config_fields,
+                )?;
+            let fields_still_linked: Vec<String> = graph
+                .traversal()
+                .e(())
+                .iter()
+                .filter(|link| link.to_port().processor_id() == processor_id)
+                .map(|link| link.to_port().port_name().to_string())
+                .filter(|port| {
+                    node.is_an_exposed_config_field_input(port)
+                        && !exposed_config_fields.contains(port)
+                })
+                .collect();
+            if !fields_still_linked.is_empty() {
+                return Err(Error::Configuration(format!(
+                    "`{}` cannot stop exposing {} as inputs while a link feeds each. To fix: \
+                     disconnect it first",
+                    node.display_name,
+                    fields_still_linked
+                        .iter()
+                        .map(|field| format!("`{field}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+            graph
+                .traversal_mut()
+                .v(processor_id)
+                .first_mut()
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?
+                .replace_the_exposed_config_fields(
+                    exposed_config_fields,
+                    exposed_config_field_input_ports,
+                );
+            crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed(
+                graph,
+                &[],
+            )?;
+            crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
                 graph,
             )
         })?;
@@ -1127,6 +1208,7 @@ impl LoadedStreamInThisRuntime {
                             processor_type: node.processor_type.clone(),
                             config: node.config.clone().unwrap_or_default(),
                             pins: node.pins.clone(),
+                            exposed_config_fields: node.exposed_config_fields.clone(),
                             studio: node.studio.clone(),
                         },
                         &config_json,
@@ -1549,7 +1631,8 @@ impl LoadedStreamInThisRuntime {
         for node in &graph.nodes {
             let mut spec = ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
                 .with_display_name(node.name.clone())
-                .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone());
+                .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone())
+                .with_exposed_config_fields(node.exposed_config_fields.clone());
             if let Some(node_uuid) = node.id {
                 spec = spec.with_node_uuid(node_uuid);
             }

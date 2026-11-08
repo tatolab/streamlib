@@ -98,7 +98,15 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a node",
-    spec_keys: &["id", "name", "type", "config", "pins", "studio"],
+    spec_keys: &[
+        "id",
+        "name",
+        "type",
+        "config",
+        "pins",
+        "exposed_config_fields",
+        "studio",
+    ],
     live_keys: &[
         "kind",
         "language",
@@ -158,6 +166,10 @@ pub struct GraphSnapshotNode {
     /// The value set on each unlinked input, by input name.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub pins: serde_json::Map<String, serde_json::Value>,
+
+    /// The config fields the node takes as inputs too, each an input of the field's name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposed_config_fields: Vec<String>,
 
     /// What the studio draws the node with: canvas position, group, comment, colour.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
@@ -900,6 +912,7 @@ mod tests {
                 processor_type: ProcessorClassImportPath::new(A_CAMERA_CLASS).unwrap(),
                 config: serde_json::json!({}),
                 pins: serde_json::Map::new(),
+                exposed_config_fields: Vec::new(),
                 studio: serde_json::Map::new(),
             }],
             links: vec![],
@@ -928,7 +941,8 @@ mod tests {
             "asset": asset.to_string(),
             "nodes": [
                 {"id": camera.to_string(), "name": "camera", "type": A_CAMERA_CLASS,
-                 "config": {}, "pins": {"fps": 30}, "studio": {"position": [10, 20]}},
+                 "config": {}, "pins": {"fps": 30}, "exposed_config_fields": ["exposure"],
+                 "studio": {"position": [10, 20]}},
                 {"id": display.to_string(), "name": "display", "type": A_CAMERA_CLASS,
                  "config": {}},
             ],
@@ -947,6 +961,10 @@ mod tests {
         assert_eq!(graph.asset, Some(asset));
         assert_eq!(graph.nodes[0].id, Some(camera));
         assert_eq!(graph.nodes[0].pins["fps"], serde_json::json!(30));
+        assert_eq!(
+            graph.nodes[0].exposed_config_fields,
+            vec!["exposure".to_string()]
+        );
         assert_eq!(
             graph.nodes[0].studio["position"],
             serde_json::json!([10, 20])
@@ -1233,14 +1251,14 @@ mod tests {
                 serde_json::json!({"nodes": [with(a_node.clone(), "confg")]}),
                 [
                     "node `camera` carries the key `confg`",
-                    "`id`, `name`, `type`, `config`, `pins` and `studio`",
+                    "`id`, `name`, `type`, `config`, `pins`, `exposed_config_fields` and `studio`",
                 ],
             ),
             (
                 serde_json::json!({"nodes": [{"name": "camera", "typ": A_CAMERA_CLASS}]}),
                 [
                     "node `camera` carries the key `typ`",
-                    "`id`, `name`, `type`, `config`, `pins` and `studio`",
+                    "`id`, `name`, `type`, `config`, `pins`, `exposed_config_fields` and `studio`",
                 ],
             ),
             (

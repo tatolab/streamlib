@@ -25,6 +25,9 @@ pub struct ProcessorSpec {
     /// The values the graph document sets on the node's unlinked inputs, by input name.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub pins: serde_json::Map<String, serde_json::Value>,
+    /// The config fields the node takes as inputs too, each an input of the field's name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposed_config_fields: Vec<String>,
     /// What the studio draws the node with: canvas position, group, comment, colour.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub studio: serde_json::Map<String, serde_json::Value>,
@@ -39,6 +42,7 @@ impl ProcessorSpec {
             display_name: None,
             node_uuid: None,
             pins: serde_json::Map::new(),
+            exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
         }
     }
@@ -57,6 +61,12 @@ impl ProcessorSpec {
     ) -> Self {
         self.pins = pins;
         self.studio = studio;
+        self
+    }
+
+    /// Take each config field of `exposed_config_fields` as an input of the field's name too.
+    pub fn with_exposed_config_fields(mut self, exposed_config_fields: Vec<String>) -> Self {
+        self.exposed_config_fields = exposed_config_fields;
         self
     }
 

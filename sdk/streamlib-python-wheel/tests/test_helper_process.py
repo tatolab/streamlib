@@ -1609,6 +1609,76 @@ def test_an_unlinked_input_reads_the_pin_value_its_setup_carried_and_each_one_se
     assert not lifecycle_thread.is_alive()
 
 
+def wait_until_the_exposed_gain_probe_took(gain: float, timeout_s: float = 10.0) -> None:
+    import helper_process_probes
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if helper_process_probes.GAINS_THE_EXPOSED_GAIN_PROBE_TOOK[-1:] == [gain]:
+            return
+        time.sleep(0.01)
+    raise AssertionError(
+        f"the probe never took a gain of {gain!r}; the gains it took: "
+        f"{helper_process_probes.GAINS_THE_EXPOSED_GAIN_PROBE_TOOK[-5:]}"
+    )
+
+
+def test_each_new_value_a_link_gives_an_exposed_config_field_is_a_live_config_update(
+    stand_in_parent,
+):
+    """A config field the node exposes is read from the input port of its
+    name before each `process()`, and each new value reaches the processor as
+    a live config update; a field it stops exposing is no longer read.
+
+    Fail-without-fix: drop the read from `call_hook_from_the_scheduling_loop`
+    and the probe keeps the setup's gain of 1.
+    """
+    from helper_process_probes import GAINS_THE_EXPOSED_GAIN_PROBE_TOOK
+
+    GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ExposedGainProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {"gain": 1.0},
+            "ports": {"exposed_config_fields": ["gain"]},
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
+    wait_until_the_exposed_gain_probe_took(1.0)
+
+    island_into_the_gain = an_island_feeding_the_probes_level(then_double_it=True)
+    island_into_the_gain["input_port"] = "gain"
+    stand_in_parent.send({"cmd": "feed_island", "island": island_into_the_gain})
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": "L-island-into-level"}
+    wait_until_the_exposed_gain_probe_took(1.5)
+    configures_while_the_gain_held = len(GAINS_THE_EXPOSED_GAIN_PROBE_TOOK)
+    time.sleep(0.1)
+    assert len(GAINS_THE_EXPOSED_GAIN_PROBE_TOOK) == configures_while_the_gain_held, (
+        "a value that did not change is no config update"
+    )
+
+    stand_in_parent.send({"cmd": "set_exposed_config_fields", "exposed_config_fields": []})
+    stand_in_parent.send({"cmd": "update_config", "config": {"gain": 3.0}})
+    assert stand_in_parent.receive() == {"rpc": "ok"}
+    wait_until_the_exposed_gain_probe_took(3.0)
+    time.sleep(0.1)
+    assert GAINS_THE_EXPOSED_GAIN_PROBE_TOOK[-1] == 3.0, (
+        "a field the node no longer exposes is not read from its port"
+    )
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done", "`set_exposed_config_fields` answers nothing"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_parent):
     """The engine reports a link `wired` only on this answer, so a port that
     could not open has to say so rather than only logging: the reason is what

@@ -83,6 +83,7 @@ def feed_an_input_port_from_a_function_node_island(
             list[float],
             list[float],
             int,
+            list[int],
         ]
     ],
     island_output: tuple[int, int],
@@ -93,7 +94,8 @@ def feed_an_input_port_from_a_function_node_island(
     calls are noted under, its compiled evaluate entry's address or the object
     whose `evaluate(input_values, now_ns)` runs its body as Python,
     where each input takes its value (an earlier node's output, or `None` and its
-    pin value), its config values, its initial state values and its output count.
+    pin value), its config values, its initial state values, its output count,
+    and the index among its config values each input past its own sets.
     `island_output` names the node and output the port reads. An island
     already feeding the port is replaced, and each stateful node it shares
     resumes from its state.

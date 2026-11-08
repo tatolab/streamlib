@@ -29,7 +29,10 @@ use crate::core::compiler::compiler_ops::function_node_promotion::{
     plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
     record_each_promotion_on_its_nodes_metrics,
 };
-use crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_pin_values_its_input_ports_read;
+use crate::core::compiler::compiler_ops::input_port_pin_values::{
+    hand_each_helper_the_config_fields_its_node_exposes_as_inputs,
+    hand_each_helper_the_pin_values_its_input_ports_read,
+};
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
@@ -395,6 +398,7 @@ impl Compiler {
         hand_each_reader_the_island_a_compile_changed(&mut graph_arc.write(), &plan.links_to_add)?;
         note_where_each_function_node_runs(&mut graph_arc.write());
         hand_each_helper_the_pin_values_its_input_ports_read(&graph_arc.read())?;
+        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph_arc.read())?;
 
         // A function node has no thread whose setup would settle its state: it
         // runs once it is wired into the read of each node it feeds.

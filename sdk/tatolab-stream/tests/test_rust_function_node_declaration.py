@@ -20,6 +20,7 @@ from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_LANGUAGE_STAMP,
 )
 from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_KIND_STAMP,
@@ -84,7 +85,7 @@ Ramp = node.rust_function(a_ramp_declaration())
 def test_a_rust_function_node_is_a_function_node_named_by_its_module_and_short_name():
     assert isinstance(Ramp, RustFunctionNode)
     assert (Ramp.__module__, Ramp.__qualname__) == (__name__, "Ramp")
-    assert Ramp.__tatolab_node_category__ == __name__
+    assert getattr(Ramp, NODE_DECLARATION_CATEGORY_STAMP) == __name__
     assert getattr(Ramp, NODE_DECLARATION_KIND_STAMP) == "function"
     assert getattr(Ramp, NODE_DECLARATION_LANGUAGE_STAMP) == "rust"
 

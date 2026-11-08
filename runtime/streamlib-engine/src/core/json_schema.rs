@@ -94,6 +94,9 @@ pub struct ProcessorNodeOutput {
     /// The values set on the node's unlinked inputs, by input name.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub pins: serde_json::Map<String, serde_json::Value>,
+    /// The config fields the node takes as inputs too, each an input of the field's name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposed_config_fields: Vec<String>,
     /// What the studio draws the node with: canvas position, group, comment, colour.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub studio: serde_json::Map<String, serde_json::Value>,
@@ -488,6 +491,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
             config: node.config.clone(),
             config_checksum: node.config_checksum,
             pins: node.pins.clone(),
+            exposed_config_fields: node.exposed_config_fields.clone(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
             ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),

@@ -32,6 +32,27 @@ pub(crate) fn hand_each_helper_the_pin_values_its_input_ports_read(graph: &Graph
     Ok(())
 }
 
+/// Hand each helper the config fields its node takes as inputs, when they
+/// differ from those it holds.
+pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
+    graph: &Graph,
+) -> Result<()> {
+    for node in graph.traversal().v(()).iter() {
+        if runs_inside_the_read_of_each_node_it_feeds(graph, &node.id) {
+            continue;
+        }
+        let Some(link_wiring) = node.get::<OutOfProcessLinkWiringComponent>() else {
+            continue;
+        };
+        link_wiring
+            .0
+            .record_the_exposed_config_fields_and_hand_them_to_a_far_side_past_its_setup_command(
+                node.exposed_config_fields.clone(),
+            )?;
+    }
+    Ok(())
+}
+
 /// The value each Channels input of `node` reads while unlinked, by port: the
 /// pin value set on it, else its declared default, as a number.
 fn the_pin_values_its_input_ports_read(node: &ProcessorNode) -> serde_json::Map<String, JsonValue> {
@@ -80,6 +101,7 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .iter()
         .filter(|port| {
             port.pin_default.is_none()
+                && !node.is_an_exposed_config_field_input(&port.name)
                 && !node.pins.contains_key(&port.name)
                 && !linked_input_ports.contains(&port.name)
         })
@@ -293,6 +315,43 @@ mod tests {
             ],
             "a pin set wins over the default, a bool reads as 1 or 0, and pin values that did \
              not change are not handed over again"
+        );
+    }
+
+    #[test]
+    fn a_helpers_setup_carries_the_config_fields_its_node_exposes_and_a_later_change_is_handed_over()
+     {
+        let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
+        let level_meter = a_level_meter_in_a_helper(&mut graph);
+        let expose = |graph: &mut Graph, exposed_config_fields: &[&str]| {
+            graph
+                .traversal_mut()
+                .v(&level_meter)
+                .first_mut()
+                .unwrap()
+                .exposed_config_fields = exposed_config_fields
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+        };
+        expose(&mut graph, &["threshold"]);
+        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph).unwrap();
+        assert_eq!(
+            the_link_wiring_of(&graph, &level_meter).as_setup_command_ports()["exposed_config_fields"],
+            serde_json::json!(["threshold"])
+        );
+
+        let delivery = RecordingOutOfProcessFarSideLinkDelivery::default();
+        the_link_wiring_of(&graph, &level_meter)
+            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
+            .unwrap();
+        expose(&mut graph, &["threshold", "ceiling"]);
+        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph).unwrap();
+        hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph).unwrap();
+        assert_eq!(
+            *delivery.exposed_config_fields_handed_over.lock(),
+            vec![vec!["threshold".to_string(), "ceiling".to_string()]],
+            "fields that did not change are not handed over again"
         );
     }
 

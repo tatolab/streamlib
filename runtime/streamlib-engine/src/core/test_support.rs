@@ -477,6 +477,8 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     /// Every set of pin values handed over, in order.
     pub(crate) pin_values_handed_over:
         Arc<parking_lot::Mutex<Vec<serde_json::Map<String, serde_json::Value>>>>,
+    /// Every set of exposed config fields handed over, in order.
+    pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
 }
 
 impl crate::core::processors::OutOfProcessFarSideLinkDelivery
@@ -537,6 +539,16 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
         pin_values: &serde_json::Map<String, serde_json::Value>,
     ) -> crate::core::Result<()> {
         self.pin_values_handed_over.lock().push(pin_values.clone());
+        Ok(())
+    }
+
+    fn hand_over_the_config_fields_its_node_exposes_as_inputs(
+        &self,
+        exposed_config_fields: &[String],
+    ) -> crate::core::Result<()> {
+        self.exposed_config_fields_handed_over
+            .lock()
+            .push(exposed_config_fields.to_vec());
         Ok(())
     }
 

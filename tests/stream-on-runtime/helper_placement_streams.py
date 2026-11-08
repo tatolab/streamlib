@@ -15,6 +15,7 @@ from helper_placement_processors import (
     CrashesItsHelper,
     DiesAbruptlyProbe,
     LabelsTheLevel,
+    LevelScaledByItsGain,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
     ReportsEachBatchOfPinValuesItReadSink,
@@ -168,6 +169,14 @@ def clamp_with_its_input_linked_to_nothing_into_python_sink(stream_builder: Stre
     clamp = stream_builder.add(Clamp, name="clamp")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(clamp.output("result"), sink.input("brightness"))
+
+
+@stream
+def level_scaled_by_its_gain_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A function node scaling its level by the `gain` of its config, read by a Python class."""
+    scaled = stream_builder.add(LevelScaledByItsGain, name="scaled")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(scaled.output("result"), sink.input("brightness"))
 
 
 @stream

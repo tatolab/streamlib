@@ -409,6 +409,7 @@ impl GraphInterfaceAsDrawn {
                     config: Some(interface_node.node.config.clone()),
                     config_checksum: compute_json_checksum(&interface_node.node.config),
                     pins: interface_node.node.pins.clone(),
+                    exposed_config_fields: interface_node.node.exposed_config_fields.clone(),
                     studio: interface_node.node.studio.clone(),
                     inputs_waiting_for_a_value: Vec::new(),
                     ports: ProcessorNodePortsOutput { inputs, outputs },
@@ -829,6 +830,7 @@ mod tests {
             },
             components: serde_json::Map::new(),
             pins: serde_json::Map::new(),
+            exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
             inputs_waiting_for_a_value: Vec::new(),
         };

@@ -417,6 +417,11 @@ All seven were settled by the owner on 2026-11-06 and 2026-11-07.
   inside one; and the engine inserting the delay itself. TouchDesigner (Feedback CHOP/TOP),
   Houdini (Solver SOP), Pure Data (`delwrite~`/`delread~`) and Simulink (Unit Delay) each close a
   loop through one dedicated node.
+- **DECIDED 10 — How a saved graph records an exposed config field (owner, 2026-11-08).** A list
+  on the node, `exposed_config_fields`, beside `config` and `pins`: each field is an input of its
+  name from the moment it is listed, so the editor draws the pin before anything is linked. The
+  list is set through the graph operation `set_exposed_config_fields`. Rejected: exposing a field
+  by linking to it, with no new key, which leaves the editor nothing to draw while it is unlinked.
 
 Assumed unless overruled:
 - A function's single output is named `result`; plain parameters are pins by default; a node's

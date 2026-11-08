@@ -344,6 +344,19 @@ def CountsItsOwnCalls(  # noqa: N802
     return calls, CallsCountedSoFar(calls)
 
 
+@dataclasses.dataclass(frozen=True)
+class LevelScaledByItsGainConfig:
+    gain: float = 0.25
+
+
+@node.function
+def LevelScaledByItsGain(  # noqa: N802
+    level: float = 1.0, *, config: LevelScaledByItsGainConfig
+) -> float:
+    """Its level scaled by the `gain` of its config, a field a link can drive once it is exposed."""
+    return level * config.gain
+
+
 #: The count at which a sink whose count started fresh takes its own helper down.
 COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES = 20.0
 

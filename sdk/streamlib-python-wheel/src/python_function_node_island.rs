@@ -87,6 +87,9 @@ enum WhereAFunctionNodeInputTakesItsValue {
 struct FunctionNodeCalledThroughItsEvaluateEntry {
     evaluate_entry: ModuleHostTableFunctionNodeEvaluateEntry,
     config_values: Vec<f64>,
+    /// The index among `config_values` each input past the node's own sets: a
+    /// config field it exposes as an input, linked.
+    config_value_indices_set_by_the_inputs_past_its_own: Vec<usize>,
     input_values: Vec<f64>,
     state_values: Vec<f64>,
     state_values_of_the_call_under_way: Vec<f64>,
@@ -236,11 +239,15 @@ fn the_state_a_function_node_starts_from(
 impl HowAFunctionNodeIsCalled {
     /// How the bootstrap hands a node over: its compiled entry's address, or
     /// the object that runs its body as Python. A node run as Python is told
-    /// the state its stream carries for it, when it carries one.
+    /// the state its stream carries for it, when it carries one. Of a compiled
+    /// node's `input_count` inputs, the last set the config values
+    /// `config_value_indices_set_by_the_inputs_past_its_own` names.
+    #[allow(clippy::too_many_arguments)]
     fn handed_over_by_the_bootstrap(
         node_id: &str,
         called_through: Py<PyAny>,
         config_values: Vec<f64>,
+        config_value_indices_set_by_the_inputs_past_its_own: Vec<usize>,
         input_count: usize,
         state_values: Vec<f64>,
         resumes_from_the_state_its_stream_carries: bool,
@@ -266,11 +273,32 @@ impl HowAFunctionNodeIsCalled {
                         evaluate_entry_address,
                     )
                 };
+                if let Some(config_value_index) =
+                    config_value_indices_set_by_the_inputs_past_its_own
+                        .iter()
+                        .find(|config_value_index| **config_value_index >= config_values.len())
+                {
+                    return Err(format!(
+                        "function node `{node_id}` sets config value {config_value_index} from \
+                         an input, and it takes {} config values",
+                        config_values.len()
+                    ));
+                }
+                let own_input_count = input_count
+                    .checked_sub(config_value_indices_set_by_the_inputs_past_its_own.len())
+                    .ok_or_else(|| {
+                        format!(
+                            "function node `{node_id}` sets {} config values from inputs, and \
+                             it takes {input_count} inputs",
+                            config_value_indices_set_by_the_inputs_past_its_own.len()
+                        )
+                    })?;
                 return Ok(Self::ThroughItsEvaluateEntry(
                     FunctionNodeCalledThroughItsEvaluateEntry {
                         evaluate_entry,
                         config_values,
-                        input_values: vec![0.0; input_count],
+                        config_value_indices_set_by_the_inputs_past_its_own,
+                        input_values: vec![0.0; own_input_count],
                         state_values_of_the_call_under_way: vec![0.0; state_values.len()],
                         state_values,
                         output_values: vec![0.0; output_count],
@@ -297,7 +325,12 @@ impl HowAFunctionNodeIsCalled {
 
     fn input_count(&self) -> usize {
         match self {
-            Self::ThroughItsEvaluateEntry(compiled) => compiled.input_values.len(),
+            Self::ThroughItsEvaluateEntry(compiled) => {
+                compiled.input_values.len()
+                    + compiled
+                        .config_value_indices_set_by_the_inputs_past_its_own
+                        .len()
+            }
             Self::AsPython(run_as_python) => run_as_python.input_count,
         }
     }
@@ -324,13 +357,21 @@ impl HowAFunctionNodeIsCalled {
     ) -> Result<()> {
         match self {
             Self::ThroughItsEvaluateEntry(compiled) => {
-                for (input_index, (input_slot, input_value)) in compiled
-                    .input_values
-                    .iter_mut()
-                    .zip(input_values)
-                    .enumerate()
-                {
-                    *input_slot = input_value.as_a_number_for_an_input_of(node_id, input_index)?;
+                let own_input_count = compiled.input_values.len();
+                for (input_index, input_value) in input_values.iter().enumerate() {
+                    let input_number =
+                        input_value.as_a_number_for_an_input_of(node_id, input_index)?;
+                    match input_index.checked_sub(own_input_count) {
+                        None => compiled.input_values[input_index] = input_number,
+                        Some(past_its_own) => {
+                            if let Some(config_value_index) = compiled
+                                .config_value_indices_set_by_the_inputs_past_its_own
+                                .get(past_its_own)
+                            {
+                                compiled.config_values[*config_value_index] = input_number;
+                            }
+                        }
+                    }
                 }
                 compiled.call_its_evaluate_entry_at(node_id, now_ns)?;
                 for (output_value, compiled_output) in
@@ -493,7 +534,8 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
 /// One function node as the bootstrap hands it over: its id, its breadcrumb
 /// number, its compiled evaluate entry's address or the object that runs it as
 /// Python, where each input takes its value, its config values, its initial
-/// state values and how many outputs it writes.
+/// state values, how many outputs it writes, and the index among its config
+/// values each input past its own sets.
 type FunctionNodeHandedOverByTheBootstrap = (
     String,
     u32,
@@ -502,6 +544,7 @@ type FunctionNodeHandedOverByTheBootstrap = (
     Vec<f64>,
     Vec<f64>,
     usize,
+    Vec<usize>,
 );
 
 impl FunctionNodeIslandEvaluatedInThisHelper {
@@ -524,6 +567,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 config_values,
                 initial_state_values,
                 output_count,
+                config_value_indices_set_by_the_inputs_past_its_own,
             ),
         ) in function_nodes.into_iter().enumerate()
         {
@@ -573,6 +617,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 &node_id,
                 called_through,
                 config_values,
+                config_value_indices_set_by_the_inputs_past_its_own,
                 where_each_input_takes_its_value_read.len(),
                 the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
                 resumes_from_the_state_its_stream_carries,
@@ -686,6 +731,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
             &node_id,
             called_through,
             config_values,
+            Vec::new(),
             input_count,
             the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
             resumes_from_the_state_its_stream_carries,
@@ -914,6 +960,7 @@ mod tests {
                     vec![],
                     vec![0.0],
                     1,
+                    vec![],
                 ),
                 (
                     "scale".to_string(),
@@ -923,6 +970,7 @@ mod tests {
                     vec![10.0],
                     vec![],
                     1,
+                    vec![],
                 ),
             ],
             (1, 0),
@@ -944,6 +992,77 @@ mod tests {
             FunctionNodeIslandOutputValue::ControlValue((2.0 + 1.0) * 10.0 + 1.0)
         );
         assert_eq!(output.evaluated_at_ns, 1_000_000_000);
+    }
+
+    #[test]
+    fn an_input_past_a_nodes_own_sets_the_config_value_it_names_at_each_evaluation() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        stream_time_ns.store(0, Ordering::SeqCst);
+        let island =
+            FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+                vec![
+                    (
+                        "add_one".to_string(),
+                        0,
+                        compiled_to(add_one_and_count_calls),
+                        vec![(None, 2.0)],
+                        vec![],
+                        vec![0.0],
+                        1,
+                        vec![],
+                    ),
+                    (
+                        "scale".to_string(),
+                        1,
+                        compiled_to(scale_by_config_plus_seconds),
+                        vec![(None, 4.0), (Some((0, 0)), 0.0)],
+                        vec![10.0],
+                        vec![],
+                        1,
+                        vec![0],
+                    ),
+                ],
+                (1, 0),
+                stream_clock_now_ns,
+                None,
+                &|_| None,
+            )
+            .unwrap();
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::ControlValue(4.0 * (2.0 + 1.0)),
+            "the linked config value, not the one the node was handed, scales"
+        );
+    }
+
+    #[test]
+    fn a_config_value_an_input_sets_that_the_node_does_not_take_is_refused_naming_it() {
+        let refusal =
+            FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+                vec![(
+                    "scale".to_string(),
+                    0,
+                    compiled_to(scale_by_config_plus_seconds),
+                    vec![(None, 4.0), (None, 3.0)],
+                    vec![10.0],
+                    vec![],
+                    1,
+                    vec![1],
+                )],
+                (0, 0),
+                a_stream_clock_the_test_sets().1,
+                None,
+                &|_| None,
+            )
+            .err()
+            .unwrap();
+        assert!(
+            refusal.contains("`scale`") && refusal.contains("config value 1"),
+            "got {refusal}"
+        );
     }
 
     #[test]
@@ -985,6 +1104,7 @@ mod tests {
                     vec![],
                     vec![1.0],
                     1,
+                    vec![],
                 )],
                 (0, 0),
                 a_stream_clock_the_test_sets().1,
@@ -1046,6 +1166,7 @@ mod tests {
                     vec![],
                     vec![0.0],
                     1,
+                    vec![],
                 )],
                 (0, 0),
                 stream_clock_now_ns,
@@ -1101,6 +1222,7 @@ mod tests {
                     vec![],
                     vec![0.0],
                     1,
+                    vec![],
                 )],
                 (0, 0),
                 a_stream_clock_the_test_sets().1,
@@ -1161,6 +1283,7 @@ mod tests {
                     vec![],
                     vec![0.0],
                     1,
+                    vec![],
                 ),
                 (
                     "tally".to_string(),
@@ -1170,6 +1293,7 @@ mod tests {
                     vec![],
                     vec![0.0],
                     2,
+                    vec![],
                 ),
             ],
             island_output,
@@ -1253,6 +1377,7 @@ mod tests {
                     vec![],
                     vec![0.0],
                     2,
+                    vec![],
                 )],
                 (0, 1),
                 a_stream_clock_the_test_sets().1,
@@ -1284,6 +1409,7 @@ mod tests {
                         vec![],
                         vec![],
                         2,
+                        vec![],
                     ),
                     (
                         "add_one".to_string(),
@@ -1293,6 +1419,7 @@ mod tests {
                         vec![],
                         vec![0.0],
                         1,
+                        vec![],
                     ),
                 ],
                 (1, 0),

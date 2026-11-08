@@ -172,8 +172,15 @@ class FunctionNodeIslandsFedToTheirPorts:
         for island_node in island["nodes"]:
             node_id = island_node["node"]
             prepared = prepared_by_node_id[node_id]
-            called_through, config_values = self._how_one_function_node_is_called(
-                prepared, input_port, node_id, island_node.get("config")
+            linked_exposed_config_fields = _the_exposed_config_fields_a_link_drives(island_node)
+            called_through, config_values, config_value_indices = (
+                self._how_one_function_node_is_called(
+                    prepared,
+                    input_port,
+                    node_id,
+                    island_node.get("config"),
+                    linked_exposed_config_fields,
+                )
             )
             if isinstance(called_through, FunctionNodeBodyRunAsPython):
                 bodies_run_as_python[(input_port, node_id)] = called_through
@@ -189,10 +196,17 @@ class FunctionNodeIslandsFedToTheirPorts:
                         island_node.get("pins") or {},
                         node_index_by_node_id,
                         output_ports_by_node_id,
+                    )
+                    + _where_each_linked_exposed_config_field_takes_its_value(
+                        island_node["links_into"],
+                        linked_exposed_config_fields,
+                        node_index_by_node_id,
+                        output_ports_by_node_id,
                     ),
                     config_values,
                     list(prepared.initial_state_values),
                     len(prepared.output_ports),
+                    config_value_indices,
                 )
             )
         island_output = island["output"]
@@ -225,14 +239,24 @@ class FunctionNodeIslandsFedToTheirPorts:
         return self._prepared_by_import_path[import_path]
 
     def _how_one_function_node_is_called(
-        self, prepared: FunctionNodeReadyToEvaluate, input_port: str, node_id: str, config: Any
-    ) -> "tuple[Any, list[float]]":
+        self,
+        prepared: FunctionNodeReadyToEvaluate,
+        input_port: str,
+        node_id: str,
+        config: Any,
+        linked_exposed_config_fields: "tuple[str, ...]",
+    ) -> "tuple[Any, list[float], list[int]]":
         body_run_as_python = self._body_run_as_python_by_input_port_and_node_id.get(
             (input_port, node_id)
         )
         if body_run_as_python is not None and body_run_as_python.runs(prepared):
-            return body_run_as_python, []
-        return how_one_function_node_is_called(prepared, node_id, config)
+            body_run_as_python.config_fields_set_by_the_inputs_past_its_own = (
+                linked_exposed_config_fields
+            )
+            return body_run_as_python, [], []
+        return how_one_function_node_is_called(
+            prepared, node_id, config, linked_exposed_config_fields
+        )
 
     def _refuse_a_stateful_node_another_port_holds(self, island: "dict[str, Any]") -> None:
         input_port_of_the_island_holding_each_stateful_node = {
@@ -273,18 +297,74 @@ def feed_each_input_port_from_its_function_node_island(
 
 
 def how_one_function_node_is_called(
-    prepared: FunctionNodeReadyToEvaluate, node_id: str, config: Any
-) -> "tuple[Any, list[float]]":
-    """What the native evaluator calls `node_id` through, and the config values it hands the call.
+    prepared: FunctionNodeReadyToEvaluate,
+    node_id: str,
+    config: Any,
+    linked_exposed_config_fields: "tuple[str, ...]" = (),
+) -> "tuple[Any, list[float], list[int]]":
+    """What the native evaluator calls `node_id` through, the config values it hands the call,
+    and the index among them each input past the node's own sets.
 
     A compiled node is called through its entry's address with its config as
     f64s; a node run as Python through an object holding its config and state.
+    Each of `linked_exposed_config_fields` is an input past the node's own, in
+    that order, setting the config field of its name at each evaluation.
     """
     if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
-        return prepared.evaluate_entry_address, config_values_of_one_function_node(
-            prepared, node_id, config
+        return (
+            prepared.evaluate_entry_address,
+            config_values_of_one_function_node(prepared, node_id, config),
+            [
+                _the_config_value_index_of(prepared, node_id, field)
+                for field in linked_exposed_config_fields
+            ],
         )
-    return FunctionNodeBodyRunAsPython(prepared, node_id, config), []
+    body_run_as_python = FunctionNodeBodyRunAsPython(prepared, node_id, config)
+    body_run_as_python.config_fields_set_by_the_inputs_past_its_own = linked_exposed_config_fields
+    return body_run_as_python, [], []
+
+
+def _the_config_value_index_of(
+    compiled: FunctionNodeCompiledToItsEvaluateEntry, node_id: str, field: str
+) -> int:
+    if field not in compiled.config_fields:
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}` exposes `{field}` as an input, which its config class "
+            f"does not declare; its fields are {', '.join(compiled.config_fields) or 'none'}"
+        )
+    return compiled.config_fields.index(field)
+
+
+def _the_exposed_config_fields_a_link_drives(island_node: "dict[str, Any]") -> "tuple[str, ...]":
+    linked_input_ports = {link["port"] for link in island_node["links_into"]}
+    return tuple(
+        field
+        for field in island_node.get("exposed_config_fields") or ()
+        if field in linked_input_ports
+    )
+
+
+def _where_each_linked_exposed_config_field_takes_its_value(
+    links_into: "list[dict[str, Any]]",
+    linked_exposed_config_fields: "tuple[str, ...]",
+    node_index_by_node_id: "dict[str, int]",
+    output_ports_by_node_id: "dict[str, tuple[str, ...]]",
+) -> "list[tuple[Optional[tuple[int, int]], float]]":
+    linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
+    return [
+        (
+            (
+                node_index_by_node_id[linked_from_by_input_port[field]["node"]],
+                _output_index(
+                    output_ports_by_node_id,
+                    linked_from_by_input_port[field]["node"],
+                    linked_from_by_input_port[field]["port"],
+                ),
+            ),
+            0.0,
+        )
+        for field in linked_exposed_config_fields
+    ]
 
 
 def prepare_function_node_to_evaluate(function_node: Any, import_path: str) -> FunctionNodeReadyToEvaluate:
@@ -369,6 +449,7 @@ class FunctionNodeBodyRunAsPython:
         self._run_as_python = run_as_python
         self._node_id = node_id
         self._config = _config_record_of_one_function_node(run_as_python, node_id, config)
+        self.config_fields_set_by_the_inputs_past_its_own: "tuple[str, ...]" = ()
         state_record_class = run_as_python.state_record_class
         self._state = state_record_class() if state_record_class is not None else None
         signature = run_as_python.function_signature
@@ -393,6 +474,9 @@ class FunctionNodeBodyRunAsPython:
         The new state is kept only once every output is answered.
         """
         signature = self._run_as_python.function_signature
+        self._take_the_config_fields_its_inputs_past_its_own_set(
+            input_values[len(self._input_parameters) :]
+        )
         arguments: "dict[str, Any]" = {}
         for parameter_name, input_value in zip(self._input_parameters, input_values):
             arguments[parameter_name] = self._the_input_the_body_takes(
@@ -424,6 +508,15 @@ class FunctionNodeBodyRunAsPython:
         self._the_state_values_of(new_state)
         self._state = new_state
         return answered
+
+    def _take_the_config_fields_its_inputs_past_its_own_set(self, input_values: "list[Any]") -> None:
+        changed_fields: "dict[str, Any]" = {}
+        for field, input_value in zip(self.config_fields_set_by_the_inputs_past_its_own, input_values):
+            value = the_value_a_config_field_takes(getattr(self._config, field), float(input_value))
+            if value != getattr(self._config, field):
+                changed_fields[field] = value
+        if changed_fields:
+            self._config = dataclasses.replace(self._config, **changed_fields)
 
     def state_values(self) -> "list[float]":
         """The node's state as the f64s its stream carries, one per field of a state record of numbers and bools."""
@@ -470,6 +563,15 @@ class FunctionNodeBodyRunAsPython:
                 f"{type(output_value).__name__}"
             )
         return _exactly_as_f64(output_value, what_it_is)
+
+
+def the_value_a_config_field_takes(value_it_holds: Any, input_value: float) -> Any:
+    """`input_value` as the type of the value the config field holds: a bool, an int when it is whole, else a float."""
+    if isinstance(value_it_holds, bool):
+        return input_value != 0.0
+    if isinstance(value_it_holds, int) and input_value.is_integer():
+        return int(input_value)
+    return input_value
 
 
 def _config_record_of_one_function_node(

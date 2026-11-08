@@ -66,6 +66,13 @@ pub trait OutOfProcessFarSideLinkDelivery: Send {
         pin_values: &serde_json::Map<String, JsonValue>,
     ) -> Result<()>;
 
+    /// Hand the far side the config fields its node takes as inputs, each read
+    /// from the input port of its name, in place of those it takes now.
+    fn hand_over_the_config_fields_its_node_exposes_as_inputs(
+        &self,
+        exposed_config_fields: &[String],
+    ) -> Result<()>;
+
     /// Refuse every link the far side still owes an answer for with `reason`,
     /// because its host gave up on it.
     fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str);
@@ -103,6 +110,9 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// The pin value each of its input ports reads while no link feeds it, by
     /// port name.
     pin_values_of_its_input_ports: serde_json::Map<String, JsonValue>,
+    /// The config fields its node takes as inputs, each read from the input
+    /// port of its name.
+    config_fields_its_node_exposes_as_inputs: Vec<String>,
     /// Each function node its islands call, by the breadcrumb number its far
     /// side writes while calling it.
     function_nodes_by_breadcrumb_number: Vec<FunctionNodeNumberedOnTheBreadcrumb>,
@@ -217,6 +227,7 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
             "outputs": self.output_links,
             "islands": self.function_node_islands_feeding_its_input_ports,
             "pins": self.pin_values_of_its_input_ports,
+            "exposed_config_fields": self.config_fields_its_node_exposes_as_inputs,
         })
     }
 }
@@ -405,6 +416,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     output_links: Vec::new(),
                     function_node_islands_feeding_its_input_ports: Vec::new(),
                     pin_values_of_its_input_ports: serde_json::Map::new(),
+                    config_fields_its_node_exposes_as_inputs: Vec::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
                     runs_a_function_node_as_its_processor: false,
@@ -667,6 +679,30 @@ impl OutOfProcessLinkWiringEnvelope {
             HowALinkReachesTheFarSide::HandedOverTo(delivery) => delivery
                 .hand_over_the_pin_values_of_its_input_ports(
                     &recorded.pin_values_of_its_input_ports,
+                ),
+            HowALinkReachesTheFarSide::RidesTheSetupCommand
+            | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
+            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(()),
+        }
+    }
+
+    /// Record the config fields its node takes as inputs, and hand them to a
+    /// far side past its setup command when they differ from those it holds.
+    pub(crate) fn record_the_exposed_config_fields_and_hand_them_to_a_far_side_past_its_setup_command(
+        &self,
+        exposed_config_fields: Vec<String>,
+    ) -> Result<()> {
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        if recorded.config_fields_its_node_exposes_as_inputs == exposed_config_fields {
+            return Ok(());
+        }
+        recorded.config_fields_its_node_exposes_as_inputs = exposed_config_fields;
+        match &recorded.how_a_link_reaches_the_far_side {
+            HowALinkReachesTheFarSide::HandedOverTo(delivery) => delivery
+                .hand_over_the_config_fields_its_node_exposes_as_inputs(
+                    &recorded.config_fields_its_node_exposes_as_inputs,
                 ),
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)

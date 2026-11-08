@@ -310,6 +310,7 @@ fn an_input_an_island_running_a_node_as_python_feeds_is_refused_naming_the_node(
                 Vec::new(),
                 Vec::new(),
                 1,
+                vec![],
             )],
             (0, 0),
         )

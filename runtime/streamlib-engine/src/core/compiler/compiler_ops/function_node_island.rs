@@ -372,7 +372,9 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 /// Wire contract with the helper bootstrap: `{"input_port", "link_id",
 /// "output": {"node", "port"}, "nodes": [{"node", "name", "import_path",
 /// "config", "pins": {input: value}, "links_into": [{"port", "from": {"node",
-/// "port"}}]}]}`, and a stateful node's `"state_fields"` beside its `"node"`.
+/// "port"}}]}]}`, a stateful node's `"state_fields"` beside its `"node"`, and
+/// the `"exposed_config_fields"` of a node that takes config fields as inputs,
+/// each a port a link of `"links_into"` may name.
 pub(crate) fn the_island_feeding_a_link(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -491,6 +493,9 @@ fn place_a_function_node_after_what_it_reads(
     let state_fields = the_state_fields_of_a_function_node(graph, &node.processor_type);
     if !state_fields.is_empty() {
         island_node["state_fields"] = serde_json::json!(state_fields);
+    }
+    if !node.exposed_config_fields.is_empty() {
+        island_node["exposed_config_fields"] = serde_json::json!(node.exposed_config_fields);
     }
     nodes_each_after_what_it_reads.push(island_node);
     Ok(())
