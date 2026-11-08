@@ -9,7 +9,7 @@ that stalls half way still says how far it got.
 
 `EncodedFrameProbe` is the one under test: it reads the encoder's own output
 the way a moq-dev player does — each message a media frame, a keyframe
-opening a group, the port's catalog entry naming the codec.
+opening a group, the port's stream facts naming the codec.
 `EncodedFrameTimestampProbe` reads the same link for its frame-header stamps.
 `DecodedVideoFrameProbe` reads the far side of the decoder as Image frames.
 
@@ -83,7 +83,10 @@ class EncodedFrameProbe:
             "byte_count": len(access_unit),
         }
         if self.frames_admitted == 1:
-            report["catalog_entry"] = ctx.inputs.inbound_link_catalog_entry(ENCODED_PORT)
+            upstream_stream_facts = ctx.inputs.upstream_stream_facts(ENCODED_PORT)
+            report["stream_facts"] = (
+                None if upstream_stream_facts is None else upstream_stream_facts.to_wire()
+            )
         log.info(ENCODED_FRAME_MARKER + json.dumps(report))
         if self.frames_admitted == ENCODED_FRAMES_REPORTED:
             log.info(ENCODED_FRAMES_COMPLETE_MARKER)

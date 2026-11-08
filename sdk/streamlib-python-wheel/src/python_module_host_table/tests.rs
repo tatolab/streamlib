@@ -12,6 +12,7 @@ use tatolab_module_sdk::ModuleHost;
 use tatolab_module_sdk::module_host_table_abi::ModuleHostTableVirtualCameraStreamHandle;
 
 use super::*;
+use crate::python_bag_conversion::python_object_to_json_value;
 use crate::python_port_payload::PythonPortPayloadBorrow;
 use crate::python_processor_context::{
     PythonRuntimeContextFullAccess, note_execution_mode_from_parent_on_runtime_context,
@@ -313,10 +314,10 @@ fn the_stop_flag_native_code_reads_follows_the_parents_stop_request() {
 }
 
 #[test]
-fn a_catalog_entry_native_code_states_reaches_the_parent_as_the_op_python_sends() {
+fn stream_facts_native_code_states_reach_the_parent_as_the_op_python_sends() {
     Python::initialize();
     let (module_host, escalates_sent) = Python::attach(|python| {
-        let (source, _destination) = one_wired_link(python, "catalog_entry");
+        let (source, _destination) = one_wired_link(python, "stream_facts");
         let (context, escalates_sent) =
             full_access_context_recording_escalates(python, source, "source");
         let capsule = open_module_host_table(&context, &[SOURCE_OUTPUT_PORT], &[]).unwrap();
@@ -327,7 +328,10 @@ fn a_catalog_entry_native_code_states_reaches_the_parent_as_the_op_python_sends(
         module_host
             .open_output_port(SOURCE_OUTPUT_PORT)
             .unwrap()
-            .set_catalog_entry("video", r#"{"codec":"avc1.42e01f","codedWidth":320}"#)
+            .set_stream_facts(
+                "packets",
+                r#"{"rfc6381_codec":"avc1.42e01f","coded_width":320}"#,
+            )
             .unwrap();
     })
     .join()
@@ -337,13 +341,42 @@ fn a_catalog_entry_native_code_states_reaches_the_parent_as_the_op_python_sends(
         let escalates_sent = escalates_sent.bind(python);
         assert_eq!(escalates_sent.len(), 1);
         let op = escalates_sent.get_item(0).unwrap();
-        let op_text = op.str().unwrap().to_string();
         assert_eq!(
-            op_text,
-            "{'op': 'set_output_port_catalog_entry', 'port': 'frames_to_downstream', \
-             'section': 'video', 'entry': {'codec': 'avc1.42e01f', 'codedWidth': 320}}"
+            op.get_item("op").unwrap().extract::<String>().unwrap(),
+            "set_output_port_stream_facts"
+        );
+        assert_eq!(
+            op.get_item("port").unwrap().extract::<String>().unwrap(),
+            "frames_to_downstream"
+        );
+        let stream_facts = python_object_to_json_value(&op.get_item("stream_facts").unwrap())
+            .expect("the facts are plain JSON");
+        assert_eq!(
+            stream_facts,
+            serde_json::json!({"family": "packets", "rfc6381_codec": "avc1.42e01f", "coded_width": 320})
         );
     });
+}
+
+#[test]
+fn stream_facts_whose_fields_are_not_one_json_object_are_refused_naming_the_port() {
+    Python::initialize();
+    let module_host = Python::attach(|python| {
+        let (source, _destination) = one_wired_link(python, "stream_facts_not_json");
+        let (context, _) = full_access_context_recording_escalates(python, source, "source");
+        module_host_of(&open_module_host_table(&context, &[SOURCE_OUTPUT_PORT], &[]).unwrap())
+    });
+
+    let refusal = module_host
+        .open_output_port(SOURCE_OUTPUT_PORT)
+        .unwrap()
+        .set_stream_facts("packets", "[1, 2]")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains("frames_to_downstream") && refusal.contains("one JSON object"),
+        "got {refusal}"
+    );
 }
 
 #[test]

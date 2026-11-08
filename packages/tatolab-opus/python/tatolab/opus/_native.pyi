@@ -15,7 +15,7 @@ __all__ = [
     "AudioWindowToEncodedPacketEncoder",
     "DecodedAudioBlock",
     "EncodedPacketToAudioBlockDecoder",
-    "OpusEncoderPortAudioEntry",
+    "OpusEncoderPortStreamFacts",
 ]
 
 @final
@@ -40,8 +40,8 @@ class AudioWindowToEncodedPacketEncoder:
         the encoder discards a source it already refused. A window that is not
         what the port's contract promised raises `ValueError` naming it."""
 
-    def take_audio_entry_owed_to_the_port(self) -> OpusEncoderPortAudioEntry | None:
-        """The catalog entry the last mint owes the output port, once."""
+    def take_stream_facts_owed_to_the_port(self) -> OpusEncoderPortStreamFacts | None:
+        """The stream facts the last mint owes the output port, once."""
 
     def take_notices(self) -> list[tuple[Literal["info", "warn"], str]]:
         """What the encoder did since the last call, for the node to log."""
@@ -50,16 +50,16 @@ class AudioWindowToEncodedPacketEncoder:
     def packets_encoded(self) -> int: ...
 
 @final
-class OpusEncoderPortAudioEntry:
-    """The audio catalog entry an encoder's output port carries."""
+class OpusEncoderPortStreamFacts:
+    """The Packets stream facts an encoder's output port carries."""
 
     @property
-    def number_of_channels(self) -> int: ...
+    def channel_count(self) -> int: ...
     @property
     def sample_rate(self) -> int: ...
     @property
-    def hex_encoded_opus_identification_header(self) -> str:
-        """The `OpusHead`, hex-encoded, as the entry's `description`."""
+    def codec_configuration_hex(self) -> str:
+        """The `OpusHead`, hex-encoded."""
 
 @final
 class EncodedPacketToAudioBlockDecoder:
@@ -72,10 +72,10 @@ class EncodedPacketToAudioBlockDecoder:
         timestamp_ns: int,
         starts_group: bool,
         lost_since_last_read: int,
-        upstream_catalog_entry: dict[str, Any] | None,
+        upstream_packets_stream_facts: dict[str, Any] | None,
     ) -> DecodedAudioBlock | None:
         """One arriving message decoded in the format the upstream port's
-        catalog entry names, or `None` when it is discarded or was all encoder
+        stream facts name, in their wire form, or `None` when it is discarded or was all encoder
         priming. What cannot be decoded raises `ValueError` naming it."""
 
     def take_notices(self) -> list[tuple[Literal["info", "warn"], str]]:

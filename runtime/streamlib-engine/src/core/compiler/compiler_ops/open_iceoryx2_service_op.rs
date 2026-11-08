@@ -27,7 +27,7 @@ use crate::core::graph::{
     ProcessorInstanceComponent, ProcessorLossCounts, ProcessorMetrics,
     SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
 };
-use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
+use crate::core::output_port_stream_facts::StreamFactsOfOutputPorts;
 use crate::core::processors::{
     OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
 };
@@ -170,7 +170,7 @@ pub(crate) struct OpenedSourceSideOfALink {
     wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
     wired_on: Option<SourceSideOfALinkWiredOn>,
     source_output_port: String,
-    catalog_entries_of_the_sources_output_ports: Arc<CatalogEntriesOfOutputPorts>,
+    stream_facts_of_the_sources_output_ports: Arc<StreamFactsOfOutputPorts>,
 }
 
 /// How a link stands once both its sides are opened.
@@ -254,11 +254,11 @@ pub(crate) fn open_the_source_side_of_a_link(
     let channel_service_name = channel_service_name(source)?;
     let link_wiring_of_a_source_out_of_process =
         out_of_process_link_wiring_of(source_graph, &source_proc_id);
-    let catalog_entries_of_the_sources_output_ports = source_graph
+    let stream_facts_of_the_sources_output_ports = source_graph
         .traversal()
         .v(&source_proc_id)
         .first()
-        .map(|source_node| Arc::clone(source_node.catalog_entries_of_output_ports()))
+        .map(|source_node| Arc::clone(source_node.stream_facts_of_output_ports()))
         .ok_or_else(|| {
             Error::ProcessorNotFound(format!("source processor '{source_proc_id}' not found"))
         })?;
@@ -376,7 +376,7 @@ pub(crate) fn open_the_source_side_of_a_link(
         wire_reply_awaited_from_the_source,
         wired_on,
         source_output_port: source_port.to_string(),
-        catalog_entries_of_the_sources_output_ports,
+        stream_facts_of_the_sources_output_ports,
     })
 }
 
@@ -503,13 +503,13 @@ pub(crate) fn open_the_destination_side_of_a_link(
         .ok_or_else(|| {
             Error::ProcessorNotFound(format!("destination processor '{dest_proc_id}' not found"))
         })?
-        .upstream_catalog_entries_by_inbound_link()
+        .upstream_stream_facts_by_inbound_link()
         .record_inbound_link(
             &dest_port,
             link_id,
             InboundLinkName::from(opened_source_side.channel_service_name.as_str()),
             &opened_source_side.source_output_port,
-            Arc::clone(&opened_source_side.catalog_entries_of_the_sources_output_ports),
+            Arc::clone(&opened_source_side.stream_facts_of_the_sources_output_ports),
         );
     Ok(wire_reply_awaited_from_the_destination)
 }
@@ -607,7 +607,7 @@ pub(crate) fn release_the_destination_side_of_a_link(
 ) {
     if let Some(dest_node) = graph.traversal().v(dest_proc_id).first() {
         dest_node
-            .upstream_catalog_entries_by_inbound_link()
+            .upstream_stream_facts_by_inbound_link()
             .forget_inbound_link(link_id);
     }
     if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
@@ -3181,15 +3181,13 @@ mod tests {
             .expect("the node's type creates its processor")
     }
 
-    /// A native reader reads the catalog entry its upstream output port carries
-    /// now off the inbound link the compiler wired, and `graph` renders that
-    /// entry under the upstream's port; disconnecting the link leaves the
-    /// reader nothing to read. Both processors are created the way a stream's
-    /// spawn creates them, so the writer and the mailboxes reach their nodes'
-    /// entries only if that path hands them over.
+    /// A processor created the way a stream's spawn creates it reaches its
+    /// node's stream facts from its writer and its mailboxes: a write of facts
+    /// is checked against the node's port, and a reader reads its upstream's
+    /// facts off the inbound link the compiler wired.
     #[test]
-    fn a_native_reader_reads_its_upstreams_current_catalog_entry_off_the_wired_link() {
-        use crate::core::descriptors::{CatalogEntry, VideoEntry};
+    fn a_spawned_processors_writer_and_mailboxes_reach_their_nodes_stream_facts() {
+        use crate::core::descriptors::ImageStreamFacts;
 
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
@@ -3213,59 +3211,25 @@ mod tests {
         open_iceoryx2_service(&mut graph, &link_id, &node).expect("the link wires");
         assert_eq!(
             dest_input
-                .inbound_link_catalog_entry("in1", None)
+                .upstream_stream_facts("in1", None)
                 .expect("a port fed by one link answers"),
             None,
-            "the upstream port declared no entry"
+            "the upstream Records port states no facts"
         );
 
-        let encoded_video = CatalogEntry::from(VideoEntry {
-            codec: "avc1.64001f".to_string(),
-            coded_width: Some(1280),
-            coded_height: Some(720),
-            description: None,
-        });
-        source_output
-            .set_catalog_entry("out1", encoded_video.clone())
-            .expect("an entry hang reads replaces the port's");
-        let inbound_link_name = dest_input
-            .inbound_link_names("in1")
-            .pop()
-            .expect("the wired link is named");
-        assert_eq!(
-            dest_input
-                .inbound_link_catalog_entry("in1", Some(&inbound_link_name))
-                .expect("the named link answers"),
-            Some(encoded_video.clone())
+        let refusal = source_output
+            .set_stream_facts("out1", ImageStreamFacts::default())
+            .expect_err("the node's Records port carries no Image facts")
+            .to_string();
+        assert!(
+            refusal.contains("out1") && refusal.contains("Records"),
+            "the writer reached the node's ports; got {refusal}"
         );
-        let rendered_source =
-            serde_json::to_value(crate::core::json_schema::ProcessorNodeOutput::from(
-                graph
-                    .traversal()
-                    .v(ProcessorUniqueId::from(source_id.as_str()))
-                    .first()
-                    .expect("the source is in the graph"),
-            ))
-            .expect("the node renders");
-        assert_eq!(
-            rendered_source["ports"]["outputs"][0]["catalog_entry"],
-            serde_json::to_value(&encoded_video).expect("the entry serializes")
-        );
-
-        source_output
-            .set_catalog_entry(
-                "out1",
-                CatalogEntry {
-                    section: crate::core::descriptors::CatalogSection::Video,
-                    entry: serde_json::json!({"codedWidth": 1280}),
-                },
-            )
-            .expect_err("an entry with no codec is refused");
 
         close_iceoryx2_service(&mut graph, &link_id).expect("the link disconnects");
         assert_eq!(
             dest_input
-                .inbound_link_catalog_entry("in1", None)
+                .upstream_stream_facts("in1", None)
                 .expect("an unfed port answers"),
             None
         );

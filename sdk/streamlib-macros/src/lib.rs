@@ -10,7 +10,6 @@
 //!   named by the import path of the class it is, which the macro captures from
 //!   its expansion site.
 
-mod catalog_entry_grammar;
 mod codegen;
 mod grammar;
 

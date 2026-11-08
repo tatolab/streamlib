@@ -80,10 +80,10 @@ class MoqTrackSendPublisher:
     ) -> None:
         """Hand the gateway one message; a payload that is not contiguous is refused."""
 
-    def send_the_upstream_catalog_entry_when_it_changed(
-        self, catalog_entry: dict[str, Any] | None = None
+    def send_the_upstream_stream_facts_when_they_changed(
+        self, upstream_stream_facts: dict[str, Any] | None = None
     ) -> None:
-        """Hand the gateway the entry of the port feeding the send when it changed."""
+        """Hand the gateway the hang entry the upstream stream facts' wire form builds, when it changed."""
 
 @final
 class MoqTrackReceiveThread:

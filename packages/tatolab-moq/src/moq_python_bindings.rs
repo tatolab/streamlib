@@ -305,17 +305,17 @@ impl MoqTrackSendPublisher {
         Ok(sent?)
     }
 
-    /// Hand the gateway the catalog entry of the port feeding the send when it
-    /// changed.
-    #[pyo3(signature = (catalog_entry=None))]
-    fn send_the_upstream_catalog_entry_when_it_changed(
+    /// Hand the gateway the hang entry the stream facts of the port feeding
+    /// the send build, in their wire form, when it changed.
+    #[pyo3(signature = (upstream_stream_facts=None))]
+    fn send_the_upstream_stream_facts_when_they_changed(
         &mut self,
-        catalog_entry: Option<&Bound<'_, PyAny>>,
+        upstream_stream_facts: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        let catalog_entry = catalog_entry.map(json_of).transpose()?;
+        let upstream_stream_facts = upstream_stream_facts.map(json_of).transpose()?;
         Ok(self
             .publisher
-            .send_the_upstream_catalog_entry_when_it_changed(catalog_entry)?)
+            .send_the_upstream_stream_facts_when_they_changed(upstream_stream_facts)?)
     }
 }
 
@@ -362,17 +362,18 @@ impl MoqReceivedTrackOutput for MoqReceivedTrackModuleHostOutput {
         }
     }
 
-    fn set_catalog_entry(&mut self, section_and_entry: &serde_json::Value) {
-        let (Some(section), Some(entry)) = (
-            section_and_entry
-                .get("section")
-                .and_then(serde_json::Value::as_str),
-            section_and_entry.get("entry"),
-        ) else {
+    fn set_packets_stream_facts_read_from_the_remote_catalog_entry(
+        &mut self,
+        packets_stream_facts: &serde_json::Value,
+    ) {
+        if !matches!(self.family, MoqReceivedTrackFamily::Packets { .. }) {
             return;
-        };
-        if let Err(refusal) = self.content.set_catalog_entry(section, &entry.to_string()) {
-            tracing::warn!("MoqTrackReceive: the catalog entry is not carried: {refusal}");
+        }
+        if let Err(refusal) = self
+            .content
+            .set_stream_facts("packets", &packets_stream_facts.to_string())
+        {
+            tracing::warn!("MoqTrackReceive: the stream facts are not carried: {refusal}");
         }
     }
 

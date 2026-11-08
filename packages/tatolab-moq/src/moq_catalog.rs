@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! A broadcast's catalog in hang's layout, as the gateway merges it from its
-//! tracks' entries and a receive node reads one track's entry back out.
+//! tracks' entries and a receive node reads one track's entry back out, and the
+//! one translation between a port's stream facts and a track's hang entry.
 
 use serde_json::Value;
 
@@ -81,6 +82,80 @@ pub fn the_track_carries_its_timestamp_in_the_hang_legacy_container(
     matches!(container, Some(hang::catalog::Container::Legacy))
 }
 
+/// The hang entry `{"section", "entry"}` a send's upstream stream facts build:
+/// Packets facts naming a codec become an `audio` rendition when they state a
+/// sample rate or channel count and a `video` one otherwise, the configuration
+/// record as hang's `description`. Other facts, or none, build no entry.
+pub fn hang_catalog_entry_built_from_stream_facts(stream_facts: &Value) -> Option<Value> {
+    if stream_facts.get("family").and_then(Value::as_str) != Some("packets") {
+        return None;
+    }
+    let codec = stream_facts.get("rfc6381_codec").and_then(Value::as_str)?;
+    let mut entry = serde_json::Map::new();
+    entry.insert("codec".to_string(), Value::from(codec));
+    let sample_rate = stream_facts.get("sample_rate").cloned();
+    let channel_count = stream_facts.get("channel_count").cloned();
+    let section = if sample_rate.is_some() || channel_count.is_some() {
+        entry.insert(
+            "sampleRate".to_string(),
+            sample_rate.unwrap_or(Value::from(0)),
+        );
+        entry.insert(
+            "numberOfChannels".to_string(),
+            channel_count.unwrap_or(Value::from(0)),
+        );
+        "audio"
+    } else {
+        for (stream_facts_field, hang_field) in [
+            ("coded_width", "codedWidth"),
+            ("coded_height", "codedHeight"),
+        ] {
+            if let Some(value) = stream_facts.get(stream_facts_field) {
+                entry.insert(hang_field.to_string(), value.clone());
+            }
+        }
+        "video"
+    };
+    if let Some(codec_configuration_hex) = stream_facts.get("codec_configuration_hex") {
+        entry.insert("description".to_string(), codec_configuration_hex.clone());
+    }
+    Some(serde_json::json!({"section": section, "entry": entry}))
+}
+
+/// The Packets stream facts' fields a remote track's hang entry states, for a
+/// receive node writing Packets; `None` for an entry naming no codec, or one
+/// outside the `video` and `audio` sections.
+pub fn packets_stream_facts_read_from_hang_catalog_entry(
+    section_and_entry: &Value,
+) -> Option<Value> {
+    let entry = section_and_entry.get("entry")?;
+    let codec = entry.get("codec").and_then(Value::as_str)?;
+    let field_pairs: &[(&str, &str)] =
+        match section_and_entry.get("section").and_then(Value::as_str) {
+            Some("video") => &[
+                ("codedWidth", "coded_width"),
+                ("codedHeight", "coded_height"),
+            ],
+            Some("audio") => &[
+                ("sampleRate", "sample_rate"),
+                ("numberOfChannels", "channel_count"),
+            ],
+            _ => return None,
+        };
+    let mut stream_facts = serde_json::Map::new();
+    stream_facts.insert("rfc6381_codec".to_string(), Value::from(codec));
+    for (hang_field, stream_facts_field) in field_pairs
+        .iter()
+        .copied()
+        .chain([("description", "codec_configuration_hex")])
+    {
+        if let Some(value) = entry.get(hang_field).filter(|value| !value.is_null()) {
+            stream_facts.insert(stream_facts_field.to_string(), value.clone());
+        }
+    }
+    Some(Value::Object(stream_facts))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +199,69 @@ mod tests {
             .expect("hang reads the catalog");
         assert!(the_track_carries_its_timestamp_in_the_hang_legacy_container(Some(&video)));
         assert!(!the_track_carries_its_timestamp_in_the_hang_legacy_container(None));
+    }
+
+    #[test]
+    fn packets_facts_of_an_encoder_build_a_video_entry_hang_reads() {
+        let stream_facts = serde_json::json!({
+            "family": "packets", "rfc6381_codec": "avc1.64001f",
+            "coded_width": 1280, "coded_height": 720,
+        });
+        let video = hang_catalog_entry_built_from_stream_facts(&stream_facts)
+            .expect("an encoder's facts build an entry");
+        assert_eq!(
+            video,
+            serde_json::json!({"section": "video", "entry": {
+                "codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720
+            }})
+        );
+        let catalog = the_catalog_merged_from_the_entries_of([("camera", &video)]);
+        hang::Catalog::<()>::from_slice(&serde_json::to_vec(&catalog).unwrap())
+            .expect("hang reads the built entry");
+        assert!(the_track_carries_its_timestamp_in_the_hang_legacy_container(Some(&video)));
+    }
+
+    #[test]
+    fn packets_facts_stating_a_sample_rate_build_an_audio_entry_hang_reads() {
+        let stream_facts = serde_json::json!({
+            "family": "packets", "rfc6381_codec": "opus", "sample_rate": 48_000,
+            "channel_count": 2, "codec_configuration_hex": "4f707573486561640102",
+        });
+        let audio = hang_catalog_entry_built_from_stream_facts(&stream_facts)
+            .expect("an Opus encoder's facts build an entry");
+        assert_eq!(audio["section"], "audio");
+        assert_eq!(audio["entry"]["description"], "4f707573486561640102");
+        let catalog = the_catalog_merged_from_the_entries_of([("microphone", &audio)]);
+        hang::Catalog::<()>::from_slice(&serde_json::to_vec(&catalog).unwrap())
+            .expect("hang reads the built entry");
+        assert_eq!(
+            packets_stream_facts_read_from_hang_catalog_entry(&audio),
+            Some(serde_json::json!({
+                "rfc6381_codec": "opus", "sample_rate": 48_000, "channel_count": 2,
+                "codec_configuration_hex": "4f707573486561640102",
+            }))
+        );
+    }
+
+    #[test]
+    fn facts_naming_no_codec_or_of_another_family_build_no_entry() {
+        assert_eq!(
+            hang_catalog_entry_built_from_stream_facts(
+                &serde_json::json!({"family": "packets", "coded_width": 640})
+            ),
+            None
+        );
+        assert_eq!(
+            hang_catalog_entry_built_from_stream_facts(
+                &serde_json::json!({"family": "image", "frame_rate": {"numerator": 30, "denominator": 1}})
+            ),
+            None
+        );
+        assert_eq!(
+            packets_stream_facts_read_from_hang_catalog_entry(
+                &serde_json::json!({"section": "json", "entry": {"mode": "stream"}})
+            ),
+            None
+        );
     }
 }

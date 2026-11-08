@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Turning received RTP into media frames and what their ports' catalog
-//! entries state.
+//! Turning received RTP into media frames and what their ports' stream facts
+//! state.
 //!
 //! RTP states neither the codec's profile and level, nor the extent, nor the
 //! channel count. Each comes from the stream itself — the SPS, the answer, the

@@ -55,8 +55,8 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "read_shared_native_service_lease_state")]
     ReadSharedNativeServiceLeaseState(EscalateRequestReadSharedNativeServiceLeaseState),
 
-    #[serde(rename = "read_inbound_link_catalog_entry")]
-    ReadInboundLinkCatalogEntry(EscalateRequestReadInboundLinkCatalogEntry),
+    #[serde(rename = "read_inbound_link_stream_facts")]
+    ReadInboundLinkStreamFacts(EscalateRequestReadInboundLinkStreamFacts),
 
     #[serde(rename = "refill_device_export_staging")]
     RefillDeviceExportStaging(EscalateRequestRefillDeviceExportStaging),
@@ -97,8 +97,8 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "run_ray_tracing_kernel")]
     RunRayTracingKernel(EscalateRequestRunRayTracingKernel),
 
-    #[serde(rename = "set_output_port_catalog_entry")]
-    SetOutputPortCatalogEntry(EscalateRequestSetOutputPortCatalogEntry),
+    #[serde(rename = "set_output_port_stream_facts")]
+    SetOutputPortStreamFacts(EscalateRequestSetOutputPortStreamFacts),
 
     #[serde(rename = "wait_device_idle")]
     WaitDeviceIdle(EscalateRequestWaitDeviceIdle),
@@ -1948,11 +1948,11 @@ pub(crate) struct EscalateRequestRunRayTracingKernel {
     pub(crate) width: u32,
 }
 
-/// Read the current catalog entry of the output port feeding one of the
+/// Read the current stream facts of the output port feeding one of the
 /// helper's input ports. Reads no payload.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct EscalateRequestReadInboundLinkCatalogEntry {
+pub(crate) struct EscalateRequestReadInboundLinkStreamFacts {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
@@ -1965,22 +1965,19 @@ pub(crate) struct EscalateRequestReadInboundLinkCatalogEntry {
     pub(crate) inbound_link: Option<String>,
 }
 
-/// Replace the catalog entry one of the helper's output ports carries. The
-/// host parses it with hang's catalog types and refuses one they do not read.
+/// Replace the stream facts one of the helper's output ports carries. The
+/// host refuses facts of another family than the port's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct EscalateRequestSetOutputPortCatalogEntry {
+pub(crate) struct EscalateRequestSetOutputPortStreamFacts {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
     /// The helper's output port.
     pub(crate) port: String,
 
-    /// The catalog section the entry belongs in.
-    pub(crate) section: streamlib_processor_schema::CatalogSection,
-
-    /// The section's fields, spelled as hang spells them.
-    pub(crate) entry: Value,
+    /// The facts, tagged by their family.
+    pub(crate) stream_facts: streamlib_processor_schema::PortStreamFacts,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

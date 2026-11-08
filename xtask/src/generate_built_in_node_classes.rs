@@ -37,46 +37,40 @@ struct BuiltInNodePortDescriptor {
     #[serde(default)]
     delivery_profile: Option<String>,
     #[serde(default)]
-    catalog_entry: Option<BuiltInNodePortCatalogEntry>,
+    family: Option<BuiltInNodePortFamilyDeclaration>,
 }
 
-/// The catalog entry an output port of a [`BuiltInNodeDescriptor`] declares.
+/// The part of a port's family declaration a built-in's docstring renders.
 #[derive(Debug, Deserialize)]
-struct BuiltInNodePortCatalogEntry {
-    section: String,
-    entry: Map<String, Value>,
+struct BuiltInNodePortFamilyDeclaration {
+    #[serde(default)]
+    frame_rate: Option<BuiltInNodeImageOutputFrameRate>,
 }
 
-impl BuiltInNodePortCatalogEntry {
-    /// The entry as a Python author writes it with `tatolab.stream.catalog`:
-    /// `BinaryEntry(mode="snapshot", mime="application/msgpack")`.
-    fn as_python_catalog_entry(&self, refused_item_label: &str) -> Result<String> {
-        let entry_class_name = match self.section.as_str() {
-            "video" => "VideoEntry",
-            "audio" => "AudioEntry",
-            "text" => "TextEntry",
-            "json" => "JsonEntry",
-            "binary" => "BinaryEntry",
-            other => bail!(
-                "{refused_item_label} declares a catalog entry in no section hang has: {other}"
-            ),
-        };
-        let keyword_arguments = self
-            .entry
-            .iter()
-            .map(|(field_name, value)| match value {
-                Value::String(text) => Ok(format!("{field_name}={}", Value::from(text.as_str()))),
-                Value::Number(number) => Ok(format!("{field_name}={number}")),
-                other => bail!(
-                    "{refused_item_label}'s catalog entry field `{field_name}` is {other}, which no \
-                     catalog entry class takes"
-                ),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(format!(
-            "{entry_class_name}({})",
-            keyword_arguments.join(", ")
-        ))
+/// An Image output's declared frame rate, in the descriptor's wire form.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BuiltInNodeImageOutputFrameRate {
+    Stated { numerator: u32, denominator: u32 },
+    FromConfig { config_key: String },
+}
+
+/// How a Python author spells an Image output's declared frame rate:
+/// `rate=30`, `rate=ImageStreamFrameRate(30000, 1001)` or
+/// `rate=from_config("key")`.
+fn python_spelling_of_a_frame_rate(frame_rate: &BuiltInNodeImageOutputFrameRate) -> String {
+    match frame_rate {
+        BuiltInNodeImageOutputFrameRate::Stated {
+            numerator,
+            denominator: 1,
+        } => format!("rate={numerator}"),
+        BuiltInNodeImageOutputFrameRate::Stated {
+            numerator,
+            denominator,
+        } => format!("rate=ImageStreamFrameRate({numerator}, {denominator})"),
+        BuiltInNodeImageOutputFrameRate::FromConfig { config_key } => {
+            format!("rate=from_config({})", Value::from(config_key.as_str()))
+        }
     }
 }
 
@@ -286,11 +280,15 @@ fn render_port_paragraph(
             paragraph,
             "\n    `{port_name}`{delivery_profile}: {description}"
         )?;
-        if let Some(catalog_entry) = &port.catalog_entry {
+        if let Some(frame_rate) = port
+            .family
+            .as_ref()
+            .and_then(|family| family.frame_rate.as_ref())
+        {
             write!(
                 paragraph,
-                "\n        Catalog entry: `{}`.",
-                catalog_entry.as_python_catalog_entry(refused_item_label)?
+                "\n        Frame rate: `{}`.",
+                python_spelling_of_a_frame_rate(frame_rate)
             )?;
         }
     }
@@ -931,7 +929,7 @@ class FrameSink(BuiltInNode[FrameSinkConfig]):
     }
 
     #[test]
-    fn an_output_ports_catalog_entry_renders_under_the_port_as_a_python_author_writes_it() {
+    fn an_image_outputs_frame_rate_renders_under_the_port_as_a_python_author_writes_it() {
         let descriptor = json!({
             "type": "tatolab.stream:FrameSource",
             "description": "Frames",
@@ -941,18 +939,31 @@ class FrameSink(BuiltInNode[FrameSinkConfig]):
                 "description": "Frames",
                 "required": true,
                 "delivery_profile": null,
-                "catalog_entry": {
-                    "section": "binary",
-                    "entry": {"mode": "snapshot", "mime": "application/msgpack"}
+                "family": {
+                    "family": "image",
+                    "frame_rate": {"stated": {"numerator": 30000, "denominator": 1001}}
+                }
+            }, {
+                "name": "preview",
+                "description": "Preview",
+                "required": true,
+                "delivery_profile": null,
+                "family": {
+                    "family": "image",
+                    "frame_rate": {"from_config": {"config_key": "frames_per_second"}}
                 }
             }]
         });
         let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
         assert!(
             rendered.contains(
-                "        `video`: Frames.\n            Catalog entry: \
-                 `BinaryEntry(mode=\"snapshot\", mime=\"application/msgpack\")`.\n"
+                "        `video`: Frames.\n            Frame rate: \
+                 `rate=ImageStreamFrameRate(30000, 1001)`.\n"
             ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("Frame rate: `rate=from_config(\"frames_per_second\")`."),
             "{rendered}"
         );
     }

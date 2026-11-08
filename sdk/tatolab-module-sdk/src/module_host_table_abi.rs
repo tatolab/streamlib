@@ -11,7 +11,7 @@
 //! check-module-host-table-surface` holds every field here to that.
 //!
 //! Every verb is callable from any thread the module owns and never takes
-//! Python's GIL, except [`ModuleHostTable::output_port_set_catalog_entry`],
+//! Python's GIL, except [`ModuleHostTable::output_port_set_stream_facts`],
 //! which attaches to the interpreter for its round trip to the parent. The
 //! surface verbs minor 2 adds reach the parent over the helper's native escalate
 //! channel, with no interpreter on either end, as do the IOSurface import
@@ -467,13 +467,14 @@ pub struct ModuleHostTable {
         starts_group: u32,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
-    /// State the port's catalog entry: `section` is `video` or `audio`, and
-    /// `entry_json` is the entry's fields as one JSON object.
-    pub output_port_set_catalog_entry: unsafe extern "C" fn(
+    /// Replace the port's stream facts: `family` is `image` or `packets`, the
+    /// port's own, and `stream_facts_json` the facts' fields as one JSON
+    /// object, named as `PortStreamFacts` names them.
+    pub output_port_set_stream_facts: unsafe extern "C" fn(
         node_host: *mut c_void,
         port: ModuleHostTablePortHandle,
-        section: ModuleHostTableUtf8,
-        entry_json: ModuleHostTableUtf8,
+        family: ModuleHostTableUtf8,
+        stream_facts_json: ModuleHostTableUtf8,
         error_message: *mut ModuleHostTableErrorMessage,
     ) -> ModuleHostTableStatus,
     /// Open an input port Python lent to native code, by its declared name.
@@ -990,7 +991,7 @@ mod layout_regression_tests {
             offset_of!(ModuleHostTable, node_host_release),
             offset_of!(ModuleHostTable, output_port_open),
             offset_of!(ModuleHostTable, output_port_write),
-            offset_of!(ModuleHostTable, output_port_set_catalog_entry),
+            offset_of!(ModuleHostTable, output_port_set_stream_facts),
             offset_of!(ModuleHostTable, input_port_open),
             offset_of!(ModuleHostTable, input_port_read),
             offset_of!(ModuleHostTable, input_message_release),

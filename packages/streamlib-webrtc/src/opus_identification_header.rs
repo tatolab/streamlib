@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The Opus identification header (`OpusHead`, RFC 7845 §5.1) a WHEP player's
-//! audio catalog entry carries hex-encoded in `description`, so a decoder
+//! audio stream facts carry hex-encoded as `codec_configuration_hex`, so a decoder
 //! learns the channel count before the first packet.
 //!
 //! RTP carries mono and stereo Opus only (RFC 7587), so the header is always

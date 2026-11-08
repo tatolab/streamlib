@@ -34,6 +34,7 @@ from tatolab.stream import (
     monotonic_now_ns,
     node,
 )
+from tatolab.stream.stream_facts import PacketsStreamFacts
 
 ENCODED_PACKET_MARKER = "MARKER:ENCODED_PACKET "
 ENCODED_PACKETS_COMPLETE_MARKER = "MARKER:ENCODED_PACKETS_COMPLETE"
@@ -143,13 +144,13 @@ class EncodedOpusMediaFrameProbe:
         varint_timestamp_microseconds, opus_packet = split_hang_legacy_container_media_frame(
             message.payload
         )
-        catalog_entry = ctx.inputs.inbound_link_catalog_entry(ENCODED_PORT)
-        if catalog_entry is None:
+        upstream_stream_facts = ctx.inputs.upstream_stream_facts(ENCODED_PORT)
+        if not isinstance(upstream_stream_facts, PacketsStreamFacts):
             raise RuntimeError(
-                "the encoder's port carries no catalog entry beside a packet it published"
+                "the encoder's port carries no Packets stream facts beside a packet it published"
             )
         opus_head_channels, pre_skip = opus_head_channels_and_pre_skip(
-            catalog_entry["entry"]["description"]
+            upstream_stream_facts.codec_configuration_hex
         )
         self.packets_admitted += 1
         log.info(
@@ -161,10 +162,9 @@ class EncodedOpusMediaFrameProbe:
                     "varint_timestamp_microseconds": varint_timestamp_microseconds,
                     "timestamp_ns": message.timestamp_ns,
                     "byte_count": len(opus_packet),
-                    "catalog_section": catalog_entry["section"],
-                    "catalog_codec": catalog_entry["entry"]["codec"],
-                    "catalog_sample_rate": catalog_entry["entry"]["sampleRate"],
-                    "catalog_number_of_channels": catalog_entry["entry"]["numberOfChannels"],
+                    "stream_facts_codec": upstream_stream_facts.rfc6381_codec,
+                    "stream_facts_sample_rate": upstream_stream_facts.sample_rate,
+                    "stream_facts_channel_count": upstream_stream_facts.channel_count,
                     "opus_head_channels": opus_head_channels,
                     "pre_skip": pre_skip,
                 }

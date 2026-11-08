@@ -78,7 +78,7 @@ class WhepPlayerThread:
     `encoded_video` and `encoded_audio` through a module host table.
 
     The thread connects, reconnects with backoff when the session ends, states
-    each port's catalog entry before the first frame it describes and again
+    each port's stream facts before the first frame they describe and again
     when the stream changes, and holds no Python while it runs.
     """
 

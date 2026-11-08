@@ -89,6 +89,16 @@ pub enum ChannelsOutputPortSampleRate {
     FromConfig { config_key: String },
 }
 
+/// The frame rate an Image output states, written on the class or read from
+/// its node's config.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ImageOutputPortFrameRate {
+    Stated(crate::ImageStreamFrameRate),
+    FromConfig { config_key: String },
+}
+
 /// The sample type of a Channels output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -109,7 +119,7 @@ pub enum ArrayOutputPortResidency {
 
 /// A port's family and the keys its family takes.
 ///
-/// An output states `names`, `codec`, `rate`, `dtype`, `formats` and
+/// An output states `names`, `codec`, `rate`, `frame_rate`, `dtype`, `formats` and
 /// `residency` as its family allows; an input states `requires`,
 /// `requires_codec` and `formats`. [`Self::refusal_of_its_keys`] names a key
 /// the family or the direction does not take.
@@ -127,6 +137,8 @@ pub struct PortFamilyDeclaration {
     pub requires_codec: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<ChannelsOutputPortSampleRate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<ImageOutputPortFrameRate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dtype: Option<ChannelsOutputPortSampleType>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -163,6 +175,7 @@ impl PortFamilyDeclaration {
             codec: None,
             requires_codec: Vec::new(),
             rate: None,
+            frame_rate: None,
             dtype: None,
             formats: Vec::new(),
             residency: None,
@@ -201,7 +214,7 @@ impl PortFamilyDeclaration {
             .iter()
             .any(|family| family.has_names());
         let input_takes_packets = families_an_input_takes.contains(&PortFamily::Packets);
-        let stated_keys: [(&str, bool, bool); 12] = [
+        let stated_keys: [(&str, bool, bool); 13] = [
             (
                 "names",
                 self.names.is_some(),
@@ -229,6 +242,11 @@ impl PortFamilyDeclaration {
                 self.rate.is_some(),
                 direction == PortFamilyDeclarationDirection::Output
                     && family == PortFamily::Channels,
+            ),
+            (
+                "frame_rate",
+                self.frame_rate.is_some(),
+                direction == PortFamilyDeclarationDirection::Output && family == PortFamily::Image,
             ),
             (
                 "dtype",
@@ -375,6 +393,46 @@ pub fn output_port_family_resolved_against_config(
         Some(other) => Err(format!(
             "config key {config_key:?} names the output's family as a string, and holds {other}"
         )),
+    }
+}
+
+/// The frame rate an Image output's declaration resolves to against its node's
+/// config — a whole number of frames per second or a `{numerator,
+/// denominator}` map — or why it cannot be resolved; `None` when it states none
+/// or its config key is unset.
+pub fn output_port_frame_rate_resolved_against_config(
+    declaration: &PortFamilyDeclaration,
+    node_config: Option<&serde_json::Value>,
+) -> Result<Option<crate::ImageStreamFrameRate>, String> {
+    let config_key = match declaration.frame_rate.as_ref() {
+        None => return Ok(None),
+        Some(ImageOutputPortFrameRate::Stated(frame_rate)) => return Ok(Some(*frame_rate)),
+        Some(ImageOutputPortFrameRate::FromConfig { config_key }) => config_key,
+    };
+    let refusal = |held: &serde_json::Value| {
+        format!(
+            "config key {config_key:?} states the frame rate as a positive whole number or a \
+             {{numerator, denominator}} map, and holds {held}"
+        )
+    };
+    match node_config.and_then(|config| config.get(config_key)) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(held @ serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|whole| u32::try_from(whole).ok())
+            .filter(|whole| *whole > 0)
+            .map(|numerator| {
+                Some(crate::ImageStreamFrameRate {
+                    numerator,
+                    denominator: 1,
+                })
+            })
+            .ok_or_else(|| refusal(held)),
+        Some(held) => serde_json::from_value::<crate::ImageStreamFrameRate>(held.clone())
+            .ok()
+            .filter(|frame_rate| frame_rate.numerator > 0 && frame_rate.denominator > 0)
+            .map(Some)
+            .ok_or_else(|| refusal(held)),
     }
 }
 
@@ -723,6 +781,62 @@ mod tests {
                 endpoint("compositor", "video", &input_reading_both),
             ),
             None
+        );
+    }
+
+    #[test]
+    fn an_image_outputs_frame_rate_resolves_from_its_class_or_its_nodes_config() {
+        let stated = PortFamilyDeclaration {
+            frame_rate: Some(ImageOutputPortFrameRate::Stated(
+                crate::ImageStreamFrameRate {
+                    numerator: 30_000,
+                    denominator: 1_001,
+                },
+            )),
+            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+        };
+        assert_eq!(
+            output_port_frame_rate_resolved_against_config(&stated, None),
+            Ok(Some(crate::ImageStreamFrameRate {
+                numerator: 30_000,
+                denominator: 1_001
+            }))
+        );
+        let from_config = PortFamilyDeclaration {
+            frame_rate: Some(ImageOutputPortFrameRate::FromConfig {
+                config_key: "frames_per_second".into(),
+            }),
+            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+        };
+        let resolved = |config: serde_json::Value| {
+            output_port_frame_rate_resolved_against_config(&from_config, Some(&config))
+        };
+        assert_eq!(
+            resolved(serde_json::json!({"frames_per_second": 60})),
+            Ok(Some(crate::ImageStreamFrameRate {
+                numerator: 60,
+                denominator: 1
+            }))
+        );
+        assert_eq!(
+            resolved(
+                serde_json::json!({"frames_per_second": {"numerator": 24000, "denominator": 1001}})
+            ),
+            Ok(Some(crate::ImageStreamFrameRate {
+                numerator: 24_000,
+                denominator: 1_001
+            }))
+        );
+        assert_eq!(resolved(serde_json::json!({})), Ok(None));
+        assert!(resolved(serde_json::json!({"frames_per_second": 0})).is_err());
+        assert!(resolved(serde_json::json!({"frames_per_second": "fast"})).is_err());
+        assert!(
+            PortFamilyDeclaration {
+                frame_rate: from_config.frame_rate.clone(),
+                ..PortFamilyDeclaration::of_family(PortFamily::Channels)
+            }
+            .refusal_of_its_keys("audio", PortFamilyDeclarationDirection::Output)
+            .is_some_and(|refusal| refusal.contains("frame_rate"))
         );
     }
 

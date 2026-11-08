@@ -112,9 +112,9 @@ impl MoqStreamServiceNames {
 pub enum MoqTrackContentSampleKind {
     /// One message's payload, as written.
     Object = 0,
-    /// The catalog entry of the port feeding the send node, as JSON; empty
-    /// when that port carries none.
-    UpstreamCatalogEntry = 1,
+    /// The hang entry the stream facts of the port feeding the send node
+    /// build, as JSON; empty when they build none.
+    HangCatalogEntryBuiltFromUpstreamStreamFacts = 1,
 }
 
 /// The header of a sample a send node writes to its track's content service.

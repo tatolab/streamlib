@@ -19,7 +19,7 @@ from tatolab.h265 import H265Decoder, H265Encoder
 ```
 
 `H265Encoder` takes `video` in and publishes `encoded_video`, one media frame per access unit — a QUIC varint timestamp in microseconds and
-then the Annex-B access unit — with a keyframe opening a group and a `VideoEntry` stated on the
+then the Annex-B access unit — with a keyframe opening a group and `PacketsStreamFacts` stated on the
 port from the stream's SPS.
 
 On Linux it encodes with Vulkan Video on a device its own helper process creates on the runtime's

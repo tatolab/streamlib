@@ -4,6 +4,7 @@
 //! A track node's declaration on its gateway, and a send node's writes to the
 //! track it names.
 
+use crate::moq_catalog::hang_catalog_entry_built_from_stream_facts;
 use std::time::{Duration, Instant};
 
 use iceoryx2::port::notifier::Notifier;
@@ -92,7 +93,8 @@ pub struct MoqTrackSendPublisher {
     content: MoqNodeSlicePublisher<MoqTrackContentSentToTheGatewayHeader>,
     gateway_wake: Option<Notifier<ipc_threadsafe::Service>>,
     sequence_number: u64,
-    upstream_catalog_entry_sent: Option<(Option<serde_json::Value>, Instant)>,
+    hang_catalog_entry_built_from_upstream_stream_facts_sent:
+        Option<(Option<serde_json::Value>, Instant)>,
 }
 
 impl MoqTrackSendPublisher {
@@ -104,7 +106,7 @@ impl MoqTrackSendPublisher {
             ipc,
             gateway_wake: None,
             sequence_number: 0,
-            upstream_catalog_entry_sent: None,
+            hang_catalog_entry_built_from_upstream_stream_facts_sent: None,
         })
     }
 
@@ -125,15 +127,19 @@ impl MoqTrackSendPublisher {
         )
     }
 
-    /// Hand the gateway the entry of the port feeding the send, `{"section",
-    /// "entry"}`, when it changed since the last one handed over, and again
-    /// every second for a gateway that was not yet reading the track.
-    pub fn send_the_upstream_catalog_entry_when_it_changed(
+    /// Hand the gateway the hang entry the stream facts of the port feeding
+    /// the send build, when it changed since the last one handed over, and
+    /// again every second for a gateway that was not yet reading the track.
+    pub fn send_the_upstream_stream_facts_when_they_changed(
         &mut self,
-        section_and_entry: Option<serde_json::Value>,
+        upstream_stream_facts: Option<serde_json::Value>,
     ) -> Result<()> {
+        let section_and_entry = upstream_stream_facts
+            .as_ref()
+            .and_then(hang_catalog_entry_built_from_stream_facts);
         let now = Instant::now();
-        if let Some((sent, sent_at)) = &self.upstream_catalog_entry_sent
+        if let Some((sent, sent_at)) =
+            &self.hang_catalog_entry_built_from_upstream_stream_facts_sent
             && *sent == section_and_entry
             && now < *sent_at + A_TRACK_IS_DECLARED_AGAIN_EVERY
         {
@@ -144,13 +150,14 @@ impl MoqTrackSendPublisher {
             .map(|entry| entry.to_string().into_bytes())
             .unwrap_or_default();
         self.send(
-            MoqTrackContentSampleKind::UpstreamCatalogEntry,
+            MoqTrackContentSampleKind::HangCatalogEntryBuiltFromUpstreamStreamFacts,
             &payload,
             0,
             false,
             0,
         )?;
-        self.upstream_catalog_entry_sent = Some((section_and_entry, now));
+        self.hang_catalog_entry_built_from_upstream_stream_facts_sent =
+            Some((section_and_entry, now));
         Ok(())
     }
 

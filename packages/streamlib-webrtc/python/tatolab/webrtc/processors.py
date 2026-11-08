@@ -8,7 +8,7 @@ surface and no GPU: `WhipPublisher` consumes the media frames `H264Encoder` and
 `OpusEncoder` publish, and `WhepPlayer` writes the media frames `H264Decoder`
 and `OpusDecoder` consume — hang's legacy container, a QUIC varint timestamp in
 microseconds and then the Annex-B access unit or Opus packet. The codec, the
-coded extent and the channel count ride the ports' catalog entries. Each runs
+coded extent and the channel count ride the ports' stream facts. Each runs
 in its own helper process. The publisher calls this wheel's own Rust from its
 `process()`; the player lends its two output ports to a thread of this wheel's
 Rust through the module host table, which writes every frame with no Python
@@ -33,6 +33,7 @@ from tatolab.stream import (
     log,
     node,
 )
+from tatolab.stream.stream_facts import PacketsStreamFacts, PortStreamFacts
 
 from . import _native
 
@@ -61,44 +62,34 @@ VideoOrAudio = Literal["video", "audio"]
 
 
 class PublishedTrack(NamedTuple):
-    """The RTP track one inbound link publishes as, read off its catalog entry."""
+    """The RTP track one inbound link publishes as, read off its upstream stream facts."""
 
     kind: VideoOrAudio
     channels: "int | None"
 
 
-def published_track_from_catalog_entry(
-    catalog_entry: "Mapping[str, Any] | None", inbound_link: str
+def published_track_from_upstream_stream_facts(
+    upstream_stream_facts: "PortStreamFacts | None", inbound_link: str
 ) -> PublishedTrack:
-    """The track `inbound_link`'s upstream catalog entry describes, refused by
-    name when it describes nothing this session carries.
+    """The track `inbound_link`'s upstream stream facts describe, refused by
+    name when they describe nothing this session carries.
 
-    The entry is `{"section": ..., "entry": {...}}` as
-    `inbound_link_catalog_entry` returns it. A codec absent from what this
-    session offers is refused rather than guessed at.
+    A codec absent from what this session offers is refused rather than
+    guessed at.
     """
-    if catalog_entry is None:
+    if not isinstance(upstream_stream_facts, PacketsStreamFacts):
         raise ValueError(
-            f"WhipPublisher: `{inbound_link}` carries no catalog entry, and each "
-            f"track's codec is read from it. Connect an H264Encoder or an "
-            f"OpusEncoder output, or a node that states its port's entry."
+            f"WhipPublisher: `{inbound_link}` carries no Packets stream facts, and each "
+            f"track's codec is read from them. Connect an H264Encoder or an "
+            f"OpusEncoder output, or a node that states its port's stream facts."
         )
-    section = catalog_entry.get("section")
-    fields = catalog_entry.get("entry") or {}
-    codec = fields.get("codec")
-    if (
-        section == "video"
-        and isinstance(codec, str)
-        and codec.startswith(H264_CODEC_STRING_PREFIXES)
-    ):
+    codec = upstream_stream_facts.rfc6381_codec
+    if isinstance(codec, str) and codec.startswith(H264_CODEC_STRING_PREFIXES):
         return PublishedTrack(kind="video", channels=None)
-    if section == "audio" and codec == OPUS_CODEC_STRING:
-        channels = fields.get("numberOfChannels")
-        return PublishedTrack(
-            kind="audio", channels=channels if isinstance(channels, int) else None
-        )
+    if codec == OPUS_CODEC_STRING:
+        return PublishedTrack(kind="audio", channels=upstream_stream_facts.channel_count)
     raise ValueError(
-        f"WhipPublisher: `{inbound_link}`'s catalog entry names {section} codec "
+        f"WhipPublisher: `{inbound_link}`'s stream facts name codec "
         f"{codec!r}, which this session does not carry — it offers H.264 "
         f"({' or '.join(prefix.rstrip('.') for prefix in H264_CODEC_STRING_PREFIXES)}) "
         f"video and {OPUS_CODEC_STRING} audio."
@@ -198,7 +189,7 @@ class WhipPublisher:
     """Media frames in, one WHIP session out.
 
     One fan-in input, and each inbound link is one track whose medium the
-    upstream port's catalog entry names. Its settings are a
+    upstream port's stream facts name. Its settings are a
     `WhipPublisherConfig` — `url`, and an optional `bearer_token` — which is
     what `rt.add(WhipPublisher, config={"url": ...})` is constructed into.
 
@@ -309,13 +300,13 @@ class WhipPublisher:
     def _track_of(
         self, inputs: LinkInputDataReader, inbound_link: str
     ) -> PublishedTrack:
-        """The track `inbound_link` publishes as, read off its upstream catalog
-        entry on its first message and fixed for the session."""
+        """The track `inbound_link` publishes as, read off its upstream stream
+        facts on its first message and fixed for the session."""
         track = self._track_by_inbound_link.get(inbound_link)
         if track is not None:
             return track
-        track = published_track_from_catalog_entry(
-            inputs.inbound_link_catalog_entry(
+        track = published_track_from_upstream_stream_facts(
+            inputs.upstream_stream_facts(
                 TRACKS_INPUT_PORT, inbound_link=inbound_link
             ),
             inbound_link,
@@ -402,12 +393,12 @@ class WhepPlayer:
     and a decoder downstream wants a port it can name when the graph is wired.
 
     A keyframe opens a group on `encoded_video`, and every Opus packet opens
-    its own on `encoded_audio`. Each port's catalog entry is stated before the
-    first media frame it describes, and stated again when the stream changes,
+    its own on `encoded_audio`. Each port's stream facts are stated before the
+    first media frame they describe, and stated again when the stream changes,
     from the stream itself: the codec string and coded extent from the SPS,
     and the channel count from the answer's `sprop-stereo` (falling back to the
     first packet's TOC when the answer states no Opus fmtp), latched constant
-    for the stream. The `OpusHead` in the audio entry's `description` carries a
+    for the stream. The `OpusHead` in the audio facts' `codec_configuration_hex` carries a
     pre-skip of 0 because RTP states no encoder lookahead, so a decoder trims
     nothing.
     """

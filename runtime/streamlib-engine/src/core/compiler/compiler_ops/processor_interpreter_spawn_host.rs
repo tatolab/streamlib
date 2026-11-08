@@ -1743,9 +1743,9 @@ pub(crate) fn spawn_host_for_processor_node(
         function_node_call_that_lost_the_helper: None,
         shutdown_was_already_asked_of_this_helper: false,
         what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches {
-            catalog_entries_of_its_output_ports: Arc::clone(node.catalog_entries_of_output_ports()),
-            upstream_catalog_entries_by_its_inbound_links: Arc::clone(
-                node.upstream_catalog_entries_by_inbound_link(),
+            stream_facts_of_its_output_ports: Arc::clone(node.stream_facts_of_output_ports()),
+            upstream_stream_facts_by_its_inbound_links: Arc::clone(
+                node.upstream_stream_facts_by_inbound_link(),
             ),
             shared_native_service_leases: Default::default(),
             failure_the_node_reported_of_itself: Default::default(),

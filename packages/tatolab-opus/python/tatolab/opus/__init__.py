@@ -10,7 +10,7 @@ type is `tatolab.opus:OpusEncoder` and `tatolab.opus:OpusDecoder`.
 Both carry media frames — hang's legacy container, a QUIC varint timestamp in
 microseconds and then one Opus packet, each opening its own group — the layout
 the moq-dev players and `tatolab-webrtc` read and write. The codec state is
-this wheel's Rust; what lives here is the port surface, the catalog entry and
+this wheel's Rust; what lives here is the port surface, the stream facts and
 the log lines, because a helper process's Rust has no `tracing` subscriber.
 """
 
@@ -32,7 +32,7 @@ from tatolab.stream import (
     log,
     node,
 )
-from tatolab.stream.catalog import AudioEntry
+from tatolab.stream.stream_facts import PacketsStreamFacts
 
 from . import _native
 
@@ -45,7 +45,7 @@ OPUS_SAMPLE_RATE_HZ = 48_000
 NANOSECONDS_PER_SECOND = 1_000_000_000
 #: One 20 ms Opus frame at 48 kHz, in per-channel samples.
 SAMPLES_IN_ONE_OPUS_WINDOW = 960
-OPUS_CATALOG_CODEC_STRING = "opus"
+OPUS_RFC6381_CODEC_STRING = "opus"
 #: libopus takes its bitrate as a C `opus_int32`.
 _HIGHEST_BITRATE_BPS_LIBOPUS_TAKES = 2**31 - 1
 
@@ -86,14 +86,14 @@ class OpusEncoderConfig:
         "count follows whatever the source publishes. One to eight channels; more is "
         "refused by name. `encoded_audio` publishes one media frame per Opus packet — a "
         "QUIC varint timestamp in microseconds, then the packet — each one opening its own "
-        "group. The port's catalog entry is an `AudioEntry` — `opus`, 48 000 Hz, the "
-        "channel count — carrying the `OpusHead` hex-encoded in `description`, so a "
+        "group. The port's stream facts are `PacketsStreamFacts` — `opus`, 48 000 Hz, the "
+        "channel count — carrying the `OpusHead` hex-encoded as `codec_configuration_hex`, so a "
         "decoder learns the channel count and the encoder's lookahead before the first "
         "packet.\n\n"
         "The libopus encoder is minted from the first window's channel count — one or two "
         "channels as a single stream, three to eight as a multistream under channel "
         "mapping family 1 — and re-mints when the source's count changes, replacing the "
-        "port's catalog entry with one naming the new count. In-band FEC and DTX are off "
+        "port's stream facts with ones naming the new count. In-band FEC and DTX are off "
         "and are not knobs."
     ),
 )
@@ -115,7 +115,7 @@ class OpusEncoder:
         self._encoder = _native.AudioWindowToEncodedPacketEncoder(
             config.bitrate_bps, config.application
         )
-        self._audio_entry_owed_to_the_port: "_native.OpusEncoderPortAudioEntry | None" = None
+        self._stream_facts_owed_to_the_port: "_native.OpusEncoderPortStreamFacts | None" = None
 
     audio = Input(
         Channels,
@@ -132,7 +132,7 @@ class OpusEncoder:
         ),
     )
     encoded_audio = Output(
-        Packets, codec=OPUS_CATALOG_CODEC_STRING, description="Opus media frames, one packet each"
+        Packets, codec=OPUS_RFC6381_CODEC_STRING, description="Opus media frames, one packet each"
     )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -151,22 +151,22 @@ class OpusEncoder:
                 _log_codec_notices(self._encoder.take_notices())
             if media_frame is None:
                 continue
-            owed = self._encoder.take_audio_entry_owed_to_the_port()
+            owed = self._encoder.take_stream_facts_owed_to_the_port()
             if owed is not None:
-                self._audio_entry_owed_to_the_port = owed
+                self._stream_facts_owed_to_the_port = owed
             # Set ahead of the first packet it describes, and kept owed until
             # the port takes it.
-            if self._audio_entry_owed_to_the_port is not None:
-                ctx.outputs.set_catalog_entry(
+            if self._stream_facts_owed_to_the_port is not None:
+                ctx.outputs.set_stream_facts(
                     ENCODED_AUDIO_PORT,
-                    AudioEntry(
-                        codec=OPUS_CATALOG_CODEC_STRING,
-                        sampleRate=self._audio_entry_owed_to_the_port.sample_rate,
-                        numberOfChannels=self._audio_entry_owed_to_the_port.number_of_channels,
-                        description=self._audio_entry_owed_to_the_port.hex_encoded_opus_identification_header,
+                    PacketsStreamFacts(
+                        rfc6381_codec=OPUS_RFC6381_CODEC_STRING,
+                        sample_rate=self._stream_facts_owed_to_the_port.sample_rate,
+                        channel_count=self._stream_facts_owed_to_the_port.channel_count,
+                        codec_configuration_hex=self._stream_facts_owed_to_the_port.codec_configuration_hex,
                     ),
                 )
-                self._audio_entry_owed_to_the_port = None
+                self._stream_facts_owed_to_the_port = None
             # Stamped with the instant the packet's first sample was captured,
             # never the moment it was published.
             ctx.outputs.write(
@@ -191,11 +191,11 @@ class OpusEncoder:
         "`encoded_audio` takes media frames in the layout `OpusEncoder` publishes — a "
         "QUIC varint timestamp, then one Opus packet — and declares no window contract: "
         "an encoded link carries whole packets. The channel count and the encoder's "
-        "lookahead come from the `OpusHead` in the upstream port's catalog entry. An audio "
-        "entry carrying no `OpusHead` names the channel count; with no entry at all, the "
+        "lookahead come from the `OpusHead` in the upstream port's stream facts. Facts "
+        "carrying no `OpusHead` name the channel count; with no facts at all, the "
         "first packet's TOC fixes one or two channels for the run. Either way nothing is "
-        "trimmed. A message that is not a media frame, an upstream entry that is not an "
-        "`opus` audio entry, an `OpusHead` that does not read, and a `pre_skip` past the "
+        "trimmed. A message that is not a media frame, upstream facts naming a codec other "
+        "than `opus`, an `OpusHead` that does not read, and a `pre_skip` past the "
         "5 760 samples one Opus packet can span are refused by name. `audio` publishes "
         "Channels blocks — `f32` at 48 000 Hz in the stream's own channel count.\n\n"
         "The entry is read as it stands when each packet decodes. When the upstream "
@@ -222,7 +222,7 @@ class OpusDecoder:
     encoded_audio = Input(
         Packets,
         delivery="ordered",
-        requires_codec=(OPUS_CATALOG_CODEC_STRING,),
+        requires_codec=(OPUS_RFC6381_CODEC_STRING,),
         description="Opus media frames to decode",
     )
     audio = Output(
@@ -234,7 +234,7 @@ class OpusDecoder:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         while (message := ctx.inputs.read_message(ENCODED_AUDIO_PORT)) is not None:
-            upstream_catalog_entry = ctx.inputs.inbound_link_catalog_entry(
+            upstream_stream_facts = ctx.inputs.upstream_stream_facts(
                 ENCODED_AUDIO_PORT, inbound_link=message.inbound_link
             )
             try:
@@ -243,7 +243,7 @@ class OpusDecoder:
                     message.timestamp_ns,
                     message.starts_group,
                     message.lost_since_last_read,
-                    upstream_catalog_entry,
+                    None if upstream_stream_facts is None else upstream_stream_facts.to_wire(),
                 )
             finally:
                 _log_codec_notices(self._decoder.take_notices())

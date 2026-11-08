@@ -34,11 +34,6 @@ pub struct PortInfo {
     /// port renders exactly what it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
-    /// Catalog entry declared by this output port, or `None`. Mirrors the
-    /// field on [`crate::core::descriptors::PortDescriptor`]; what the port
-    /// carries now lives on the node, beside the ports.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
     /// The port family this port declares. Mirrors the field on
     /// [`crate::core::descriptors::PortDescriptor`].
     pub family: crate::core::descriptors::PortFamilyDeclaration,
@@ -53,7 +48,6 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             delivery_profile: port.delivery_profile.clone(),
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
-            catalog_entry: port.catalog_entry.clone(),
             family: port.family.clone(),
         }
     }

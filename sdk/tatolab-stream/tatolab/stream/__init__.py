@@ -16,9 +16,9 @@ compiles with no runtime installed. The built-in nodes are generated from the
 runtime's own declarations, each with a `TypedDict` for its config.
 """
 
-from . import catalog as catalog
 from . import clock as clock
 from . import log as log
+from . import stream_facts as stream_facts
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError as ExposedNameCastsToNothingError,
 )
@@ -232,7 +232,6 @@ __all__ = [
     "StreamClock",
     "StreamClockReading",
     "Time",
-    "catalog",
     "clock",
     "compile_stream_to_graph",
     "from_config",
@@ -242,4 +241,5 @@ __all__ = [
     "node",
     "start_monotonic_timer",
     "stream",
+    "stream_facts",
 ]

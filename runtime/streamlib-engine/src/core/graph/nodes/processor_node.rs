@@ -11,8 +11,8 @@ use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
 use std::sync::Arc;
 
 use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
-use crate::core::output_port_catalog_entries::{
-    CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,
+use crate::core::output_port_stream_facts::{
+    StreamFactsOfOutputPorts, UpstreamStreamFactsByInboundLink,
 };
 use crate::core::utils::compute_json_checksum;
 
@@ -54,10 +54,10 @@ pub struct ProcessorNode {
     /// The entries this node's output ports carry now, shared with whatever
     /// replaces them and with every node an inbound link reads them from.
     #[serde(skip)]
-    catalog_entries_of_output_ports: Arc<CatalogEntriesOfOutputPorts>,
+    stream_facts_of_output_ports: Arc<StreamFactsOfOutputPorts>,
     /// The upstream entries this node's inbound links reach.
     #[serde(skip)]
-    upstream_catalog_entries_by_inbound_link: Arc<UpstreamCatalogEntriesByInboundLink>,
+    upstream_stream_facts_by_inbound_link: Arc<UpstreamStreamFactsByInboundLink>,
 }
 
 impl PartialEq for ProcessorNode {
@@ -103,8 +103,10 @@ impl ProcessorNode {
         outputs: Vec<PortInfo>,
     ) -> Self {
         let config_checksum = config.as_ref().map(compute_json_checksum).unwrap_or(0);
-        let catalog_entries_of_output_ports =
-            Arc::new(CatalogEntriesOfOutputPorts::as_declared_by(&outputs));
+        let stream_facts_of_output_ports = Arc::new(StreamFactsOfOutputPorts::as_declared_by(
+            &outputs,
+            config.as_ref(),
+        ));
         Self {
             id: ProcessorUniqueId::new(),
             node_uuid: uuid::Uuid::new_v4(),
@@ -118,8 +120,8 @@ impl ProcessorNode {
             node_kind,
             components: ComponentMap::new(),
             component_serializers: Vec::new(),
-            catalog_entries_of_output_ports,
-            upstream_catalog_entries_by_inbound_link: Arc::default(),
+            stream_facts_of_output_ports,
+            upstream_stream_facts_by_inbound_link: Arc::default(),
         }
     }
 
@@ -134,15 +136,15 @@ impl ProcessorNode {
     }
 
     /// The entries this node's output ports carry now.
-    pub(crate) fn catalog_entries_of_output_ports(&self) -> &Arc<CatalogEntriesOfOutputPorts> {
-        &self.catalog_entries_of_output_ports
+    pub(crate) fn stream_facts_of_output_ports(&self) -> &Arc<StreamFactsOfOutputPorts> {
+        &self.stream_facts_of_output_ports
     }
 
     /// The upstream entries this node's inbound links reach.
-    pub(crate) fn upstream_catalog_entries_by_inbound_link(
+    pub(crate) fn upstream_stream_facts_by_inbound_link(
         &self,
-    ) -> &Arc<UpstreamCatalogEntriesByInboundLink> {
-        &self.upstream_catalog_entries_by_inbound_link
+    ) -> &Arc<UpstreamStreamFactsByInboundLink> {
+        &self.upstream_stream_facts_by_inbound_link
     }
 
     /// Update config and recompute checksum.

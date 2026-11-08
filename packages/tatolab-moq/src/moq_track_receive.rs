@@ -8,7 +8,10 @@
 use std::time::{Duration, Instant};
 
 use crate::error::{MoqModuleError, Result};
-use crate::moq_catalog::the_track_carries_its_timestamp_in_the_hang_legacy_container;
+use crate::moq_catalog::{
+    packets_stream_facts_read_from_hang_catalog_entry,
+    the_track_carries_its_timestamp_in_the_hang_legacy_container,
+};
 use crate::moq_node_ipc::{
     MoqGatewayControlMessage, MoqNodeIpc, MoqReceivedContentSampleKind,
     MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
@@ -42,8 +45,12 @@ pub trait MoqReceivedTrackOutput: Send {
     fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) -> bool;
     /// Count `given_up_group_count` groups lost before the next write.
     fn declare_groups_given_up(&mut self, given_up_group_count: u64);
-    /// Carry the track's catalog entry, `{"section", "entry"}`.
-    fn set_catalog_entry(&mut self, section_and_entry: &serde_json::Value);
+    /// State the Packets stream facts the track's remote hang entry states,
+    /// as one JSON object of `PacketsStreamFacts`' fields.
+    fn set_packets_stream_facts_read_from_the_remote_catalog_entry(
+        &mut self,
+        packets_stream_facts: &serde_json::Value,
+    );
     /// The stream's clock now, in nanoseconds.
     fn stream_time_now_ns(&self) -> i64;
 }
@@ -178,8 +185,13 @@ impl MoqReceivedContentWriting {
                     the_track_carries_its_timestamp_in_the_hang_legacy_container(
                         section_and_entry.as_ref(),
                     );
-                if let Some(section_and_entry) = &section_and_entry {
-                    output.set_catalog_entry(section_and_entry);
+                if let Some(packets_stream_facts) = section_and_entry
+                    .as_ref()
+                    .and_then(packets_stream_facts_read_from_hang_catalog_entry)
+                {
+                    output.set_packets_stream_facts_read_from_the_remote_catalog_entry(
+                        &packets_stream_facts,
+                    );
                 }
             }
             kind if kind == MoqReceivedContentSampleKind::GroupsGivenUp as u32 => {

@@ -214,9 +214,9 @@ struct EncodedVideoLentByTheModuleHost<'port> {
 }
 
 impl EncodedVideoOutputPort for EncodedVideoLentByTheModuleHost<'_> {
-    fn set_catalog_entry(&self, section: &str, entry_json: &str) -> Result<(), String> {
+    fn set_stream_facts(&self, family: &str, stream_facts_json: &str) -> Result<(), String> {
         self.encoded_video_output
-            .set_catalog_entry(section, entry_json)
+            .set_stream_facts(family, stream_facts_json)
             .map_err(|refusal| refusal.to_string())
     }
 
