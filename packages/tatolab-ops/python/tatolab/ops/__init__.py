@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 from tatolab.stream import State, Stateful, Time, node
 
-__all__ = ["Clamp", "Lfo", "LfoPhase", "Remap"]
+__all__ = ["Clamp", "Feedback", "Lfo", "LfoPhase", "Remap"]
 
 
 @dataclass(frozen=True)
@@ -53,3 +53,9 @@ def Remap(  # noqa: N802
 def Clamp(x: float, low: float = 0.0, high: float = 1.0) -> float:  # noqa: N802
     """`x` held between `low` and `high`."""
     return min(max(x, low), high)
+
+
+@node.function
+def Feedback(value: float = 0.0) -> float:  # noqa: N802
+    """`value` as it was at the last evaluation, starting at 0: the one node a loop of function nodes closes through."""
+    return value

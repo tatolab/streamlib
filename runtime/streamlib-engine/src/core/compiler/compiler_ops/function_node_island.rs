@@ -51,6 +51,20 @@ pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     })
 }
 
+/// The type of the one function node a cycle of function nodes closes
+/// through: it hands out its input as it was at the last evaluation.
+pub(crate) const FEEDBACK_FUNCTION_NODE_TYPE: &str = "tatolab.ops:Feedback";
+
+/// Whether `node_id` is a `Feedback` node, whose input the island reads from
+/// the last evaluation.
+fn is_a_feedback_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
+    graph
+        .traversal()
+        .v(node_id)
+        .first()
+        .is_some_and(|node| node.processor_type.to_string() == FEEDBACK_FUNCTION_NODE_TYPE)
+}
+
 /// Whether `node_id` is a function node, inside its readers' islands or
 /// promoted out of them.
 fn is_a_function_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
@@ -367,14 +381,17 @@ pub(crate) fn the_island_feeding_a_link(
     let island_output_node_id = link.source().processor_id().clone();
     let mut nodes_each_after_what_it_reads = Vec::new();
     let mut placed = HashSet::new();
-    let mut on_the_path_from_the_output = Vec::new();
-    place_a_function_node_after_what_it_reads(
-        graph,
-        &island_output_node_id,
-        &mut placed,
-        &mut on_the_path_from_the_output,
-        &mut nodes_each_after_what_it_reads,
-    )?;
+    let mut read_at_the_last_evaluation_by_a_feedback_node = vec![island_output_node_id.clone()];
+    while let Some(node_id) = read_at_the_last_evaluation_by_a_feedback_node.pop() {
+        place_a_function_node_after_what_it_reads(
+            graph,
+            &node_id,
+            &mut placed,
+            &mut Vec::new(),
+            &mut nodes_each_after_what_it_reads,
+            &mut read_at_the_last_evaluation_by_a_feedback_node,
+        )?;
+    }
     Ok(serde_json::json!({
         "input_port": link.to_port().port_name(),
         "link_id": link_id.to_string(),
@@ -392,6 +409,7 @@ fn place_a_function_node_after_what_it_reads(
     placed: &mut HashSet<ProcessorUniqueId>,
     on_the_path_from_the_output: &mut Vec<ProcessorUniqueId>,
     nodes_each_after_what_it_reads: &mut Vec<JsonValue>,
+    read_at_the_last_evaluation_by_a_feedback_node: &mut Vec<ProcessorUniqueId>,
 ) -> Result<()> {
     if placed.contains(node_id) {
         return Ok(());
@@ -407,7 +425,8 @@ fn place_a_function_node_after_what_it_reads(
             .collect();
         return Err(Error::InvalidGraph(format!(
             "function nodes {} read each other in a cycle; an island evaluates each node after \
-             what it reads, so a cycle needs a delay node, which reads the last evaluation",
+             what it reads, so a cycle closes only through a `Feedback` node, which hands out \
+             its input as it was at the last evaluation",
             cycle.join(" → ")
         )));
     }
@@ -438,13 +457,18 @@ fn place_a_function_node_after_what_it_reads(
                  this release"
             )));
         }
-        place_a_function_node_after_what_it_reads(
-            graph,
-            upstream_id,
-            placed,
-            on_the_path_from_the_output,
-            nodes_each_after_what_it_reads,
-        )?;
+        if is_a_feedback_node(graph, node_id) {
+            read_at_the_last_evaluation_by_a_feedback_node.push(upstream_id.clone());
+        } else {
+            place_a_function_node_after_what_it_reads(
+                graph,
+                upstream_id,
+                placed,
+                on_the_path_from_the_output,
+                nodes_each_after_what_it_reads,
+                read_at_the_last_evaluation_by_a_feedback_node,
+            )?;
+        }
         links_into.push(serde_json::json!({
             "port": link_into.to_port().port_name(),
             "from": {
@@ -544,6 +568,7 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
     let destination_id = link.to_port().processor_id();
     if !runs_inside_the_read_of_each_node_it_feeds(graph, source_id)
         || !runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
+        || is_a_feedback_node(graph, destination_id)
     {
         return Ok(());
     }
@@ -559,8 +584,9 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
                 .collect();
             return Err(Error::InvalidGraph(format!(
                 "linking `{}` closes a cycle of function nodes, {}; an island evaluates each \
-                 node after what it reads, so a cycle needs a delay node, which reads the last \
-                 evaluation",
+                 node after what it reads, so a cycle closes only through a `Feedback` node, \
+                 which hands out its input as it was at the last evaluation. To fix: link the \
+                 loop's way back through a `Feedback` node",
                 link.id,
                 cycle.join(" → ")
             )));
@@ -575,7 +601,9 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
                 continue;
             }
             let downstream_id = downstream_link.to_port().processor_id();
-            if runs_inside_the_read_of_each_node_it_feeds(graph, downstream_id) {
+            if runs_inside_the_read_of_each_node_it_feeds(graph, downstream_id)
+                && !is_a_feedback_node(graph, downstream_id)
+            {
                 let mut longer_path = path.clone();
                 longer_path.push(downstream_id.clone());
                 paths_to_follow.push(longer_path);
@@ -1381,7 +1409,90 @@ pub(crate) mod tests {
             refusal.contains(&format!("{remap} → {mix} → {remap}")),
             "{refusal}"
         );
-        assert!(refusal.contains("delay node"), "{refusal}");
+        assert!(refusal.contains("`Feedback` node"), "{refusal}");
+    }
+
+    fn a_graph_resolving_the_test_function_node_types_and_feedback() -> Graph {
+        a_graph_resolving_these_function_node_types([
+            a_function_node_type("test_ops:lfo", &[], &["result"]),
+            a_function_node_type("test_ops:remap", &["x"], &["result"]),
+            a_function_node_type("test_ops:mix", &["a", "b"], &["result"]),
+            a_function_node_type(FEEDBACK_FUNCTION_NODE_TYPE, &["value"], &["result"]),
+        ])
+    }
+
+    #[test]
+    fn a_link_closing_a_loop_through_feedback_is_taken_live() {
+        let mut graph = a_graph_resolving_the_test_function_node_types_and_feedback();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+        let feedback = add_a_node(&mut graph, FEEDBACK_FUNCTION_NODE_TYPE, JsonValue::Null);
+        link(&mut graph, (&lfo, "result"), (&mix, "a"));
+        link(&mut graph, (&feedback, "result"), (&mix, "b"));
+        let closing_the_loop = link(&mut graph, (&mix, "result"), (&feedback, "value"));
+
+        assert_eq!(
+            the_refusal_of_a_commit(
+                &graph,
+                &[],
+                &[],
+                std::slice::from_ref(&closing_the_loop),
+                &[],
+                &[]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn an_island_closing_a_loop_through_feedback_evaluates_feedback_before_what_it_reads() {
+        let mut graph = a_graph_resolving_the_test_function_node_types_and_feedback();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+        let feedback = add_a_node(&mut graph, FEEDBACK_FUNCTION_NODE_TYPE, JsonValue::Null);
+        let reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&lfo, "result"), (&mix, "a"));
+        link(&mut graph, (&feedback, "result"), (&mix, "b"));
+        link(&mut graph, (&mix, "result"), (&feedback, "value"));
+        let into_the_reader = link(&mut graph, (&mix, "result"), (&reader, "in1"));
+
+        let island = the_island_feeding_a_link(&graph, &into_the_reader).unwrap();
+
+        let order = the_node_ids_of_an_island(&island);
+        let position_of = |node_id: &ProcessorUniqueId| {
+            order
+                .iter()
+                .position(|each| each == node_id.as_str())
+                .unwrap()
+        };
+        assert_eq!(order.len(), 3, "each node once: {order:?}");
+        assert!(position_of(&feedback) < position_of(&mix), "{order:?}");
+        assert!(position_of(&lfo) < position_of(&mix), "{order:?}");
+        let feedback_node = &island["nodes"][position_of(&feedback)];
+        assert_eq!(
+            feedback_node["links_into"],
+            serde_json::json!([{ "port": "value", "from": { "node": mix.to_string(), "port": "result" } }]),
+            "`Feedback` still names what it reads, which the reader takes from the last evaluation"
+        );
+    }
+
+    #[test]
+    fn a_loop_whose_way_back_skips_feedback_is_still_refused() {
+        let mut graph = a_graph_resolving_the_test_function_node_types_and_feedback();
+        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let feedback = add_a_node(&mut graph, FEEDBACK_FUNCTION_NODE_TYPE, JsonValue::Null);
+        let reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&feedback, "result"), (&mix, "a"));
+        link(&mut graph, (&mix, "result"), (&remap, "x"));
+        link(&mut graph, (&remap, "result"), (&mix, "b"));
+        let into_the_reader = link(&mut graph, (&mix, "result"), (&reader, "in1"));
+
+        let refusal = the_island_feeding_a_link(&graph, &into_the_reader)
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("in a cycle"), "{refusal}");
+        assert!(refusal.contains("`Feedback` node"), "{refusal}");
     }
 
     #[test]

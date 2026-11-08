@@ -178,8 +178,8 @@ The order is: the families, then variables, then the gateway and track nodes.
   `Random` agree. See DECIDED 2.
 - **Time.** `now` is the reader's `ctx.time` at the read, in integer nanoseconds on the
   stream's monotonic clock. Reproducible in stepped mode; read-time in real-time mode.
-- **Cycles.** The island pass refuses a cycle unless it passes through a delay node (`Lag`,
-  `SampleAndHold`), which reads the last evaluation's state.
+- **Cycles.** The island pass refuses a cycle unless it closes through a `Feedback` node, which
+  hands out its input as it was at the last evaluation. See DECIDED 9.
 - **Literal pins.** An unlinked input takes the value set on its pin, else its default
   (§Inputs and config).
 - **A control value on a wire.** An island edge carrying one value is Channels with an
@@ -408,6 +408,15 @@ All seven were settled by the owner on 2026-11-06 and 2026-11-07.
 - **DECIDED 7 — Inputs and config (owner, 2026-11-06).** A value that changes freely is an input
   with a pin value; config is for what needs a rebuild, and any config field may be exposed as
   a pin (§Inputs and config).
+- **DECIDED 9 — How a loop closes (owner, 2026-11-08).** One built-in node, `Feedback`, closes a
+  loop of function nodes: it hands out its input as it was at the last evaluation, starting at 0,
+  and the island evaluates it before what it reads. Any other cycle is refused by name. It is
+  `tatolab.ops:Feedback`, the one `tatolab-ops` name the engine knows. Rejected: a
+  `delay=True` flag on `@node.function`, which makes every author and agent learn a new kind of
+  node; letting any stateful node close a loop, which changes what `Lfo` or a counter means
+  inside one; and the engine inserting the delay itself. TouchDesigner (Feedback CHOP/TOP),
+  Houdini (Solver SOP), Pure Data (`delwrite~`/`delread~`) and Simulink (Unit Delay) each close a
+  loop through one dedicated node.
 
 Assumed unless overruled:
 - A function's single output is named `result`; plain parameters are pins by default; a node's
@@ -430,7 +439,8 @@ Assumed unless overruled:
 
 - `Lfo → Remap → <Python class>` runs with exactly one child process, the class's, beside the
   class case in `tests/stream-on-runtime/test_helper_placement.py`.
-- `connect` and `disconnect` re-island live, and a cycle without a delay node is refused by name.
+- `connect` and `disconnect` re-island live, and a cycle that does not close through `Feedback` is
+  refused by name.
 - `Lfo → Remap` from `tatolab-ops` runs compiled, from the wheel's pre-compiled code, and is
   read by a module's native half with no GIL.
 - A user's numeric `@node.function` compiles on load, is cached, and matches its Python output; a

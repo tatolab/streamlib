@@ -141,13 +141,21 @@ class FunctionNodeIslandsFedToTheirPorts:
         """Prepare every node of `island` and feed it to its input port, in place of any island feeding it."""
         input_port = island["input_port"]
         self._refuse_a_stateful_node_another_port_holds(island)
+        prepared_by_node_id = {
+            island_node["node"]: self._prepared(island_node["import_path"])
+            for island_node in island["nodes"]
+        }
+        node_index_by_node_id = {
+            island_node["node"]: node_index for node_index, island_node in enumerate(island["nodes"])
+        }
+        output_ports_by_node_id = {
+            node_id: prepared.output_ports for node_id, prepared in prepared_by_node_id.items()
+        }
         function_nodes_handed_over: "list[Any]" = []
-        node_index_by_node_id: "dict[str, int]" = {}
-        output_ports_by_node_id: "dict[str, tuple[str, ...]]" = {}
         bodies_run_as_python: "dict[tuple[str, str], FunctionNodeBodyRunAsPython]" = {}
         for island_node in island["nodes"]:
             node_id = island_node["node"]
-            prepared = self._prepared(island_node["import_path"])
+            prepared = prepared_by_node_id[node_id]
             called_through, config_values = self._how_one_function_node_is_called(
                 prepared, input_port, node_id, island_node.get("config")
             )
@@ -171,8 +179,6 @@ class FunctionNodeIslandsFedToTheirPorts:
                     len(prepared.output_ports),
                 )
             )
-            node_index_by_node_id[node_id] = len(node_index_by_node_id)
-            output_ports_by_node_id[node_id] = prepared.output_ports
         island_output = island["output"]
         feed_an_input_port_from_a_function_node_island(
             link_data_access=self._link_data_access,

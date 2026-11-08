@@ -68,12 +68,18 @@ impl FunctionNodeValue {
 #[derive(Debug)]
 enum WhereAFunctionNodeInputTakesItsValue {
     /// An output of a node evaluated earlier in the island.
-    FromAnEarlierNodesOutput {
+    AnEarlierNodesOutput {
+        node_index: usize,
+        output_index: usize,
+    },
+    /// An output of a node evaluated later in the island, as it was at the
+    /// last evaluation: how a `Feedback` node reads the loop it closes.
+    ALaterNodesOutputAtTheLastEvaluation {
         node_index: usize,
         output_index: usize,
     },
     /// The pin's value, as nothing is linked to it.
-    FromItsPin(FunctionNodeValue),
+    ItsPin(FunctionNodeValue),
 }
 
 /// A function node's evaluate entry, compiled for its signature, and the f64
@@ -143,16 +149,27 @@ impl FunctionNodeIslandEvaluation {
             let (evaluated_earlier, from_this_node_on) = self
                 .function_nodes_each_after_what_it_reads
                 .split_at_mut(node_index);
-            let function_node = &mut from_this_node_on[0];
+            let Some((function_node, evaluated_later)) = from_this_node_on.split_first_mut() else {
+                break;
+            };
             let input_values: Vec<&FunctionNodeValue> = function_node
                 .where_each_input_takes_its_value
                 .iter()
-                .map(|where_it_takes_its_value| match where_it_takes_its_value {
-                    WhereAFunctionNodeInputTakesItsValue::FromAnEarlierNodesOutput {
+                .map(|where_it_takes_its_value| {
+                    match where_it_takes_its_value {
+                    WhereAFunctionNodeInputTakesItsValue::AnEarlierNodesOutput {
                         node_index,
                         output_index,
                     } => &evaluated_earlier[*node_index].output_values[*output_index],
-                    WhereAFunctionNodeInputTakesItsValue::FromItsPin(pin_value) => pin_value,
+                    WhereAFunctionNodeInputTakesItsValue::ALaterNodesOutputAtTheLastEvaluation {
+                        node_index: later_node_index,
+                        output_index,
+                    } => {
+                        &evaluated_later[*later_node_index - node_index - 1].output_values
+                            [*output_index]
+                    }
+                    WhereAFunctionNodeInputTakesItsValue::ItsPin(pin_value) => pin_value,
+                }
                 })
                 .collect();
             call_noting_its_breadcrumb_on(
@@ -513,9 +530,15 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             let mut where_each_input_takes_its_value_read = Vec::new();
             for (source, pin_value) in where_each_input_takes_its_value {
                 where_each_input_takes_its_value_read.push(match source {
-                    None => WhereAFunctionNodeInputTakesItsValue::FromItsPin(
+                    None => WhereAFunctionNodeInputTakesItsValue::ItsPin(
                         FunctionNodeValue::Number(pin_value),
                     ),
+                    Some((source_node_index, output_index)) if source_node_index > node_index => {
+                        WhereAFunctionNodeInputTakesItsValue::ALaterNodesOutputAtTheLastEvaluation {
+                            node_index: source_node_index,
+                            output_index,
+                        }
+                    }
                     Some((source_node_index, output_index)) => {
                         let reads_an_output_evaluated_earlier = source_node_index < node_index
                             && output_index
@@ -529,7 +552,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                                  evaluated before it"
                             ));
                         }
-                        WhereAFunctionNodeInputTakesItsValue::FromAnEarlierNodesOutput {
+                        WhereAFunctionNodeInputTakesItsValue::AnEarlierNodesOutput {
                             node_index: source_node_index,
                             output_index,
                         }
@@ -565,6 +588,26 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                     .collect(),
                 writes_its_state_on_the_board,
             });
+        }
+        for function_node in &function_nodes_each_after_what_it_reads {
+            for where_it_takes_its_value in &function_node.where_each_input_takes_its_value {
+                if let WhereAFunctionNodeInputTakesItsValue::ALaterNodesOutputAtTheLastEvaluation {
+                    node_index: later_node_index,
+                    output_index,
+                } = where_it_takes_its_value
+                {
+                    let reads_an_output_the_island_holds = function_nodes_each_after_what_it_reads
+                        .get(*later_node_index)
+                        .is_some_and(|later| *output_index < later.output_values.len());
+                    if !reads_an_output_the_island_holds {
+                        return Err(format!(
+                            "function node `{}` reads output {output_index} of node \
+                             {later_node_index}, which the island does not hold",
+                            function_node.node_id
+                        ));
+                    }
+                }
+            }
         }
         let reads_an_output_of_the_island = function_nodes_each_after_what_it_reads
             .get(island_output_node_index)

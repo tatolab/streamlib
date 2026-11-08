@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from tatolab.ops import Clamp, Lfo, LfoPhase, Remap
+from tatolab.ops import Clamp, Feedback, Lfo, LfoPhase, Remap
 
 
 def test_lfo_starts_at_zero_and_advances_by_the_stream_time_between_reads():
@@ -28,3 +28,8 @@ def test_clamp_holds_a_value_between_its_bounds():
     assert Clamp(-1.0) == 0.0
     assert Clamp(0.25) == 0.25
     assert Clamp(4.0, low=1.0, high=2.0) == 2.0
+
+
+def test_feedback_called_as_a_function_passes_its_value_on():
+    assert Feedback() == 0.0
+    assert Feedback(0.75) == 0.75
