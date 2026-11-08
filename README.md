@@ -446,7 +446,8 @@ tatolab enable-virtual-camera [--print]
   queued on every saved edit to a `.py` file, a `.graph.json` document, `pyproject.toml` or
   `tatolab-project.json` in the project; the runtime replaces the running streams, and an edit
   that fails unloads its stream and records it failed, why printed from the log, until the next
-  save. Ctrl-C ends `dev` and leaves
+  save; an edit that leaves `tatolab-project.json` missing or unreadable fails the load and leaves
+  the running streams as they were. Ctrl-C ends `dev` and leaves
   the streams running. When the runtime goes away, `dev` says so, waits for it to answer again,
   and follows the project's log on from where it read up to.
 - **`streams`** lists the streams the runtime holds: each one's id and display name, whether it is
