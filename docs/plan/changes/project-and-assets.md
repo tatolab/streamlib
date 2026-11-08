@@ -209,7 +209,7 @@ releases and variants, pushing content to cloud storage beside an Artifacts remo
 
 ## Tickets (as few tracer bullets as the change needs)
 
-Blocked on roadmap step 4 (#3214), because `exposed` leaves the spec
+#3256 may start at once; #3257 and every ticket after it are blocked on roadmap step 4 (#3214), because `exposed` leaves the spec
 keys and the record there.
 
 1. **#3256 — A project is a repository of assets.** The project file, history in `.tatolab/history.git`

@@ -67,8 +67,9 @@ Change: [`changes/project-and-assets.md`](changes/project-and-assets.md).
 
 A project becomes a versioned repository of assets with its own history, a stream's graph is one
 asset, every asset and node gets a runtime-generated UUID, every change is a transaction, and
-another project's assets are linked dependencies. No `stream.py`. It waits on step 4, because
-`exposed` leaves the spec keys and the stream record there.
+another project's assets are linked dependencies. No `stream.py`. #3256 builds new code beside
+the stream path and may start now, beside steps 2 to 4; #3257 and the tickets after it wait on
+step 4, because `exposed` leaves the spec keys and the stream record there.
 
 Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (transactions),
 #3259 (generators as fragments), #3260 (linked dependencies) and #3152 (the project read).
