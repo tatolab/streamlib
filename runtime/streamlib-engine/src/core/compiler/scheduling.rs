@@ -82,7 +82,7 @@ mod tests {
             .register_descriptor_only(descriptor)
             .expect("fixture descriptor registers cleanly");
 
-        let node = ProcessorNode::new(path, "fixture-node", None, vec![], vec![]);
+        let node = ProcessorNode::new(path, None, "fixture-node", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&NodeTypesOneStreamResolves::new(), &node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
@@ -109,7 +109,7 @@ mod tests {
             )
             .expect("fixture descriptor registers cleanly");
 
-        let node = ProcessorNode::new(path, "fixture-node", None, vec![], vec![]);
+        let node = ProcessorNode::new(path, None, "fixture-node", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&node_types, &node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
@@ -121,6 +121,7 @@ mod tests {
     fn strategy_falls_back_to_normal_when_descriptor_missing() {
         let node = ProcessorNode::new(
             class_import_path("UnregisteredFixtureProcessor"),
+            None,
             "ghost-node",
             None,
             vec![],

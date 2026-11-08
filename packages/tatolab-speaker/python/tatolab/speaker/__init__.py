@@ -60,7 +60,7 @@ class SpeakerSinkConfig:
     ] = None
 
 
-@node(
+@node.process(
     execution="manual",
     scheduling="realtime",
     paced_by_real_time=True,

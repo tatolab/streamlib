@@ -523,7 +523,7 @@ class RuntimeContextLimitedAccess(_RuntimeContextMembersBothCapabilitiesShare, P
 class LinkInputDataReader(Protocol):
     """A node's input ports, as `ctx.inputs`.
 
-    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    A port name is cast the way `@node.process` casts it — lowercased, accents dropped,
     anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
     """
@@ -713,7 +713,7 @@ class LinkInputDataReader(Protocol):
 class LinkOutputDataWriter(Protocol):
     """A node's output ports, as `ctx.outputs`.
 
-    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    A port name is cast the way `@node.process` casts it — lowercased, accents dropped,
     anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
     casts to a declared port finds it; one casting to nothing raises `ValueError`.
     """

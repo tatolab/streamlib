@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A `@node` whose config takes any key, for `test_stream_graph_load_on_tatolabd.py`.
+"""A `@node.process` whose config takes any key, for `test_stream_graph_load_on_tatolabd.py`.
 
 A built-in refuses a setting it does not know at load, so a test whose subject
 is only what a config can carry through a load — how deep it nests — names
@@ -17,7 +17,7 @@ class OpenConfig(dict[str, Any]):
     """Any key, holding any JSON value."""
 
 
-@node
+@node.process
 class OpenConfigSink:
     """Reads each frame it receives, and takes any config."""
 

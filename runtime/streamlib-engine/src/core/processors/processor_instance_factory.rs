@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode, is_in_exposed_name_cast_form};
@@ -538,6 +538,14 @@ impl ProcessorInstanceFactory {
         processor_type: &ProcessorClassImportPath,
     ) -> Option<ProcessorDescriptor> {
         self.descriptors.read().get(processor_type).cloned()
+    }
+
+    /// How `processor_type` runs, projected out under the read lock.
+    pub(crate) fn node_kind(&self, processor_type: &ProcessorClassImportPath) -> Option<NodeKind> {
+        self.descriptors
+            .read()
+            .get(processor_type)
+            .map(|descriptor| descriptor.node_kind)
     }
 
     /// The class's short name, as the registering surface declared it — what

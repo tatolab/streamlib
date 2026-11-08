@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@node` classes `test_stream_graph_load_on_tatolabd.py` names in a graph by type alone.
+"""The `@node.process` classes `test_stream_graph_load_on_tatolabd.py` names in a graph by type alone.
 
 Nothing in the test process imports this module: `tatolabd` describes it in a
 processor interpreter, so a graph naming `runtime_load_nodes:LoadedFrameRelay`
@@ -11,7 +11,7 @@ proves a node type registers from its description alone.
 from tatolab.stream import Image, Input, Output, RuntimeContextLimitedAccess, node
 
 
-@node
+@node.process
 class LoadedFrameRelay:
     """Passes each frame it reads downstream unchanged."""
 

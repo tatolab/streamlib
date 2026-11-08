@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Reading one described node type — the `@node` stamps a processor
+//! Reading one described node type — the `@node.process` stamps a processor
 //! interpreter printed for a class — into what the engine registers.
 //!
 //! The keys of a described node type are the `__tatolab_node_*__` attributes
@@ -22,6 +22,7 @@ use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
 const DESCRIBED_DESCRIPTION_KEY: &str = "description";
+const DESCRIBED_KIND_KEY: &str = "kind";
 const DESCRIBED_EXECUTION_KEY: &str = "execution";
 const DESCRIBED_SCHEDULING_PRIORITY_KEY: &str = "scheduling_priority";
 const DESCRIBED_PACED_BY_REAL_TIME_KEY: &str = "paced_by_real_time";
@@ -59,6 +60,7 @@ impl PythonProcessorDeclaration {
             DESCRIBED_SHORT_NAME_KEY,
         )?)
         .map_err(|blank| blank.to_string())?;
+        refuse_a_described_kind_other_than_process(described_node_type)?;
         let execution_config = read_execution_config(described_node_type)?;
 
         let mut descriptor = ProcessorDescriptor::new(
@@ -88,6 +90,20 @@ impl PythonProcessorDeclaration {
     }
 }
 
+/// A processor interpreter runs a class in its own process, so every type it
+/// describes is a `process` node, which the descriptor carries by default.
+fn refuse_a_described_kind_other_than_process(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    match read_string(described_node_type, DESCRIBED_KIND_KEY)?.as_str() {
+        "process" => Ok(()),
+        other => Err(format!(
+            "{DESCRIBED_KIND_KEY} is {other:?}, but a processor interpreter runs `process` \
+             nodes, the classes `@tatolab.stream.node.process` declares"
+        )),
+    }
+}
+
 /// The JSON Schema the decorator derived from the class's config class.
 ///
 /// Derived in Python, where the config class is, and carried across as the
@@ -101,7 +117,7 @@ fn read_config_schema_document(
         return Err(format!(
             "{DESCRIBED_CONFIG_SCHEMA_KEY} must be a JSON object, got {} — the decorator derives \
              this document, so a class reaching here was built by hand rather than by \
-             @tatolab.stream.node",
+             @tatolab.stream.node.process",
             json_kind_name(document)
         ));
     }
@@ -132,7 +148,7 @@ fn read_execution_config(
         unknown => {
             return Err(format!(
                 "unknown execution mode {unknown:?} — the decorator validates this, so a class \
-                 reaching here was built by hand rather than by @tatolab.stream.node"
+                 reaching here was built by hand rather than by @tatolab.stream.node.process"
             ));
         }
     };
@@ -559,13 +575,14 @@ mod tests {
         ProcessorClassImportPath::new(import_path).expect("the test path names a class")
     }
 
-    /// A described node type carrying what `@tatolab.stream.node` stamps,
+    /// A described node type carrying what `@tatolab.stream.node.process` stamps,
     /// with `input_ports` as given.
     fn described_node_type_with_input_ports(input_ports: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
             "import_path": "my_app.audio:AudioConsumer",
             "short_name": "AudioConsumer",
             "description": "consumes audio",
+            "kind": "process",
             "execution": {"mode": "continuous", "interval_ms": 20},
             "scheduling_priority": "high",
             "paced_by_real_time": false,
@@ -622,6 +639,25 @@ mod tests {
             "catalog_entry": catalog_entry,
         }]);
         described
+    }
+
+    #[test]
+    fn a_described_process_reads_as_a_process_node_and_any_other_kind_is_refused() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        assert_eq!(
+            read(&described).expect("reads").descriptor.node_kind,
+            crate::core::descriptors::NodeKind::Process
+        );
+
+        described["kind"] = serde_json::json!("function");
+        let refusal = refusal_of(&described);
+        assert!(
+            refusal.contains("\"function\"") && refusal.contains("process"),
+            "{refusal}"
+        );
+
+        described.as_object_mut().expect("an object").remove("kind");
+        assert!(refusal_of(&described).contains("kind"));
     }
 
     #[test]

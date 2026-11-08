@@ -704,6 +704,7 @@ mod tests {
             "import_path": GOOD_TYPE,
             "short_name": "BlurProcessor",
             "description": "blurs",
+            "kind": "process",
             "execution": {"mode": "reactive"},
             "scheduling_priority": null,
             "paced_by_real_time": false,
@@ -851,7 +852,7 @@ mod tests {
                 "described_node_types": [],
                 "refused_node_types": [{
                     "import_path": "my_app.nodes:Plain",
-                    "refusal": "the class `Plain` carries no `@node` declaration, so it is not a node",
+                    "refusal": "the class `Plain` carries no `@node.process` declaration, so it is not a node",
                 }],
             }))
         ));
@@ -860,7 +861,7 @@ mod tests {
 
         assert_eq!(node_types, [import_path("my_app.nodes:Plain")]);
         assert!(
-            refusal.contains("the class `Plain` carries no `@node` declaration"),
+            refusal.contains("the class `Plain` carries no `@node.process` declaration"),
             "{refusal}"
         );
     }

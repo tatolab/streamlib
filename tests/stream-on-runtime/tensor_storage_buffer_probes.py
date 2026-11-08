@@ -93,7 +93,7 @@ class TensorStorageBufferPublishingSourceConfig:
     minimum_interval_between_publishes_ns: int = 0
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class TensorStorageBufferPublishingSource:
     """Writes each frame's values into a pooled tensor through torch and
     publishes its surface id once the handle's close has ordered the writes."""
@@ -236,7 +236,7 @@ class PublishedTensorReadingSinkConfig:
     resolve_the_previous_frames_id: bool = False
 
 
-@node
+@node.process
 class PublishedTensorReadingSink:
     """Resolves each published tensor id and compares its values to the ones
     its producer wrote for that frame."""
@@ -278,7 +278,7 @@ class PublishedTensorReadingSink:
         )
 
 
-@node
+@node.process
 class HeldTensorRereadingSink:
     """Resolves the first tensor and holds its handle open, re-reading it
     through torch as every later tensor is published."""
@@ -377,7 +377,7 @@ float4 main() : SV_Target {
 """
 
 
-@node(
+@node.process(
     execution="manual",
     description="A compute kernel and a draw each bind a tensor storage buffer by surface id",
 )

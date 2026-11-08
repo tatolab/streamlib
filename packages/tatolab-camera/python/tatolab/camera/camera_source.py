@@ -47,7 +47,7 @@ class CameraSourceConfig:
     ] = 4
 
 
-@node(
+@node.process(
     execution="manual",
     paced_by_real_time=True,
     description=(

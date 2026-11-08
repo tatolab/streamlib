@@ -15,7 +15,7 @@ TESTPATTERN_MODULE_PACKAGE_STAND_IN_SOURCE = (
     "from tatolab.stream import Image, Output, node\n"
     "\n"
     "\n"
-    '@node(execution="continuous", interval_ms=33)\n'
+    '@node.process(execution="continuous", interval_ms=33)\n'
     "class TestPatternSource:\n"
     "    __test__ = False\n"
     "\n"

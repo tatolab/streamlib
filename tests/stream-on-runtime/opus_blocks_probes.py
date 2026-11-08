@@ -69,7 +69,7 @@ DECODED_BLOCKS_REPORTED = 24
 ENCODED_PORT = "encoded_audio_from_upstream"
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class StereoToneSource:
     """Publishes a stereo tone at a stated rate, for the encoder to frame.
 
@@ -121,7 +121,7 @@ def opus_head_channels_and_pre_skip(hex_encoded_opus_head: str) -> tuple[int, in
     return opus_head[9], pre_skip
 
 
-@node
+@node.process
 class EncodedOpusMediaFrameProbe:
     """Reads the encoder's output as media frames and reports each packet.
 
@@ -174,7 +174,7 @@ class EncodedOpusMediaFrameProbe:
             log.info(ENCODED_PACKETS_COMPLETE_MARKER)
 
 
-@node
+@node.process
 class DecodedAudioBlockProbe:
     """Reports each decoded block's format, its length and its stamp.
 

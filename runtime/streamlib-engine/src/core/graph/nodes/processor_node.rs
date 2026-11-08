@@ -10,7 +10,7 @@ use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Outpu
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
 use std::sync::Arc;
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::output_port_catalog_entries::{
     CatalogEntriesOfOutputPorts, UpstreamCatalogEntriesByInboundLink,
 };
@@ -31,6 +31,10 @@ pub struct ProcessorNode {
     #[serde(default)]
     pub config_checksum: u64,
     pub ports: ProcessorNodePorts,
+    /// How the node's type runs, read off its registered descriptor; `None`
+    /// on a node whose type nothing registers.
+    #[serde(skip)]
+    node_kind: Option<NodeKind>,
     /// Runtime components (not serialized by derive, but via serialize_components).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
@@ -78,6 +82,7 @@ impl ProcessorNode {
     /// Create a new processor node. The ID is generated automatically using cuid2.
     pub fn new(
         processor_type: ProcessorClassImportPath,
+        node_kind: Option<NodeKind>,
         display_name: impl Into<String>,
         config: Option<serde_json::Value>,
         inputs: Vec<PortInfo>,
@@ -93,6 +98,7 @@ impl ProcessorNode {
             config,
             config_checksum,
             ports: ProcessorNodePorts { inputs, outputs },
+            node_kind,
             components: ComponentMap::new(),
             component_serializers: Vec::new(),
             catalog_entries_of_output_ports,
@@ -130,6 +136,11 @@ impl ProcessorNode {
 
     pub fn processor_type(&self) -> &ProcessorClassImportPath {
         &self.processor_type
+    }
+
+    /// How the node's type runs; `None` when nothing registers its type.
+    pub fn node_kind(&self) -> Option<NodeKind> {
+        self.node_kind
     }
 
     pub fn has_input(&self, name: &str) -> bool {

@@ -40,7 +40,7 @@ other. `tatolab dev` runs it in the runtime. Each node runs in its own process, 
 blocks another. Tato Studio's viewer shows any node's output on the machine, and the
 `tatolab-moq` gateway nodes send one to a MoQ relay, where other streams and machines read it.
 
-This package holds the authoring API (`@stream`, `@node`, `StreamBuilder`), typed classes for
+This package holds the authoring API (`@stream`, `@node.process`, `StreamBuilder`), typed classes for
 every built-in node (the converters between the Image, Array, Channels and Records families), and
 the protocols your nodes are handed at run time. It installs and imports without the runtime,
 with complete type hints, so your editor, type checker and unit tests work on any machine.

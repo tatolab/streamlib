@@ -11,7 +11,7 @@ from tatolab.stream import Input, Output, Records, log, node
 RECORD_RECEIVED_THROUGH_THE_RELAY_MARKER = "RECORD_RECEIVED_THROUGH_THE_RELAY"
 
 
-@node(execution="continuous", interval_ms=20)
+@node.process(execution="continuous", interval_ms=20)
 class CountingRecordsSource:
     """Writes `{"count": n}`, n rising from 0, every tick."""
 
@@ -25,7 +25,7 @@ class CountingRecordsSource:
         self.count += 1
 
 
-@node
+@node.process
 class ReportsEachRecordReceivedSink:
     """Logs each record it reads under `RECORD_RECEIVED_THROUGH_THE_RELAY_MARKER`."""
 

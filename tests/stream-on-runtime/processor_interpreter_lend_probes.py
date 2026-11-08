@@ -17,7 +17,7 @@ from tatolab.stream import Input, Output, Records, log, node
 BAGS_THE_SINK_COUNTS_BEFORE_IT_REPORTS = 20
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class ReportsItsInterpreterSource:
     """Announces its interpreter and the lent runtime's file, then emits a bag per tick."""
 
@@ -47,7 +47,7 @@ class ReportsItsInterpreterSource:
         )
 
 
-@node
+@node.process
 class CountsBagsFromUpstreamSink:
     """Announces once it has processed enough messages to call the stream live."""
 

@@ -24,7 +24,7 @@ def report(marker_name: str, payload: "dict[str, object] | None" = None) -> None
     log.info(f"MARKER:{marker_name}" + ("" if payload is None else " " + json.dumps(payload)))
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackProbe:
     """Parks in `process()` far past the ladder's one-second callback budget."""
 
@@ -44,7 +44,7 @@ class AsleepInItsCallbackProbe:
 TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_TEST_TEARDOWN_RECORD_DIRECTORY"
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackRecordingItsTeardownProbe:
     """Parks in `process()`, and records its `teardown()` in a file."""
 
@@ -60,7 +60,7 @@ class AsleepInItsCallbackRecordingItsTeardownProbe:
             pass
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackAndSlowToTearDownProbe:
     """Parks in `process()`, then takes three seconds over `teardown()`.
 
@@ -79,7 +79,7 @@ class AsleepInItsCallbackAndSlowToTearDownProbe:
         report("SLOW_TEARDOWN_FINISHED", {"pid": os.getpid()})
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class WorkerKeepingTeardownGoingProbe:
     """Forks a worker that ignores SIGTERM, then spends thirty seconds in a
     `teardown()` that ignores it too.
@@ -112,7 +112,7 @@ class WorkerKeepingTeardownGoingProbe:
         report("LONG_TEARDOWN_FINISHED")
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class StartsAProcessThatOutlivesItProbe:
     """Starts a process that inherits every descriptor it can and outlives
     `tatolabd` by far.
@@ -143,7 +143,7 @@ if os.environ.get("STREAMLIB_ENTRYPOINT", "").endswith(":ThirtySecondImportProbe
     time.sleep(30)
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class ThirtySecondImportProbe:
     """Its module takes thirty seconds to import in the helper that hosts it."""
 

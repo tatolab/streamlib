@@ -42,7 +42,7 @@ class ReportsItsOwnProcessSourceConfig:
     label: str = "unlabelled"
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class ReportsItsOwnProcessSource:
     """Stamps every message with the pid it was produced in."""
 
@@ -59,7 +59,7 @@ class ReportsItsOwnProcessSource:
         ctx.outputs.write(self.frames_to_downstream, {"produced_in_pid": os.getpid()})
 
 
-@node
+@node.process
 class ReportsUpstreamProcessSink:
     """Announces the pid a message was produced in, alongside its own."""
 
@@ -81,7 +81,7 @@ class ReportsUpstreamProcessSink:
             report("SINK_PID", {"sink_pid": os.getpid(), "upstream_pid": upstream_pid})
 
 
-@node
+@node.process
 class ReportsItsOwnProcessRecordsSink:
     """Announces its own process at setup, downstream of a native built-in.
 
@@ -99,7 +99,7 @@ class ReportsItsOwnProcessRecordsSink:
         ctx.inputs.read("records_from_upstream")
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class WritesRawMessagePayloadSource:
     """Writes `RAW_MESSAGE_PAYLOAD_BYTES` every tick, after reporting once what
     handing `write` a dict raised."""
@@ -129,7 +129,7 @@ class WritesRawMessagePayloadSource:
         ctx.outputs.write("raw_messages_to_downstream", RAW_MESSAGE_PAYLOAD_BYTES)
 
 
-@node
+@node.process
 class ReportsTheRawMessagePayloadItReadSink:
     """Reports the first payload it reads, as hex, with its type and its own pid."""
 
@@ -153,7 +153,7 @@ class ReportsTheRawMessagePayloadItReadSink:
         )
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class DiesAbruptlyProbe:
     """Takes its own process down mid-run, the way a segfaulting native call
     inside a user callback would."""
@@ -172,7 +172,7 @@ class DiesAbruptlyProbe:
             os._exit(1)
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class SleepsThroughItsOwnShutdownProbe:
     """Parks in `process()` far past the ladder's one-second budget.
 
@@ -194,7 +194,7 @@ class SleepsThroughItsOwnShutdownProbe:
         report("SLEEPER_TORE_DOWN")
 
 
-@node(execution="continuous", interval_ms=50)
+@node.process(execution="continuous", interval_ms=50)
 class ForksAWorkerThatOutlivesItProbe:
     """Starts a worker of its own the way `os.system("sleep 60 &")` does.
 
@@ -216,7 +216,7 @@ class ForksAWorkerThatOutlivesItProbe:
             report("WORKER_PID", {"worker_pid": self.worker_pid, "helper_pid": os.getpid()})
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class SleepsThroughItsOwnSetupProbe:
     """Parks in `setup()`, so shutdown finds it still registering.
 

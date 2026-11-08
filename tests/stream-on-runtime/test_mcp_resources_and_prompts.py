@@ -84,7 +84,7 @@ from tatolab.stream import (
 MARKED_FRAME_COLOUR = ColorInfo(primaries="bt2020", transfer="srgb", range="full")
 
 
-@node
+@node.process
 class FrameMarkingEffect:
     """Forwards every frame described as BT.2020, so a consumer can tell it passed through."""
 
@@ -111,7 +111,7 @@ MARKED_FRAME_SINK_SOURCE_TEMPLATE = '''\
 from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, log, node
 
 
-@node
+@node.process
 class MarkedFrameSink:
     """Says so once when a frame arrives carrying the inserted effect's BT.2020 mark."""
 

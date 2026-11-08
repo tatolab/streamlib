@@ -17,7 +17,7 @@ DECLARED_ENTRY = BinaryEntry(mode="snapshot", mime="application/msgpack")
 REPLACEMENT_ENTRY = JsonEntry(mode="stream")
 
 
-@node(execution="continuous", interval_ms=50)
+@node.process(execution="continuous", interval_ms=50)
 class KeepsItsDeclaredCatalogEntry:
     """Writes a record every tick and never touches its port's entry."""
 
@@ -27,7 +27,7 @@ class KeepsItsDeclaredCatalogEntry:
         ctx.outputs.write(self.records, {"kept": True})
 
 
-@node(execution="continuous", interval_ms=50)
+@node.process(execution="continuous", interval_ms=50)
 class ReplacesItsCatalogEntryOnItsFirstTick:
     """Replaces its port's entry on its first tick, after trying one hang refuses.
 
@@ -53,7 +53,7 @@ class ReplacesItsCatalogEntryOnItsFirstTick:
         ctx.outputs.write(self.records, {"replaced": True})
 
 
-@node
+@node.process
 class ReportsItsUpstreamsCatalogEntry:
     """Reports the entry its one upstream port carries, every message, as
     `MARKER:UPSTREAM_CATALOG_ENTRY <json>`."""
