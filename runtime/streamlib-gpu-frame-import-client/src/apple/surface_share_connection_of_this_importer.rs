@@ -5,7 +5,8 @@
 //! memory crossing as Mach port rights.
 
 use std::ffi::OsString;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use streamlib_surface_client::{OwnedMachSendRight, SurfaceShareMachServiceConnection};
@@ -108,7 +109,11 @@ impl<PoolSlotImport: Clone + Send + Sync + 'static>
                 opened
             }
         };
-        match connection.send_request_with_ports(request, outbound_ports) {
+        match connection.send_request_with_ports_answered_within(
+            request,
+            outbound_ports,
+            Some(SURFACE_SHARE_RESPONSE_TIMEOUT),
+        ) {
             Ok((reply, received_ports)) => {
                 self.pool_slot_imports_by_pool_slot
                     .drop_the_pool_slots_a_reply_lists_as_retired(&reply);
@@ -155,26 +160,13 @@ impl<PoolSlotImport: Clone + Send + Sync + 'static>
                 )
             })?,
         );
-        let watched_connection = Arc::clone(&opened);
-        let pool_slot_imports_by_pool_slot = Arc::clone(&self.pool_slot_imports_by_pool_slot);
+        let watched_connection = Arc::downgrade(&opened);
+        let pool_slot_imports_by_pool_slot = Arc::downgrade(&self.pool_slot_imports_by_pool_slot);
         std::thread::Builder::new()
             .name("surface-share-service-watch".into())
-            .spawn(
-                move || match watched_connection.wait_for_the_service_to_go_away(None) {
-                    Ok(_) => {
-                        pool_slot_imports_by_pool_slot.drop_every_import();
-                        tracing::info!(
-                            "the surface-share service went away; released every pool slot this \
-                             importer had imported"
-                        );
-                    }
-                    Err(watch_failure) => tracing::warn!(
-                        "could not watch the surface-share service for its going away \
-                         ({watch_failure}); this importer keeps its imported pool slots until its \
-                         connection is replaced"
-                    ),
-                },
-            )
+            .spawn(move || {
+                watch_for_the_service_going_away(watched_connection, pool_slot_imports_by_pool_slot)
+            })
             .map_err(|spawn_failure| {
                 format!(
                     "could not start the thread that watches the surface-share service: \
@@ -182,6 +174,54 @@ impl<PoolSlotImport: Clone + Send + Sync + 'static>
                 )
             })?;
         Ok(opened)
+    }
+}
+
+/// How often the watcher looks up from its wait to see whether the importer
+/// and the connection it watches are still there.
+const HOW_OFTEN_THE_SERVICE_WATCHER_CHECKS_ITS_IMPORTER_IS_LIVE: Duration = Duration::from_secs(1);
+
+/// Wait for the service behind `watched_connection` to go away, then drop
+/// every import; give up once the importer drops its imports or the
+/// connection, so a watcher never outlives what it watches.
+fn watch_for_the_service_going_away<PoolSlotImport: Clone + Send + Sync + 'static>(
+    watched_connection: Weak<SurfaceShareMachServiceConnection>,
+    pool_slot_imports_by_pool_slot: Weak<PoolSlotImportsByPoolSlot<PoolSlotImport>>,
+) {
+    loop {
+        let Some(connection) = watched_connection.upgrade() else {
+            return;
+        };
+        if pool_slot_imports_by_pool_slot.strong_count() == 0 {
+            return;
+        }
+        let went_away = connection.wait_for_the_service_to_go_away(Some(
+            HOW_OFTEN_THE_SERVICE_WATCHER_CHECKS_ITS_IMPORTER_IS_LIVE,
+        ));
+        drop(connection);
+        match went_away {
+            Ok(false) => {}
+            Ok(true) => {
+                if let Some(pool_slot_imports_by_pool_slot) =
+                    pool_slot_imports_by_pool_slot.upgrade()
+                {
+                    pool_slot_imports_by_pool_slot.drop_every_import();
+                    tracing::info!(
+                        "the surface-share service went away; released every pool slot this \
+                         importer had imported"
+                    );
+                }
+                return;
+            }
+            Err(watch_failure) => {
+                tracing::warn!(
+                    "could not watch the surface-share service for its going away \
+                     ({watch_failure}); this importer keeps its imported pool slots until its \
+                     connection is replaced"
+                );
+                return;
+            }
+        }
     }
 }
 

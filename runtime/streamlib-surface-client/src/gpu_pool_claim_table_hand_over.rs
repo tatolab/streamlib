@@ -26,6 +26,10 @@ pub const SURFACE_SHARE_POOL_SLOTS_FIELD: &str = "pool_slots";
 /// The field of one `pool_slots` entry naming its claim table row.
 pub const SURFACE_SHARE_POOL_SLOT_ROW_FIELD: &str = "slot";
 
+/// The field of one `pool_slots` entry stating the row's lease number, which
+/// its row in the table carries for as long as the slot holds it.
+pub const SURFACE_SHARE_POOL_SLOT_ROW_LEASE_NUMBER_FIELD: &str = "row_lease_number";
+
 /// The `check_out` request field a helper sets when it already holds its own
 /// import of the published frame's pool slot; the service then answers the
 /// frame's metadata and sends no handle.
@@ -52,12 +56,55 @@ pub fn gpu_pool_uuid_of_its_wire_name(wire_name: &str) -> Option<[u8; 16]> {
     Some(pool_uuid)
 }
 
-/// A claim table hand-over, read: the column to claim in and each row's pool
-/// slot key.
+/// One claim table row leased to a slot, as a hand-over lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuPoolClaimTableRowLeasedToASlot {
+    /// The row, the `slot` a `GpuPoolSlotFrame` descriptor carries.
+    pub row_index: u32,
+    /// The key of the slot holding the row.
+    pub pool_slot_key: String,
+    /// The lease's number, which the row carries while the slot holds it.
+    pub row_lease_number: u64,
+}
+
+impl GpuPoolClaimTableRowLeasedToASlot {
+    /// This row as one entry of a hand-over's `pool_slots` field.
+    pub fn pool_slots_entry(&self) -> serde_json::Value {
+        serde_json::json!({
+            SURFACE_SHARE_POOL_SLOT_ROW_FIELD: self.row_index,
+            "surface_id": self.pool_slot_key,
+            SURFACE_SHARE_POOL_SLOT_ROW_LEASE_NUMBER_FIELD: self.row_lease_number,
+        })
+    }
+
+    fn of_a_pool_slots_entry(pool_slot: &serde_json::Value) -> Result<Self, String> {
+        let row_index = pool_slot
+            .get(SURFACE_SHARE_POOL_SLOT_ROW_FIELD)
+            .and_then(|value| value.as_u64())
+            .and_then(|row| u32::try_from(row).ok());
+        let pool_slot_key = pool_slot.get("surface_id").and_then(|value| value.as_str());
+        let row_lease_number = pool_slot
+            .get(SURFACE_SHARE_POOL_SLOT_ROW_LEASE_NUMBER_FIELD)
+            .and_then(|value| value.as_u64());
+        match (row_index, pool_slot_key, row_lease_number) {
+            (Some(row_index), Some(pool_slot_key), Some(row_lease_number)) => Ok(Self {
+                row_index,
+                pool_slot_key: pool_slot_key.to_string(),
+                row_lease_number,
+            }),
+            _ => Err(format!(
+                "a claim table hand-over lists a pool slot without a row, a key and a lease \
+                 number: {pool_slot}"
+            )),
+        }
+    }
+}
+
+/// A claim table hand-over, read: the column to claim in and each leased row.
 #[derive(Debug, PartialEq, Eq)]
 pub struct GpuPoolClaimTableHandOver {
     pub claimant_column_index: usize,
-    pub pool_slot_key_by_row: Vec<(u32, String)>,
+    pub rows_leased_to_slots: Vec<GpuPoolClaimTableRowLeasedToASlot>,
 }
 
 impl GpuPoolClaimTableHandOver {
@@ -68,29 +115,16 @@ impl GpuPoolClaimTableHandOver {
             .and_then(|value| value.as_u64())
             .ok_or("a claim table hand-over states no claimant column")?
             as usize;
-        let pool_slot_key_by_row = reply
+        let rows_leased_to_slots = reply
             .get(SURFACE_SHARE_POOL_SLOTS_FIELD)
             .and_then(|value| value.as_array())
             .ok_or("a claim table hand-over lists no pool slots")?
             .iter()
-            .map(|pool_slot| {
-                let row = pool_slot
-                    .get(SURFACE_SHARE_POOL_SLOT_ROW_FIELD)
-                    .and_then(|value| value.as_u64())
-                    .and_then(|row| u32::try_from(row).ok());
-                let pool_slot_key = pool_slot.get("surface_id").and_then(|value| value.as_str());
-                match (row, pool_slot_key) {
-                    (Some(row), Some(pool_slot_key)) => Ok((row, pool_slot_key.to_string())),
-                    _ => Err(format!(
-                        "a claim table hand-over lists a pool slot without a row and a key: \
-                         {pool_slot}"
-                    )),
-                }
-            })
+            .map(GpuPoolClaimTableRowLeasedToASlot::of_a_pool_slots_entry)
             .collect::<Result<_, _>>()?;
         Ok(Self {
             claimant_column_index,
-            pool_slot_key_by_row,
+            rows_leased_to_slots,
         })
     }
 }
@@ -122,21 +156,45 @@ mod tests {
     }
 
     #[test]
-    fn a_hand_over_reads_its_column_and_every_rows_key() {
+    fn a_hand_over_reads_back_its_column_and_every_row_it_lists() {
+        let rows_leased_to_slots = vec![
+            GpuPoolClaimTableRowLeasedToASlot {
+                row_index: 0,
+                pool_slot_key: "slot-a".into(),
+                row_lease_number: 1,
+            },
+            GpuPoolClaimTableRowLeasedToASlot {
+                row_index: 2,
+                pool_slot_key: "slot-c".into(),
+                row_lease_number: 4,
+            },
+        ];
         let reply = serde_json::json!({
             SURFACE_SHARE_CLAIMANT_COLUMN_FIELD: 3,
-            SURFACE_SHARE_POOL_SLOTS_FIELD: [
-                {SURFACE_SHARE_POOL_SLOT_ROW_FIELD: 0, "surface_id": "slot-a"},
-                {SURFACE_SHARE_POOL_SLOT_ROW_FIELD: 2, "surface_id": "slot-c"},
-            ],
+            SURFACE_SHARE_POOL_SLOTS_FIELD: rows_leased_to_slots
+                .iter()
+                .map(GpuPoolClaimTableRowLeasedToASlot::pool_slots_entry)
+                .collect::<Vec<_>>(),
         });
 
         assert_eq!(
             GpuPoolClaimTableHandOver::from_reply(&reply),
             Ok(GpuPoolClaimTableHandOver {
                 claimant_column_index: 3,
-                pool_slot_key_by_row: vec![(0, "slot-a".into()), (2, "slot-c".into())],
+                rows_leased_to_slots,
             })
         );
+    }
+
+    #[test]
+    fn a_hand_over_row_without_a_lease_number_is_refused() {
+        let reply = serde_json::json!({
+            SURFACE_SHARE_CLAIMANT_COLUMN_FIELD: 3,
+            SURFACE_SHARE_POOL_SLOTS_FIELD: [
+                {SURFACE_SHARE_POOL_SLOT_ROW_FIELD: 0, "surface_id": "slot-a"},
+            ],
+        });
+
+        assert!(GpuPoolClaimTableHandOver::from_reply(&reply).is_err());
     }
 }
