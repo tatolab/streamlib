@@ -40,7 +40,7 @@ pyo3 = { version = "0.29.0", features = ["abi3-py312"] }
 streamlib = { path = "../streamlib-sdk", version = "0.68.34" }
 
 # The project an asset UUID resolves in, read from its files alone: no history, so no libgit2.
-streamlib-project-repository = { path = "../../runtime/streamlib-project-repository", version = "0.68.34", default-features = false }
+streamlib-project-repository = { path = "../../runtime/streamlib-project-repository", default-features = false }
 uuid = { version = "1.11" }
 
 # The module host table's layout, which this wheel builds for a node's native
