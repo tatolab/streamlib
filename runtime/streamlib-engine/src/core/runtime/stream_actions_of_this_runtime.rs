@@ -5293,10 +5293,14 @@ mod tests {
             .load_the_project_off_its_queue(project.run_request())
             .unwrap();
         let (_, first_stream_tag, _) = the_one_running_stream_of(&first_run);
-        let previous_record = the_record_of(&streams_directory, &camera);
-        let mut a_graph_whose_record_differs = the_graph_of_a_stream_named("camera");
-        a_graph_whose_record_differs["nodes"][0]["name"] = "replacement-source".into();
-        project.write_the_graph_document(a_graph_whose_record_differs);
+        let mut previous_record = the_record_of(&streams_directory, &camera);
+        previous_record.runtime_crashes_in_a_row_implicating_it = 1;
+        records_in(&streams_directory)
+            .write(&previous_record)
+            .unwrap();
+        let mut a_replacement_graph = the_graph_of_a_stream_named("camera");
+        a_replacement_graph["nodes"][0]["name"] = "replacement-source".into();
+        project.write_the_graph_document(a_replacement_graph);
 
         let refusal = {
             let _refusing_writes = StreamsDirectoryRefusingWrites::from_now_on(&streams_directory);
