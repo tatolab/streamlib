@@ -48,8 +48,17 @@ pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     })
 }
 
+/// Whether `node_id` is a function node, inside its readers' islands or
+/// promoted out of them.
+fn is_a_function_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
+    graph.traversal().v(node_id).first().is_some_and(|node| {
+        node.node_kind()
+            .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
+    })
+}
+
 /// How `link_id` is wired, refusing a link into a function node from a node
-/// that is not one.
+/// that is not one, whether or not the function node was promoted.
 pub(crate) fn how_a_link_is_wired(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -61,6 +70,16 @@ pub(crate) fn how_a_link_is_wired(
         runs_inside_the_read_of_each_node_it_feeds(graph, source_id),
         runs_inside_the_read_of_each_node_it_feeds(graph, destination_id),
     ) {
+        (false, false)
+            if is_a_function_node(graph, destination_id)
+                && !is_a_function_node(graph, source_id) =>
+        {
+            Err(Error::InvalidLink(format!(
+                "link `{link_id}` feeds function node `{destination_id}` from `{source_id}`, \
+                 which is not a function node; a function node's inputs come from other \
+                 function nodes or from its pins in this release"
+            )))
+        }
         (false, false) => Ok(HowALinkIsWired::ThroughAChannel),
         (true, true) => Ok(HowALinkIsWired::AsACallInsideAFunctionNodeIsland),
         (true, false) => Ok(HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead),

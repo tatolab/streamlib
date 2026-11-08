@@ -114,6 +114,16 @@ impl ProcessorInstance {
         self.0.why_the_out_of_process_helper_died_on_its_own()
     }
 
+    /// Ask to promote the function node whose call lost this processor's
+    /// helper out of its islands, before the helper is restarted.
+    pub(crate) fn ask_to_promote_the_function_node_that_lost_the_helper_that_died(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Option<super::FunctionNodePromotionAwaitedBeforeTheReaderRestarts> {
+        self.0
+            .ask_to_promote_the_function_node_that_lost_the_helper_that_died(ctx)
+    }
+
     /// Start a new helper process, with a new processor instance, in place of
     /// one that died on its own.
     pub fn restart_the_out_of_process_helper_that_died(

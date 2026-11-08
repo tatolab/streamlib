@@ -14,8 +14,6 @@ from __future__ import annotations
 import struct
 from typing import Any, Optional
 
-import numpy
-
 from tatolab.stream import Channels, Input, NodeLinkDataAccess, Output, node
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
@@ -41,6 +39,18 @@ def the_processor_class_a_promoted_function_node_runs_as(
     """A `@node.process` class whose `process` calls `function_node` compiled, once per run of its loop."""
     compiled = compile_function_node_to_its_evaluate_entry(function_node, import_path)
     config_class: Optional[type] = getattr(function_node, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
+    ports_named_like_a_runner_member = sorted(
+        port
+        for port in (*compiled.input_ports, *compiled.output_ports)
+        if port in vars(_FunctionNodeRunAsItsHelpersProcessor)
+        or port in _FunctionNodeRunAsItsHelpersProcessor.__annotations__
+    )
+    if ports_named_like_a_runner_member:
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}` ({import_path}) cannot run in a helper of its own: its "
+            f"port {', '.join(repr(port) for port in ports_named_like_a_runner_member)} is "
+            "named like a member of the processor it would run as"
+        )
 
     class_attributes: "dict[str, Any]" = {
         input_port: Input(Channels, delivery="newest") for input_port in compiled.input_ports
@@ -70,11 +80,14 @@ class _FunctionNodeRunAsItsHelpersProcessor:
     _compiled: FunctionNodeCompiledToItsEvaluateEntry
     _node_id: str
     _link_data_access: NodeLinkDataAccess
+    _input_values: "list[Optional[float]]"
+    _control_values_written: int
+    _evaluation: FunctionNodeEvaluatedAsItsHelpersProcessor
 
     def start_from_its_config(self, config: Any = None) -> None:
         """Take the node's config and start its state from its initial record; set as `__init__` once declared."""
         compiled = self._compiled
-        self._input_values: "list[Optional[float]]" = [
+        self._input_values = [
             compiled.pin_defaults_by_input_port.get(input_port) for input_port in compiled.input_ports
         ]
         self._control_values_written = 0
@@ -105,7 +118,7 @@ class _FunctionNodeRunAsItsHelpersProcessor:
         for output_port, output_value in zip(compiled.output_ports, output_values):
             ctx.outputs.write_channels_block(
                 output_port,
-                numpy.array([[output_value]], dtype=numpy.float64),
+                memoryview(struct.pack("=d", output_value)).cast("d", (1, 1)),
                 start_sample=self._control_values_written,
                 sample_rate=_CONTROL_VALUE_SAMPLE_RATE,
             )

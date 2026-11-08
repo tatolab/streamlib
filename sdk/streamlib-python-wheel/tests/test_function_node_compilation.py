@@ -424,12 +424,12 @@ class _OutputsRecordingEachControlValueWritten:
     """`ctx.outputs` recording each Channels block written."""
 
     def __init__(self) -> None:
-        self.blocks_written: "list[tuple[str, list[list[float]], int, int]]" = []
+        self.blocks_written: "list[tuple[str, object, int, int]]" = []
 
     def write_channels_block(
         self, port_name: str, samples: Any, *, start_sample: int, sample_rate: int
     ) -> None:
-        self.blocks_written.append((port_name, samples.tolist(), start_sample, sample_rate))
+        self.blocks_written.append((port_name, memoryview(samples).tolist(), start_sample, sample_rate))
 
 
 class _ContextOfOneProcess:
@@ -474,3 +474,19 @@ def test_a_promoted_function_node_starts_from_its_pin_values():
     runner.process(ctx)
 
     assert ctx.outputs.blocks_written == [("result", [[7.0]], 0, 0)]
+
+
+@node.function
+def passes_its_process_input_through(process: float) -> float:
+    return process
+
+
+def test_a_promoted_function_node_with_a_port_named_like_a_runner_member_is_refused_by_name():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    with pytest.raises(FunctionNodeDoesNotCompile, match="its port 'process' is named like a member"):
+        the_processor_class_a_promoted_function_node_runs_as(
+            passes_its_process_input_through,
+            f"{__name__}:passes_its_process_input_through",
+            "passes-1",
+            data_plane,
+        )

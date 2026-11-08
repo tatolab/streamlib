@@ -19,7 +19,8 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     wire_a_link_from_a_function_node_island_into_its_reader,
 };
 use crate::core::compiler::compiler_ops::function_node_promotion::{
-    FunctionNodePromotionPlanned, plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
+    FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
+    plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
     record_each_promotion_on_its_nodes_metrics,
 };
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
@@ -207,7 +208,7 @@ impl Compiler {
         // 1. Validate and categorize operations
         // =====================================================================
         let mut plan = the_plan_these_operations_make(&graph_arc, operations);
-        let promotions_planned = plan_every_function_node_promotion(&graph_arc, &mut plan)?;
+        let promotions_planned = plan_every_function_node_promotion(&graph_arc, &mut plan);
 
         // A processor removal cascades its incident links out of the graph
         // (petgraph `remove_node`), so a link queued for wiring against a
@@ -664,18 +665,58 @@ fn the_plan_these_operations_make(
 
 /// Plan each promotion `plan` holds against `graph_arc`, adding the nodes it
 /// moves to `plan`'s processors to build and their links to its links to wire.
+///
+/// A promotion is planned only once its reader's host claims it is still
+/// waiting; a refused one settles that reader alone, and the rest of the batch
+/// compiles.
 fn plan_every_function_node_promotion(
     graph_arc: &RwLock<Graph>,
     plan: &mut CompilationPlan,
-) -> Result<Vec<FunctionNodePromotionPlanned>> {
+) -> Vec<FunctionNodePromotionPlanned> {
     let mut promotions_planned = Vec::new();
     for promotion in std::mem::take(&mut plan.function_node_promotions) {
-        let promotion_planned = plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
-            &mut graph_arc.write(),
-            &promotion.function_node_id,
-            &promotion.reader_id,
-            &promotion.reason,
-        )?;
+        let Some(reader_link_wiring) = graph_arc
+            .read()
+            .traversal()
+            .v(&promotion.reader_id)
+            .first()
+            .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+            .map(|component| Arc::clone(&component.0))
+        else {
+            tracing::warn!(
+                "Function node {} is not promoted: its reader {} runs no helper process",
+                promotion.function_node_id,
+                promotion.reader_id,
+            );
+            continue;
+        };
+        if !reader_link_wiring.claim_the_awaited_function_node_promotion_out_of_its_islands() {
+            tracing::warn!(
+                "Function node {} is not promoted: {}'s host stopped waiting for it",
+                promotion.function_node_id,
+                promotion.reader_id,
+            );
+            continue;
+        }
+        let promotion_planned =
+            match plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+                &mut graph_arc.write(),
+                &promotion.function_node_id,
+                &promotion.reader_id,
+                &promotion.reason,
+                &WhatTheCompileCarryingAPromotionRemoves {
+                    processors: &plan.processors_to_remove,
+                    links: &plan.links_to_remove,
+                },
+            ) {
+                Ok(promotion_planned) => promotion_planned,
+                Err(refusal) => {
+                    reader_link_wiring.settle_the_function_node_promotion_out_of_its_islands(Err(
+                        refusal.to_string(),
+                    ));
+                    continue;
+                }
+            };
         tracing::info!(
             "Promoting function node {} and {} downstream of it out of {}'s islands",
             promotion.function_node_id,
@@ -694,7 +735,7 @@ fn plan_every_function_node_promotion(
         }
         promotions_planned.push(promotion_planned);
     }
-    Ok(promotions_planned)
+    promotions_planned
 }
 
 /// Whether an `AddLink` names a link this graph has already wired — or handed

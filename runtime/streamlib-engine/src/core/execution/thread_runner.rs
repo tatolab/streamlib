@@ -507,7 +507,8 @@ const GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED: Durat
 
 /// Start a new helper process in place of one that died on its own, under a
 /// fresh full-access grant as the processor's first `setup()` and `start()`
-/// had.
+/// had, once any promotion the death asked for has settled — waited on without
+/// holding the processor, since the compile carrying it may need to.
 fn restart_the_out_of_process_helper_that_died(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
@@ -521,6 +522,12 @@ fn restart_the_out_of_process_helper_that_died(
         ))
     })?;
     let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, restart_grant);
+    let promotion_awaited = processor
+        .lock()
+        .ask_to_promote_the_function_node_that_lost_the_helper_that_died(&full_ctx);
+    if let Some(promotion_awaited) = promotion_awaited {
+        promotion_awaited.wait_until_it_settles();
+    }
     processor
         .lock()
         .restart_the_out_of_process_helper_that_died(&full_ctx)

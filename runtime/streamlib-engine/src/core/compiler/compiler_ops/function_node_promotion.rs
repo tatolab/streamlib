@@ -37,16 +37,24 @@ pub(crate) struct FunctionNodePromotionPlanned {
     )>,
 }
 
+/// What the compile that carries a promotion removes from the graph.
+pub(crate) struct WhatTheCompileCarryingAPromotionRemoves<'a> {
+    pub(crate) processors: &'a [ProcessorUniqueId],
+    pub(crate) links: &'a [LinkUniqueId],
+}
+
 /// Move `crashed_function_node` and every function node downstream of it out
 /// of `reader`'s islands, marking each to be built as a processor of its own
-/// and each of their links to be wired again; refused, changing nothing, when
+/// and each of their links to be wired again. Refused, changing nothing, when
 /// one of them also feeds a reader other than `reader`, since a running reader
-/// is not re-islanded in this release.
+/// is not re-islanded in this release, or when the same compile removes the
+/// reader, a node that would move, or one of their links.
 pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
     graph: &mut Graph,
     crashed_function_node: &ProcessorUniqueId,
     reader: &ProcessorUniqueId,
     reason: &str,
+    what_the_same_compile_removes: &WhatTheCompileCarryingAPromotionRemoves<'_>,
 ) -> Result<FunctionNodePromotionPlanned> {
     let crashed_function_node_name = the_name_in_the_graph_of(graph, crashed_function_node);
     let reader_name = the_name_in_the_graph_of(graph, reader);
@@ -107,6 +115,20 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
         })
         .map(|link| (link.id.clone(), link.to_port().processor_id() == reader))
         .collect();
+    let removed_by_the_same_compile = promoted
+        .iter()
+        .chain(std::iter::once(reader))
+        .any(|node_id| what_the_same_compile_removes.processors.contains(node_id))
+        || links_touching_a_promoted_node
+            .iter()
+            .any(|(link_id, _)| what_the_same_compile_removes.links.contains(link_id));
+    if removed_by_the_same_compile {
+        return Err(Error::InvalidGraph(format!(
+            "function node `{crashed_function_node_name}` is not promoted out of \
+             `{reader_name}`'s islands: the same change removes the reader, a node that would \
+             move, or one of their links"
+        )));
+    }
     for (link_id, feeds_the_reader) in &links_touching_a_promoted_node {
         if *feeds_the_reader {
             reader_link_wiring.forget_a_function_node_island(link_id.as_str());
@@ -215,6 +237,12 @@ mod tests {
     };
     use crate::core::graph::JsonSerializableComponent;
 
+    const NOTHING_REMOVED: WhatTheCompileCarryingAPromotionRemoves<'static> =
+        WhatTheCompileCarryingAPromotionRemoves {
+            processors: &[],
+            links: &[],
+        };
+
     fn the_link_state_of(graph: &Graph, link_id: &LinkUniqueId) -> Option<LinkState> {
         graph
             .traversal()
@@ -304,6 +332,7 @@ mod tests {
             &remap,
             &reader,
             "function node `remap` crashed its helper process during its call.",
+            &NOTHING_REMOVED,
         )
         .unwrap();
 
@@ -352,6 +381,7 @@ mod tests {
             &lfo,
             &reader,
             "function node `lfo` stalled.",
+            &NOTHING_REMOVED,
         )
         .unwrap();
 
@@ -377,6 +407,7 @@ mod tests {
             &remap,
             &reader,
             "function node `remap` stalled.",
+            &NOTHING_REMOVED,
         )
         .unwrap();
 
@@ -408,6 +439,7 @@ mod tests {
             &remap,
             &reader,
             "function node `remap` stalled.",
+            &NOTHING_REMOVED,
         )
         .unwrap_err()
         .to_string();
@@ -431,6 +463,72 @@ mod tests {
     }
 
     #[test]
+    fn a_promotion_whose_link_the_same_compile_removes_is_refused_changing_nothing() {
+        let OneIslandIntoOneReader {
+            mut graph,
+            lfo,
+            reader,
+            lfo_into_remap,
+            remap_into_the_reader,
+            ..
+        } = one_island_into_one_reader_driven_in(ProcessExecution::Continuous { interval_ms: 10 });
+
+        let refusal = plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+            &mut graph,
+            &lfo,
+            &reader,
+            "function node `lfo` stalled.",
+            &WhatTheCompileCarryingAPromotionRemoves {
+                processors: &[],
+                links: std::slice::from_ref(&lfo_into_remap),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(refusal.contains("the same change removes"), "{refusal}");
+        assert!(runs_inside_the_read_of_each_node_it_feeds(&graph, &lfo));
+        assert_eq!(
+            the_link_state_of(&graph, &remap_into_the_reader),
+            Some(LinkState::Wired)
+        );
+    }
+
+    #[test]
+    fn a_link_into_a_promoted_function_node_from_a_node_that_is_not_one_is_refused() {
+        let OneIslandIntoOneReader {
+            mut graph,
+            remap,
+            reader,
+            ..
+        } = one_island_into_one_reader_driven_in(ProcessExecution::Continuous { interval_ms: 10 });
+        plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+            &mut graph,
+            &remap,
+            &reader,
+            "function node `remap` stalled.",
+            &NOTHING_REMOVED,
+        )
+        .unwrap();
+        let process_node = add_a_node(
+            &mut graph,
+            crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path()
+                .as_str(),
+            JsonValue::Null,
+        );
+
+        let into_the_promoted_node = link(&mut graph, (&process_node, "out1"), (&remap, "x"));
+
+        let refusal = how_a_link_is_wired(&graph, &into_the_promoted_node)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("which is not a function node"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
     fn a_function_node_already_out_of_its_readers_islands_is_not_promoted_again() {
         let OneIslandIntoOneReader {
             mut graph,
@@ -439,12 +537,20 @@ mod tests {
             ..
         } = one_island_into_one_reader_driven_in(ProcessExecution::Continuous { interval_ms: 10 });
         plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
-            &mut graph, &remap, &reader, "first",
+            &mut graph,
+            &remap,
+            &reader,
+            "first",
+            &NOTHING_REMOVED,
         )
         .unwrap();
 
         let refusal = plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
-            &mut graph, &remap, &reader, "second",
+            &mut graph,
+            &remap,
+            &reader,
+            "second",
+            &NOTHING_REMOVED,
         )
         .unwrap_err()
         .to_string();
@@ -469,6 +575,7 @@ mod tests {
             &lfo,
             &reader,
             "function node `lfo` stalled.",
+            &NOTHING_REMOVED,
         )
         .unwrap();
 
