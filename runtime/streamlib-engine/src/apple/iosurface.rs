@@ -191,6 +191,40 @@ pub(crate) fn write_rows_at_the_iosurfaces_stride(iosurface: &IOSurfaceRef, rows
     assert_eq!(unlocked, 0, "IOSurfaceUnlock");
 }
 
+/// A private IOSurface of `height` rows of `width` elements, each
+/// `bytes_per_element` wide, with rows packed back to back — no padding — so
+/// its pages read as one tightly laid-out pixel buffer.
+///
+/// Tagged with `pixel_format`'s CoreVideo code when it is a packed,
+/// single-plane format; otherwise the surface is described as elements
+/// alone. Refused when IOSurface would not honour the packed row pitch.
+pub fn create_private_iosurface_with_packed_rows(
+    width: u32,
+    height: u32,
+    bytes_per_element: u32,
+    pixel_format: PixelFormat,
+) -> Result<CFRetained<IOSurfaceRef>> {
+    const OPERATION: &str = "create_private_iosurface_with_packed_rows";
+    let packed_bytes_per_row =
+        byte_size_of_one_packed_row(OPERATION, width, height, bytes_per_element)?;
+    let iosurface = create_private_iosurface(
+        OPERATION,
+        width,
+        height,
+        bytes_per_element,
+        Some(packed_bytes_per_row),
+        pixel_format,
+    )?;
+    if iosurface.bytes_per_row() != packed_bytes_per_row as usize {
+        return Err(Error::TextureError(format!(
+            "{OPERATION}: IOSurface padded {width}x{height}'s rows to {} bytes; the packed \
+             layout needs {packed_bytes_per_row}",
+            iosurface.bytes_per_row()
+        )));
+    }
+    Ok(iosurface)
+}
+
 /// A private IOSurface for a `width`x`height` GPU image of `format`, with the
 /// row pitch IOSurface chooses — the alignment a Metal texture over the
 /// surface needs. Readers take the stride from the surface, never from
