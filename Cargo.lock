@@ -5141,7 +5141,6 @@ dependencies = [
  "cuid2",
  "dispatch2",
  "dotenvy",
- "hang",
  "hound",
  "iceoryx2",
  "iceoryx2-log",

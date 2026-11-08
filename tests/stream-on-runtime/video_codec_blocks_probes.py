@@ -8,7 +8,7 @@ error — one line per frame rather than one array at the end, so a run
 that stalls half way still says how far it got.
 
 `EncodedFrameProbe` is the one under test: it reads the encoder's own output
-the way a moq-dev player does — each message a media frame, a keyframe
+as a decoder reads it — each message one bare access unit, a keyframe
 opening a group, the port's stream facts naming the codec.
 `EncodedFrameTimestampProbe` reads the same link for its frame-header stamps.
 `DecodedVideoFrameProbe` reads the far side of the decoder as Image frames.
@@ -22,7 +22,6 @@ overlap.
 import dataclasses
 import json
 
-from hang_media_frame_reading import split_hang_legacy_container_media_frame
 from tatolab.stream import Image, Input, Packets, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
@@ -48,7 +47,7 @@ ENCODED_PORT = "encoded_video_from_upstream"
 
 @node.process
 class EncodedFrameProbe:
-    """Reads the encoder's output as media frames and reports each one."""
+    """Reads the encoder's output as access units and reports each one."""
 
     def __init__(self) -> None:
         self.frames_admitted = 0
@@ -71,13 +70,10 @@ class EncodedFrameProbe:
                 return
             self.entered_the_stream = True
         self.frames_admitted += 1
-        varint_timestamp_microseconds, access_unit = split_hang_legacy_container_media_frame(
-            message.payload
-        )
+        access_unit = bytes(memoryview(message.payload).cast("B"))
         report = {
             "starts_group": message.starts_group,
             "lost_since_last_read": message.lost_since_last_read,
-            "varint_timestamp_microseconds": varint_timestamp_microseconds,
             "timestamp_ns": message.timestamp_ns,
             "opening_bytes": list(access_unit[:4]),
             "byte_count": len(access_unit),

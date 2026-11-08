@@ -18,8 +18,8 @@ uv add tatolab-h264
 from tatolab.h264 import H264Decoder, H264Encoder
 ```
 
-`H264Encoder` takes `video` in and publishes `encoded_video`, one media frame per access unit — a QUIC varint timestamp in microseconds and
-then the Annex-B access unit — with a keyframe opening a group and `PacketsStreamFacts` stated on the
+`H264Encoder` takes `video` in and publishes `encoded_video`, one bare Annex-B access unit per message,
+stamped on the message, with a keyframe opening a group and `PacketsStreamFacts` stated on the
 port from the stream's SPS.
 
 On Linux it encodes with Vulkan Video on a device its own helper process creates on the runtime's
@@ -30,7 +30,7 @@ VideoToolbox: the runtime converts each texture-backed frame on the GPU into an 
 from the session's own pool, and VideoToolbox codes that. `effort_level` is refused on macOS,
 which has no encoder-effort index.
 
-`H264Decoder` takes media frames in that layout on `encoded_video`, entering the stream at a group
+`H264Decoder` takes those access units on `encoded_video`, entering the stream at a group
 start and, after a loss, discarding to the next one. `video` publishes a `VideoFrame` on an RGBA
 texture of the node's output pool at the stream's conformance window, with the colour the SPS
 signals. On Linux it decodes into an NV12 buffer its helper exports; on macOS VideoToolbox decodes
