@@ -1767,7 +1767,8 @@ pub(crate) fn spawn_host_for_processor_node(
 
 /// Build the host of a function node promoted out of its readers' islands:
 /// its helper runs the node as its processor, driven the way its promotion
-/// says, and numbers it first on its function-node call breadcrumb.
+/// says, numbers it first on its function-node call breadcrumb, and reports
+/// how it ran it at the end of its setup.
 pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
     function_node_import_path: &str,
     descriptor: &ProcessorDescriptor,
@@ -1800,12 +1801,18 @@ pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
             &node.display_name,
             descriptor.function_node_state_fields.clone(),
         );
+    host.link_wiring
+        .tell_each_function_node_how_its_far_side_ran_it([(
+            node.id.to_string(),
+            Arc::clone(&promotion.how_its_own_helper_ran_it),
+        )]);
     Ok(host)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::graph::HowItsHelpersRanAFunctionNode;
     use std::ffi::OsStr;
     use std::os::fd::{AsRawFd, OwnedFd};
 
@@ -2180,6 +2187,44 @@ sys.exit(0)
         );
         host.processor_id = "Pblur".to_string();
         host
+    }
+
+    /// The helper a promoted function node runs in reports how it ran it in its
+    /// `ready`, and the report lands where the node's promotion holds it.
+    ///
+    /// Fail-without-fix: the host's envelope knows no report for the node it
+    /// runs as its processor, so its `ready` is read and dropped.
+    #[test]
+    fn a_promoted_function_nodes_own_helper_reports_how_it_ran_it() {
+        let import_path =
+            crate::core::descriptors::ProcessorClassImportPath::new("my_app.ops:counter").unwrap();
+        let mut node =
+            ProcessorNode::new(import_path.clone(), None, "counter", None, vec![], vec![]);
+        let how_its_own_helper_ran_it = Arc::new(HowItsHelpersRanAFunctionNode::default());
+        node.insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
+            process_execution: ProcessExecution::Continuous { interval_ms: 10 },
+            how_its_own_helper_ran_it: Arc::clone(&how_its_own_helper_ran_it),
+        });
+        let host = spawn_host_for_a_function_node_promoted_to_its_own_process(
+            "my_app.ops:counter",
+            &ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new("counter").unwrap(),
+                import_path,
+                "a test double",
+            ),
+            &node,
+            &stream_environment_for_test(),
+            Path::new(LEND_DIRECTORY_FOR_TEST),
+            the_stream_a_test_helper_belongs_to(),
+        )
+        .unwrap();
+
+        host.link_wiring
+            .note_how_its_far_side_ran_its_function_nodes(Some(&serde_json::json!({
+                node.id.as_str(): false,
+            })));
+
+        assert_eq!(how_its_own_helper_ran_it.ran_compiled(), Some(false));
     }
 
     /// The child is told to run its loop in the mode the envelope carries, and

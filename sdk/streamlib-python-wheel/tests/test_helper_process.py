@@ -30,6 +30,9 @@ import pytest
 from tatolab.runtime import _engine
 from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
+from tatolab.runtime._function_node_run_as_its_helpers_processor import (
+    the_processor_class_a_promoted_function_node_runs_as,
+)
 from tatolab.runtime._processor_interpreter_bootstrap import (
     HelperProcessLifecycle,
     HelperProcessProtocolError,
@@ -37,7 +40,7 @@ from tatolab.runtime._processor_interpreter_bootstrap import (
     ParentProcessLogSink,
     load_processor_class,
 )
-from tatolab.stream import NodeLinkDataAccess
+from tatolab.stream import NodeLinkDataAccess, node
 
 pytestmark = pytest.mark.usefixtures(
     "private_iceoryx2_domain_for_this_test_process",
@@ -854,6 +857,55 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
 
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
     assert stand_in_parent.receive(timeout_seconds=0.5) is None
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+@node.function
+def doubles_its_level(level: float = 0.5) -> float:
+    return level * 2.0
+
+
+@node.function
+def labels_its_level(level: float = 0.5) -> dict:
+    return {"label": "high" if level > 0.5 else "low"}
+
+
+@pytest.mark.parametrize(
+    ("function_node", "node_id", "ran_compiled"),
+    [(doubles_its_level, "doubler-1", True), (labels_its_level, "labeller-1", False)],
+)
+def test_a_promoted_function_nodes_ready_says_how_its_own_helper_runs_it(
+    stand_in_parent, function_node, node_id, ran_compiled
+):
+    """A function node promoted to a helper of its own is evaluated by no
+    reader, so its own helper's `ready` is the only report of how it runs."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+
+    def drive() -> None:
+        link_data_access = _engine.open_node_link_data_access_for_helper_process()
+        HelperProcessLifecycle(
+            bridge,
+            the_processor_class_a_promoted_function_node_runs_as(
+                function_node, f"{__name__}:{function_node.__name__}", node_id, link_data_access
+            ),
+            "R-helper-test",
+            node_id,
+            link_data_access,
+        ).run_until_the_parent_is_done()
+
+    lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
+    lifecycle_thread.start()
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": None, "ports": {}})
+    assert stand_in_parent.receive() == {
+        "rpc": "ready",
+        "function_nodes_ran_compiled": {node_id: ran_compiled},
+    }
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"

@@ -539,7 +539,8 @@ def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its
 
     Each reader reads every count in order, so each reads a run of consecutive
     counts from the one counter, and `graph` shows the counter holding a count
-    at least as high as any either read.
+    at least as high as any either read, and that its own helper ran it
+    compiled.
 
     Fail-without-fix: the counter runs inside each reader with a copy of its
     state each, and the stream starts only the two readers' helpers.
@@ -568,6 +569,7 @@ def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its
     assert counter["components"]["function_node_state"]["calls"] >= max(
         first_reader["counts"][-1], second_reader["counts"][-1]
     ), counter["components"]
+    assert counter["components"]["ran_compiled"] is True, counter["components"]
 
 
 def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_tatolab_ops(
