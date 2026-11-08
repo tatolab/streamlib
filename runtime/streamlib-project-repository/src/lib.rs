@@ -24,6 +24,7 @@ pub use canonical_project_json::canonical_project_json_bytes;
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind,
     ProjectAssetSidecar, ProjectRelativeAssetPath, every_asset_uuid_the_project_holds,
+    the_content_path_of_an_asset,
 };
 pub use project_content_store::{
     PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,

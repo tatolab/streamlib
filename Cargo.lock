@@ -5341,10 +5341,12 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-gpu-frame-import-client",
  "streamlib-media-builtins",
+ "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "streamlib-surface-client",
  "tatolab-module-sdk",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

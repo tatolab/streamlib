@@ -10,7 +10,7 @@ use streamlib_project_repository::{
     PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetKind, ProjectAssetOperation, ProjectOperation, ProjectRepository,
     ProjectRepositoryRefusal, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind,
+    ProjectTransactionAuthorKind, the_content_path_of_an_asset,
 };
 use uuid::Uuid;
 
@@ -976,4 +976,38 @@ fn the_history_records_the_whole_project_but_what_is_generated_hidden_or_held_by
         ]
     );
     assert_eq!(files_at_head["nodes/halftone.py"], b"class Halftone: ...\n");
+}
+
+#[test]
+fn an_assets_content_path_holds_its_bytes_and_an_unknown_or_missing_asset_is_refused() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let lut = fixture.import_source("grade.cube", b"LUT_3D_SIZE 2");
+    let applied = repository
+        .apply_asset_changes(&agent(), vec![import_from(&lut, "looks/grade.cube")])
+        .unwrap();
+    let asset = imported_asset(&applied);
+
+    let content_path = the_content_path_of_an_asset(&fixture.project_directory, asset).unwrap();
+    assert_eq!(std::fs::read(&content_path).unwrap(), b"LUT_3D_SIZE 2");
+    assert!(
+        content_path.starts_with(
+            fixture
+                .project_directory
+                .join(PROJECT_CONTENT_STORE_DIRECTORY)
+        )
+    );
+
+    let unknown_asset = Uuid::new_v4();
+    assert!(matches!(
+        the_content_path_of_an_asset(&fixture.project_directory, unknown_asset),
+        Err(ProjectRepositoryRefusal::NoSuchAsset(refused)) if refused == unknown_asset
+    ));
+
+    std::fs::remove_file(&content_path).unwrap();
+    assert!(matches!(
+        the_content_path_of_an_asset(&fixture.project_directory, asset),
+        Err(ProjectRepositoryRefusal::ContentNotInTheStore(_))
+    ));
 }

@@ -42,6 +42,20 @@ impl StreamAndNodeTheHelperHosts {
             ),
         }
     }
+
+    fn asset_content_path(&self, asset: &str) -> PyResult<String> {
+        let asset = uuid::Uuid::parse_str(asset).map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "`{asset}` is not an asset UUID: {error}"
+            ))
+        })?;
+        let content_path = streamlib_project_repository::the_content_path_of_an_asset(
+            std::path::Path::new(&self.stream_project_directory),
+            asset,
+        )
+        .map_err(|refusal| pyo3::exceptions::PyLookupError::new_err(refusal.to_string()))?;
+        Ok(content_path.to_string_lossy().into_owned())
+    }
 }
 
 /// Privileged runtime context passed to `setup` / `teardown` / `start` / `stop`.
@@ -289,6 +303,11 @@ impl PythonRuntimeContextFullAccess {
         self.stream_and_node.stream_project_directory.clone()
     }
 
+    /// Where the bytes of the project asset `asset` sit, to open and read but never write.
+    fn asset_content_path(&self, asset: &str) -> PyResult<String> {
+        self.stream_and_node.asset_content_path(asset)
+    }
+
     /// Whether this processor is currently paused.
     fn is_paused(&self) -> bool {
         self.pause_state_announced_by_parent.load(Ordering::Relaxed)
@@ -412,6 +431,11 @@ impl PythonRuntimeContextLimitedAccess {
     #[getter]
     fn stream_project_directory(&self) -> String {
         self.stream_and_node.stream_project_directory.clone()
+    }
+
+    /// Where the bytes of the project asset `asset` sit, to open and read but never write.
+    fn asset_content_path(&self, asset: &str) -> PyResult<String> {
+        self.stream_and_node.asset_content_path(asset)
     }
 
     /// Whether this processor is currently paused.
