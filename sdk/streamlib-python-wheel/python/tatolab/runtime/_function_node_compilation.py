@@ -12,6 +12,10 @@ on disk by Numba; the wrapper is compiled at each load.
 
 A body that does not compile, or that takes or gives a `dict`, runs as Python in
 its reader's interpreter, called at the read with the interpreter's lock held.
+
+An `UnreadMessage` reaches a compiled body as a token, the index of the input
+that holds it plus one, and an output the body may hand out nothing on carries,
+past every output, a slot saying whether it handed one out.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from typing import Any, Callable, Optional
 from tatolab.stream import NodeLinkDataAccess, log
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
+    UNREAD_MESSAGE_VALUE_TYPE,
     FunctionNode,
 )
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
@@ -45,8 +50,15 @@ from tatolab.runtime._engine import (
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
 
-# The value types a body run as Python takes and gives: the scalars, and a `dict` as Records.
-_VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = ("float", "int", "bool", "records")
+# The value types a body run as Python takes and gives: the scalars, a `dict` as Records, and a
+# message it hands on unread.
+_VALUE_TYPES_A_BODY_RUN_AS_PYTHON_CARRIES = (
+    "float",
+    "int",
+    "bool",
+    "records",
+    UNREAD_MESSAGE_VALUE_TYPE,
+)
 
 # The largest integer magnitude an f64 holds exactly.
 _LARGEST_INTEGER_AN_F64_HOLDS_EXACTLY = 2**53
@@ -57,6 +69,43 @@ _EVALUATE_ENTRY_STATUS_REFUSED = -1
 
 class FunctionNodeDoesNotCompile(Exception):
     """A function node whose body or signature the evaluate entry cannot carry."""
+
+
+# What a node whose every value is a number, a bool or a dict carries beyond numbers: nothing.
+_NO_VALUES_CARRIED_BEYOND_NUMBERS: "dict[str, list[int]]" = {
+    "inputs_that_take_none": [],
+    "inputs_carrying_an_unread_message": [],
+    "outputs_carrying_an_unread_message": [],
+    "outputs_that_may_hand_out_nothing": [],
+}
+
+
+def _how_the_values_of_a_signature_are_carried(
+    function_signature: "dict[str, Any]",
+) -> "dict[str, list[int]]":
+    """Which inputs and outputs of `function_signature` take `None`, carry an `UnreadMessage`, or may hand out nothing."""
+    inputs = function_signature["inputs"]
+    outputs = function_signature["outputs"]
+    return {
+        "inputs_that_take_none": [
+            index for index, each_input in enumerate(inputs) if each_input["optional"]
+        ],
+        "inputs_carrying_an_unread_message": [
+            index
+            for index, each_input in enumerate(inputs)
+            if each_input["value_type"] == UNREAD_MESSAGE_VALUE_TYPE
+        ],
+        "outputs_carrying_an_unread_message": [
+            index
+            for index, each_output in enumerate(outputs)
+            if each_output["value_type"] == UNREAD_MESSAGE_VALUE_TYPE
+        ],
+        "outputs_that_may_hand_out_nothing": [
+            index
+            for index, each_output in enumerate(outputs)
+            if each_output.get("may_hand_out_nothing")
+        ],
+    }
 
 
 @dataclasses.dataclass(frozen=True)
@@ -75,6 +124,10 @@ class FunctionNodeCompiledToItsEvaluateEntry:
     is_stateful: bool
     body_loaded_from_numbas_cache: bool
     compiled_wrapper_kept_alive: Any
+    input_value_types: "tuple[str, ...]" = ()
+    how_its_values_are_carried: "dict[str, list[int]]" = dataclasses.field(
+        default_factory=lambda: dict(_NO_VALUES_CARRIED_BEYOND_NUMBERS)
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,6 +146,10 @@ class FunctionNodeRunAsPythonInItsReader:
     initial_state_values: "tuple[float, ...]"
     is_stateful: bool
     why_it_does_not_compile: str
+    input_value_types: "tuple[str, ...]" = ()
+    how_its_values_are_carried: "dict[str, list[int]]" = dataclasses.field(
+        default_factory=lambda: dict(_NO_VALUES_CARRIED_BEYOND_NUMBERS)
+    )
 
 
 FunctionNodeReadyToEvaluate = typing.Union[
@@ -168,6 +225,7 @@ class FunctionNodeIslandsFedToTheirPorts:
             node_id: prepared.output_ports for node_id, prepared in prepared_by_node_id.items()
         }
         function_nodes_handed_over: "list[Any]" = []
+        how_each_node_carries_its_values: "list[dict[str, Any]]" = []
         bodies_run_as_python: "dict[tuple[str, str], FunctionNodeBodyRunAsPython]" = {}
         for island_node in island["nodes"]:
             node_id = island_node["node"]
@@ -184,6 +242,16 @@ class FunctionNodeIslandsFedToTheirPorts:
             )
             if isinstance(called_through, FunctionNodeBodyRunAsPython):
                 bodies_run_as_python[(input_port, node_id)] = called_through
+            how_each_node_carries_its_values.append(
+                {
+                    **prepared.how_its_values_are_carried,
+                    "inputs_read_from_links_from_outside_the_island": (
+                        _the_inputs_read_from_links_from_outside_the_island(
+                            prepared, island_node["links_into"], linked_exposed_config_fields
+                        )
+                    ),
+                }
+            )
             function_nodes_handed_over.append(
                 (
                     node_id,
@@ -218,6 +286,7 @@ class FunctionNodeIslandsFedToTheirPorts:
                 node_index_by_node_id[island_output["node"]],
                 _output_index(output_ports_by_node_id, island_output["node"], island_output["port"]),
             ),
+            how_each_node_carries_its_values=how_each_node_carries_its_values,
         )
         self._forget_the_bodies_run_as_python_for(input_port)
         self._body_run_as_python_by_input_port_and_node_id.update(bodies_run_as_python)
@@ -353,7 +422,9 @@ def _where_each_linked_exposed_config_field_takes_its_value(
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
     return [
         (
-            (
+            None
+            if _is_read_through_the_reader(linked_from_by_input_port[field])
+            else (
                 node_index_by_node_id[linked_from_by_input_port[field]["node"]],
                 _output_index(
                     output_ports_by_node_id,
@@ -365,6 +436,38 @@ def _where_each_linked_exposed_config_field_takes_its_value(
         )
         for field in linked_exposed_config_fields
     ]
+
+
+def _is_read_through_the_reader(linked_from: "dict[str, Any]") -> bool:
+    """Whether a link into an island node comes from a node outside the island, whose channel its reader reads."""
+    return "reader_input_port" in linked_from
+
+
+def _the_inputs_read_from_links_from_outside_the_island(
+    prepared: FunctionNodeReadyToEvaluate,
+    links_into: "list[dict[str, Any]]",
+    linked_exposed_config_fields: "tuple[str, ...]",
+) -> "list[tuple[int, str, str]]":
+    """Each input a link from outside the island feeds: its index, the reader input port it is read at, and its value type.
+
+    A linked exposed config field is an input past the node's own, read as a number.
+    """
+    linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
+    value_type_by_input_port = dict(zip(prepared.input_ports, prepared.input_value_types))
+    inputs_read: "list[tuple[int, str, str]]" = []
+    for input_index, input_port in enumerate(
+        (*prepared.input_ports, *linked_exposed_config_fields)
+    ):
+        linked_from = linked_from_by_input_port.get(input_port)
+        if linked_from is not None and _is_read_through_the_reader(linked_from):
+            inputs_read.append(
+                (
+                    input_index,
+                    linked_from["reader_input_port"],
+                    value_type_by_input_port.get(input_port, "float"),
+                )
+            )
+    return inputs_read
 
 
 def prepare_function_node_to_evaluate(function_node: Any, import_path: str) -> FunctionNodeReadyToEvaluate:
@@ -406,10 +509,11 @@ def function_node_run_as_python_in_its_reader(
                 f"it `float`, `int`, `bool` or `dict`."
             )
     for each_input in function_signature["inputs"]:
-        if each_input["optional"]:
+        if each_input["optional"] and each_input["value_type"] != UNREAD_MESSAGE_VALUE_TYPE:
             raise FunctionNodeDoesNotCompile(
                 f"{import_path}'s input `{each_input['parameter']}` is optional, and a function "
-                f"node takes a value on every input in this release. To fix: give it a default."
+                f"node takes a value on every input but an `UnreadMessage` in this release. To "
+                f"fix: give it a default."
             )
     state_parameter: Optional[str] = function_signature["state_parameter"]
     state_record_class: Optional[type] = (
@@ -437,6 +541,8 @@ def function_node_run_as_python_in_its_reader(
         ),
         is_stateful=state_record_class is not None,
         why_it_does_not_compile=why_it_does_not_compile,
+        input_value_types=tuple(each_input["value_type"] for each_input in function_signature["inputs"]),
+        how_its_values_are_carried=_how_the_values_of_a_signature_are_carried(function_signature),
     )
 
 
@@ -546,6 +652,8 @@ class FunctionNodeBodyRunAsPython:
         )
 
     def _the_input_the_body_takes(self, parameter_name: str, value_type: str, input_value: Any) -> Any:
+        if value_type == UNREAD_MESSAGE_VALUE_TYPE:
+            return input_value
         if value_type == "records":
             if not isinstance(input_value, dict):
                 raise TypeError(
@@ -557,6 +665,15 @@ class FunctionNodeBodyRunAsPython:
 
     def _the_output_the_evaluator_takes(self, each_output: "dict[str, Any]", output_value: Any) -> Any:
         what_it_is = f"function node `{self._node_id}`'s output `{each_output['port']}`"
+        if output_value is None and each_output.get("may_hand_out_nothing"):
+            return None
+        if each_output["value_type"] == UNREAD_MESSAGE_VALUE_TYPE:
+            if output_value is None or isinstance(output_value, (bool, int, float, dict)):
+                raise TypeError(
+                    f"{what_it_is} hands on a message it was handed, and the body gave "
+                    f"{type(output_value).__name__}"
+                )
+            return output_value
         if each_output["value_type"] == "records":
             if not isinstance(output_value, dict):
                 raise TypeError(f"{what_it_is} is a dict, and the body gave {type(output_value).__name__}")
@@ -706,7 +823,9 @@ def _where_each_input_takes_its_value(
     where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], float]]" = []
     for input_port in prepared.input_ports:
         linked_from = linked_from_by_input_port.get(input_port)
-        if linked_from is not None:
+        if linked_from is not None and _is_read_through_the_reader(linked_from):
+            where_each_input_takes_its_value.append((None, 0.0))
+        elif linked_from is not None:
             source_node_id = linked_from["node"]
             where_each_input_takes_its_value.append(
                 (
@@ -793,10 +912,11 @@ def compile_function_node_to_its_evaluate_entry(
         _refuse_a_value_the_evaluate_entry_cannot_carry(
             import_path, f"input `{each_input['parameter']}`", each_input["value_type"]
         )
-        if each_input["optional"]:
+        if each_input["optional"] and each_input["value_type"] != UNREAD_MESSAGE_VALUE_TYPE:
             raise FunctionNodeDoesNotCompile(
                 f"{import_path}'s input `{each_input['parameter']}` is optional, and a compiled "
-                f"function node takes a number on every input. To fix: give it a numeric default."
+                f"function node takes a number on every input but an `UnreadMessage`. To fix: "
+                f"give it a numeric default."
             )
     for each_output in function_signature["outputs"]:
         _refuse_a_value_the_evaluate_entry_cannot_carry(
@@ -899,6 +1019,8 @@ def compile_function_node_to_its_evaluate_entry(
         body_loaded_from_numbas_cache=sum(body_with_its_dataclasses_lowered.stats.cache_hits.values())
         > 0,
         compiled_wrapper_kept_alive=compiled_wrapper,
+        input_value_types=tuple(each_input["value_type"] for each_input in function_signature["inputs"]),
+        how_its_values_are_carried=_how_the_values_of_a_signature_are_carried(function_signature),
     )
 
 
@@ -966,10 +1088,14 @@ def _initial_state_values(
 def _refuse_a_value_the_evaluate_entry_cannot_carry(
     import_path: str, what_it_types: str, value_type: str
 ) -> None:
-    if value_type not in _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES.values():
+    if (
+        value_type not in _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES.values()
+        and value_type != UNREAD_MESSAGE_VALUE_TYPE
+    ):
         raise FunctionNodeDoesNotCompile(
             f"{import_path}'s {what_it_types} is {value_type}, and a compiled function node "
-            f"carries numbers and bools in this release. To fix: make it `float`, `int` or `bool`."
+            f"carries numbers, bools and `UnreadMessage`s in this release. To fix: make it "
+            f"`float`, `int` or `bool`."
         )
 
 
@@ -1064,6 +1190,9 @@ def _evaluate_entry_wrapper_source(
     value_type_by_input_parameter = {
         each_input["parameter"]: each_input["value_type"] for each_input in function_signature["inputs"]
     }
+    optional_input_parameters = {
+        each_input["parameter"] for each_input in function_signature["inputs"] if each_input["optional"]
+    }
     input_parameters = list(value_type_by_input_parameter)
     lines = ["def evaluate(input_values, config_values, state_values, output_values, now_ns):"]
     if input_parameters:
@@ -1073,7 +1202,17 @@ def _evaluate_entry_wrapper_source(
     if state_value_types:
         lines.append(f"    state = carray(state_values, ({len(state_value_types)},))")
     output_ports = [each_output["port"] for each_output in function_signature["outputs"]]
-    lines.append(f"    outputs = carray(output_values, ({len(output_ports)},))")
+    handed_out_slot_by_output_index = {
+        output_index: len(output_ports) + handed_out_slot_index
+        for handed_out_slot_index, output_index in enumerate(
+            index
+            for index, each_output in enumerate(function_signature["outputs"])
+            if each_output.get("may_hand_out_nothing")
+        )
+    }
+    lines.append(
+        f"    outputs = carray(output_values, ({len(output_ports) + len(handed_out_slot_by_output_index)},))"
+    )
 
     arguments: "list[str]" = []
     for parameter_name in inspect.signature(body).parameters:
@@ -1102,12 +1241,13 @@ def _evaluate_entry_wrapper_source(
                 + ")"
             )
         else:
-            arguments.append(
-                _from_f64(
-                    f"inputs[{input_parameters.index(parameter_name)}]",
-                    value_type_by_input_parameter[parameter_name],
+            input_expression = f"inputs[{input_parameters.index(parameter_name)}]"
+            if parameter_name in optional_input_parameters:
+                arguments.append(f"(None if {input_expression} == 0.0 else {input_expression})")
+            else:
+                arguments.append(
+                    _from_f64(input_expression, value_type_by_input_parameter[parameter_name])
                 )
-            )
     lines.append("    try:")
     lines.append(f"        returned = body_with_its_dataclasses_lowered({', '.join(arguments)})")
     lines.append("    except Exception:")
@@ -1118,13 +1258,22 @@ def _evaluate_entry_wrapper_source(
             lines.append(f"    state[{index}] = {_to_f64(f'new_state.{field_name}', value_type)}")
     else:
         lines.append("    output = returned")
-    if output_record_class is not None:
-        for index, each_output in enumerate(function_signature["outputs"]):
-            output_value = _to_f64(f"output.{each_output['field']}", each_output["value_type"])
-            lines.append(f"    outputs[{index}] = {output_value}")
-    else:
-        output_value = _to_f64("output", function_signature["outputs"][0]["value_type"])
-        lines.append(f"    outputs[0] = {output_value}")
+    for index, each_output in enumerate(function_signature["outputs"]):
+        output_expression = "output" if output_record_class is None else f"output.{each_output['field']}"
+        handed_out_slot = handed_out_slot_by_output_index.get(index)
+        if handed_out_slot is None:
+            lines.append(f"    outputs[{index}] = {_to_f64(output_expression, each_output['value_type'])}")
+            continue
+        lines.append(f"    output_{index} = {output_expression}")
+        lines.append(f"    if output_{index} is None:")
+        lines.append(f"        outputs[{index}] = 0.0")
+        lines.append(f"        outputs[{handed_out_slot}] = 0.0")
+        lines.append("    else:")
+        lines.append(
+            f"        outputs[{index}] = "
+            f"{_optional_to_f64(f'output_{index}', each_output['value_type'])}"
+        )
+        lines.append(f"        outputs[{handed_out_slot}] = 1.0")
     lines.append("    return 0")
     return "\n".join(lines) + "\n", wrapper_globals
 
@@ -1155,6 +1304,13 @@ def _to_f64(value_expression: str, value_type: str) -> str:
     if value_type == "bool":
         return f"(1.0 if {value_expression} else 0.0)"
     return f"float({value_expression})"
+
+
+def _optional_to_f64(value_expression: str, value_type: str) -> str:
+    """`_to_f64` of a value Numba types as optional, which its `float` refuses and its arithmetic unwraps."""
+    if value_type == "bool":
+        return f"(1.0 if {value_expression} else 0.0)"
+    return f"(0.0 + {value_expression})"
 
 
 def _from_f64(value_expression: str, value_type: str) -> str:

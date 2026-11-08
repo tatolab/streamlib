@@ -4,7 +4,10 @@
 """The `@node.function` grammar: a function whose signature is the node.
 
 A plain parameter is an input pin and its default the pin's value; the return
-annotation is the output `result`, or one output per field of a dataclass.
+annotation is the output `result`, or one output per field of a dataclass. An
+output typed `T | None` hands out nothing on a call that returns `None`. An
+`UnreadMessage` input takes a message of any family, which the body can only
+hand on, to an `UnreadMessage` output of the family linked into that input.
 `config` names the node's one config dataclass. `Time` and `State[...]` are
 found by type and are never pins. Decorating registers nothing: it reads the
 signature once and stamps the declaration the runtime reads, the same stamps a
@@ -56,6 +59,15 @@ NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP = "__tatolab_node_function_state_fi
 
 # The value a scalar pin carries, by the annotation that names it.
 _SCALAR_PIN_VALUE_TYPES: "dict[Any, str]" = {float: "float", int: "int", bool: "bool"}
+
+# The value type of a message a function node hands on unread.
+UNREAD_MESSAGE_VALUE_TYPE = "unread_message"
+
+# The family an `UnreadMessage` input is declared with, beside every other family it also takes.
+_UNREAD_MESSAGE_INPUT_FAMILY = {
+    "family": "image",
+    "also_takes_families": ["array", "channels", "packets", "records"],
+}
 
 _FUNCTION_LOCAL_MARKER = "<locals>"
 
@@ -167,6 +179,7 @@ class _FunctionNodeSignatureReading:
         self._config_parameter: Optional[str] = None
         self.config_class: Optional[type] = None
         self._port_spelling_by_cast_name: "dict[str, str]" = {}
+        self._unread_message_input_ports: "list[str]" = []
 
         for parameter in inspect.signature(function).parameters.values():
             self._read_parameter(parameter, annotations)
@@ -303,6 +316,8 @@ class _FunctionNodeSignatureReading:
         pin_value_type, family_declaration = self._pin_value_type_and_family(
             value_annotation, f"input `{parameter.name}`"
         )
+        if pin_value_type == UNREAD_MESSAGE_VALUE_TYPE:
+            self._unread_message_input_ports.append(port_name)
         signature_input: "dict[str, Any]" = {
             "parameter": parameter.name,
             "port": port_name,
@@ -318,7 +333,7 @@ class _FunctionNodeSignatureReading:
             "name": port_name,
             "description": "",
             "delivery_profile": "newest",
-            "family": {"family": family_declaration["family"]},
+            "family": dict(family_declaration),
         }
         if "default" in signature_input:
             input_port["pin_default"] = signature_input["default"]
@@ -392,9 +407,19 @@ class _FunctionNodeSignatureReading:
         signature_outputs: "list[dict[str, Any]]" = []
         for output_name, output_annotation in outputs:
             port_name = self._cast_port_name(output_name)
-            pin_value_type, family_declaration = self._pin_value_type_and_family(
-                output_annotation, f"output `{output_name}`"
+            value_annotation, may_hand_out_nothing = _value_annotation_and_whether_optional(
+                output_annotation
             )
+            pin_value_type, family_declaration = self._pin_value_type_and_family(
+                value_annotation, f"output `{output_name}`"
+            )
+            if pin_value_type == UNREAD_MESSAGE_VALUE_TYPE:
+                family_declaration = {
+                    "family": "image",
+                    "family_follows_input_port": self._the_unread_message_input_an_output_follows(
+                        output_name
+                    ),
+                }
             if family_declaration["family"] == "channels" and pin_value_type != "channels_block":
                 family_declaration = {
                     "family": "channels",
@@ -409,6 +434,7 @@ class _FunctionNodeSignatureReading:
                     "port": port_name,
                     "field": None if fields_of is None else output_name,
                     "value_type": pin_value_type,
+                    "may_hand_out_nothing": may_hand_out_nothing,
                 }
             )
         if fields_of is not None:
@@ -417,9 +443,23 @@ class _FunctionNodeSignatureReading:
                 signature_output["fields_of"] = signature_outputs_class
         return output_ports, signature_outputs
 
+    def _the_unread_message_input_an_output_follows(self, output_name: str) -> str:
+        if len(self._unread_message_input_ports) != 1:
+            raise TypeError(
+                f"{self._function_name}'s output `{output_name}` is an `UnreadMessage`, which "
+                f"takes the family of the `UnreadMessage` input it hands on, and "
+                f"{self._function_name} takes {len(self._unread_message_input_ports)} of them. "
+                f"To fix: take exactly one `UnreadMessage` input."
+            )
+        return self._unread_message_input_ports[0]
+
     def _pin_value_type_and_family(
         self, annotation: Any, what_it_types: str
     ) -> "tuple[str, dict[str, Any]]":
+        from ._node_context_protocols import UnreadMessage
+
+        if annotation is UnreadMessage:
+            return UNREAD_MESSAGE_VALUE_TYPE, dict(_UNREAD_MESSAGE_INPUT_FAMILY)
         if annotation in _SCALAR_PIN_VALUE_TYPES:
             return _SCALAR_PIN_VALUE_TYPES[annotation], {"family": "channels"}
         if annotation is dict or typing.get_origin(annotation) is dict:
@@ -431,8 +471,8 @@ class _FunctionNodeSignatureReading:
         raise TypeError(
             f"{self._function_name}'s {what_it_types} is typed {annotation!r}, which names no "
             f"port family. To fix: type it as `float`, `int` or `bool` (one channel), `dict` "
-            f"(Records), or a read type: `ImageFrame`, `ArrayFrame`, `ChannelsBlock`, "
-            f"`PacketsUnit`."
+            f"(Records), a read type: `ImageFrame`, `ArrayFrame`, `ChannelsBlock`, "
+            f"`PacketsUnit`, or `UnreadMessage` for a message it hands on unread."
         )
 
     def _cast_port_name(self, spelling: str) -> str:

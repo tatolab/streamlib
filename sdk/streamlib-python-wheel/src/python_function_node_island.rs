@@ -15,14 +15,16 @@ use pyo3::types::{PyDict, PyInt, PyList};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
+    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptorKind,
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
-    FunctionNodeIslandOutputValue, HelperProcessLossCountBoardWriter,
+    FunctionNodeIslandOutputValue, HelperProcessLossCountBoardWriter, InputMailboxesInner,
+    MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
 };
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_OK, ModuleHostTableFunctionNodeEvaluateEntry,
 };
 
-use crate::python_bag_conversion::records_message_payload_of;
+use crate::python_bag_conversion::{records_message_dict_of, records_message_payload_of};
 use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -34,6 +36,12 @@ enum FunctionNodeValue {
     Number(f64),
     /// A `dict`, which only a node run as Python takes or gives.
     Record(Py<PyAny>),
+    /// A message read off a channel, which a node hands on without reading it.
+    MessageHandedOnUnread(MessageAFunctionNodeIslandHandsOnUnread),
+    /// No value: a link from outside the island that carried none yet, a
+    /// message input no new message reached, or an output its node handed out
+    /// nothing on.
+    Nothing,
 }
 
 impl FunctionNodeValue {
@@ -44,23 +52,208 @@ impl FunctionNodeValue {
                 "function node `{node_id}` runs compiled and takes a number on input \
                  {input_index}, and was handed a dict"
             ))),
+            Self::MessageHandedOnUnread(_) => Err(Error::Runtime(format!(
+                "function node `{node_id}` takes a number on input {input_index}, and was \
+                 handed a message to hand on unread; only an `UnreadMessage` input takes one"
+            ))),
+            Self::Nothing => Err(Error::Runtime(format!(
+                "function node `{node_id}` takes a number on input {input_index}, and no value \
+                 reached it"
+            ))),
         }
     }
 
-    fn to_python<'py>(&self, python: Python<'py>) -> Bound<'py, PyAny> {
+    fn is_nothing(&self) -> bool {
+        matches!(self, Self::Nothing)
+    }
+
+    fn duplicated(&self) -> Self {
         match self {
-            Self::Number(number) => number.into_pyobject(python).unwrap().into_any(),
-            Self::Record(record) => record.bind(python).clone(),
+            Self::Number(number) => Self::Number(*number),
+            Self::Record(record) => Python::attach(|python| Self::Record(record.clone_ref(python))),
+            Self::MessageHandedOnUnread(message) => Self::MessageHandedOnUnread(message.clone()),
+            Self::Nothing => Self::Nothing,
         }
     }
 
-    /// `value` as a function node gives it: a `dict` as a record, anything
-    /// else as the number it converts to.
+    fn to_python<'py>(&self, python: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match self {
+            Self::Number(number) => number.into_pyobject(python)?.into_any(),
+            Self::Record(record) => record.bind(python).clone(),
+            Self::MessageHandedOnUnread(message) => Bound::new(
+                python,
+                UnreadMessageAFunctionNodeHandsOn {
+                    message: message.clone(),
+                },
+            )?
+            .into_any(),
+            Self::Nothing => python.None().into_bound(python),
+        })
+    }
+
+    /// `value` as a function node gives it: `None` as nothing, a message it
+    /// was handed as that message, a `dict` as a record, anything else as the
+    /// number it converts to.
     fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if value.is_none() {
+            return Ok(Self::Nothing);
+        }
+        if let Ok(unread_message) = value.cast::<UnreadMessageAFunctionNodeHandsOn>() {
+            return Ok(Self::MessageHandedOnUnread(
+                unread_message.get().message.clone(),
+            ));
+        }
         if value.is_instance_of::<PyDict>() {
             return Ok(Self::Record(value.clone().unbind()));
         }
         Ok(Self::Number(value.extract::<f64>()?))
+    }
+
+    fn as_the_island_output_of(
+        &self,
+        node_id: &str,
+        output_index: usize,
+    ) -> Result<FunctionNodeIslandOutputValue> {
+        Ok(match self {
+            Self::Number(number) => FunctionNodeIslandOutputValue::ControlValue(*number),
+            Self::Record(record) => Python::attach(|python| {
+                records_message_payload_of(
+                    &format!("function node `{node_id}`'s output {output_index}"),
+                    record.bind(python),
+                    &[],
+                )
+                .map(FunctionNodeIslandOutputValue::RecordsMessage)
+                .map_err(|refusal| Error::Runtime(refusal.to_string()))
+            })?,
+            Self::MessageHandedOnUnread(message) => {
+                FunctionNodeIslandOutputValue::MessageHandedOnUnread(message.clone())
+            }
+            Self::Nothing => FunctionNodeIslandOutputValue::Nothing,
+        })
+    }
+}
+
+/// A message of any family a function node was handed to pass on without
+/// reading it: the body can only hand it on or not.
+#[pyclass(name = "UnreadMessage", module = "tatolab.stream", frozen)]
+pub(crate) struct UnreadMessageAFunctionNodeHandsOn {
+    message: MessageAFunctionNodeIslandHandsOnUnread,
+}
+
+/// How a function node input reads the messages a link from outside its
+/// island carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HowAnInputReadsALinkFromOutsideItsIsland {
+    /// As the control value a Channels message carries: its first sample.
+    ControlValue,
+    /// As the dict a Records message carries.
+    Record,
+    /// As the message itself, handed on unread: nothing at an evaluation no new
+    /// message arrived before.
+    MessageHandedOnUnread,
+}
+
+impl HowAnInputReadsALinkFromOutsideItsIsland {
+    /// How an input of `value_type`, as the bootstrap names it, reads a link.
+    fn of_the_value_type(value_type: &str) -> std::result::Result<Self, String> {
+        match value_type {
+            "float" | "int" | "bool" => Ok(Self::ControlValue),
+            "records" => Ok(Self::Record),
+            "unread_message" => Ok(Self::MessageHandedOnUnread),
+            unknown => Err(format!(
+                "an input of value type {unknown:?} cannot read a link from a node outside its \
+                 island; it reads a number, a dict or an `UnreadMessage`"
+            )),
+        }
+    }
+}
+
+/// The control value a Channels message carries: its first sample.
+fn the_control_value_a_message_carries(
+    message: &MessageReadFromInputPort,
+    node_id: &str,
+    reader_input_port: &str,
+) -> Result<f64> {
+    let refusal = |what_it_carries: &str| {
+        Error::Runtime(format!(
+            "function node `{node_id}` reads a number off the link it reads at \
+             {reader_input_port:?}, and the message {what_it_carries}"
+        ))
+    };
+    let descriptor = message.payload_descriptor;
+    if DataChannelPayloadDescriptorKind::from_wire(descriptor.kind)
+        != Some(DataChannelPayloadDescriptorKind::ChannelsBlock)
+    {
+        return Err(refusal("is no Channels block"));
+    }
+    let block = ChannelsBlockDescriptorBody::from_descriptor_body(&descriptor.body);
+    let payload = message.payload.bytes();
+    match ChannelsBlockSampleType::from_wire(block.sample_type) {
+        Some(ChannelsBlockSampleType::F64) => payload
+            .get(..8)
+            .map(|sample| f64::from_le_bytes(sample.try_into().unwrap_or_default()))
+            .ok_or_else(|| refusal("carries no sample")),
+        Some(ChannelsBlockSampleType::F32) => payload
+            .get(..4)
+            .map(|sample| f64::from(f32::from_le_bytes(sample.try_into().unwrap_or_default())))
+            .ok_or_else(|| refusal("carries no sample")),
+        None => Err(refusal("names a sample type this build does not know")),
+    }
+}
+
+/// Reads the newest message at one of the reader's input ports, past any older
+/// ones still queued there; `None` when none arrived since the last read.
+type NewestMessageReaderOfTheReadersInputPorts =
+    Box<dyn Fn(&str) -> Result<Option<MessageReadFromInputPort>> + Send + Sync>;
+
+fn the_newest_message_read_from(
+    input_mailboxes: &InputMailboxesInner,
+    reader_input_port: &str,
+) -> Result<Option<MessageReadFromInputPort>> {
+    let mut newest = None;
+    while let Some(message) = input_mailboxes.read_raw(reader_input_port)? {
+        newest = Some(message);
+    }
+    Ok(newest)
+}
+
+/// What the bootstrap says of how one function node's values travel beyond
+/// numbers: the inputs it reads off links from outside its island, those that
+/// take `None`, and the inputs and outputs that carry a message handed on
+/// unread or may carry nothing.
+///
+/// Wire contract with the helper bootstrap: a dict of these five keys, the
+/// first `[(input_index, reader_input_port, value_type)]`, the rest input or
+/// output indices.
+#[derive(Debug, Default, FromPyObject)]
+pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
+    #[pyo3(item)]
+    inputs_read_from_links_from_outside_the_island: Vec<(usize, String, String)>,
+    #[pyo3(item)]
+    inputs_that_take_none: Vec<usize>,
+    #[pyo3(item)]
+    inputs_carrying_an_unread_message: Vec<usize>,
+    #[pyo3(item)]
+    outputs_carrying_an_unread_message: Vec<usize>,
+    #[pyo3(item)]
+    outputs_that_may_hand_out_nothing: Vec<usize>,
+}
+
+/// How an island reads values beyond numbers: what each of its nodes carries,
+/// in island order, and how the newest message at a reader input port is read.
+pub(crate) struct HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+    how_each_node_carries_its_values: Vec<HowAFunctionNodeCarriesValuesBeyondNumbers>,
+    read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
+}
+
+impl HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+    /// An island whose every value is a number, a dict or a pin.
+    #[cfg(test)]
+    fn none() -> Self {
+        Self {
+            how_each_node_carries_its_values: Vec::new(),
+            read_the_newest_message_at: Box::new(|_| Ok(None)),
+        }
     }
 }
 
@@ -80,12 +273,24 @@ enum WhereAFunctionNodeInputTakesItsValue {
     },
     /// The pin's value, as nothing is linked to it.
     ItsPin(FunctionNodeValue),
+    /// A link from a node outside the island, whose channel the reader reads at
+    /// `reader_input_port`: the value read off it last.
+    ALinkFromOutsideTheIsland {
+        reader_input_port: String,
+        read_as: HowAnInputReadsALinkFromOutsideItsIsland,
+        value_read_last: FunctionNodeValue,
+    },
 }
 
 /// A function node's evaluate entry, compiled for its signature, and the f64
 /// buffers it is called with.
 struct FunctionNodeCalledThroughItsEvaluateEntry {
     evaluate_entry: ModuleHostTableFunctionNodeEvaluateEntry,
+    /// The values a call's message inputs and outputs carry as tokens: a
+    /// message input as its index plus one, or 0 for none; and the slot past
+    /// the outputs where each output that may hand out nothing says whether it
+    /// handed one out.
+    values_carried_as_tokens: FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry,
     config_values: Vec<f64>,
     /// The index among `config_values` each input past the node's own sets: a
     /// config field it exposes as an input, linked.
@@ -94,6 +299,21 @@ struct FunctionNodeCalledThroughItsEvaluateEntry {
     state_values: Vec<f64>,
     state_values_of_the_call_under_way: Vec<f64>,
     output_values: Vec<f64>,
+}
+
+/// The inputs and outputs of a compiled call that carry a message as a token,
+/// and the slot of each output's handed-out flag.
+///
+/// ABI contract with the evaluate entry the bootstrap compiles: a message input
+/// carries `input_index + 1`, or `0.0` when it holds none; a message output
+/// carries the token of the input it hands on, or `0.0`; and each output that
+/// may hand out nothing has a slot past every output, in output order, holding
+/// `1.0` when it handed one out and `0.0` when it did not.
+#[derive(Debug, Default)]
+struct FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry {
+    inputs_carrying_an_unread_message: Vec<usize>,
+    outputs_carrying_an_unread_message: Vec<usize>,
+    handed_out_slot_of_each_output: Vec<Option<usize>>,
 }
 
 /// A function node whose body runs as Python in this helper's interpreter,
@@ -120,6 +340,9 @@ struct FunctionNodeInAnIsland {
     breadcrumb_number: u32,
     how_it_is_called: HowAFunctionNodeIsCalled,
     where_each_input_takes_its_value: Vec<WhereAFunctionNodeInputTakesItsValue>,
+    /// The inputs a call may leave with no value, handing the body `None`; at
+    /// any other input with no value the node hands out nothing, uncalled.
+    inputs_that_take_none: Vec<usize>,
     output_values: Vec<FunctionNodeValue>,
     /// Whether each call's new state is written on the helper's board, which
     /// carries an entry for the node exactly when its state is carried.
@@ -131,6 +354,10 @@ struct FunctionNodeInAnIsland {
 struct FunctionNodeIslandEvaluation {
     function_nodes_each_after_what_it_reads: Vec<FunctionNodeInAnIsland>,
     last_evaluated_at_ns: Option<i64>,
+    /// Whether the island output's message, when it hands one on, went to a
+    /// read since the last evaluation; it goes to one read only.
+    message_handed_on_since_the_last_evaluation: bool,
+    read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
     /// The board each call's breadcrumb is noted on, so the parent can name
     /// the node a call died or stalled in.
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
@@ -147,7 +374,62 @@ pub(crate) struct FunctionNodeIslandEvaluatedInThisHelper {
 }
 
 impl FunctionNodeIslandEvaluation {
+    /// Read each link from outside the island at its reader input port: a
+    /// number or a dict keeps the newest value it carried, and a message input
+    /// holds the message that arrived since the last evaluation, or nothing.
+    fn read_each_link_from_outside_the_island(&mut self) -> Result<()> {
+        for function_node in &mut self.function_nodes_each_after_what_it_reads {
+            for where_it_takes_its_value in &mut function_node.where_each_input_takes_its_value {
+                let WhereAFunctionNodeInputTakesItsValue::ALinkFromOutsideTheIsland {
+                    reader_input_port,
+                    read_as,
+                    value_read_last,
+                } = where_it_takes_its_value
+                else {
+                    continue;
+                };
+                let newest_message = (self.read_the_newest_message_at)(reader_input_port)?;
+                match (newest_message, *read_as) {
+                    (Some(message), HowAnInputReadsALinkFromOutsideItsIsland::ControlValue) => {
+                        *value_read_last =
+                            FunctionNodeValue::Number(the_control_value_a_message_carries(
+                                &message,
+                                &function_node.node_id,
+                                reader_input_port,
+                            )?);
+                    }
+                    (Some(message), HowAnInputReadsALinkFromOutsideItsIsland::Record) => {
+                        *value_read_last = Python::attach(|python| {
+                            records_message_dict_of(
+                                python,
+                                reader_input_port,
+                                message.payload.bytes(),
+                            )
+                            .map(|record| FunctionNodeValue::Record(record.unbind()))
+                            .map_err(|refusal| Error::Runtime(refusal.to_string()))
+                        })?;
+                    }
+                    (
+                        Some(message),
+                        HowAnInputReadsALinkFromOutsideItsIsland::MessageHandedOnUnread,
+                    ) => {
+                        *value_read_last = FunctionNodeValue::MessageHandedOnUnread(
+                            MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(&message),
+                        );
+                    }
+                    (None, HowAnInputReadsALinkFromOutsideItsIsland::MessageHandedOnUnread) => {
+                        *value_read_last = FunctionNodeValue::Nothing;
+                    }
+                    (None, _) => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn evaluate_every_node_at(&mut self, now_ns: i64) -> Result<()> {
+        self.read_each_link_from_outside_the_island()?;
+        self.message_handed_on_since_the_last_evaluation = false;
         for node_index in 0..self.function_nodes_each_after_what_it_reads.len() {
             let (evaluated_earlier, from_this_node_on) = self
                 .function_nodes_each_after_what_it_reads
@@ -172,9 +454,27 @@ impl FunctionNodeIslandEvaluation {
                             [*output_index]
                     }
                     WhereAFunctionNodeInputTakesItsValue::ItsPin(pin_value) => pin_value,
+                    WhereAFunctionNodeInputTakesItsValue::ALinkFromOutsideTheIsland {
+                        value_read_last,
+                        ..
+                    } => value_read_last,
                 }
                 })
                 .collect();
+            let an_input_that_needs_a_value_has_none =
+                input_values
+                    .iter()
+                    .enumerate()
+                    .any(|(input_index, input_value)| {
+                        input_value.is_nothing()
+                            && !function_node.inputs_that_take_none.contains(&input_index)
+                    });
+            if an_input_that_needs_a_value_has_none {
+                for output_value in &mut function_node.output_values {
+                    *output_value = FunctionNodeValue::Nothing;
+                }
+                continue;
+            }
             call_noting_its_breadcrumb_on(
                 self.call_breadcrumb_board_writer.as_deref(),
                 &function_node.node_id,
@@ -252,6 +552,7 @@ impl HowAFunctionNodeIsCalled {
         state_values: Vec<f64>,
         resumes_from_the_state_its_stream_carries: bool,
         output_count: usize,
+        how_it_carries_its_values: &HowAFunctionNodeCarriesValuesBeyondNumbers,
     ) -> std::result::Result<Self, String> {
         Python::attach(|python| {
             let called_through = called_through.bind(python);
@@ -293,15 +594,27 @@ impl HowAFunctionNodeIsCalled {
                             config_value_indices_set_by_the_inputs_past_its_own.len()
                         )
                     })?;
+                let values_carried_as_tokens =
+                    FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry::of(
+                        node_id,
+                        how_it_carries_its_values,
+                        own_input_count,
+                        output_count,
+                    )?;
+                let output_slot_count = output_count
+                    + how_it_carries_its_values
+                        .outputs_that_may_hand_out_nothing
+                        .len();
                 return Ok(Self::ThroughItsEvaluateEntry(
                     FunctionNodeCalledThroughItsEvaluateEntry {
                         evaluate_entry,
+                        values_carried_as_tokens,
                         config_values,
                         config_value_indices_set_by_the_inputs_past_its_own,
                         input_values: vec![0.0; own_input_count],
                         state_values_of_the_call_under_way: vec![0.0; state_values.len()],
                         state_values,
-                        output_values: vec![0.0; output_count],
+                        output_values: vec![0.0; output_slot_count],
                     },
                 ));
             }
@@ -359,8 +672,19 @@ impl HowAFunctionNodeIsCalled {
             Self::ThroughItsEvaluateEntry(compiled) => {
                 let own_input_count = compiled.input_values.len();
                 for (input_index, input_value) in input_values.iter().enumerate() {
-                    let input_number =
-                        input_value.as_a_number_for_an_input_of(node_id, input_index)?;
+                    let input_number = if compiled
+                        .values_carried_as_tokens
+                        .inputs_carrying_an_unread_message
+                        .contains(&input_index)
+                    {
+                        if input_value.is_nothing() {
+                            0.0
+                        } else {
+                            (input_index + 1) as f64
+                        }
+                    } else {
+                        input_value.as_a_number_for_an_input_of(node_id, input_index)?
+                    };
                     match input_index.checked_sub(own_input_count) {
                         None => compiled.input_values[input_index] = input_number,
                         Some(past_its_own) => {
@@ -374,10 +698,9 @@ impl HowAFunctionNodeIsCalled {
                     }
                 }
                 compiled.call_its_evaluate_entry_at(node_id, now_ns)?;
-                for (output_value, compiled_output) in
-                    output_values.iter_mut().zip(&compiled.output_values)
-                {
-                    *output_value = FunctionNodeValue::Number(*compiled_output);
+                for (output_index, output_value) in output_values.iter_mut().enumerate() {
+                    *output_value =
+                        compiled.the_value_an_output_took(node_id, output_index, input_values)?;
                 }
                 Ok(())
             }
@@ -388,7 +711,99 @@ impl HowAFunctionNodeIsCalled {
     }
 }
 
+impl FunctionNodeValuesCarriedAsTokensThroughAnEvaluateEntry {
+    fn of(
+        node_id: &str,
+        how_it_carries_its_values: &HowAFunctionNodeCarriesValuesBeyondNumbers,
+        own_input_count: usize,
+        output_count: usize,
+    ) -> std::result::Result<Self, String> {
+        let refusal = |what: &str, index: usize, count: usize| {
+            format!(
+                "function node `{node_id}` names {what} {index} as carrying a message or \
+                 nothing, and it has {count}"
+            )
+        };
+        for input_index in &how_it_carries_its_values.inputs_carrying_an_unread_message {
+            if *input_index >= own_input_count {
+                return Err(refusal("input", *input_index, own_input_count));
+            }
+        }
+        for output_index in how_it_carries_its_values
+            .outputs_carrying_an_unread_message
+            .iter()
+            .chain(&how_it_carries_its_values.outputs_that_may_hand_out_nothing)
+        {
+            if *output_index >= output_count {
+                return Err(refusal("output", *output_index, output_count));
+            }
+        }
+        let mut handed_out_slot_of_each_output = vec![None; output_count];
+        for (handed_out_slot_index, output_index) in how_it_carries_its_values
+            .outputs_that_may_hand_out_nothing
+            .iter()
+            .enumerate()
+        {
+            handed_out_slot_of_each_output[*output_index] =
+                Some(output_count + handed_out_slot_index);
+        }
+        Ok(Self {
+            inputs_carrying_an_unread_message: how_it_carries_its_values
+                .inputs_carrying_an_unread_message
+                .clone(),
+            outputs_carrying_an_unread_message: how_it_carries_its_values
+                .outputs_carrying_an_unread_message
+                .clone(),
+            handed_out_slot_of_each_output,
+        })
+    }
+}
+
 impl FunctionNodeCalledThroughItsEvaluateEntry {
+    /// The value output `output_index` took at the call just made: nothing
+    /// when its handed-out slot says so, the input its token names for a
+    /// message output, and the number it wrote otherwise.
+    fn the_value_an_output_took(
+        &self,
+        node_id: &str,
+        output_index: usize,
+        input_values: &[&FunctionNodeValue],
+    ) -> Result<FunctionNodeValue> {
+        let tokens = &self.values_carried_as_tokens;
+        let handed_one_out = tokens
+            .handed_out_slot_of_each_output
+            .get(output_index)
+            .copied()
+            .flatten()
+            .is_none_or(|handed_out_slot| self.output_values[handed_out_slot] != 0.0);
+        if !handed_one_out {
+            return Ok(FunctionNodeValue::Nothing);
+        }
+        let written = self.output_values[output_index];
+        if !tokens
+            .outputs_carrying_an_unread_message
+            .contains(&output_index)
+        {
+            return Ok(FunctionNodeValue::Number(written));
+        }
+        if written == 0.0 {
+            return Ok(FunctionNodeValue::Nothing);
+        }
+        let named_input_index = (written - 1.0) as usize;
+        let names_a_message_input = written.fract() == 0.0
+            && written >= 1.0
+            && tokens
+                .inputs_carrying_an_unread_message
+                .contains(&named_input_index);
+        match input_values.get(named_input_index) {
+            Some(input_value) if names_a_message_input => Ok(input_value.duplicated()),
+            _ => Err(Error::Runtime(format!(
+                "function node `{node_id}` handed out {written} on output {output_index}, which \
+                 carries a message it was handed, and names none of its message inputs"
+            ))),
+        }
+    }
+
     /// Call the node's evaluate entry, keeping the state it wrote only when it
     /// answers OK.
     fn call_its_evaluate_entry_at(&mut self, node_id: &str, now_ns: i64) -> Result<()> {
@@ -437,13 +852,12 @@ impl FunctionNodeCalledAsPython {
                     "function node `{node_id}`, run as Python, raised: {refusal}"
                 ))
             };
-            let input_list = PyList::new(
-                python,
-                input_values
-                    .iter()
-                    .map(|input_value| input_value.to_python(python)),
-            )
-            .map_err(raised)?;
+            let input_objects = input_values
+                .iter()
+                .map(|input_value| input_value.to_python(python))
+                .collect::<PyResult<Vec<_>>>()
+                .map_err(raised)?;
+            let input_list = PyList::new(python, input_objects).map_err(raised)?;
             let returned = self
                 .run_as_python
                 .bind(python)
@@ -488,22 +902,19 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
         }
         let island_output_node =
             &evaluation.function_nodes_each_after_what_it_reads[self.island_output_node_index];
-        let value = match &island_output_node.output_values[self.island_output_index] {
-            FunctionNodeValue::Number(number) => {
-                FunctionNodeIslandOutputValue::ControlValue(*number)
+        let value = island_output_node.output_values[self.island_output_index]
+            .as_the_island_output_of(&island_output_node.node_id, self.island_output_index)?;
+        let value = match value {
+            FunctionNodeIslandOutputValue::MessageHandedOnUnread(_)
+                if evaluation.message_handed_on_since_the_last_evaluation =>
+            {
+                FunctionNodeIslandOutputValue::Nothing
             }
-            FunctionNodeValue::Record(record) => Python::attach(|python| {
-                records_message_payload_of(
-                    &format!(
-                        "function node `{}`'s output {}",
-                        island_output_node.node_id, self.island_output_index
-                    ),
-                    record.bind(python),
-                    &[],
-                )
-                .map(FunctionNodeIslandOutputValue::RecordsMessage)
-                .map_err(|refusal| Error::Runtime(refusal.to_string()))
-            })?,
+            FunctionNodeIslandOutputValue::MessageHandedOnUnread(message) => {
+                evaluation.message_handed_on_since_the_last_evaluation = true;
+                FunctionNodeIslandOutputValue::MessageHandedOnUnread(message)
+            }
+            value => value,
         };
         Ok(FunctionNodeIslandOutputForOneRead {
             value,
@@ -554,7 +965,13 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
         call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
         state_resumed_from: &dyn Fn(u32) -> Option<Vec<f64>>,
+        how_it_carries_values_beyond_numbers: HowAFunctionNodeIslandCarriesValuesBeyondNumbers,
     ) -> std::result::Result<Self, String> {
+        let HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+            mut how_each_node_carries_its_values,
+            read_the_newest_message_at,
+        } = how_it_carries_values_beyond_numbers;
+        how_each_node_carries_its_values.resize_with(function_nodes.len(), Default::default);
         let mut function_nodes_each_after_what_it_reads: Vec<FunctionNodeInAnIsland> =
             Vec::with_capacity(function_nodes.len());
         for (
@@ -571,6 +988,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             ),
         ) in function_nodes.into_iter().enumerate()
         {
+            let how_it_carries_its_values = &how_each_node_carries_its_values[node_index];
             let mut where_each_input_takes_its_value_read = Vec::new();
             for (source, pin_value) in where_each_input_takes_its_value {
                 where_each_input_takes_its_value_read.push(match source {
@@ -603,6 +1021,27 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                     }
                 });
             }
+            for (input_index, reader_input_port, value_type) in
+                &how_it_carries_its_values.inputs_read_from_links_from_outside_the_island
+            {
+                let read_as =
+                    HowAnInputReadsALinkFromOutsideItsIsland::of_the_value_type(value_type)
+                        .map_err(|refusal| format!("function node `{node_id}`: {refusal}"))?;
+                let where_it_takes_its_value = where_each_input_takes_its_value_read
+                    .get_mut(*input_index)
+                    .ok_or_else(|| {
+                        format!(
+                            "function node `{node_id}` reads input {input_index} off a link from \
+                             outside its island, and it takes fewer inputs"
+                        )
+                    })?;
+                *where_it_takes_its_value =
+                    WhereAFunctionNodeInputTakesItsValue::ALinkFromOutsideTheIsland {
+                        reader_input_port: reader_input_port.clone(),
+                        read_as,
+                        value_read_last: FunctionNodeValue::Nothing,
+                    };
+            }
             let writes_its_state_on_the_board = !initial_state_values.is_empty()
                 && call_breadcrumb_board_writer
                     .as_deref()
@@ -622,12 +1061,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
                 resumes_from_the_state_its_stream_carries,
                 output_count,
+                how_it_carries_its_values,
             )?;
             function_nodes_each_after_what_it_reads.push(FunctionNodeInAnIsland {
                 node_id,
                 breadcrumb_number,
                 how_it_is_called,
                 where_each_input_takes_its_value: where_each_input_takes_its_value_read,
+                inputs_that_take_none: how_it_carries_its_values.inputs_that_take_none.clone(),
                 output_values: (0..output_count)
                     .map(|_| FunctionNodeValue::Number(0.0))
                     .collect(),
@@ -674,6 +1115,8 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             evaluation: Mutex::new(FunctionNodeIslandEvaluation {
                 function_nodes_each_after_what_it_reads,
                 last_evaluated_at_ns: None,
+                message_handed_on_since_the_last_evaluation: false,
+                read_the_newest_message_at,
                 call_breadcrumb_board_writer,
             }),
             stream_clock_now_ns,
@@ -738,6 +1181,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
             the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
             resumes_from_the_state_its_stream_carries,
             output_count,
+            &HowAFunctionNodeCarriesValuesBeyondNumbers::default(),
         )
         .map_err(PyValueError::new_err)?;
         Ok(Self {
@@ -746,6 +1190,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
                 breadcrumb_number,
                 how_it_is_called,
                 where_each_input_takes_its_value: Vec::new(),
+                inputs_that_take_none: Vec::new(),
                 output_values: (0..output_count)
                     .map(|_| FunctionNodeValue::Number(0.0))
                     .collect(),
@@ -805,11 +1250,11 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
             Ok(())
         })?;
         let function_node = self.function_node.lock();
-        Ok(function_node
+        function_node
             .output_values
             .iter()
             .map(|output_value| output_value.to_python(python))
-            .collect())
+            .collect()
     }
 }
 
@@ -817,12 +1262,20 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
 /// reads, evaluated at each read of the port; an island already feeding the
 /// port is replaced, and each stateful node it shares resumes from its state.
 #[pyfunction]
-#[pyo3(signature = (*, link_data_access, input_port, function_nodes, island_output))]
+#[pyo3(signature = (
+    *,
+    link_data_access,
+    input_port,
+    function_nodes,
+    island_output,
+    how_each_node_carries_its_values = Vec::new(),
+))]
 pub(crate) fn feed_an_input_port_from_a_function_node_island(
     link_data_access: &PythonProcessorLinkDataAccess,
     input_port: &str,
     function_nodes: Vec<FunctionNodeHandedOverByTheBootstrap>,
     island_output: (usize, usize),
+    how_each_node_carries_its_values: Vec<HowAFunctionNodeCarriesValuesBeyondNumbers>,
 ) -> PyResult<()> {
     let input_mailboxes = link_data_access
         .input_mailboxes_of_this_helper()
@@ -848,6 +1301,20 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
                     .or_else(|| {
                         link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number)
                     })
+            },
+            HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+                how_each_node_carries_its_values,
+                read_the_newest_message_at: {
+                    let input_mailboxes_read = Arc::downgrade(&input_mailboxes);
+                    Box::new(
+                        move |reader_input_port| match input_mailboxes_read.upgrade() {
+                            Some(input_mailboxes) => {
+                                the_newest_message_read_from(&input_mailboxes, reader_input_port)
+                            }
+                            None => Ok(None),
+                        },
+                    )
+                },
             },
         )
         .map_err(PyValueError::new_err)?;
@@ -979,6 +1446,7 @@ mod tests {
             stream_clock_now_ns,
             None,
             &|_| None,
+            HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
         )
         .unwrap()
     }
@@ -1028,6 +1496,7 @@ mod tests {
                 stream_clock_now_ns,
                 None,
                 &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
             )
             .unwrap();
         assert_eq!(
@@ -1058,6 +1527,7 @@ mod tests {
                 a_stream_clock_the_test_sets().1,
                 None,
                 &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
             )
             .err()
             .unwrap();
@@ -1112,6 +1582,7 @@ mod tests {
                 a_stream_clock_the_test_sets().1,
                 None,
                 &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
             )
             .unwrap();
         let refusal = island
@@ -1174,6 +1645,7 @@ mod tests {
                 stream_clock_now_ns,
                 Some(board_writer),
                 &|breadcrumb_number| (breadcrumb_number == 4).then(|| vec![41.0]),
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
             )
             .unwrap();
         assert_eq!(
@@ -1230,6 +1702,7 @@ mod tests {
                 a_stream_clock_the_test_sets().1,
                 None,
                 &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
             )
             .err()
             .unwrap();
@@ -1302,6 +1775,7 @@ mod tests {
             stream_clock_now_ns,
             None,
             state_resumed_from,
+            HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
         )
         .unwrap()
     }
@@ -1385,6 +1859,7 @@ mod tests {
                 a_stream_clock_the_test_sets().1,
                 None,
                 &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
             )
             .unwrap();
         let refusal = island
@@ -1428,6 +1903,7 @@ mod tests {
                 a_stream_clock_the_test_sets().1,
                 None,
                 &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers::none(),
             )
             .unwrap();
         let refusal = island
@@ -1437,6 +1913,256 @@ mod tests {
         assert!(
             refusal.contains("`add_one` runs compiled and takes a number on input 0"),
             "{refusal}"
+        );
+    }
+
+    /// Hands its message input on while its second input is on, else nothing:
+    /// a message travels as the token of the input holding it, and the slot
+    /// past its one output says whether it handed one out.
+    unsafe extern "C" fn hand_the_message_on_while_open(
+        input_values: *const f64,
+        _config_values: *const f64,
+        _state_values: *mut f64,
+        output_values: *mut f64,
+        _now_ns: i64,
+    ) -> i32 {
+        unsafe {
+            let is_open = *input_values.add(1) != 0.0;
+            *output_values = if is_open { *input_values } else { 0.0 };
+            *output_values.add(1) = if is_open { 1.0 } else { 0.0 };
+        }
+        MODULE_HOST_TABLE_STATUS_OK
+    }
+
+    const READER_INPUT_PORT_OF_THE_LINK_FROM_OUTSIDE_THE_ISLAND: &str =
+        "function_node_island_input_link_from_a_class_node";
+
+    /// Messages queued at the reader input port a link from outside the
+    /// island is read at, each read handing out the newest.
+    fn messages_queued_at_the_reader_input_port() -> (
+        Arc<Mutex<Vec<MessageReadFromInputPort>>>,
+        NewestMessageReaderOfTheReadersInputPorts,
+    ) {
+        let queued: Arc<Mutex<Vec<MessageReadFromInputPort>>> = Arc::new(Mutex::new(Vec::new()));
+        let read_by_the_island = Arc::clone(&queued);
+        (
+            queued,
+            Box::new(move |reader_input_port| {
+                assert_eq!(
+                    reader_input_port,
+                    READER_INPUT_PORT_OF_THE_LINK_FROM_OUTSIDE_THE_ISLAND
+                );
+                let mut queued = read_by_the_island.lock();
+                let newest = queued.pop();
+                queued.clear();
+                Ok(newest)
+            }),
+        )
+    }
+
+    fn a_message_of(
+        payload: Vec<u8>,
+        payload_descriptor: streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor,
+        timestamp_ns: i64,
+    ) -> MessageReadFromInputPort {
+        MessageReadFromInputPort {
+            payload: payload.into(),
+            timestamp_ns,
+            group_boundary: streamlib::sdk::iceoryx2::MessageGroupBoundary::StartsGroup,
+            lost_since_last_read: 2,
+            payload_descriptor,
+        }
+    }
+
+    fn a_channels_block_of_one_f64_sample(
+        sample: f64,
+        timestamp_ns: i64,
+    ) -> MessageReadFromInputPort {
+        a_message_of(
+            sample.to_le_bytes().to_vec(),
+            streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::channels_block(
+                ChannelsBlockDescriptorBody {
+                    start_sample: 0,
+                    sample_rate: 0,
+                    channel_count: 1,
+                    samples_per_channel: 1,
+                    sample_type: ChannelsBlockSampleType::F64 as u32,
+                },
+            ),
+            timestamp_ns,
+        )
+    }
+
+    fn a_gate_reading_a_link_from_outside_its_island(
+        is_open: bool,
+        stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
+        read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
+    ) -> FunctionNodeIslandEvaluatedInThisHelper {
+        FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+            vec![(
+                "gate".to_string(),
+                0,
+                compiled_to(hand_the_message_on_while_open),
+                vec![(None, 0.0), (None, if is_open { 1.0 } else { 0.0 })],
+                vec![],
+                vec![],
+                1,
+                vec![],
+            )],
+            (0, 0),
+            stream_clock_now_ns,
+            None,
+            &|_| None,
+            HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+                how_each_node_carries_its_values: vec![
+                    HowAFunctionNodeCarriesValuesBeyondNumbers {
+                        inputs_read_from_links_from_outside_the_island: vec![(
+                            0,
+                            READER_INPUT_PORT_OF_THE_LINK_FROM_OUTSIDE_THE_ISLAND.to_string(),
+                            "unread_message".to_string(),
+                        )],
+                        inputs_that_take_none: vec![],
+                        inputs_carrying_an_unread_message: vec![0],
+                        outputs_carrying_an_unread_message: vec![0],
+                        outputs_that_may_hand_out_nothing: vec![0],
+                    },
+                ],
+                read_the_newest_message_at,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_open_gate_hands_on_the_newest_message_unread_and_nothing_once_it_is_handed_on() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let (queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
+        let island = a_gate_reading_a_link_from_outside_its_island(
+            true,
+            stream_clock_now_ns,
+            read_the_newest_message_at,
+        );
+        queued.lock().push(a_message_of(
+            vec![1, 2, 3],
+            streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::bytes(),
+            40,
+        ));
+        queued.lock().push(a_message_of(
+            vec![4, 5],
+            streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::bytes(),
+            50,
+        ));
+        stream_time_ns.store(100, Ordering::SeqCst);
+        let FunctionNodeIslandOutputValue::MessageHandedOnUnread(handed_on) = island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap()
+            .value
+        else {
+            panic!("an open gate hands its message on");
+        };
+        assert_eq!(handed_on.payload_bytes, vec![4, 5]);
+        assert_eq!(handed_on.timestamp_ns, 50);
+        assert_eq!(handed_on.lost_since_last_read, 2);
+        stream_time_ns.store(200, Ordering::SeqCst);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::Nothing
+        );
+    }
+
+    #[test]
+    fn a_closed_gate_hands_out_nothing_rather_than_the_last_message() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let (queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
+        let island = a_gate_reading_a_link_from_outside_its_island(
+            false,
+            stream_clock_now_ns,
+            read_the_newest_message_at,
+        );
+        queued.lock().push(a_message_of(
+            vec![1],
+            streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::bytes(),
+            10,
+        ));
+        stream_time_ns.store(100, Ordering::SeqCst);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::Nothing
+        );
+    }
+
+    #[test]
+    fn a_number_read_off_a_link_from_outside_the_island_keeps_the_newest_control_value() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let (queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
+        let island =
+            FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+                vec![(
+                    "add_one".to_string(),
+                    0,
+                    compiled_to(add_one_and_count_calls),
+                    vec![(None, 0.0)],
+                    vec![],
+                    vec![0.0],
+                    1,
+                    vec![],
+                )],
+                (0, 0),
+                stream_clock_now_ns,
+                None,
+                &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+                    how_each_node_carries_its_values: vec![
+                        HowAFunctionNodeCarriesValuesBeyondNumbers {
+                            inputs_read_from_links_from_outside_the_island: vec![(
+                                0,
+                                READER_INPUT_PORT_OF_THE_LINK_FROM_OUTSIDE_THE_ISLAND.to_string(),
+                                "float".to_string(),
+                            )],
+                            ..Default::default()
+                        },
+                    ],
+                    read_the_newest_message_at,
+                },
+            )
+            .unwrap();
+        stream_time_ns.store(100, Ordering::SeqCst);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::Nothing,
+            "a node whose link has carried no value yet hands out nothing"
+        );
+        queued
+            .lock()
+            .push(a_channels_block_of_one_f64_sample(3.0, 10));
+        queued
+            .lock()
+            .push(a_channels_block_of_one_f64_sample(5.0, 20));
+        stream_time_ns.store(200, Ordering::SeqCst);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::ControlValue(6.0)
+        );
+        stream_time_ns.store(300, Ordering::SeqCst);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::ControlValue(6.0),
+            "a number keeps the newest value its link carried"
         );
     }
 }

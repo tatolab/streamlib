@@ -560,3 +560,54 @@ class ReportsTheLevelRecordsItReadSink:
         self.records_read.append(record)
         if len(self.records_read) == LEVEL_RECORDS_READ_BEFORE_REPORTING:
             report("LEVEL_RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})
+
+
+@node.process(execution="continuous", interval_ms=10)
+class CountsEachTickRecordsSource:
+    """Writes `{"count": n}` every tick, counting from 1."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    counts_to_downstream = Output(Records)
+
+    def process(self, ctx) -> None:
+        self.count += 1
+        ctx.outputs.write(self.counts_to_downstream, {"count": self.count})
+
+
+#: How many reads a gated sink makes into each batch it reports.
+GATED_READS_PER_REPORTED_BATCH = 50
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfGatedCountsItReadSink:
+    """Reads the counts a `Gate` hands on, and reports each batch of reads with
+    its own pid and when the batch started: the counts it read, and how many
+    reads found nothing."""
+
+    def __init__(self) -> None:
+        self.counts_in_this_batch: "list[int]" = []
+        self.reads_in_this_batch = 0
+        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+
+    gated_counts = Input(Records, delivery="newest")
+
+    def process(self, ctx) -> None:
+        if self.reads_in_this_batch == 0:
+            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        record = ctx.inputs.read(self.gated_counts)
+        self.reads_in_this_batch += 1
+        if record is not None:
+            self.counts_in_this_batch.append(int(record["count"]))
+        if self.reads_in_this_batch == GATED_READS_PER_REPORTED_BATCH:
+            report(
+                "GATED_COUNT_BATCH_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
+                    "counts": self.counts_in_this_batch,
+                },
+            )
+            self.counts_in_this_batch = []
+            self.reads_in_this_batch = 0

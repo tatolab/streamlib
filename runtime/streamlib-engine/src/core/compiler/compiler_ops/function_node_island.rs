@@ -21,10 +21,17 @@ use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
     FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
-    GraphWeight, HowItsHelpersRanAFunctionNode, Link, LinkState, LinkStateComponent, LinkUniqueId,
-    OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
+    GraphWeight, HowItsHelpersRanAFunctionNode, InputLinkPortRef, Link,
+    LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
+    LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
 };
 use crate::core::processors::OutOfProcessLinkWireReply;
+use crate::iceoryx2::Iceoryx2Node;
+
+use super::function_node_pool::is_the_function_node_pool_type;
+use super::open_iceoryx2_service_op::{
+    close_iceoryx2_service, open_iceoryx2_service_into_the_reader_of_a_function_node_island,
+};
 
 /// How the compiler wires one link, by the kinds of its two ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +42,21 @@ pub(crate) enum HowALinkIsWired {
     AsACallInsideAFunctionNodeIsland,
     /// As the island upstream of it, carried to the helper the link feeds.
     AsTheIslandItsReaderEvaluatesAtEachRead,
+    /// Through an iceoryx2 channel into the reader of the function node's
+    /// island, at an input port of the reader's own opened for the link: a
+    /// link from a node outside any island into a function node.
+    ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland,
+}
+
+/// The input port of an island's reader that the channel of `link_id`, into
+/// one of the island's function nodes, is wired into.
+///
+/// Wire contract with the helper bootstrap: an island node's `links_into`
+/// entry names it as `{"port", "from": {"reader_input_port"}}`.
+pub(crate) fn the_reader_input_port_a_link_into_a_function_node_is_read_at(
+    link_id: &LinkUniqueId,
+) -> String {
+    format!("function_node_island_input_{link_id}")
 }
 
 /// Whether `node_id` is a function node that runs inside the read of each
@@ -100,12 +122,141 @@ pub(crate) fn how_a_link_is_wired(
         (false, false) => Ok(HowALinkIsWired::ThroughAChannel),
         (true, true) => Ok(HowALinkIsWired::AsACallInsideAFunctionNodeIsland),
         (true, false) => Ok(HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead),
-        (false, true) => Err(Error::InvalidLink(format!(
-            "link `{link_id}` feeds function node `{destination_id}` from `{source_id}`, which \
-             is not a function node; an island's inputs come from other function nodes or \
-             from its pins in this release"
-        ))),
+        (false, true) => Ok(HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland),
     }
+}
+
+/// Wire `link_id`, from a node outside any island into a function node: open
+/// its channel into the one reader of the function node's island, which reads
+/// it at each evaluation; or mark it wired with no channel while no reader
+/// evaluates the island yet, and the reader that links it opens the channel.
+pub(crate) fn wire_a_link_into_a_function_node_island_through_its_reader(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<()> {
+    let function_node_id = link_in(graph, link_id)?.to_port().processor_id().clone();
+    let readers = the_readers_a_function_node_feeds(graph, &function_node_id);
+    let mut readers = readers.into_iter();
+    match (readers.next(), readers.next()) {
+        (None, _) => mark_a_link(graph, link_id, LinkState::Wired),
+        (Some(reader_id), None) => {
+            open_the_channel_of_a_link_into_a_function_node_island_at_its_reader(
+                graph,
+                link_id,
+                &reader_id,
+                iceoryx2_node,
+            )
+        }
+        (Some(_), Some(_)) => Err(an_island_reading_a_channel_fed_to_two_readers(
+            graph,
+            &function_node_id,
+        )),
+    }
+}
+
+fn open_the_channel_of_a_link_into_a_function_node_island_at_its_reader(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    reader_id: &ProcessorUniqueId,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<()> {
+    let reader = graph
+        .traversal()
+        .v(reader_id)
+        .first()
+        .ok_or_else(|| Error::ProcessorNotFound(reader_id.to_string()))?;
+    if is_the_function_node_pool_type(&reader.processor_type) {
+        let function_node_id = link_in(graph, link_id)?.to_port().processor_id();
+        return Err(Error::InvalidLink(format!(
+            "link `{link_id}` feeds function node `{function_node_id}` from a node outside any \
+             island, and the island is read by a node in the app process, through the stream's \
+             function node pool, which carries only control values and records. To fix: read \
+             the island from a node in a helper process"
+        )));
+    }
+    if !reader.has::<OutOfProcessLinkWiringComponent>() {
+        return Err(Error::InvalidLink(format!(
+            "link `{link_id}` feeds a function node island read by `{reader_id}`, which runs in \
+             the app process; a function node runs inside the read of a node in a helper \
+             process, and the app process runs no node code"
+        )));
+    }
+    tracing::info!(
+        "Opening the channel of {link_id} into `{reader_id}`, which evaluates the function node \
+         island it feeds"
+    );
+    open_iceoryx2_service_into_the_reader_of_a_function_node_island(
+        graph,
+        link_id,
+        InputLinkPortRef::new(
+            reader_id.clone(),
+            the_reader_input_port_a_link_into_a_function_node_is_read_at(link_id),
+        ),
+        iceoryx2_node,
+    )
+}
+
+fn an_island_reading_a_channel_fed_to_two_readers(
+    graph: &Graph,
+    function_node_id: &ProcessorUniqueId,
+) -> Error {
+    let mut reader_names: Vec<String> = the_readers_a_function_node_feeds(graph, function_node_id)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    reader_names.sort();
+    Error::InvalidLink(format!(
+        "the island of function node `{function_node_id}` reads a link from a node outside \
+         any island, and feeds {}; each reader evaluates the island itself, so a link into it \
+         has one reader in this release. To fix: give each reader its own function nodes",
+        reader_names.join(" and ")
+    ))
+}
+
+/// The links into the function nodes `function_node_ids` from nodes outside
+/// any island.
+fn the_links_into_function_nodes_from_outside_any_island(
+    graph: &Graph,
+    function_node_ids: &[ProcessorUniqueId],
+) -> Vec<LinkUniqueId> {
+    graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| {
+            function_node_ids.contains(link.to_port().processor_id())
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+        })
+        .map(|link| link.id.clone())
+        .collect()
+}
+
+/// The function nodes upstream of `node_id` through function nodes, the
+/// island its inputs evaluate.
+fn the_function_nodes_upstream_of(
+    graph: &Graph,
+    node_id: &ProcessorUniqueId,
+) -> Vec<ProcessorUniqueId> {
+    let mut function_nodes_upstream = Vec::new();
+    let mut nodes_to_follow = vec![node_id.clone()];
+    let mut followed = HashSet::new();
+    while let Some(following_id) = nodes_to_follow.pop() {
+        if !followed.insert(following_id.clone()) {
+            continue;
+        }
+        for link in graph.traversal().e(()).iter() {
+            if link.to_port().processor_id() != &following_id {
+                continue;
+            }
+            let upstream_id = link.source().processor_id();
+            if runs_inside_the_read_of_each_node_it_feeds(graph, upstream_id) {
+                function_nodes_upstream.push(upstream_id.clone());
+                nodes_to_follow.push(upstream_id.clone());
+            }
+        }
+    }
+    function_nodes_upstream
 }
 
 /// Wire `link_id`, from a function node into a helper's input port: record the
@@ -117,6 +268,7 @@ pub(crate) fn how_a_link_is_wired(
 pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
+    iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
     let island = the_island_feeding_a_link(graph, link_id)?;
     let reader_id = link_in(graph, link_id)?.to_port().processor_id().clone();
@@ -143,6 +295,25 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
         )));
     }
     let function_node_ids = the_function_node_ids_an_island_calls(&island);
+    for link_into_the_island in
+        the_links_into_function_nodes_from_outside_any_island(graph, &function_node_ids)
+    {
+        let already_read_through_a_reader = graph
+            .traversal()
+            .e(&link_into_the_island)
+            .first()
+            .is_some_and(|link| {
+                link.has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+            });
+        if !already_read_through_a_reader {
+            open_the_channel_of_a_link_into_a_function_node_island_at_its_reader(
+                graph,
+                &link_into_the_island,
+                &reader_id,
+                iceoryx2_node,
+            )?;
+        }
+    }
     let answer_awaited_from_the_reader = reader_link_wiring
         .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(island)?;
     reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
@@ -314,15 +485,21 @@ pub(crate) fn the_report_of_how_its_helpers_ran_a_function_node(
     Some(how_it_ran)
 }
 
+/// Whether a node outside any island feeds `node_id`, directly or through an
+/// island it evaluates, whose messages wake it.
 fn is_fed_by_a_node_that_is_not_a_function_node(
     graph: &Graph,
     node_id: &ProcessorUniqueId,
 ) -> bool {
+    let function_nodes_upstream = the_function_nodes_upstream_of(graph, node_id);
     graph
         .traversal()
         .e(())
         .iter()
-        .filter(|link| link.to_port().processor_id() == node_id)
+        .filter(|link| {
+            link.to_port().processor_id() == node_id
+                || function_nodes_upstream.contains(link.to_port().processor_id())
+        })
         .any(|link| {
             !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
         })
@@ -335,6 +512,21 @@ pub(crate) fn unwire_a_link_from_a_function_node_island_into_its_reader(
     link_id: &LinkUniqueId,
 ) -> Result<()> {
     let reader_id = link_in(graph, link_id)?.to_port().processor_id().clone();
+    let links_read_through_this_reader: Vec<LinkUniqueId> = graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| {
+            link.get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+                .is_some_and(|read_through| {
+                    read_through.reader_input_port.processor_id() == &reader_id
+                })
+        })
+        .map(|link| link.id.clone())
+        .collect();
+    for link_read_through_this_reader in links_read_through_this_reader {
+        close_iceoryx2_service(graph, &link_read_through_this_reader)?;
+    }
     if let Some(reader_link_wiring) = graph
         .traversal()
         .v(&reader_id)
@@ -373,7 +565,7 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 /// Wire contract with the helper bootstrap: `{"input_port", "link_id",
 /// "output": {"node", "port"}, "nodes": [{"node", "name", "import_path",
 /// "config", "pins": {input: value}, "links_into": [{"port", "from": {"node",
-/// "port"}}]}]}`, a stateful node's `"state_fields"` beside its `"node"`, and
+/// "port"} or {"reader_input_port"}}]}]}`, a stateful node's `"state_fields"` beside its `"node"`, and
 /// the `"exposed_config_fields"` of a node that takes config fields as inputs,
 /// each a port a link of `"links_into"` may name.
 pub(crate) fn the_island_feeding_a_link(
@@ -454,11 +646,14 @@ fn place_a_function_node_after_what_it_reads(
     for link_into in links_into_this_node {
         let upstream_id = link_into.source().processor_id();
         if !runs_inside_the_read_of_each_node_it_feeds(graph, upstream_id) {
-            return Err(Error::InvalidLink(format!(
-                "function node `{node_id}` reads `{upstream_id}`, which is not a function \
-                 node; an island's inputs come from other function nodes or from its pins in \
-                 this release"
-            )));
+            links_into.push(serde_json::json!({
+                "port": link_into.to_port().port_name(),
+                "from": {
+                    "reader_input_port":
+                        the_reader_input_port_a_link_into_a_function_node_is_read_at(&link_into.id),
+                },
+            }));
+            continue;
         }
         if is_a_feedback_node(graph, node_id) {
             read_at_the_last_evaluation_by_a_feedback_node.push(upstream_id.clone());
@@ -537,6 +732,7 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
         refuse_a_second_link_into_a_port_an_island_feeds(graph, link)?;
         refuse_an_island_into_a_port_declaring_an_audio_window(graph, link)?;
         refuse_a_link_closing_a_cycle_of_function_nodes(graph, link)?;
+        refuse_an_island_reading_a_channel_fed_to_two_readers(graph, link)?;
     }
     for link_id in links_to_remove {
         let link = link_in(graph, link_id)?;
@@ -614,6 +810,33 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
                 longer_path.push(downstream_id.clone());
                 paths_to_follow.push(longer_path);
             }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse `link` when it leaves an island that reads a link from a node
+/// outside any island feeding more than one reader.
+fn refuse_an_island_reading_a_channel_fed_to_two_readers(graph: &Graph, link: &Link) -> Result<()> {
+    let function_node_id = [link.source().processor_id(), link.to_port().processor_id()]
+        .into_iter()
+        .find(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id));
+    let Some(function_node_id) = function_node_id else {
+        return Ok(());
+    };
+    for reader_id in the_readers_a_function_node_feeds(graph, function_node_id) {
+        let island = the_function_nodes_upstream_of(graph, &reader_id);
+        let reads_a_channel =
+            !the_links_into_function_nodes_from_outside_any_island(graph, &island).is_empty();
+        if reads_a_channel
+            && island.iter().any(|island_node_id| {
+                the_readers_a_function_node_feeds(graph, island_node_id).len() > 1
+            })
+        {
+            return Err(an_island_reading_a_channel_fed_to_two_readers(
+                graph,
+                function_node_id,
+            ));
         }
     }
     Ok(())
@@ -733,7 +956,13 @@ fn is_reactive_and_left_fed_only_by_islands(
                     .any(|removed_link_id| removed_link_id.as_str() == link.id())
         })
         .collect();
+    let island = the_function_nodes_upstream_of(graph, reader_id);
+    let the_island_reads_a_link_left_from_outside_any_island =
+        the_links_into_function_nodes_from_outside_any_island(graph, &island)
+            .iter()
+            .any(|link_id| !links_to_remove.contains(link_id));
     runs_reactively
+        && !the_island_reads_a_link_left_from_outside_any_island
         && links_left_into_the_reader.iter().any(|link| {
             runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
         })
@@ -793,12 +1022,15 @@ pub(crate) mod tests {
             language: FunctionNodeLanguage::Python,
         };
         for input_port in input_ports {
-            descriptor = descriptor.with_input(PortDescriptor::new(
-                *input_port,
-                "",
-                true,
-                PortFamilyDeclaration::of_family(PortFamily::Channels),
-            ));
+            descriptor = descriptor.with_input(
+                PortDescriptor::new(
+                    *input_port,
+                    "",
+                    true,
+                    PortFamilyDeclaration::of_family(PortFamily::Channels),
+                )
+                .with_delivery_profile("newest"),
+            );
         }
         for output_port in output_ports {
             descriptor = descriptor.with_output(PortDescriptor::new(
@@ -946,14 +1178,11 @@ pub(crate) mod tests {
             how_a_link_is_wired(&graph, &into_the_reader).unwrap(),
             HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead
         );
-        let into_a_function_node_from_a_process_node =
+        let into_a_function_node_from_a_class_node =
             link(&mut graph, (&source, "out1"), (&remap, "x"));
-        let refusal = how_a_link_is_wired(&graph, &into_a_function_node_from_a_process_node)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            refusal.contains("which is not a function node"),
-            "{refusal}"
+        assert_eq!(
+            how_a_link_is_wired(&graph, &into_a_function_node_from_a_class_node).unwrap(),
+            HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland
         );
     }
 
@@ -1019,8 +1248,12 @@ pub(crate) mod tests {
         let reader = a_helper_reader_before_its_setup(&mut graph);
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
 
-        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-            .unwrap();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
 
         let islands = reader_setup_command_ports(&graph, &reader)["islands"].clone();
         assert_eq!(islands.as_array().unwrap().len(), 1);
@@ -1054,8 +1287,12 @@ pub(crate) mod tests {
         let reader = a_helper_reader_before_its_setup(&mut graph);
         link(&mut graph, (&lfo, "result"), (&remap, "x"));
         let into_the_reader = link(&mut graph, (&remap, "result"), (&reader, "in1"));
-        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-            .unwrap();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
         let ran_compiled = |graph: &Graph, node_id: &ProcessorUniqueId| {
             graph
                 .traversal()
@@ -1141,10 +1378,13 @@ pub(crate) mod tests {
         let reader =
             a_helper_reader_before_its_setup_driven_in(&mut graph, ProcessExecution::Reactive);
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        let refusal =
-            wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-                .unwrap_err()
-                .to_string();
+        let refusal = wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(refusal.contains("execution=\"continuous\""), "{refusal}");
     }
 
@@ -1238,8 +1478,12 @@ pub(crate) mod tests {
             .is_none(),
             "a running reader takes a live link from a function node"
         );
-        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-            .unwrap();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
 
         let handed_over = delivery.late_fed_function_node_islands.lock().clone();
         assert_eq!(handed_over.len(), 1);
@@ -1268,8 +1512,12 @@ pub(crate) mod tests {
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let reader = a_helper_reader_past_its_setup(&mut graph, &delivery);
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-            .unwrap();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
         assert_eq!(
             delivery.late_fed_function_node_islands.lock()[0]["nodes"][0]["pins"],
             serde_json::json!({})
@@ -1315,8 +1563,12 @@ pub(crate) mod tests {
         let untouched_into_the_reader =
             link(&mut graph, (&untouched_lfo, "result"), (&reader, "in2"));
         for island_link in [&into_the_reader, &untouched_into_the_reader] {
-            wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, island_link)
-                .unwrap();
+            wire_a_link_from_a_function_node_island_into_its_reader(
+                &mut graph,
+                island_link,
+                &Iceoryx2Node::for_this_test_process(),
+            )
+            .unwrap();
         }
         the_link_wiring_of(&graph, &reader)
             .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
@@ -1359,8 +1611,12 @@ pub(crate) mod tests {
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let reader = a_helper_reader_past_its_setup(&mut graph, &delivery);
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-            .unwrap();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
 
         assert!(
             the_refusal_of_a_commit(
@@ -1596,10 +1852,13 @@ pub(crate) mod tests {
             JsonValue::Null,
         );
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&native_reader, "in1"));
-        let refusal =
-            wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-                .unwrap_err()
-                .to_string();
+        let refusal = wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(refusal.contains("runs in the app process"), "{refusal}");
     }
 
@@ -1611,14 +1870,131 @@ pub(crate) mod tests {
         the_link_wiring_of(&graph, &reader)
             .hold_every_later_link_until_the_setup_command_goes_out();
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-            .unwrap();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
         assert_eq!(link_state_of(&graph, &into_the_reader), LinkState::Wired);
         let setup_command_islands =
             the_link_wiring_of(&graph, &reader).as_setup_command_ports()["islands"].clone();
         assert_eq!(
             setup_command_islands[0]["link_id"],
             into_the_reader.as_str()
+        );
+    }
+
+    /// A class node in a helper of its own, whose `out1` feeds `remap`'s `x`,
+    /// and `remap` feeding a helper reader's `in1`.
+    fn a_class_node_feeding_remap_into_a_helper_reader(
+        graph: &mut Graph,
+    ) -> (
+        ProcessorUniqueId,
+        ProcessorUniqueId,
+        LinkUniqueId,
+        LinkUniqueId,
+    ) {
+        let source = add_a_node(
+            graph,
+            crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path()
+                .as_str(),
+            JsonValue::Null,
+        );
+        graph
+            .traversal_mut()
+            .v(&source)
+            .first_mut()
+            .unwrap()
+            .insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(Arc::new(
+                OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                    ProcessExecution::Reactive,
+                ),
+            )));
+        let remap = add_a_node(graph, "test_ops:remap", JsonValue::Null);
+        let reader = a_helper_reader_before_its_setup(graph);
+        let into_the_island = link(graph, (&source, "out1"), (&remap, "x"));
+        let into_the_reader = link(graph, (&remap, "result"), (&reader, "in1"));
+        (remap, reader, into_the_island, into_the_reader)
+    }
+
+    #[test]
+    fn a_class_node_linked_into_an_island_is_read_at_a_hidden_input_of_its_reader() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let (remap, reader, into_the_island, into_the_reader) =
+            a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+        let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &iceoryx2_node,
+        )
+        .unwrap();
+
+        let read_at = graph
+            .traversal()
+            .e(&into_the_island)
+            .first()
+            .unwrap()
+            .get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+            .map(|component| component.reader_input_port.clone())
+            .expect("the link into the island is opened at its reader");
+        assert_eq!(read_at.processor_id(), &reader);
+        assert_eq!(
+            read_at.port_name(),
+            the_reader_input_port_a_link_into_a_function_node_is_read_at(&into_the_island)
+        );
+        let island = &reader_setup_command_ports(&graph, &reader)["islands"][0];
+        let remap_in_the_island = island["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["node"] == remap.as_str())
+            .unwrap();
+        assert_eq!(
+            remap_in_the_island["links_into"],
+            serde_json::json!([{
+                "port": "x",
+                "from": {"reader_input_port": read_at.port_name()},
+            }])
+        );
+
+        wire_a_link_into_a_function_node_island_through_its_reader(
+            &mut graph,
+            &into_the_island,
+            &iceoryx2_node,
+        )
+        .unwrap();
+        assert_eq!(
+            link_state_of(&graph, &into_the_island),
+            LinkState::Wired,
+            "a link its reader already opened is wired once"
+        );
+    }
+
+    #[test]
+    fn an_island_reading_a_class_node_that_feeds_two_readers_is_refused_by_name() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let (remap, _reader, _into_the_island, _into_the_reader) =
+            a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+        let second_reader = a_helper_reader_before_its_setup(&mut graph);
+        let into_the_second_reader = link(&mut graph, (&remap, "result"), (&second_reader, "in1"));
+
+        let refusal = the_refusal_of_a_commit(
+            &graph,
+            &[],
+            &[],
+            std::slice::from_ref(&into_the_second_reader),
+            &[],
+            &[],
+        )
+        .expect("an island reading a channel feeds one reader");
+        assert!(
+            refusal.contains(&format!(
+                "function node `{remap}` reads a link from a node outside"
+            )),
+            "{refusal}"
         );
     }
 }

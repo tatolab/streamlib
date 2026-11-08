@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "tatolab-ops"
 version = "0.68.34"
-description = "The small function nodes every Tatolab stream can wire: math, shaping, logic, values, noise and time, compiled to native code."
+description = "The small function nodes every Tatolab stream can wire: math, shaping, logic, gating, values, noise and time, compiled to native code."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "BUSL-1.1"
@@ -49,6 +49,7 @@ Trigger = "tatolab.ops:Trigger"
 Counter = "tatolab.ops:Counter"
 SampleAndHold = "tatolab.ops:SampleAndHold"
 Feedback = "tatolab.ops:Feedback"
+Gate = "tatolab.ops:Gate"
 
 [project.urls]
 Homepage = "https://tatolab.com"

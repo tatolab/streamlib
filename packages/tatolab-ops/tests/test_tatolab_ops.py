@@ -23,6 +23,7 @@ from tatolab.ops import (
     CounterCount,
     Divide,
     Feedback,
+    Gate,
     Lag,
     LagValue,
     Lerp,
@@ -68,6 +69,20 @@ def test_clamp_holds_a_value_between_its_bounds():
     assert Clamp(-1.0) == 0.0
     assert Clamp(0.25) == 0.25
     assert Clamp(4.0, low=1.0, high=2.0) == 2.0
+
+
+def test_gate_hands_its_message_on_while_open_and_nothing_while_closed():
+    message = object()
+    assert Gate(message) is message
+    assert Gate(message, open=False) is None
+
+
+def test_gate_takes_a_message_of_any_family_and_hands_on_the_family_linked_into_it():
+    signature = getattr(Gate, "__tatolab_node_function_signature__")
+    assert signature["inputs"][0]["value_type"] == "unread_message"
+    assert signature["outputs"][0]["may_hand_out_nothing"] is True
+    (output_port,) = getattr(Gate, "__tatolab_node_output_ports__")
+    assert output_port["family"]["family_follows_input_port"] == "value"
 
 
 def test_feedback_called_as_a_function_passes_its_value_on():
@@ -187,6 +202,9 @@ def test_sample_and_hold_takes_its_input_as_its_sample_turns_on():
 
 # Each node with the calls it is held to compiled: its inputs by parameter, the
 # stream time, and the state it is called with.
+# A message `Gate` hands on, which its evaluate entry carries as a token naming the input holding it.
+_A_MESSAGE_HANDED_ON_UNREAD = object()
+
 _CALLS_EACH_NODE_IS_HELD_TO_COMPILED: "list[tuple[Any, list[dict[str, Any]]]]" = [
     (Absolute, [{"x": -2.5}, {"x": 3.0}]),
     (Add, [{"a": 2.0, "b": 3.0}]),
@@ -232,6 +250,7 @@ _CALLS_EACH_NODE_IS_HELD_TO_COMPILED: "list[tuple[Any, list[dict[str, Any]]]]" =
     ),
     (Constant, [{"value": 0.3}]),
     (Feedback, [{"value": 0.75}]),
+    (Gate, [{"value": _A_MESSAGE_HANDED_ON_UNREAD}, {"value": _A_MESSAGE_HANDED_ON_UNREAD, "open": False}]),
     (
         Random,
         [
@@ -287,16 +306,45 @@ def _as_f64(value: Any) -> float:
     return 1.0 if value is True else 0.0 if value is False else float(value)
 
 
+def _the_input_values(signature: "dict[str, Any]", call: "dict[str, Any]") -> "list[float]":
+    """Each input as its evaluate entry takes it: a number, or a message as its input's index plus one."""
+    return [
+        float(index + 1)
+        if each_input["value_type"] == "unread_message"
+        else _as_f64(call.get(each_input["parameter"], each_input.get("default")))
+        for index, each_input in enumerate(signature["inputs"])
+    ]
+
+
+def _the_output_values(
+    signature: "dict[str, Any]", call: "dict[str, Any]", output: Any
+) -> "list[float]":
+    """Each output as its evaluate entry gives it, then a handed-out slot per output that may hand out nothing."""
+    input_parameters = [each_input["parameter"] for each_input in signature["inputs"]]
+    values: "list[float]" = []
+    handed_out: "list[float]" = []
+    for each_output in signature["outputs"]:
+        value = output if each_output["field"] is None else getattr(output, each_output["field"])
+        if each_output.get("may_hand_out_nothing"):
+            handed_out.append(0.0 if value is None else 1.0)
+        if value is None:
+            values.append(0.0)
+        elif each_output["value_type"] == "unread_message":
+            values.append(
+                float(next(i for i, p in enumerate(input_parameters) if call.get(p) is value) + 1)
+            )
+        else:
+            values.append(_as_f64(value))
+    return values + handed_out
+
+
 def _the_values_a_call_returns(
     function_node: Any, call: "dict[str, Any]"
 ) -> "tuple[list[float], list[float]]":
     signature = function_node.__tatolab_node_function_signature__
     returned = function_node(**call)
     output, new_state = returned if signature["state_parameter"] is not None else (returned, None)
-    outputs = [
-        _as_f64(output if each_output["field"] is None else getattr(output, each_output["field"]))
-        for each_output in signature["outputs"]
-    ]
+    outputs = _the_output_values(signature, call, output)
     state = (
         []
         if new_state is None
@@ -310,13 +358,19 @@ def _the_values_its_evaluate_entry_returns(
 ) -> "tuple[list[float], list[float]]":
     signature = function_node.__tatolab_node_function_signature__
     input_values = (ctypes.c_double * max(1, len(signature["inputs"])))(
-        *[_as_f64(call[each_input["parameter"]]) for each_input in signature["inputs"]]
+        *_the_input_values(signature, call)
     )
     previous = call.get(signature["state_parameter"] or "")
     state_values = (ctypes.c_double * max(1, len(compiled.state_fields)))(
         *[_as_f64(getattr(previous, field)) for field in compiled.state_fields]
     )
-    output_values = (ctypes.c_double * len(signature["outputs"]))()
+    output_values = (
+        ctypes.c_double
+        * (
+            len(signature["outputs"])
+            + sum(1 for each_output in signature["outputs"] if each_output.get("may_hand_out_nothing"))
+        )
+    )()
     config_values = (ctypes.c_double * 1)()
     status = _EvaluateEntry(compiled.evaluate_entry_address)(
         input_values,

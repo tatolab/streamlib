@@ -452,8 +452,12 @@ mod tests {
                 (&reader, "in1"),
             );
         }
-        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &remap_into_the_reader)
-            .unwrap();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &remap_into_the_reader,
+            &crate::iceoryx2::Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
         OneIslandIntoOneReader {
             graph,
             lfo,

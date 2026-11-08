@@ -5,12 +5,13 @@
 
 from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCalls
 from rust_function_node_fixture import ScaleAndOffset
-from tatolab.ops import Clamp, Lfo, Remap
+from tatolab.ops import Clamp, Gate, Lfo, Remap
 from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, graph_generator
 
 from helper_placement_processors import (
     STEPPED_LFO_STEP_MS,
     STEPPED_LFO_STEPS_REPORTED,
+    CountsEachTickRecordsSource,
     CountsItsOwnCalls,
     CrashesItsHelper,
     DiesAbruptlyProbe,
@@ -19,6 +20,7 @@ from helper_placement_processors import (
     LevelScaledByItsGain,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
+    ReportsEachBatchOfGatedCountsItReadSink,
     ReportsEachBatchOfItsConfiguredLevel,
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
@@ -278,3 +280,13 @@ def rust_function_nodes_in_islands_beside_tatolab_ops(stream_builder: StreamBuil
     counts_sink = stream_builder.add(ReportsTheCountsItReadInOrderSink)
     stream_builder.connect(counter.output("result"), remap.input("x"))
     stream_builder.connect(remap.output("result"), counts_sink.input("count"))
+
+
+@graph_generator
+def python_source_through_a_gate_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A Python class's counts through `tatolab.ops`' `Gate` into another Python class."""
+    source = stream_builder.add(CountsEachTickRecordsSource, name="source")
+    gate = stream_builder.add(Gate, name="gate")
+    sink = stream_builder.add(ReportsEachBatchOfGatedCountsItReadSink, name="sink")
+    stream_builder.connect(source.output("counts_to_downstream"), gate.input("value"))
+    stream_builder.connect(gate.output("result"), sink.input("gated_counts"))

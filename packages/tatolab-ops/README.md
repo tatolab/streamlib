@@ -12,7 +12,9 @@ helper's read, with no process of its own.
 - Shaping: `Lerp`, `Clamp`, `Remap` (from -1..1 onto 0..1 by default), `Smoothstep` and
   `Step`.
 - Logic: `Compare` (`less`, `equal` and `greater`, within a tolerance), `Switch`, which
-  picks between two values by a bool, and `Select`, which picks one of four by an index.
+  picks between two values by a bool, `Select`, which picks one of four by an index, and
+  `Gate`, which hands a message of any family on unread while `open` and nothing while
+  closed, so a reactive node behind a closed gate does not run.
 - Values and noise: `Constant`, `Random`, which draws afresh for each stream time and the
   same for the same seed and time, and `PerlinNoise` along `x`.
 - Time: `Lfo`, a sine wave from -1 to 1 at `rate_hz`; `Timer`, the seconds since its start

@@ -22,10 +22,11 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, Link,
-    LinkState, LinkStateComponent, LinkUniqueId, LossCountsOfPortsInThisProcess,
-    OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent, OutputLinkPortRef,
-    ProcessorInstanceComponent, ProcessorLossCounts, ProcessorMetrics,
-    SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
+    LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
+    LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
+    ProcessorLossCounts, ProcessorMetrics, SourceSideHeldOpenForAReaderOutsideItsStream,
+    SourceSideOfALinkWiredOn,
 };
 use crate::core::output_port_stream_facts::StreamFactsOfOutputPorts;
 use crate::core::processors::{
@@ -67,6 +68,35 @@ pub fn open_iceoryx2_service(
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
+    open_iceoryx2_service_read_at(graph, link_id, None, iceoryx2_node)
+}
+
+/// Open the channel of `link_id`, into a function node, at `reader_input_port`
+/// of the reader that evaluates the function node's island: the reader reads
+/// the link's messages there under the delivery profile of the function node's
+/// own input port, and the link is marked so a disconnect reclaims that port.
+pub(crate) fn open_iceoryx2_service_into_the_reader_of_a_function_node_island(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    reader_input_port: InputLinkPortRef,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<()> {
+    open_iceoryx2_service_read_at(graph, link_id, Some(&reader_input_port), iceoryx2_node)?;
+    graph
+        .traversal_mut()
+        .e(link_id)
+        .first_mut()
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?
+        .insert(LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent { reader_input_port });
+    Ok(())
+}
+
+fn open_iceoryx2_service_read_at(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    reader_input_port: Option<&InputLinkPortRef>,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<()> {
     let (from_port, to_port) = {
         let link =
             graph.traversal_mut().e(link_id).first().ok_or_else(|| {
@@ -75,7 +105,12 @@ pub fn open_iceoryx2_service(
         (link.source().clone(), link.to_port().clone())
     };
 
-    let destination = read_the_destination_of_a_link(graph, &to_port, link_id)?;
+    let destination = read_the_destination_of_a_link(
+        graph,
+        reader_input_port.unwrap_or(&to_port),
+        &to_port,
+        link_id,
+    )?;
     let opened_source_side =
         open_the_source_side_of_a_link(graph, &from_port, link_id, &destination, iceoryx2_node)?;
     let wire_reply_awaited_from_the_destination =
@@ -109,7 +144,9 @@ pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
 
 /// Read what wiring link `link_id` into `to_port` needs of its destination,
 /// off the destination's graph, refusing a second inbound link into a port
-/// that windows and a destination past its notifier cap.
+/// that windows and a destination past its notifier cap. The port's delivery
+/// profile is the one `delivery_declared_by` declares: `to_port` itself, or the
+/// function node input a reader reads the link for.
 ///
 /// A `match_device` sentinel is not refused here: the compiler wires every
 /// link before it releases any processor into `setup()`, which is where the
@@ -117,6 +154,7 @@ pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
 pub(crate) fn read_the_destination_of_a_link(
     dest_graph: &mut Graph,
     to_port: &InputLinkPortRef,
+    delivery_declared_by: &InputLinkPortRef,
     link_id: &LinkUniqueId,
 ) -> Result<DestinationOfALinkAsItsWiringReadsIt> {
     let dest_proc_id = to_port.processor_id().clone();
@@ -139,8 +177,11 @@ pub(crate) fn read_the_destination_of_a_link(
             "Destination input port declares a window contract; its reads run through the stage"
         );
     }
-    let input_port_delivery =
-        delivery_resolution_of_input_port(dest_graph, &dest_proc_id, &dest_port)?;
+    let input_port_delivery = delivery_resolution_of_input_port(
+        dest_graph,
+        delivery_declared_by.processor_id(),
+        delivery_declared_by.port_name(),
+    )?;
     let max_notifiers = destination_max_notifiers(dest_graph, &dest_proc_id)?;
     // Every destination is notified whatever mode it runs in. One that never
     // drains its listener costs its sources a counter increment per frame:
@@ -536,11 +577,17 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
     let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
         graph.traversal_mut().e(link_id).first().map(|link| {
+            let read_at = link
+                .get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+                .map_or_else(
+                    || link.to_port().clone(),
+                    |read_through| read_through.reader_input_port.clone(),
+                );
             (
                 link.source().processor_id().clone(),
                 link.source().port_name().to_string(),
-                link.to_port().processor_id().clone(),
-                link.to_port().port_name().to_string(),
+                read_at.processor_id().clone(),
+                read_at.port_name().to_string(),
             )
         })
     else {
@@ -559,6 +606,7 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
         link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
+        link.remove::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>();
         // The answers go with the link: a refusal is rendered until the link is
         // disconnected, and this is that point.
         link.remove::<OutOfProcessLinkWireRepliesComponent>();

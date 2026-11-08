@@ -18,6 +18,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     the_function_nodes_among, unwire_a_link_from_a_function_node_island_into_its_reader,
     wire_a_call_inside_a_function_node_island,
     wire_a_link_from_a_function_node_island_into_its_reader,
+    wire_a_link_into_a_function_node_island_through_its_reader,
 };
 use crate::core::compiler::compiler_ops::function_node_pool::{
     carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool,
@@ -518,6 +519,14 @@ fn wire_every_link_a_plan_adds(
                 wire_a_link_from_a_function_node_island_into_its_reader(
                     &mut graph_arc.write(),
                     link_id,
+                    iceoryx2_node,
+                )?;
+            }
+            HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland => {
+                wire_a_link_into_a_function_node_island_through_its_reader(
+                    &mut graph_arc.write(),
+                    link_id,
+                    iceoryx2_node,
                 )?;
             }
         }
@@ -567,6 +576,18 @@ pub(super) fn unwire_and_remove_a_link(
                 unwire_a_link_from_a_function_node_island_into_its_reader(&mut graph, link_id)
             }
             Ok(HowALinkIsWired::AsACallInsideAFunctionNodeIsland) => Ok(()),
+            Ok(HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland) => {
+                let read_through_a_reader = graph.traversal().e(link_id).first().is_some_and(
+                    |link| {
+                        link.has::<crate::core::graph::LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+                    },
+                );
+                if read_through_a_reader {
+                    super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
+                } else {
+                    Ok(())
+                }
+            }
             Ok(HowALinkIsWired::ThroughAChannel) | Err(_) => {
                 tracing::info!("[CLOSE SERVICE] {}", link_id);
                 super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)

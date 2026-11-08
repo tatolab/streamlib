@@ -135,9 +135,10 @@ The order is: the families, then variables, then the gateway and track nodes.
   - Time: `Lfo`, `Timer`, `Lag`, `Trigger`, `Counter`, `SampleAndHold`.
   - Images: `HoldFrame` (keeps one frame until told to refresh), which passes an Image along
     without reading its pixels and so needs no compiling. Loading an image from a file touches
-    the filesystem, so `ImageFile` is a class node in the same module.
-- `Select` picks a value; `Gate` passes or blocks messages, so a reactive node behind a closed
-  gate does not run. That is the graph's if/else.
+    the filesystem, so `ImageFile` is a class node in the same module. See DECIDED 14 and 15.
+- `Select` picks a value; `Gate(value: UnreadMessage, open: bool = True) -> UnreadMessage | None`
+  passes or blocks messages of any family, so a reactive node behind a closed gate does not run.
+  That is the graph's if/else. See DECIDED 12 and 13.
 
 ### Evaluation islands
 
@@ -182,6 +183,11 @@ The order is: the families, then variables, then the gateway and track nodes.
   hands out its input as it was at the last evaluation. See DECIDED 9.
 - **Literal pins.** An unlinked input takes the value set on its pin, else its default
   (§Inputs and config).
+- **Reading a class node.** A function node reads a class node's output through its reader: the
+  reader's helper subscribes to the class node's channel at a hidden input port, and the island
+  keeps the newest message on that input. See DECIDED 11.
+- **Nothing.** A function returning `T | None` hands out nothing on `None`: the reader's read
+  gives `None`, and that port does not wake it. See DECIDED 12.
 - **A control value on a wire.** An island edge carrying one value is Channels with an
   irregular control rate: one sample per message, rate unset. See DECIDED 4.
 - **The step ledger** leaves links inside an island off its balance; edge links count as today.
@@ -386,7 +392,7 @@ The first two are removed in the PR that carries this proposal, by owner ruling.
 
 ## Decisions
 
-All seven were settled by the owner on 2026-11-06 and 2026-11-07.
+Each was settled by the owner on the date it names.
 
 - **DECIDED 1 — Pairing (owner, 2026-11-07).** Latest of each input, re-evaluated when any
   changes, as TouchDesigner does; no input waits on another. Rejected: waiting for matching
@@ -422,6 +428,30 @@ All seven were settled by the owner on 2026-11-06 and 2026-11-07.
   name from the moment it is listed, so the editor draws the pin before anything is linked. The
   list is set through the graph operation `set_exposed_config_fields`. Rejected: exposing a field
   by linking to it, with no new key, which leaves the editor nothing to draw while it is unlinked.
+
+- **DECIDED 11 — Reading a class node's output (owner, 2026-11-08).** The reader's helper
+  subscribes to the class node's channel, and the island keeps the newest message on each input.
+  A new message re-evaluates the island and wakes a reactive reader. Losses count on the
+  reader's board. An island that reads a class node feeds one reader, and a reader with no
+  helper of its own (an app-process built-in, the pool) and a promoted function node are refused
+  by name for now.
+- **DECIDED 12 — Handing out nothing (owner, 2026-11-08).** A function returns `T | None`, and
+  `None` means nothing this evaluation: the reader's read gives `None` and that port does not
+  wake it. A compiled evaluate entry gets a present flag per output that may hand out nothing,
+  past every output. A node whose required input holds nothing is not called and hands out
+  nothing. A closed `Gate` returns `None`, never the last value.
+- **DECIDED 13 — Passing a message along unread (owner, 2026-11-08).** One opaque input type,
+  `UnreadMessage`, whose output takes the family linked into it, settled at connect
+  (`family_follows_input_port`). The body can only hand it on or not. In compiled code it is a
+  token naming the input that holds it. One `Gate` serves every family.
+- **DECIDED 14 — `HoldFrame` (owner, 2026-11-08).** `HoldFrame(frame: Image, refresh: bool =
+  False) -> Image` takes the first frame and any frame arriving while `refresh` is true, and
+  otherwise hands back the frame it holds. It holds the producer's slot with no copy, which ties
+  up one pool slot; a helper restart drops the frame until the next one arrives.
+- **DECIDED 15 — `ImageFile` (owner, 2026-11-08).** A Python `@node.process` in `tatolab-ops`.
+  Its config names a project image asset by UUID, opened through `asset_content_path`, never a
+  raw path. It decodes PNG and JPEG with Pillow, uploads to one Image slot, and publishes once
+  at start and again on each config change.
 
 Assumed unless overruled:
 - A function's single output is named `result`; plain parameters are pins by default; a node's
