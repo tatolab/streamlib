@@ -175,7 +175,8 @@ reshapes #3216.
    placeholder that installs nothing, as the bare `tatolab` name is. They take no further uploads, and have every release
    yanked once the index serves the same version, so uv and pip skip them unless a project pins
    one exactly. Yanking is reversible. An existing project gains the `[[tool.uv.index]]` table by
-   hand, as the release note says, before its next `uv lock --upgrade`; nothing rewrites it on
+   hand, as the release note says, before its next `uv lock --upgrade`; that note ships in the
+   release before the one that yanks; nothing rewrites it on
    load, since pre-1.0 the plan keeps no back-compat shims, and `project-and-assets` already
    changes every project's shape.
 3. **Assumed unless overruled: which examples become samples.** Every converted example in
