@@ -1033,9 +1033,12 @@ impl LoadedStreamInThisRuntime {
                     .refuse_a_config_update_that_breaks_a_declared_port(
                         &self.node_types_this_stream_resolves,
                         &crate::core::graph_snapshot::GraphSnapshotNode {
+                            id: Some(node.node_uuid),
                             name: node.display_name.clone(),
                             processor_type: node.processor_type.clone(),
                             config: node.config.clone().unwrap_or_default(),
+                            pins: node.pins.clone(),
+                            studio: node.studio.clone(),
                         },
                         &config_json,
                     )?;
@@ -1367,7 +1370,9 @@ impl LoadedStreamInThisRuntime {
         graph
             .clock
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
-        let resolution = graph.with_graph_only_nodes_resolved()?;
+        let graph_whose_every_node_holds_a_uuid =
+            graph.with_a_uuid_minted_for_each_node_holding_none();
+        let resolution = graph_whose_every_node_holds_a_uuid.with_graph_only_nodes_resolved()?;
         let graph = &resolution.graph_the_runtime_runs;
         self.processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
@@ -1381,16 +1386,20 @@ impl LoadedStreamInThisRuntime {
             resolution.graph_only_nodes_as_drawn.node_names_cast();
         self.compiler.scope(|this_streams_graph, _tx| {
             this_streams_graph.set_stream_clock_spec(graph.clock);
+            this_streams_graph.set_stream_asset(graph.asset);
             this_streams_graph
                 .set_node_names_the_graph_only_nodes_hold(node_names_the_graph_only_nodes_hold);
         });
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
-            let added = self.add_processor_of_a_validated_graph_load(
-                ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
-                    .with_display_name(node.name.clone()),
-            )?;
+            let mut spec = ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
+                .with_display_name(node.name.clone())
+                .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone());
+            if let Some(node_uuid) = node.id {
+                spec = spec.with_node_uuid(node_uuid);
+            }
+            let added = self.add_processor_of_a_validated_graph_load(spec)?;
             processor_id_by_node_name.insert(added.name, added.processor_id);
         }
         let processor_id_of = |node: &str| -> Result<ProcessorUniqueId> {

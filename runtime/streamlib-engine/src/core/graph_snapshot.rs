@@ -14,7 +14,8 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use uuid::Uuid;
 
 use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::ProcessorClassImportPath;
@@ -40,6 +41,10 @@ use crate::core::{Error, PortDirection, Result};
 /// which refuse a key the runtime does not read.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct GraphSnapshot {
+    /// The stream asset whose graph document this graph is. Absent on a graph no document holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<Uuid>,
+
     /// The stream this graph is. Absent on a graph no stream was loaded as.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
@@ -58,6 +63,8 @@ pub struct GraphSnapshot {
 /// The spec keys a graph document is read through, before its keys are checked.
 #[derive(Deserialize)]
 struct GraphSnapshotAsWritten {
+    #[serde(default)]
+    asset: Option<Uuid>,
     #[serde(default)]
     stream: Option<String>,
     #[serde(default)]
@@ -84,15 +91,15 @@ struct GraphDocumentObjectKeys {
 
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
-    spec_keys: &["stream", "clock", "nodes", "links"],
+    spec_keys: &["asset", "stream", "clock", "nodes", "links"],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &["extensions", "machine", "references", "runtime_name"],
 };
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a node",
-    spec_keys: &["name", "type", "config"],
-    live_keys: &["id", "config_checksum", "ports", "components"],
+    spec_keys: &["id", "name", "type", "config", "pins", "studio"],
+    live_keys: &["config_checksum", "ports", "components"],
 };
 
 const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
@@ -120,6 +127,15 @@ const TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT: &str = "a link's ends are both i
 /// One node of a [`GraphSnapshot`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GraphSnapshotNode {
+    /// The node's UUID, kept across every run; absent on a node named by its name alone, which
+    /// takes a fresh one as it is placed.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "a_node_uuid_or_an_earlier_renders_processor_id"
+    )]
+    pub id: Option<Uuid>,
+
     /// The node's name, unique in the graph once cast.
     pub name: String,
 
@@ -131,10 +147,27 @@ pub struct GraphSnapshotNode {
     /// when it is given none.
     #[serde(default = "a_config_naming_no_setting")]
     pub config: serde_json::Value,
+
+    /// The value set on each unlinked input, by input name.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub pins: serde_json::Map<String, serde_json::Value>,
+
+    /// What the studio draws the node with: canvas position, group, comment, colour.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub studio: serde_json::Map<String, serde_json::Value>,
 }
 
 fn a_config_naming_no_setting() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
+}
+
+/// A node's `id` as a UUID; a `graph` render from before node UUIDs carried a run's
+/// processor id there, which reads as no UUID.
+fn a_node_uuid_or_an_earlier_renders_processor_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Uuid>, D::Error> {
+    let written = Option::<String>::deserialize(deserializer)?;
+    Ok(written.and_then(|written| Uuid::parse_str(&written).ok()))
 }
 
 /// One link of a [`GraphSnapshot`], from an output port to an input port,
@@ -163,18 +196,105 @@ impl GraphSnapshot {
     pub fn from_graph_document(graph_document: serde_json::Value) -> Result<Self> {
         refuse_a_key_this_runtime_does_not_read(&graph_document)?;
         let GraphSnapshotAsWritten {
+            asset,
             stream,
             clock,
             nodes,
             links,
         } = GraphSnapshotAsWritten::deserialize(&graph_document)
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
-        Ok(Self {
+        let mut graph = Self {
+            asset,
             stream,
             clock,
             nodes,
             links,
-        })
+        };
+        graph.name_each_link_end_by_its_nodes_name()?;
+        Ok(graph)
+    }
+
+    /// Name each link end that names its node by UUID by that node's name instead, as the
+    /// runtime runs a graph, refusing two nodes of one UUID.
+    fn name_each_link_end_by_its_nodes_name(&mut self) -> Result<()> {
+        let mut node_name_by_uuid: HashMap<Uuid, &str> = HashMap::new();
+        for node in &self.nodes {
+            let Some(node_uuid) = node.id else {
+                continue;
+            };
+            if let Some(holder) = node_name_by_uuid.insert(node_uuid, &node.name) {
+                return Err(Error::GraphError(format!(
+                    "nodes `{holder}` and `{}` both have the UUID {node_uuid}; a node's UUID \
+                     names it alone",
+                    node.name
+                )));
+            }
+        }
+        let node_name_by_uuid: HashMap<Uuid, String> = node_name_by_uuid
+            .into_iter()
+            .map(|(node_uuid, name)| (node_uuid, name.to_string()))
+            .collect();
+        for link in &mut self.links {
+            for end in [&mut link.source, &mut link.target] {
+                if let Some(name) = Uuid::parse_str(&end.node)
+                    .ok()
+                    .and_then(|node_uuid| node_name_by_uuid.get(&node_uuid))
+                {
+                    end.node = name.clone();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// This graph as its stream asset's graph document: canonical JSON, keys sorted, two-space
+    /// indent and one trailing newline, each link end naming its node by UUID, and no `stream`,
+    /// which the runtime computes. Refused for a graph with no `asset` or with a node without a UUID.
+    pub fn graph_document_bytes(&self) -> Result<Vec<u8>> {
+        if self.asset.is_none() {
+            return Err(Error::GraphError(
+                "a graph document holds its stream asset's UUID as `asset`, and this graph \
+                 holds none"
+                    .to_string(),
+            ));
+        }
+        let mut node_uuid_by_name: HashMap<String, Uuid> = HashMap::new();
+        for node in &self.nodes {
+            let node_uuid = node.id.ok_or_else(|| {
+                Error::GraphError(format!(
+                    "node `{}` has no UUID, which every node of a graph document has",
+                    node.name
+                ))
+            })?;
+            node_uuid_by_name.insert(
+                cast_exposed_name_to_url_safe(&node.name)?.into_owned(),
+                node_uuid,
+            );
+        }
+        let mut document = Self {
+            stream: None,
+            ..self.clone()
+        };
+        for link in &mut document.links {
+            for end in [&mut link.source, &mut link.target] {
+                if let Some(node_uuid) =
+                    node_uuid_by_name.get(cast_exposed_name_to_url_safe(&end.node)?.as_ref())
+                {
+                    end.node = node_uuid.to_string();
+                }
+            }
+        }
+        streamlib_project_repository::canonical_project_json_bytes(&document)
+            .map_err(|e| Error::GraphError(format!("the graph document does not serialize: {e}")))
+    }
+
+    /// This graph with a fresh UUID given to each node that holds none.
+    pub fn with_a_uuid_minted_for_each_node_holding_none(&self) -> Self {
+        let mut graph = self.clone();
+        for node in &mut graph.nodes {
+            node.id.get_or_insert_with(Uuid::new_v4);
+        }
+        graph
     }
 
     /// Serialize the graph as pretty-printed JSON.
@@ -739,12 +859,16 @@ mod tests {
     #[test]
     fn a_graph_serializes_exactly_the_spec_keys() {
         let graph = GraphSnapshot {
+            asset: None,
             stream: None,
             clock: StreamClockSpec::Real,
             nodes: vec![GraphSnapshotNode {
+                id: None,
                 name: "camera".into(),
                 processor_type: ProcessorClassImportPath::new(A_CAMERA_CLASS).unwrap(),
                 config: serde_json::json!({}),
+                pins: serde_json::Map::new(),
+                studio: serde_json::Map::new(),
             }],
             links: vec![],
         };
@@ -762,6 +886,106 @@ mod tests {
             GraphSnapshot::from_json_str(&graph.to_json_string().unwrap()).unwrap(),
             graph
         );
+    }
+
+    fn a_graph_document_of_a_camera_feeding_a_display() -> (Uuid, Uuid, Uuid, String) {
+        let asset = Uuid::new_v4();
+        let camera = Uuid::new_v4();
+        let display = Uuid::new_v4();
+        let document = serde_json::json!({
+            "asset": asset.to_string(),
+            "nodes": [
+                {"id": camera.to_string(), "name": "camera", "type": A_CAMERA_CLASS,
+                 "config": {}, "pins": {"fps": 30}, "studio": {"position": [10, 20]}},
+                {"id": display.to_string(), "name": "display", "type": A_CAMERA_CLASS,
+                 "config": {}},
+            ],
+            "links": [{"source": {"node": camera.to_string(), "port": "video"},
+                       "target": {"node": display.to_string(), "port": "video"}}],
+        });
+        (asset, camera, display, document.to_string())
+    }
+
+    #[test]
+    fn a_graph_document_names_link_ends_by_node_uuid_and_reads_back_by_name() {
+        let (asset, camera, display, document) = a_graph_document_of_a_camera_feeding_a_display();
+
+        let graph = GraphSnapshot::from_json_str(&document).unwrap();
+
+        assert_eq!(graph.asset, Some(asset));
+        assert_eq!(graph.nodes[0].id, Some(camera));
+        assert_eq!(graph.nodes[0].pins["fps"], serde_json::json!(30));
+        assert_eq!(
+            graph.nodes[0].studio["position"],
+            serde_json::json!([10, 20])
+        );
+        assert_eq!(graph.links[0].source.node, "camera");
+        assert_eq!(graph.links[0].target.node, "display");
+
+        let written: serde_json::Value =
+            serde_json::from_slice(&graph.graph_document_bytes().unwrap()).unwrap();
+        assert_eq!(written["links"][0]["source"]["node"], camera.to_string());
+        assert_eq!(written["links"][0]["target"]["node"], display.to_string());
+        assert_eq!(GraphSnapshot::from_graph_document(written).unwrap(), graph);
+    }
+
+    #[test]
+    fn a_graph_document_is_written_the_same_bytes_every_time() {
+        let (_, _, _, document) = a_graph_document_of_a_camera_feeding_a_display();
+        let graph = GraphSnapshot::from_json_str(&document).unwrap();
+        let bytes = graph.graph_document_bytes().unwrap();
+
+        assert!(bytes.ends_with(b"}\n"));
+        assert_eq!(
+            GraphSnapshot::from_json_str(std::str::from_utf8(&bytes).unwrap())
+                .unwrap()
+                .graph_document_bytes()
+                .unwrap(),
+            bytes
+        );
+    }
+
+    #[test]
+    fn two_nodes_of_one_uuid_are_refused() {
+        let (_, camera, display, document) = a_graph_document_of_a_camera_feeding_a_display();
+        let document = document.replace(&display.to_string(), &camera.to_string());
+
+        let refusal = GraphSnapshot::from_json_str(&document)
+            .unwrap_err()
+            .to_string();
+
+        assert!(refusal.contains("both have the UUID"), "got {refusal}");
+    }
+
+    #[test]
+    fn a_graph_with_no_asset_or_a_node_with_no_uuid_writes_no_document() {
+        let (asset, camera, _, document) = a_graph_document_of_a_camera_feeding_a_display();
+        let no_asset = document.replace(&format!("\"asset\":\"{asset}\","), "");
+        assert!(
+            GraphSnapshot::from_json_str(&no_asset)
+                .unwrap()
+                .graph_document_bytes()
+                .is_err()
+        );
+        let no_uuid = document.replace(&format!("\"id\":\"{camera}\","), "");
+        let refusal = GraphSnapshot::from_json_str(&no_uuid)
+            .unwrap()
+            .graph_document_bytes()
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("`camera` has no UUID"), "got {refusal}");
+    }
+
+    #[test]
+    fn a_node_id_that_is_no_uuid_reads_as_no_uuid() {
+        let graph = GraphSnapshot::from_json_str(
+            &serde_json::json!({"nodes": [{"id": "P1abc", "name": "camera",
+                                           "type": A_CAMERA_CLASS, "config": {}}],
+                                "links": []})
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(graph.nodes[0].id, None);
     }
 
     #[test]
@@ -970,21 +1194,21 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`stream`, `clock`, `nodes` and `links`",
+                    "`asset`, `stream`, `clock`, `nodes` and `links`",
                 ],
             ),
             (
                 serde_json::json!({"nodes": [with(a_node.clone(), "confg")]}),
                 [
                     "node `camera` carries the key `confg`",
-                    "`name`, `type` and `config`",
+                    "`id`, `name`, `type`, `config`, `pins` and `studio`",
                 ],
             ),
             (
                 serde_json::json!({"nodes": [{"name": "camera", "typ": A_CAMERA_CLASS}]}),
                 [
                     "node `camera` carries the key `typ`",
-                    "`name`, `type` and `config`",
+                    "`id`, `name`, `type`, `config`, `pins` and `studio`",
                 ],
             ),
             (

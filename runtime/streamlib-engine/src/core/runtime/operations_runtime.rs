@@ -626,7 +626,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
 
     fn open_a_viewer_of_an_output_port(
         &self,
-        node_id: ProcessorUniqueId,
+        node_id: String,
         port_name: String,
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>> {

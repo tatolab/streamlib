@@ -58,7 +58,23 @@ impl<'a> TraversalSourceMut<'a> {
         // `GET /api/graph` names exactly what the caller asked for.
         let (inputs, outputs) = resolved_ports.unwrap_or_default();
 
-        let node = ProcessorNode::new(spec.name, name, Some(spec.config), inputs, outputs);
+        if let Some(node_uuid) = spec.node_uuid
+            && let Some(holder) = self
+                .graph
+                .node_weights()
+                .find(|node| node.node_uuid == node_uuid)
+        {
+            return Err(Error::GraphError(format!(
+                "node `{name}` cannot take the UUID {node_uuid}: node `{}` of the graph holds it",
+                holder.display_name
+            )));
+        }
+        let mut node = ProcessorNode::new(spec.name, name, Some(spec.config), inputs, outputs);
+        if let Some(node_uuid) = spec.node_uuid {
+            node.node_uuid = node_uuid;
+        }
+        node.pins = spec.pins;
+        node.studio = spec.studio;
 
         let node_idx = self.graph.add_node(node);
 

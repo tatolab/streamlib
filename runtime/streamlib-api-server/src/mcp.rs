@@ -925,7 +925,7 @@ impl LocalApiMcpServerHandler {
         }
         let stream_operations = self.the_stream_a_tool_call_names("open_viewer", &stream)?;
         let viewer_held_open = stream_operations
-            .open_a_viewer_of_an_output_port(node_id.into(), port, viewer_process_id)
+            .open_a_viewer_of_an_output_port(node_id, port, viewer_process_id)
             .await
             .map_err(|refusal| format!("open_viewer failed: {refusal}"))?;
         let hand_off = viewer_held_open.hand_off().clone();
@@ -951,7 +951,7 @@ impl LocalApiMcpServerHandler {
             &OpenViewerToolResult {
                 viewer,
                 stream: hand_off.stream,
-                node_id: hand_off.node_id.to_string(),
+                node_id: hand_off.node_id,
                 node_name: hand_off.node_name,
                 port: hand_off.port,
                 iceoryx2_domain_root: hand_off.iceoryx2_domain_root.display().to_string(),

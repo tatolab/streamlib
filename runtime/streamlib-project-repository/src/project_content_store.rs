@@ -142,6 +142,7 @@ impl ProjectContentStore {
 }
 
 /// The SHA-256 of `bytes`, lowercase hex, as the store names content.
+#[cfg(feature = "history")]
 pub(crate) fn content_sha256_of(bytes: &[u8]) -> String {
     lowercase_hex(&Sha256::digest(bytes))
 }

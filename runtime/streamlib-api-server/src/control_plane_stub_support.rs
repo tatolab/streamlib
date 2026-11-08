@@ -9,7 +9,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
     ($surface:literal) => {
         fn open_a_viewer_of_an_output_port(
             &self,
-            node_id: ::streamlib::sdk::graph::ProcessorUniqueId,
+            node_id: String,
             port_name: String,
             _process_id_of_the_viewer: Option<u32>,
         ) -> ::streamlib::sdk::runtime::BoxFuture<

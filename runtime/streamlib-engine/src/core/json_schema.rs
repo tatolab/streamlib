@@ -31,6 +31,9 @@ pub use streamlib_processor_schema::ProcessorClassImportPath;
 /// [`GraphSnapshot`](crate::core::graph_snapshot::GraphSnapshot).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphResponse {
+    /// The UUID of the stream asset whose graph document this graph was loaded from: a spec key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
     /// The stream id this graph was loaded under, its stream's address. Absent until a load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
@@ -65,7 +68,7 @@ pub struct MachineWideGraphResponse {
 /// A node in the graph.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorNodeOutput {
-    /// This node's per-run id. A live key: a loaded graph mints new ones.
+    /// The node's UUID: a spec key, kept across every run and restart of its stream.
     pub id: String,
     /// The import path of the class this node is — a plain string.
     #[serde(rename = "type")]
@@ -81,6 +84,12 @@ pub struct ProcessorNodeOutput {
     pub config_checksum: u64,
     /// Input and output ports.
     pub ports: ProcessorNodePortsOutput,
+    /// The values set on the node's unlinked inputs, by input name.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub pins: serde_json::Map<String, serde_json::Value>,
+    /// What the studio draws the node with: canvas position, group, comment, colour.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub studio: serde_json::Map<String, serde_json::Value>,
     /// Runtime components (dynamic, varies based on processor state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
@@ -394,11 +403,13 @@ pub struct CodeExamplesOutput {
 impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
     fn from(node: &crate::core::graph::ProcessorNode) -> Self {
         Self {
-            id: node.id.to_string(),
+            id: node.node_uuid.to_string(),
             processor_type: node.processor_type.clone(),
             name: node.display_name.clone(),
             config: node.config.clone(),
             config_checksum: node.config_checksum,
+            pins: node.pins.clone(),
+            studio: node.studio.clone(),
             ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
             components: node.serialize_components(),
         }
@@ -1302,7 +1313,15 @@ mod graph_response_top_level_key_rendering_tests {
         declared.sort();
         assert_eq!(
             declared,
-            ["clock", "links", "machine", "nodes", "references", "stream"]
+            [
+                "asset",
+                "clock",
+                "links",
+                "machine",
+                "nodes",
+                "references",
+                "stream"
+            ]
         );
     }
 

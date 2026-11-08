@@ -39,6 +39,9 @@ pub struct Graph {
     /// The id of the stream this graph was loaded as, until then `None`.
     loaded_stream_id: Option<String>,
 
+    /// The UUID of the stream asset whose graph document this graph was loaded from.
+    stream_asset: Option<uuid::Uuid>,
+
     /// The clock the stream this graph was loaded as runs on.
     stream_clock_spec: StreamClockSpec,
 
@@ -75,6 +78,7 @@ impl Graph {
         Self {
             digraph: DiGraph::new(),
             loaded_stream_id: None,
+            stream_asset: None,
             stream_clock_spec: StreamClockSpec::Real,
             node_types_this_stream_resolves,
             node_names_the_graph_only_nodes_hold: HashSet::new(),
@@ -145,6 +149,16 @@ impl Graph {
         self.loaded_stream_id = Some(stream_id);
     }
 
+    /// The UUID of the stream asset whose graph document this graph was loaded from.
+    pub fn stream_asset(&self) -> Option<uuid::Uuid> {
+        self.stream_asset
+    }
+
+    /// Record the UUID of the stream asset whose graph document this graph was loaded from.
+    pub fn set_stream_asset(&mut self, stream_asset: Option<uuid::Uuid>) {
+        self.stream_asset = stream_asset;
+    }
+
     /// The clock the stream this graph was loaded as runs on.
     pub fn stream_clock_spec(&self) -> StreamClockSpec {
         self.stream_clock_spec
@@ -204,6 +218,9 @@ impl Graph {
     pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {
+            asset: self
+                .stream_asset
+                .map(|stream_asset| stream_asset.to_string()),
             stream: self.loaded_stream_id.clone(),
             clock: self.stream_clock_spec,
             nodes: self

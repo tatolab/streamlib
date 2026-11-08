@@ -15,7 +15,9 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
+use streamlib::sdk::runtime::{
+    LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, RuntimeOperations,
+};
 
 /// Register a descriptor-only type with one input and one output port.
 /// Idempotent under `serial_test`.
@@ -53,6 +55,19 @@ fn the_graph_document_of(stream: &LoadedStreamInThisRuntime) -> serde_json::Valu
 
 fn the_spec_in(graph_document: serde_json::Value) -> GraphSnapshot {
     GraphSnapshot::from_graph_document(graph_document).expect("a graph document is a graph")
+}
+
+/// The spec in `graph_document` with each node's UUID dropped, refusing a node that renders none.
+fn the_spec_without_its_node_uuids_in(graph_document: serde_json::Value) -> GraphSnapshot {
+    let mut graph = the_spec_in(graph_document);
+    for node in &mut graph.nodes {
+        assert!(
+            node.id.take().is_some(),
+            "node `{}` renders no UUID",
+            node.name
+        );
+    }
+    graph
 }
 
 /// Load options for a stream whose project lives in `project_directory`,
@@ -168,9 +183,9 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
         rendered_second["links"][0]["target"],
         serde_json::json!({"node": "front-display", "port": "video_in"})
     );
-    assert_ne!(
+    assert_eq!(
         rendered_second["nodes"][0]["id"], rendered_first["nodes"][0]["id"],
-        "ids are live keys a load mints anew"
+        "a node keeps its UUID through a load"
     );
     assert_eq!(
         rendered_second["stream"], "built-in-code",
@@ -190,7 +205,7 @@ fn a_graph_carrying_exposed_is_refused_naming_the_keys_a_graph_has() {
 
     assert!(refusal.contains("the key `exposed`"), "{refusal}");
     assert!(
-        refusal.contains("`stream`, `clock`, `nodes` and `links`"),
+        refusal.contains("`asset`, `stream`, `clock`, `nodes` and `links`"),
         "{refusal}"
     );
 }
@@ -806,19 +821,14 @@ fn an_image_variable_read_twice_runs_as_two_links_and_renders_as_drawn() {
         "each get's drawn link carries the id of the link the runtime runs: {link_ids_by_drawn_source:?}"
     );
     for node in rendered["nodes"].as_array().unwrap() {
-        let is_a_variable_node = node["type"]
-            .as_str()
-            .unwrap()
-            .starts_with("tatolab.stream:");
-        assert_eq!(
-            node["id"].as_str().unwrap().is_empty(),
-            is_a_variable_node,
-            "only a variable node renders with no runtime id: {node}"
+        assert!(
+            uuid::Uuid::parse_str(node["id"].as_str().unwrap()).is_ok(),
+            "every node renders its UUID, a variable node too: {node}"
         );
     }
 
     assert_eq!(
-        the_spec_in(rendered.clone()),
+        the_spec_without_its_node_uuids_in(rendered.clone()),
         the_spec_in(graph),
         "graph renders the variables as drawn"
     );
@@ -906,7 +916,10 @@ fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_bac
             {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
         ])
     );
-    assert_eq!(the_spec_in(rendered.clone()), the_spec_in(graph));
+    assert_eq!(
+        the_spec_without_its_node_uuids_in(rendered.clone()),
+        the_spec_in(graph)
+    );
 
     let second_runner = Runner::new().unwrap();
     load(&second_runner, project_directory.path(), rendered)
@@ -1013,18 +1026,14 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
         serde_json::json!({"direction": "output", "port": "camera", "family": "image"})
     );
     assert_eq!(
-        the_spec_in(rendered.clone()),
+        the_spec_without_its_node_uuids_in(rendered.clone()),
         the_spec_in(graph),
         "graph renders the interface as drawn"
     );
-    let camera_id = rendered["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| node["name"] == "camera")
-        .and_then(|node| node["id"].as_str())
-        .map(streamlib::sdk::graph::ProcessorUniqueId::from)
-        .expect("the camera renders its id");
+    let camera_id = first
+        .the_node_named("camera")
+        .expect("the camera node is in the graph")
+        .processor_id;
     let removal_refusal = first
         .remove_processor(&camera_id)
         .expect_err("removing the node the GraphOutput's link names is refused")
@@ -1116,14 +1125,10 @@ fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port
         }),
     )
     .expect("an Output fed by a port whose family its config names loads");
-    let receive_id = the_graph_document_of(&stream)["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| node["name"] == "receive")
-        .and_then(|node| node["id"].as_str())
-        .map(streamlib::sdk::graph::ProcessorUniqueId::from)
-        .expect("the receive node renders its id");
+    let receive_id = stream
+        .the_node_named("receive")
+        .expect("the receive node is in the graph")
+        .processor_id;
 
     stream
         .update_processor_config(&receive_id, serde_json::json!({"family": "packets"}))
