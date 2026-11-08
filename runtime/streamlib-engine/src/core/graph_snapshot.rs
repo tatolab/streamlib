@@ -25,6 +25,7 @@ use crate::core::graph::{
     port_names_listed_for_a_refusal, refuse_a_reference_to_a_node_of_the_wrong_type,
     refuse_a_second_referrer_of_a_node_that_takes_one,
 };
+use crate::core::graph_fragment_flattening::GraphFragmentsAsDrawn;
 use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
 use crate::core::graph_variable_resolution::{
     GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
@@ -98,8 +99,14 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a node",
-    spec_keys: &["id", "name", "type", "config", "pins", "studio"],
+    spec_keys: &["id", "name", "type", "config", "pins", "studio", "fragment"],
     live_keys: &["kind", "language", "config_checksum", "ports", "components"],
+};
+
+const GRAPH_FRAGMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
+    object_kind: "a fragment",
+    spec_keys: &["nodes", "links"],
+    live_keys: &[],
 };
 
 const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
@@ -155,6 +162,23 @@ pub struct GraphSnapshotNode {
     /// What the studio draws the node with: canvas position, group, comment, colour.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub studio: serde_json::Map<String, serde_json::Value>,
+
+    /// The stored output of the graph generator `type` names, on a fragment, whose `config` is
+    /// the generator's promoted config; absent on every other node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment: Option<GraphFragment>,
+}
+
+/// A fragment's stored output: the nodes and links its graph generator built, each link end
+/// naming a node of the fragment.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GraphFragment {
+    /// Every node the generator built, a fragment it placed among them.
+    pub nodes: Vec<GraphSnapshotNode>,
+
+    /// Every link between those nodes' ports.
+    #[serde(default)]
+    pub links: Vec<GraphSnapshotLink>,
 }
 
 fn a_config_naming_no_setting() -> serde_json::Value {
@@ -213,37 +237,14 @@ impl GraphSnapshot {
         Ok(graph)
     }
 
-    /// Name each link end that names its node by UUID by that node's name instead, as the
-    /// runtime runs a graph, refusing two nodes of one UUID.
+    /// Name each link end that names its node by UUID by that node's name instead, at every
+    /// level, as the runtime runs a graph, refusing two nodes of one UUID anywhere in it.
     fn name_each_link_end_by_its_nodes_name(&mut self) -> Result<()> {
-        let mut node_name_by_uuid: HashMap<Uuid, &str> = HashMap::new();
-        for node in &self.nodes {
-            let Some(node_uuid) = node.id else {
-                continue;
-            };
-            if let Some(holder) = node_name_by_uuid.insert(node_uuid, &node.name) {
-                return Err(Error::GraphError(format!(
-                    "nodes `{holder}` and `{}` both have the UUID {node_uuid}; a node's UUID \
-                     names it alone",
-                    node.name
-                )));
-            }
-        }
-        let node_name_by_uuid: HashMap<Uuid, String> = node_name_by_uuid
-            .into_iter()
-            .map(|(node_uuid, name)| (node_uuid, name.to_string()))
-            .collect();
-        for link in &mut self.links {
-            for end in [&mut link.source, &mut link.target] {
-                if let Some(name) = Uuid::parse_str(&end.node)
-                    .ok()
-                    .and_then(|node_uuid| node_name_by_uuid.get(&node_uuid))
-                {
-                    end.node = name.clone();
-                }
-            }
-        }
-        Ok(())
+        name_each_link_end_of_one_level_by_its_nodes_name(
+            &mut self.nodes,
+            &mut self.links,
+            &mut HashMap::new(),
+        )
     }
 
     /// This graph as its stream asset's graph document: canonical JSON, keys sorted, two-space
@@ -257,42 +258,55 @@ impl GraphSnapshot {
                     .to_string(),
             ));
         }
-        let mut node_uuid_by_name: HashMap<String, Uuid> = HashMap::new();
-        for node in &self.nodes {
-            let node_uuid = node.id.ok_or_else(|| {
-                Error::GraphError(format!(
-                    "node `{}` has no UUID, which every node of a graph document has",
-                    node.name
-                ))
-            })?;
-            node_uuid_by_name.insert(
-                cast_exposed_name_to_url_safe(&node.name)?.into_owned(),
-                node_uuid,
-            );
-        }
         let mut document = Self {
             stream: None,
             ..self.clone()
         };
-        for link in &mut document.links {
-            for end in [&mut link.source, &mut link.target] {
-                if let Some(node_uuid) =
-                    node_uuid_by_name.get(cast_exposed_name_to_url_safe(&end.node)?.as_ref())
-                {
-                    end.node = node_uuid.to_string();
-                }
-            }
-        }
+        name_each_link_end_of_one_level_by_its_nodes_uuid(
+            &mut document.nodes,
+            &mut document.links,
+        )?;
         streamlib_project_repository::canonical_project_json_bytes(&document)
             .map_err(|e| Error::GraphError(format!("the graph document does not serialize: {e}")))
     }
 
+    /// Every node at every level, each under its path of names from the stream, depth first:
+    /// a fragment's nodes come just before the fragment node itself.
+    pub fn nodes_at_every_level(&self) -> Vec<(String, &GraphSnapshotNode)> {
+        fn push_each_node_of_one_level<'graph>(
+            nodes: &'graph [GraphSnapshotNode],
+            path_of_names: &str,
+            every_node: &mut Vec<(String, &'graph GraphSnapshotNode)>,
+        ) {
+            for node in nodes {
+                let node_path = format!("{path_of_names}{}", node.name);
+                if let Some(fragment) = &node.fragment {
+                    push_each_node_of_one_level(
+                        &fragment.nodes,
+                        &format!("{node_path}/"),
+                        every_node,
+                    );
+                }
+                every_node.push((node_path, node));
+            }
+        }
+        let mut every_node = Vec::new();
+        push_each_node_of_one_level(&self.nodes, "", &mut every_node);
+        every_node
+    }
+
     /// This graph with a fresh UUID given to each node that holds none.
     pub fn with_a_uuid_minted_for_each_node_holding_none(&self) -> Self {
-        let mut graph = self.clone();
-        for node in &mut graph.nodes {
-            node.id.get_or_insert_with(Uuid::new_v4);
+        fn mint_a_uuid_for_each_node_holding_none(nodes: &mut [GraphSnapshotNode]) {
+            for node in nodes {
+                node.id.get_or_insert_with(Uuid::new_v4);
+                if let Some(fragment) = &mut node.fragment {
+                    mint_a_uuid_for_each_node_holding_none(&mut fragment.nodes);
+                }
+            }
         }
+        let mut graph = self.clone();
+        mint_a_uuid_for_each_node_holding_none(&mut graph.nodes);
         graph
     }
 
@@ -315,18 +329,22 @@ impl GraphSnapshot {
         self.with_graph_only_nodes_resolved()?.validate(node_types)
     }
 
-    /// Resolve the nodes that run nothing out of this graph: its variables,
-    /// then its interface nodes.
+    /// Resolve the nodes that run nothing out of this graph: its fragments, flattened, then its
+    /// variables, then its interface nodes.
     pub fn with_graph_only_nodes_resolved(
         &self,
     ) -> Result<GraphSnapshotWithGraphOnlyNodesResolved> {
-        let variables = self.with_graph_variables_resolved()?;
+        let fragments = self.with_graph_fragments_flattened()?;
+        let variables = fragments
+            .graph_the_runtime_runs
+            .with_graph_variables_resolved()?;
         let interface = variables
             .graph_the_runtime_runs
             .with_graph_interface_resolved()?;
         Ok(GraphSnapshotWithGraphOnlyNodesResolved {
             graph_the_runtime_runs: interface.graph_the_runtime_runs,
             graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn {
+                fragments_as_drawn: fragments.fragments_as_drawn,
                 variables_as_drawn: variables.variables_as_drawn,
                 interface_as_drawn: interface.interface_as_drawn,
             },
@@ -424,10 +442,11 @@ impl GraphSnapshot {
     }
 }
 
-/// What the nodes that run nothing were drawn as: variables and interface
+/// What the nodes that run nothing were drawn as: fragments, variables and interface
 /// nodes, so `graph` renders them back.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GraphOnlyNodesAsDrawn {
+    pub fragments_as_drawn: GraphFragmentsAsDrawn,
     pub variables_as_drawn: GraphVariablesAsDrawn,
     pub interface_as_drawn: GraphInterfaceAsDrawn,
 }
@@ -451,15 +470,26 @@ impl NodeChangeADrawnLinkBlocks {
 }
 
 impl GraphOnlyNodesAsDrawn {
-    /// Refuse `change` to the node named `node_name` while a drawn link between it
-    /// and a variable or interface node names it, which would leave that link
-    /// dangling in the graph `graph` renders.
+    /// Refuse `change` to the node named `node_name` while it is part of a fragment, or while a
+    /// drawn link between it and a fragment, a variable or an interface node names it, which
+    /// would leave that link dangling in the graph `graph` renders.
     pub fn refuse_a_node_change_a_drawn_link_names(
         &self,
         node_name: &str,
         change: NodeChangeADrawnLinkBlocks,
     ) -> Result<()> {
         let node_cast = cast_exposed_name_to_url_safe(node_name)?;
+        if let Some(fragment) = self
+            .fragments_as_drawn
+            .fragment_holding_the_running_node(&node_cast)
+        {
+            return Err(Error::GraphError(format!(
+                "node `{node_name}` cannot be {}: it is part of fragment `{fragment}`, which \
+                 its graph generator built and which is read-only; re-run the generator to \
+                 change it",
+                change.as_refused()
+            )));
+        }
         let names_the_node = |end: &LinkPortRefOutput| {
             cast_exposed_name_to_url_safe(&end.node).is_ok_and(|end_cast| end_cast == node_cast)
         };
@@ -472,12 +502,18 @@ impl GraphOnlyNodesAsDrawn {
                     .links_touching_an_interface_node
                     .iter()
                     .map(|drawn| &drawn.link),
+            )
+            .chain(
+                self.fragments_as_drawn
+                    .links_touching_a_fragment
+                    .iter()
+                    .map(|drawn| &drawn.link),
             );
         for link in links_drawn_to_a_graph_only_node {
             if names_the_node(&link.source) || names_the_node(&link.target) {
                 return Err(Error::GraphError(format!(
                     "node `{node_name}` cannot be {}: the graph links `{}/{}` to `{}/{}`, \
-                     an end of which is a variable or interface node, and that link would \
+                     an end of which is a fragment, a variable or an interface node, and that link would \
                      name a node the graph no longer holds",
                     change.as_refused(),
                     link.source.node,
@@ -490,8 +526,9 @@ impl GraphOnlyNodesAsDrawn {
         Ok(())
     }
 
-    /// The cast name of every variable and interface node drawn.
+    /// The cast name of every fragment, variable and interface node drawn.
     pub fn node_names_cast(&self) -> HashSet<String> {
+        let fragment_names_cast = self.fragments_as_drawn.fragment_names_flattened_and_cast();
         self.variables_as_drawn
             .variable_nodes
             .iter()
@@ -506,15 +543,17 @@ impl GraphOnlyNodesAsDrawn {
                     .ok()
                     .map(std::borrow::Cow::into_owned)
             })
+            .chain(fragment_names_cast)
             .collect()
     }
 
     /// Render the graph-only nodes into `graph_response`, a render of the graph
-    /// the runtime runs: the interface first, which was resolved out of the
-    /// graph its variables resolved to, then the variables.
+    /// the runtime runs, in the reverse of the order they were resolved: the
+    /// interface, then the variables, then each fragment as a container.
     pub fn render_into(&self, graph_response: &mut GraphResponse) {
         self.interface_as_drawn.render_into(graph_response);
         self.variables_as_drawn.render_into(graph_response);
+        self.fragments_as_drawn.render_into(graph_response);
     }
 }
 
@@ -538,6 +577,9 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
         graph.validate_a_graph_holding_no_graph_only_node(node_types)?;
         self.graph_only_nodes_as_drawn
             .interface_as_drawn
+            .validate(graph, node_types)?;
+        self.graph_only_nodes_as_drawn
+            .fragments_as_drawn
             .validate(graph, node_types)?;
         let node_named = |node_name: &str| -> Result<Option<&GraphSnapshotNode>> {
             let cast = cast_exposed_name_to_url_safe(node_name)?;
@@ -595,13 +637,25 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
 }
 
 /// Refuse the first key of `graph_document` the runtime does not read — at the
-/// top, on a node, a link or a link end — naming it and where it
+/// top, on a node, a fragment, a link or a link end, at every level — naming it and where it
 /// sits, before the spec is read, so a misspelled key is named rather than
 /// reported as the key it stands in for being missing. A link end naming a
 /// machine or a stream is refused naming how a stream reads a port outside it.
 /// An object the walk expects and does not find is left for the read to
 /// refuse.
 fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -> Result<()> {
+    if let Some(graph_object) = graph_document.as_object() {
+        refuse_a_key_no_such_object_holds(graph_object, &GRAPH_DOCUMENT_KEYS, || {
+            "the graph".to_string()
+        })?;
+    }
+    refuse_a_key_one_level_does_not_read(graph_document, "")
+}
+
+/// Refuse the first key the runtime does not read on a node, a link or a link end of `level` —
+/// the graph, or a fragment — and of every fragment it holds; `node_path` is the path of names
+/// down to `level`, each followed by `/`.
+fn refuse_a_key_one_level_does_not_read(level: &serde_json::Value, node_path: &str) -> Result<()> {
     fn text_at<'o>(object: &'o GraphDocumentObject, key: &str) -> &'o str {
         object
             .get(key)
@@ -623,7 +677,7 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
             .map_or_else(|| "?".to_string(), port_address_of)
     }
     let objects_of = |key: &str| {
-        graph_document
+        level
             .get(key)
             .and_then(serde_json::Value::as_array)
             .into_iter()
@@ -631,20 +685,26 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
             .filter_map(serde_json::Value::as_object)
     };
 
-    if let Some(graph_object) = graph_document.as_object() {
-        refuse_a_key_no_such_object_holds(graph_object, &GRAPH_DOCUMENT_KEYS, || {
-            "the graph".to_string()
-        })?;
-    }
     for node in objects_of("nodes") {
-        refuse_a_key_no_such_object_holds(node, &GRAPH_NODE_KEYS, || {
-            format!("node `{}`", text_at(node, "name"))
-        })?;
+        let node_named = || format!("node `{node_path}{}`", text_at(node, "name"));
+        refuse_a_key_no_such_object_holds(node, &GRAPH_NODE_KEYS, node_named)?;
+        let Some(fragment) = node.get("fragment") else {
+            continue;
+        };
+        if let Some(fragment_object) = fragment.as_object() {
+            refuse_a_key_no_such_object_holds(fragment_object, &GRAPH_FRAGMENT_KEYS, || {
+                format!("the fragment of {}", node_named())
+            })?;
+        }
+        refuse_a_key_one_level_does_not_read(
+            fragment,
+            &format!("{node_path}{}/", text_at(node, "name")),
+        )?;
     }
     for link in objects_of("links") {
         let link_named = || {
             format!(
-                "the link `{}` → `{}`",
+                "the link `{node_path}{}` → `{node_path}{}`",
                 port_address_at(link, "source"),
                 port_address_at(link, "target")
             )
@@ -663,6 +723,83 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
         refuse_a_key_no_such_object_holds(link, &GRAPH_LINK_KEYS, link_named)?;
         for (link_end, link_end_named) in link_ends {
             refuse_a_key_no_such_object_holds(link_end, &GRAPH_LINK_END_KEYS, link_end_named)?;
+        }
+    }
+    Ok(())
+}
+
+/// Name each link end of one level that names its node by UUID by that node's name instead,
+/// and so for every fragment the level holds, refusing a UUID `node_name_by_uuid` already holds.
+fn name_each_link_end_of_one_level_by_its_nodes_name(
+    nodes: &mut [GraphSnapshotNode],
+    links: &mut [GraphSnapshotLink],
+    node_name_by_uuid: &mut HashMap<Uuid, String>,
+) -> Result<()> {
+    let mut node_name_by_uuid_on_this_level: HashMap<Uuid, String> = HashMap::new();
+    for node in nodes.iter_mut() {
+        if let Some(node_uuid) = node.id {
+            if let Some(holder) = node_name_by_uuid.insert(node_uuid, node.name.clone()) {
+                return Err(Error::GraphError(format!(
+                    "nodes `{holder}` and `{}` both have the UUID {node_uuid}; a node's UUID \
+                     names it alone",
+                    node.name
+                )));
+            }
+            node_name_by_uuid_on_this_level.insert(node_uuid, node.name.clone());
+        }
+        if let Some(fragment) = &mut node.fragment {
+            name_each_link_end_of_one_level_by_its_nodes_name(
+                &mut fragment.nodes,
+                &mut fragment.links,
+                node_name_by_uuid,
+            )?;
+        }
+    }
+    for link in links {
+        for end in [&mut link.source, &mut link.target] {
+            if let Some(name) = Uuid::parse_str(&end.node)
+                .ok()
+                .and_then(|node_uuid| node_name_by_uuid_on_this_level.get(&node_uuid))
+            {
+                end.node = name.clone();
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Name each link end of one level by its node's UUID, and so for every fragment the level
+/// holds, refusing a node with no UUID.
+fn name_each_link_end_of_one_level_by_its_nodes_uuid(
+    nodes: &mut [GraphSnapshotNode],
+    links: &mut [GraphSnapshotLink],
+) -> Result<()> {
+    let mut node_uuid_by_name: HashMap<String, Uuid> = HashMap::new();
+    for node in nodes.iter_mut() {
+        let node_uuid = node.id.ok_or_else(|| {
+            Error::GraphError(format!(
+                "node `{}` has no UUID, which every node of a graph document has",
+                node.name
+            ))
+        })?;
+        node_uuid_by_name.insert(
+            cast_exposed_name_to_url_safe(&node.name)?.into_owned(),
+            node_uuid,
+        );
+        if let Some(fragment) = &mut node.fragment {
+            name_each_link_end_of_one_level_by_its_nodes_uuid(
+                &mut fragment.nodes,
+                &mut fragment.links,
+            )?;
+        }
+    }
+    for link in links {
+        for end in [&mut link.source, &mut link.target] {
+            if let Some(node_uuid) =
+                node_uuid_by_name.get(cast_exposed_name_to_url_safe(&end.node)?.as_ref())
+            {
+                end.node = node_uuid.to_string();
+            }
         }
     }
     Ok(())
@@ -894,6 +1031,7 @@ mod tests {
                 config: serde_json::json!({}),
                 pins: serde_json::Map::new(),
                 studio: serde_json::Map::new(),
+                fragment: None,
             }],
             links: vec![],
         };
@@ -1226,14 +1364,14 @@ mod tests {
                 serde_json::json!({"nodes": [with(a_node.clone(), "confg")]}),
                 [
                     "node `camera` carries the key `confg`",
-                    "`id`, `name`, `type`, `config`, `pins` and `studio`",
+                    "`id`, `name`, `type`, `config`, `pins`, `studio` and `fragment`",
                 ],
             ),
             (
                 serde_json::json!({"nodes": [{"name": "camera", "typ": A_CAMERA_CLASS}]}),
                 [
                     "node `camera` carries the key `typ`",
-                    "`id`, `name`, `type`, `config`, `pins` and `studio`",
+                    "`id`, `name`, `type`, `config`, `pins`, `studio` and `fragment`",
                 ],
             ),
             (

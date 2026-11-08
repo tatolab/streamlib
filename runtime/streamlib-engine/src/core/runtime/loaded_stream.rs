@@ -1116,6 +1116,7 @@ impl LoadedStreamInThisRuntime {
                             config: node.config.clone().unwrap_or_default(),
                             pins: node.pins.clone(),
                             studio: node.studio.clone(),
+                            fragment: None,
                         },
                         &config_json,
                     )?;

@@ -73,12 +73,12 @@ class KeepsRunning:
 '''
 
 CRASHING_STREAM_SOURCE = '''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from processors.crashing import ExitsSoonAfterEveryStart, KeepsRunning
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     stream_builder.add(ExitsSoonAfterEveryStart, name="exits-soon")
     stream_builder.add(KeepsRunning, name="keeps-running")

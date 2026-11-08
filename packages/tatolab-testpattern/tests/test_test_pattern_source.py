@@ -18,7 +18,7 @@ from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
 )
-from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, run_graph_generator, graph_generator
 from tatolab.testpattern import (
     POTATO_SPRITE,
     SAMPLE_STREAM_CAPTION_PANEL,
@@ -44,13 +44,13 @@ def test_the_node_is_a_continuous_source_with_one_rgba8_image_output():
     }
 
 
-@stream
+@graph_generator
 def a_test_pattern(stream_builder: StreamBuilder) -> None:
     stream_builder.add(TestPatternSource, config={"width": 640})
 
 
 def test_a_stream_names_the_source_by_the_type_the_module_publishes():
-    graph = compile_stream_to_graph(a_test_pattern)
+    graph = run_graph_generator(a_test_pattern)
 
     assert [(node["name"], node["type"], node["config"]) for node in graph["nodes"]] == [
         ("testpatternsource", "tatolab.testpattern:TestPatternSource", {"width": 640})

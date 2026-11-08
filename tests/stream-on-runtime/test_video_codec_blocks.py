@@ -30,7 +30,7 @@ from block_wiring_streams import (
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
-from tatolab.stream import compile_stream_to_graph
+from tatolab.stream import run_graph_generator
 from video_codec_blocks_probes import DECODED_STAMPS_REPORTED, ENCODED_FRAMES_REPORTED
 from video_codec_blocks_streams import (
     an_h264_decoder_alone,
@@ -109,7 +109,7 @@ CODEC_ROUND_TRIPS = {
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]", marker_class
 ):
-    graph = compile_stream_to_graph(ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS[marker_class])
+    graph = run_graph_generator(ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS[marker_class])
     (codec_node,) = [
         node for node in graph["nodes"] if node["type"] == node_type_of(marker_class)
     ]
@@ -150,7 +150,7 @@ def the_codec_nodes_rendered_types(live_graph: dict, codec: str) -> "dict[str, s
     """The `type` `graph` renders for the two codec nodes, keyed by the node
     class each was added as."""
     marker_classes = CODEC_ROUND_TRIPS[codec]["marker_classes"]
-    compiled_graph = compile_stream_to_graph(CODEC_ROUND_TRIPS[codec]["probed_stream"])
+    compiled_graph = run_graph_generator(CODEC_ROUND_TRIPS[codec]["probed_stream"])
     marker_class_name_by_node_name = {
         node["name"]: marker_class.__name__
         for node in compiled_graph["nodes"]

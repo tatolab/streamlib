@@ -10,7 +10,7 @@ on any GPU rather than only on a rig with a camera.
 """
 
 from tatolab.camera import CameraSource
-from tatolab.stream import NodeReference, StreamBuilder, stream
+from tatolab.stream import NodeReference, StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 import cast_claim_probes
@@ -34,7 +34,7 @@ def _add_the_probe_off(
     stream_builder.connect(source.output("video"), probe.input("video_from_upstream"))
 
 
-@stream
+@graph_generator
 def the_held_image_frame_keeps_its_slot_probe_off_the_camera(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -45,7 +45,7 @@ def the_held_image_frame_keeps_its_slot_probe_off_the_camera(
     )
 
 
-@stream
+@graph_generator
 def a_dropped_image_frame_releases_its_slot_probe_off_the_camera(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -56,7 +56,7 @@ def a_dropped_image_frame_releases_its_slot_probe_off_the_camera(
     )
 
 
-@stream
+@graph_generator
 def the_image_frame_reaches_its_pixels_bare_probe_off_the_test_pattern(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -67,7 +67,7 @@ def the_image_frame_reaches_its_pixels_bare_probe_off_the_test_pattern(
     )
 
 
-@stream
+@graph_generator
 def the_image_frame_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -78,7 +78,7 @@ def the_image_frame_reaches_its_pixels_as_a_device_tensor_probe_off_the_camera(
     )
 
 
-@stream
+@graph_generator
 def the_gpu_write_door_edits_the_frame_probe_off_the_test_pattern(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -89,7 +89,7 @@ def the_gpu_write_door_edits_the_frame_probe_off_the_test_pattern(
     )
 
 
-@stream
+@graph_generator
 def the_gpu_write_door_edits_the_frame_probe_off_the_camera(stream_builder: StreamBuilder) -> None:
     _add_the_probe_off(
         stream_builder,
@@ -98,7 +98,7 @@ def the_gpu_write_door_edits_the_frame_probe_off_the_camera(stream_builder: Stre
     )
 
 
-@stream
+@graph_generator
 def a_raise_inside_the_gpu_write_door_discards_the_edit_probe_off_the_test_pattern(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -109,7 +109,7 @@ def a_raise_inside_the_gpu_write_door_discards_the_edit_probe_off_the_test_patte
     )
 
 
-@stream
+@graph_generator
 def the_cpu_write_door_edits_the_frame_probe_off_the_test_pattern(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -120,7 +120,7 @@ def the_cpu_write_door_edits_the_frame_probe_off_the_test_pattern(
     )
 
 
-@stream
+@graph_generator
 def the_cpu_write_door_edits_the_frame_probe_off_the_camera(stream_builder: StreamBuilder) -> None:
     _add_the_probe_off(
         stream_builder,
@@ -129,7 +129,7 @@ def the_cpu_write_door_edits_the_frame_probe_off_the_camera(stream_builder: Stre
     )
 
 
-@stream
+@graph_generator
 def a_raise_inside_the_cpu_write_door_propagates_probe_off_the_test_pattern(
     stream_builder: StreamBuilder,
 ) -> None:

@@ -8,48 +8,48 @@ stream is the probe alone. The end-to-end scenarios put the test pattern module
 in front of one or two Python processors.
 """
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 import pixel_exchange_probes
 
 
-@stream
+@graph_generator
 def numpy_view_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.NumpyViewProbe)
 
 
-@stream
+@graph_generator
 def unlocked_export_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.UnlockedExportProbe)
 
 
-@stream
+@graph_generator
 def lock_mode_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.LockModeProbe)
 
 
-@stream
+@graph_generator
 def shared_memory_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.SharedMemoryProbe)
 
 
-@stream
+@graph_generator
 def tensor_outlives_the_surface_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.TensorOutlivesTheSurfaceProbe)
 
 
-@stream
+@graph_generator
 def pool_cycle_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.PoolCycleProbe)
 
 
-@stream
+@graph_generator
 def dlpack_consumer_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.DlpackConsumerProbe)
 
 
-@stream
+@graph_generator
 def unsupported_format_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(pixel_exchange_probes.UnsupportedFormatProbe)
 
@@ -68,7 +68,7 @@ def _add_the_cross_process_edit(stream_builder: StreamBuilder, *, skip_edit: boo
     )
 
 
-@stream
+@graph_generator
 def a_test_pattern_into_an_inverting_effect(stream_builder: StreamBuilder) -> None:
     """Test pattern → Python effect, the user-facing story: the frames one
     processor produces are edited in place by another one's interpreter."""
@@ -79,14 +79,14 @@ def a_test_pattern_into_an_inverting_effect(stream_builder: StreamBuilder) -> No
     stream_builder.connect(pattern.output("video"), effect.input("video_from_upstream"))
 
 
-@stream
+@graph_generator
 def a_test_pattern_edited_then_digested_in_another_process(stream_builder: StreamBuilder) -> None:
     """Native source → Python effect → a second Python processor: the edit
     one child makes is read back by another, through the engine's memory."""
     _add_the_cross_process_edit(stream_builder, skip_edit=False)
 
 
-@stream
+@graph_generator
 def a_test_pattern_left_unedited_then_digested_in_another_process(
     stream_builder: StreamBuilder,
 ) -> None:

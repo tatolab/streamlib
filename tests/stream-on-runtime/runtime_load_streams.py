@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_stream_graph_load_on_tatolabd.py` runs,
+"""The `@graph_generator` functions `test_stream_graph_load_on_tatolabd.py` runs,
 each run as a one-stream project whose `stream.py` delegates to it."""
 
 from typing import Any
@@ -9,7 +9,7 @@ from typing import Any
 from runtime_load_open_config_nodes import OpenConfigSink
 from runtime_load_served_graph_nodes import LoadedFrameSink
 from tatolab.h264 import H264Encoder
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 #: The deepest config the builder compiles: 126 containers from the compile
@@ -26,7 +26,7 @@ def config_nesting_containers_deep(containers_counting_the_config: int) -> "dict
     return {"nested": nested}
 
 
-@stream
+@graph_generator
 def open_config_sink_with_the_deepest_config_the_builder_compiles(stream_builder: StreamBuilder) -> None:
     stream_builder.add(
         OpenConfigSink,
@@ -34,14 +34,14 @@ def open_config_sink_with_the_deepest_config_the_builder_compiles(stream_builder
     )
 
 
-@stream
+@graph_generator
 def pattern_linked_from_a_port_it_lacks_into_an_encoder(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(TestPatternSource)
     encoder = stream_builder.add(H264Encoder)
     stream_builder.connect(pattern.output("no_such_port"), encoder.input("video"))
 
 
-@stream
+@graph_generator
 def named_pattern_into_a_named_sink(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
         TestPatternSource, name="Loaded Pattern", config={"width": 320, "height": 180}

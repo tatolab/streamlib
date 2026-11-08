@@ -30,22 +30,22 @@ COMPILE_ENTRY_MODULE = "tatolab.stream._project_stream_compile_entry"
 COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
 
 MINIMAL_STREAM_SOURCE = (
-    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.stream import StreamBuilder, graph_generator\n"
     "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
-    "@stream\n"
+    "@graph_generator\n"
     "def main(stream_builder: StreamBuilder) -> None:\n"
     "    stream_builder.add(TestPatternSource)\n"
 )
 APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION = "def setup(runtime):\n    pass\n"
 
 FRONT_STREAM_SOURCE = (
-    "from tatolab.stream import StreamBuilder, stream\n"
+    "from tatolab.stream import StreamBuilder, graph_generator\n"
     "from tatolab.testpattern import TestPatternSource\n"
     "\n"
     "\n"
-    "@stream\n"
+    "@graph_generator\n"
     "def front(stream_builder: StreamBuilder) -> None:\n"
     '    """Front pattern.\n'
     "\n"
@@ -55,7 +55,7 @@ FRONT_STREAM_SOURCE = (
 TWO_STREAM_SOURCE = FRONT_STREAM_SOURCE + (
     "\n"
     "\n"
-    "@stream\n"
+    "@graph_generator\n"
     "def back(stream_builder: StreamBuilder) -> None:\n"
     '    stream_builder.add(TestPatternSource, name="Back Pattern")\n'
 )
@@ -222,10 +222,10 @@ def test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py(
 
     assert f"error: no `stream.py` in `{anchor_directory}`, only an `app.py`" in message
     assert (
-        "`tatolab dev` loads the @stream functions of `stream.py`, and never reads "
+        "`tatolab dev` loads the @graph_generator functions of `stream.py`, and never reads "
         "`app.py`." in message
     )
-    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message, (
+    assert "    @graph_generator\n    def main(stream_builder: StreamBuilder) -> None:\n" in message, (
         "the refusal must show the shape `stream.py` holds"
     )
     assert "-f <file>" not in message, "a project's entry is always `stream.py`"
@@ -663,7 +663,7 @@ def test_a_module_targets_function_it_lacks_names_the_file_its_module_resolved_t
 
     assert (
         f"`refusal_naming_rigs.desk` (`{anchor_directory / 'refusal_naming_rigs' / 'desk.py'}`) "
-        f"defines no @stream function named `side`"
+        f"defines no @graph_generator function named `side`"
     ) in message
     assert (
         f"Name one of them: `tatolab run --dir {anchor_directory} "
@@ -734,7 +734,7 @@ def test_a_raising_stream_is_its_own_failed_entry_beside_the_streams_that_compil
         anchor_directory,
         "stream.py",
         TWO_STREAM_SOURCE
-        + "\n\n@stream\ndef broken(stream_builder: StreamBuilder) -> None:\n"
+        + "\n\n@graph_generator\ndef broken(stream_builder: StreamBuilder) -> None:\n"
         + '    """Raises."""\n    raise ValueError("bad wiring")\n',
     )
 
@@ -820,8 +820,8 @@ def test_an_entry_that_defines_no_stream_is_a_project_with_no_stream_and_a_sampl
 
     message = no_stream_defined_because_of(run_compile_entry(anchor_directory, verb="dev"))
 
-    assert "stream.py` defines no @stream function" in message
-    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
+    assert "stream.py` defines no @graph_generator function" in message
+    assert "    @graph_generator\n    def main(stream_builder: StreamBuilder) -> None:\n" in message
     assert "stream_builder.add(TestPatternSource)" in message
     assert "-f <file>" not in message
 
@@ -839,7 +839,7 @@ def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_
     assert document["stream_function"] == "stream:side"
     assert document["project_directory"] == str(anchor_directory)
 
-    assert "defines no @stream function named `side`" in message
+    assert "defines no @graph_generator function named `side`" in message
     assert "    front — Front pattern.\n" in message
     assert "    back" in message
 
@@ -856,9 +856,9 @@ def test_a_named_function_in_a_file_with_no_stream_is_reported_naming_the_decora
 
     assert document["stream_function"] == "stream:main"
 
-    assert "defines no @stream function named `main`, nor any other" in message
+    assert "defines no @graph_generator function named `main`, nor any other" in message
     assert (
-        "`@stream` above a module-level `def main(stream_builder: StreamBuilder) -> None:`"
+        "`@graph_generator` above a module-level `def main(stream_builder: StreamBuilder) -> None:`"
         in message
     )
 
@@ -875,8 +875,8 @@ def test_a_named_function_that_is_not_a_stream_is_reported_naming_the_fix(anchor
         run_compile_entry(anchor_directory, "stream.py:helper")
     )["not_defined_because"]
 
-    assert "`helper` in" in message and "is not a @stream function" in message
-    assert "decorate it with `@stream`" in message
+    assert "`helper` in" in message and "is not a @graph_generator function" in message
+    assert "decorate it with `@graph_generator`" in message
     assert "(stream_builder: StreamBuilder) -> None:" in message
 
 
@@ -945,8 +945,8 @@ def test_a_package_target_naming_a_value_that_is_not_a_stream_is_reported_naming
 
     assert document["stream_function"] == "re_exporting_helper_rover:wire_cameras"
 
-    assert "`wire_cameras` in" in message and "is not a @stream function" in message
-    assert "decorate it with `@stream`" in message
+    assert "`wire_cameras` in" in message and "is not a @graph_generator function" in message
+    assert "decorate it with `@graph_generator`" in message
     assert "(stream_builder: StreamBuilder) -> None:" in message
 
 
@@ -966,10 +966,10 @@ def test_a_stream_that_adds_nothing_compiles_and_is_the_runtimes_to_refuse(
     write_app(
         anchor_directory,
         "stream.py",
-        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.stream import StreamBuilder, graph_generator\n"
         "\n"
         "\n"
-        "@stream\n"
+        "@graph_generator\n"
         "def main(stream_builder: StreamBuilder) -> None:\n"
         "    pass\n",
     )
@@ -985,10 +985,10 @@ def test_a_raising_stream_function_is_reported_under_its_location_with_its_trace
     write_app(
         anchor_directory,
         "stream.py",
-        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.stream import StreamBuilder, graph_generator\n"
         "\n"
         "\n"
-        "@stream\n"
+        "@graph_generator\n"
         "def main(stream_builder: StreamBuilder) -> None:\n"
         "    raise ValueError('bad wiring')\n",
     )
@@ -1011,11 +1011,11 @@ def test_a_typed_duplicate_is_refused_on_the_authors_own_line(anchor_directory: 
     write_app(
         anchor_directory,
         "stream.py",
-        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.stream import StreamBuilder, graph_generator\n"
         "from tatolab.testpattern import TestPatternSource\n"
         "\n"
         "\n"
-        "@stream\n"
+        "@graph_generator\n"
         "def main(stream_builder: StreamBuilder) -> None:\n"
         '    stream_builder.add(TestPatternSource, name="Pattern")\n'
         '    stream_builder.add(TestPatternSource, name="pattern")\n',
@@ -1041,10 +1041,10 @@ def test_a_syntax_error_is_reported_as_the_apps_traceback(anchor_directory: Path
     write_app(
         anchor_directory,
         "stream.py",
-        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.stream import StreamBuilder, graph_generator\n"
         "\n"
         "\n"
-        "@stream\n"
+        "@graph_generator\n"
         "def main(stream_builder: StreamBuilder) -> None\n"
         "    pass\n",
     )
@@ -1112,16 +1112,16 @@ def test_an_app_that_exits_on_purpose_keeps_its_own_exit_code(anchor_directory: 
 def test_a_stream_function_that_exits_on_purpose_keeps_its_own_exit_code(
     anchor_directory: Path,
 ):
-    """The same from inside the `@stream` function, which runs at compile time."""
+    """The same from inside the `@graph_generator` function, which runs at compile time."""
     write_app(
         anchor_directory,
         "stream.py",
         "import sys\n"
         "\n"
-        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.stream import StreamBuilder, graph_generator\n"
         "\n"
         "\n"
-        "@stream\n"
+        "@graph_generator\n"
         "def main(stream_builder: StreamBuilder) -> None:\n"
         "    sys.exit(4)\n",
     )
@@ -1149,10 +1149,10 @@ def test_an_app_that_exits_zero_on_purpose_exits_zero_with_no_document(
         source = (
             "import sys\n"
             "\n"
-            "from tatolab.stream import StreamBuilder, stream\n"
+            "from tatolab.stream import StreamBuilder, graph_generator\n"
             "\n"
             "\n"
-            "@stream\n"
+            "@graph_generator\n"
             "def main(stream_builder: StreamBuilder) -> None:\n"
             f"    {exit_call}\n"
         )
@@ -1177,7 +1177,7 @@ def test_what_the_app_arranges_to_print_after_the_compile_never_follows_the_docu
         "import threading\n"
         "import time\n"
         "\n"
-        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.stream import StreamBuilder, graph_generator\n"
         "from tatolab.testpattern import TestPatternSource\n"
         "\n"
         "atexit.register(lambda: print('printed at exit'))\n"
@@ -1192,7 +1192,7 @@ def test_what_the_app_arranges_to_print_after_the_compile_never_follows_the_docu
         "threading.Thread(target=print_late).start()\n"
         "\n"
         "\n"
-        "@stream\n"
+        "@graph_generator\n"
         "def main(stream_builder: StreamBuilder) -> None:\n"
         "    stream_builder.add(TestPatternSource)\n",
     )
@@ -1245,7 +1245,7 @@ def test_a_config_at_the_deepest_a_graph_carries_compiles_to_a_document_serde_js
     write_app(
         anchor_directory,
         "stream.py",
-        "from tatolab.stream import StreamBuilder, stream\n"
+        "from tatolab.stream import StreamBuilder, graph_generator\n"
         "from tatolab.testpattern import TestPatternSource\n"
         "\n"
         "nested = []\n"
@@ -1253,7 +1253,7 @@ def test_a_config_at_the_deepest_a_graph_carries_compiles_to_a_document_serde_js
         "    nested = [nested]\n"
         "\n"
         "\n"
-        "@stream\n"
+        "@graph_generator\n"
         "def main(stream_builder: StreamBuilder) -> None:\n"
         "    stream_builder.add(TestPatternSource, config={'nested': nested})\n",
     )

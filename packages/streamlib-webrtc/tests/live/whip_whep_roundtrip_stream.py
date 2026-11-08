@@ -37,7 +37,7 @@ from tatolab.moq import MoqGateway, MoqTrack, MoqTrackSend
 from tatolab.speaker import SpeakerSink
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.webrtc import WhepPlayer, WhipPublisher
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 # Stated rather than left to the encoder's own default, so the baseline is
@@ -77,7 +77,7 @@ def _session_configuration(url_variable: str, token_variable: str) -> dict[str, 
     return configuration
 
 
-@stream
+@graph_generator
 def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilder) -> None:
     audio_capture_device = os.environ.get("STREAMLIB_AUDIO_CAPTURE_DEVICE_ID")
 
@@ -109,7 +109,7 @@ def test_pattern_and_microphone_published_over_whip(stream_builder: StreamBuilde
     stream_builder.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
 
 
-@stream
+@graph_generator
 def the_same_input_played_back_over_whep_through_the_decoders(
     stream_builder: StreamBuilder,
 ) -> None:

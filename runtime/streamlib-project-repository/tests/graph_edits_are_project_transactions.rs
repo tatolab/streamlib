@@ -104,6 +104,7 @@ fn a_node(name: &str, config: serde_json::Value) -> StreamGraphDocumentNode {
         config,
         pins: Map::new(),
         studio: Map::new(),
+        fragment: None,
     }
 }
 

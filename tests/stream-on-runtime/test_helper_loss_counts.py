@@ -142,12 +142,12 @@ class NewestSink:
 '''
 
 LOSS_COUNTING_STREAM_SOURCE = f'''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from {LOSS_COUNTING_PROCESSORS_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     source = stream_builder.add(FastBagSource, name="source")
     slow_sink = stream_builder.add(SlowOrderedSink, name="slow-sink")

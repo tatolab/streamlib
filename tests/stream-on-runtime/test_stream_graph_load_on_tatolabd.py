@@ -7,7 +7,7 @@ A graph reaches `tatolabd` through `run_project`, as `tatolab run` makes it: the
 runtime reads each graph document of the project and loads the graph it holds. A
 graph written here by hand is written as a project's graph document, the text a
 test wrote verbatim but for its stream asset, so the runtime parses exactly that
-text; a `@stream` function is compiled in this process to its graph document. Every
+text; a `@graph_generator` function is compiled in this process to its graph document. Every
 run here but the rig's is on a `tatolabd` that reaches no Vulkan driver: a document
 the runtime cannot load is a stream recorded failed with the reason; a load that
 succeeds fails at its start, at the GPU, before any device opens — and the runtime
@@ -36,6 +36,7 @@ from conftest import (
     TatolabdUnderTest,
     environment_reaching_no_vulkan_driver,
 )
+from graph_fragment_streams import pattern_into_a_look_holding_a_fragment
 from node_module_whose_describe_holds_the_load import (
     HELD_DESCRIBE_DEADLINE_SECONDS,
     NodeModuleWhoseDescribeHoldsTheLoad,
@@ -537,6 +538,57 @@ def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
     assert interrupt_honoured_within_seconds < HELD_DESCRIBE_DEADLINE_SECONDS / 2
     (stream_run,) = tatolabd.stream_runs
     assert stream_run.queued_action()
+
+
+# ---- fragments ----------------------------------------------------------------
+
+
+def test_a_fragment_inside_a_fragment_loads_as_the_nodes_it_holds(
+    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
+):
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
+        pattern_into_a_look_holding_a_fragment
+    )
+
+    assert loaded_with(run_outcome) == 2
+
+
+def nodes_named(nodes: "list[dict[str, Any]]") -> "dict[str, dict[str, Any]]":
+    """`nodes` by name."""
+    return {node["name"]: node for node in nodes}
+
+
+@pytest.mark.requires_gpu
+def test_graph_renders_a_fragment_inside_a_fragment_as_a_container_inside_its_container(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(pattern_into_a_look_holding_a_fragment)
+    stream_id = tatolabd.stream_runs[-1].await_loaded()["stream_id"]
+    local_api = tatolabd.local_api_client()
+    served_graph = local_api.await_every_node_running(
+        stream=stream_id, expected_node_names=["pattern", "look/soft/sink"]
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    top_level = nodes_named(served_graph["nodes"])
+    assert list(top_level) == ["pattern", "look"], list(top_level)
+    look = top_level["look"]
+    assert look["kind"] == "fragment", look
+    assert look["type"] == "graph_fragment_streams:look", look
+    assert [port["name"] for port in look["ports"]["inputs"]] == ["video"], look["ports"]
+    look_holds = nodes_named(look["fragment"]["nodes"])
+    assert list(look_holds) == ["graphinput", "soft"], list(look_holds)
+    soft = look_holds["soft"]
+    assert soft["kind"] == "fragment", soft
+    soft_holds = nodes_named(soft["fragment"]["nodes"])
+    assert list(soft_holds) == ["graphinput", "sink"], list(soft_holds)
+    assert soft_holds["sink"]["components"]["state"] == "Running", soft_holds["sink"]
+    served_link_ends = [
+        (link["source"]["node"], link["source"]["port"], link["target"]["node"], link["target"]["port"])
+        for link in served_graph["links"]
+    ]
+    assert served_link_ends == [("pattern", "video", "look", "video")], served_link_ends
 
 
 # ---- a loaded stream, run and read back by name -----------------------------

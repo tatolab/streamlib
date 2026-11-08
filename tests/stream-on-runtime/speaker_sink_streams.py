@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_speaker_sink.py` runs from the suite project."""
+"""The `@graph_generator` functions `test_speaker_sink.py` runs from the suite project."""
 
 from tatolab.microphone import MicrophoneSource
 from tatolab.speaker import SpeakerSink
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from speaker_sink_probes import AudioBlockCountingProbe
 
@@ -13,12 +13,12 @@ SPEAKER_NODE_NAME = "speakersink"
 UNOPENABLE_DEVICE_ID = "not-a-real-audio-device"
 
 
-@stream
+@graph_generator
 def one_speaker_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
     stream_builder.add(SpeakerSink)
 
 
-@stream
+@graph_generator
 def microphone_into_a_speaker_and_a_block_counting_probe(stream_builder: StreamBuilder) -> None:
     """A microphone wired straight to a speaker, with no Python in the sample path.
 
@@ -41,6 +41,6 @@ def microphone_into_a_speaker_and_a_block_counting_probe(stream_builder: StreamB
     stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
 
-@stream
+@graph_generator
 def speaker_sink_naming_an_unopenable_device(stream_builder: StreamBuilder) -> None:
     stream_builder.add(SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})

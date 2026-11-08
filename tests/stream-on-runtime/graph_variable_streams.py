@@ -3,7 +3,7 @@
 
 """The streams `test_graph_variables.py` starts on `tatolabd`."""
 
-from tatolab.stream import GetVariable, SetVariable, StreamBuilder, stream
+from tatolab.stream import GetVariable, SetVariable, StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 from graph_variable_probes import ImageVariableReader
@@ -11,7 +11,7 @@ from graph_variable_probes import ImageVariableReader
 PATTERN_WIDTH = 320
 
 
-@stream
+@graph_generator
 def a_test_pattern_held_in_a_variable_and_read_twice(stream_builder: StreamBuilder) -> None:
     pattern = stream_builder.add(
         TestPatternSource, config={"width": PATTERN_WIDTH, "height": 180}

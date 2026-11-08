@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_video_codec_blocks.py` runs from the suite project."""
+"""The `@graph_generator` functions `test_video_codec_blocks.py` runs from the suite project."""
 
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
 
 from video_codec_blocks_probes import (
@@ -21,22 +21,22 @@ TEST_PATTERN_FRAMES_PER_SECOND = 30
 KEYFRAME_INTERVAL_SECONDS = 1
 
 
-@stream
+@graph_generator
 def an_h264_encoder_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(H264Encoder)
 
 
-@stream
+@graph_generator
 def an_h264_decoder_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(H264Decoder)
 
 
-@stream
+@graph_generator
 def an_h265_encoder_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(H265Encoder)
 
 
-@stream
+@graph_generator
 def an_h265_decoder_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(H265Decoder)
 
@@ -89,11 +89,11 @@ def _add_a_codec_round_trip_with_probes(
     )
 
 
-@stream
+@graph_generator
 def an_h264_round_trip_with_probes(stream_builder: StreamBuilder) -> None:
     _add_a_codec_round_trip_with_probes(stream_builder, H264Encoder, H264Decoder)
 
 
-@stream
+@graph_generator
 def an_h265_round_trip_with_probes(stream_builder: StreamBuilder) -> None:
     _add_a_codec_round_trip_with_probes(stream_builder, H265Encoder, H265Decoder)

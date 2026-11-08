@@ -13,7 +13,7 @@ import os
 
 from moq_gateway_processors import CountingRecordsSource, ReportsEachRecordReceivedSink
 from tatolab.moq import MoqGateway, MoqTrack, MoqTrackReceive, MoqTrackSend
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE = "STREAMLIB_FIXTURE_RELAY_URL"
 SENDING_BROADCAST = "suite-gateway-sender"
@@ -21,7 +21,7 @@ RECEIVING_BROADCAST = "suite-gateway-receiver"
 COUNT_TRACK = "counts"
 
 
-@stream
+@graph_generator
 def counting_records_sent_to_the_relay_and_read_back(stream_builder: StreamBuilder) -> None:
     relay_url = os.environ[FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE]
     source = stream_builder.add(CountingRecordsSource, name="counts")

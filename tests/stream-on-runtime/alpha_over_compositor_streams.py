@@ -10,7 +10,7 @@ from the same description the stream was wired from.
 from dataclasses import dataclass
 
 from tatolab.compositor import AlphaOverCompositor
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 import alpha_over_compositor_probes
 from alpha_over_compositor_probes import (
@@ -97,27 +97,27 @@ def _wire_the_scenario(stream_builder: StreamBuilder, scenario: str) -> None:
     stream_builder.connect(compositor.output("video"), probe.input("composite_from_upstream"))
 
 
-@stream
+@graph_generator
 def premultiplied_layers_into_the_compositor(stream_builder: StreamBuilder) -> None:
     _wire_the_scenario(stream_builder, "premultiplied_alpha")
 
 
-@stream
+@graph_generator
 def red_on_layer_1_and_blue_on_layer_2_into_the_compositor(stream_builder: StreamBuilder) -> None:
     _wire_the_scenario(stream_builder, "red_on_layer_1_blue_on_layer_2")
 
 
-@stream
+@graph_generator
 def blue_on_layer_1_and_red_on_layer_2_into_the_compositor(stream_builder: StreamBuilder) -> None:
     _wire_the_scenario(stream_builder, "blue_on_layer_1_red_on_layer_2")
 
 
-@stream
+@graph_generator
 def a_layer_1_that_never_sends_into_the_compositor(stream_builder: StreamBuilder) -> None:
     _wire_the_scenario(stream_builder, "layer_1_never_sends")
 
 
-@stream
+@graph_generator
 def a_layer_0_that_never_sends_into_the_compositor(stream_builder: StreamBuilder) -> None:
     _wire_the_scenario(stream_builder, "layer_0_never_sends")
 

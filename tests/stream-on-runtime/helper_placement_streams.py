@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@stream` functions `test_helper_placement.py` runs from the suite project."""
+"""The `@graph_generator` functions `test_helper_placement.py` runs from the suite project."""
 
 from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCalls
 from rust_function_node_fixture import ScaleAndOffset
 from tatolab.ops import Clamp, Lfo, Remap
-from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, stream
+from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, graph_generator
 
 from helper_placement_processors import (
     STEPPED_LFO_STEP_MS,
@@ -41,45 +41,45 @@ def _labelled_source_into_sink(
     stream_builder.connect(source.output("frames_to_downstream"), sink.input("frames_from_upstream"))
 
 
-@stream
+@graph_generator
 def first_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
     """A source labelled `first` into a sink reporting where its bags came from."""
     _labelled_source_into_sink(stream_builder, "first")
 
 
-@stream
+@graph_generator
 def only_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
     """A source labelled `only` into a sink reporting where its bags came from."""
     _labelled_source_into_sink(stream_builder, "only")
 
 
-@stream
+@graph_generator
 def reaped_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
     """A source labelled `reaped` into a sink reporting where its bags came from."""
     _labelled_source_into_sink(stream_builder, "reaped")
 
 
-@stream
+@graph_generator
 def two_labelled_sources_each_into_its_own_sink(stream_builder: StreamBuilder) -> None:
     """Two instances of one source class, each into a sink named for its label."""
     for label in ("first", "second"):
         _labelled_source_into_sink(stream_builder, label, sink_name=f"{label}Sink")
 
 
-@stream
+@graph_generator
 def dies_abruptly_beside_a_survivor_pair(stream_builder: StreamBuilder) -> None:
     """A processor that takes its own process down, beside a source-sink pair."""
     stream_builder.add(DiesAbruptlyProbe)
     _labelled_source_into_sink(stream_builder, "survivor")
 
 
-@stream
+@graph_generator
 def stale_build_labelled_source(stream_builder: StreamBuilder) -> None:
     """A lone source labelled `stale`, for a helper made to see another build."""
     stream_builder.add(ReportsItsOwnProcessSource, config={"label": "stale"})
 
 
-@stream
+@graph_generator
 def raw_message_payload_source_into_sink(stream_builder: StreamBuilder) -> None:
     """A Python source writing a non-msgpack payload into a Python sink reporting it."""
     source = stream_builder.add(WritesRawMessagePayloadSource)
@@ -89,7 +89,7 @@ def raw_message_payload_source_into_sink(stream_builder: StreamBuilder) -> None:
     )
 
 
-@stream
+@graph_generator
 def native_channels_to_records_into_python_records_sink(stream_builder: StreamBuilder) -> None:
     """A native Channels-to-Records converter into a Python sink reporting its own process."""
     to_records = stream_builder.add(ChannelsToRecords, config={"channel_names": ["level"]})
@@ -97,25 +97,25 @@ def native_channels_to_records_into_python_records_sink(stream_builder: StreamBu
     stream_builder.connect(to_records.output("records"), sink.input("records_from_upstream"))
 
 
-@stream
+@graph_generator
 def one_probe_sleeping_through_its_own_shutdown(stream_builder: StreamBuilder) -> None:
     """A processor parked in `process()` when shutdown arrives."""
     stream_builder.add(SleepsThroughItsOwnShutdownProbe)
 
 
-@stream
+@graph_generator
 def one_probe_forking_a_worker_that_outlives_it(stream_builder: StreamBuilder) -> None:
     """A processor that forks a worker meant to outlive its helper."""
     stream_builder.add(ForksAWorkerThatOutlivesItProbe)
 
 
-@stream
+@graph_generator
 def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> None:
     """A processor still inside `setup()` when shutdown arrives."""
     stream_builder.add(SleepsThroughItsOwnSetupProbe)
 
 
-@stream
+@graph_generator
 def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
     """`tatolab.ops`' `Lfo` into `Remap` into a Python class reading the value they evaluate to."""
     lfo = stream_builder.add(Lfo)
@@ -125,7 +125,7 @@ def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(remap.output("result"), sink.input("brightness"))
 
 
-@stream
+@graph_generator
 def function_nodes_read_by_two_native_converters_into_python_records_sink(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -152,7 +152,7 @@ def function_nodes_read_by_two_native_converters_into_python_records_sink(
     stream_builder.connect(first_converter.output("records"), sink.input("level_records"))
 
 
-@stream
+@graph_generator
 def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuilder) -> None:
     """A function node whose compiled call never returns, inside the read of a Python class."""
     spinner = stream_builder.add(SpinsForever, name="spinner")
@@ -160,7 +160,7 @@ def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuil
     stream_builder.connect(spinner.output("result"), sink.input("brightness"))
 
 
-@stream
+@graph_generator
 def function_node_run_as_python_into_python_records_sink(stream_builder: StreamBuilder) -> None:
     """A function node giving a `dict`, which runs as Python, read by a Python class as Records."""
     labeller = stream_builder.add(LabelsTheLevel, name="labeller")
@@ -168,7 +168,7 @@ def function_node_run_as_python_into_python_records_sink(stream_builder: StreamB
     stream_builder.connect(labeller.output("result"), sink.input("label"))
 
 
-@stream
+@graph_generator
 def function_node_run_as_python_that_crashes_into_python_sink(stream_builder: StreamBuilder) -> None:
     """A function node run as Python whose call takes its reader's helper down."""
     crasher = stream_builder.add(CrashesItsHelper, name="crasher")
@@ -176,7 +176,7 @@ def function_node_run_as_python_that_crashes_into_python_sink(stream_builder: St
     stream_builder.connect(crasher.output("result"), sink.input("brightness"))
 
 
-@stream
+@graph_generator
 def stateful_counter_into_python_sink_that_dies_once(stream_builder: StreamBuilder) -> None:
     """A stateful function node counting its calls, read by a Python class that
     takes its own helper down once a fresh count reaches twenty."""
@@ -185,7 +185,7 @@ def stateful_counter_into_python_sink_that_dies_once(stream_builder: StreamBuild
     stream_builder.connect(counter.output("result"), sink.input("count"))
 
 
-@stream
+@graph_generator
 def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
     """One stateful function node counting its calls, read by two Python classes."""
     counter = stream_builder.add(CountsItsOwnCalls, name="counter")
@@ -194,7 +194,7 @@ def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> 
         stream_builder.connect(counter.output("result"), reader.input("count"))
 
 
-@stream
+@graph_generator
 def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -211,7 +211,7 @@ def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
         stream_builder.connect(lfo.output("result"), sink.input("wave"))
 
 
-@stream
+@graph_generator
 def rust_function_nodes_in_islands_beside_tatolab_ops(stream_builder: StreamBuilder) -> None:
     """`Lfo` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`
     into `Remap`, each island read by its own Python class."""

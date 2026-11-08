@@ -13,18 +13,18 @@ from tatolab.speaker import SpeakerSink
 from tatolab.testpattern import TestPatternSource
 from tatolab.stream import (
     StreamBuilder,
-    stream,
+    graph_generator,
 )
 
 
-@stream
+@graph_generator
 def microphone_wired_straight_into_a_speaker(stream_builder: StreamBuilder) -> None:
     microphone = stream_builder.add(MicrophoneSource)
     speaker = stream_builder.add(SpeakerSink)
     stream_builder.connect(microphone.output("audio"), speaker.input("audio"))
 
 
-@stream
+@graph_generator
 def microphone_through_the_opus_round_trip_into_a_speaker(stream_builder: StreamBuilder) -> None:
     microphone = stream_builder.add(MicrophoneSource)
     encoder = stream_builder.add(OpusEncoder)
@@ -47,11 +47,11 @@ def _add_a_codec_round_trip(
     stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
 
 
-@stream
+@graph_generator
 def h264_round_trip(stream_builder: StreamBuilder) -> None:
     _add_a_codec_round_trip(stream_builder, H264Encoder, H264Decoder)
 
 
-@stream
+@graph_generator
 def h265_round_trip(stream_builder: StreamBuilder) -> None:
     _add_a_codec_round_trip(stream_builder, H265Encoder, H265Decoder)

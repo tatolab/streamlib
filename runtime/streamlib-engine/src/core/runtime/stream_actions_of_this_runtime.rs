@@ -194,11 +194,11 @@ fn the_graph_a_stream_document_holds(
         .map_err(|not_utf8| why_it_holds_no_graph(format!("is not UTF-8: {not_utf8}")))?;
     let graph = GraphSnapshot::from_json_str(document_text)
         .map_err(|not_a_graph| why_it_holds_no_graph(format!("does not load: {not_a_graph}")))?;
-    let nodes_holding_no_uuid: Vec<String> = graph
-        .nodes
+    let nodes_at_every_level = graph.nodes_at_every_level();
+    let nodes_holding_no_uuid: Vec<String> = nodes_at_every_level
         .iter()
-        .filter(|node| node.id.is_none())
-        .map(|node| format!("`{}`", node.name))
+        .filter(|(_, node)| node.id.is_none())
+        .map(|(node_path, _)| format!("`{node_path}`"))
         .collect();
     if !nodes_holding_no_uuid.is_empty() {
         return Err(why_it_holds_no_graph(format!(
@@ -207,15 +207,14 @@ fn the_graph_a_stream_document_holds(
             nodes_holding_no_uuid.join(", ")
         )));
     }
-    for node in &graph.nodes {
+    for (node_path, node) in &nodes_at_every_level {
         if let Some(asset) = assets_a_node_config_references(&node.config)
             .into_iter()
             .find(|asset| !asset_uuids_the_project_holds.contains(asset))
         {
             return Err(why_it_holds_no_graph(format!(
-                "has node `{}` whose config references the asset {asset}, which the project \
-                 does not hold",
-                node.name
+                "has node `{node_path}` whose config references the asset {asset}, which the \
+                 project does not hold"
             )));
         }
     }

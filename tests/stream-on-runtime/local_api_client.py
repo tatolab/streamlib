@@ -42,6 +42,10 @@ STREAM_ACTION_FOLLOW_DEADLINE_SECONDS = 480.0
 STREAM_ACTION_FOLLOW_POLL_SECONDS = 0.1
 
 RUNNING_NODE_STATE = "Running"
+#: The component an interface node carries what it declares under.
+GRAPH_INTERFACE_COMPONENT_KEY = "graph_interface"
+#: The component a variable node carries what it holds under.
+GRAPH_VARIABLE_COMPONENT_KEY = "graph_variable"
 #: The states a node passes through before its `setup` has run, as the engine renders them.
 NODE_STATES_BEFORE_SETUP_COMPLETED = ("Pending", "Idle")
 LINK_ERROR_STATE = "error"
@@ -211,17 +215,16 @@ class LocalApiClient:
     ) -> "dict[str, Any]":
         """Poll the stream's graph until every node — and each of `expected_node_names` — is Running.
 
-        Returns the graph that satisfied it; past the timeout raises naming each
-        node's last state.
+        A node inside a fragment counts under its path of names, `look/soft/sink`; the
+        fragment itself runs nothing and has no state. Returns the graph that satisfied it;
+        past the timeout raises naming each node's last state.
         """
         expected = set(expected_node_names or ())
         deadline = time.monotonic() + timeout
         node_states: "dict[str, Any]" = {}
         while True:
             graph = self.graph(stream)
-            node_states = {
-                node["name"]: node.get("components", {}).get("state") for node in graph["nodes"]
-            }
+            node_states = node_states_at_every_level(graph["nodes"], "")
             if (
                 node_states
                 and expected <= node_states.keys()
@@ -287,3 +290,22 @@ class LocalApiClient:
                 )
             time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
         return f"still {link['state'] if link else 'absent'} after {timeout}s"
+
+
+def node_states_at_every_level(nodes: "list[dict[str, Any]]", path_of_names: str) -> "dict[str, Any]":
+    """Each running node's state under its path of names, inside every fragment `nodes` holds;
+    an interface or variable node inside a fragment runs nothing and is left out."""
+    node_states: "dict[str, Any]" = {}
+    for node in nodes:
+        node_path = f"{path_of_names}{node['name']}"
+        fragment = node.get("fragment")
+        components = node.get("components", {})
+        if isinstance(fragment, dict):
+            node_states.update(node_states_at_every_level(fragment["nodes"], f"{node_path}/"))
+        elif path_of_names and (
+            GRAPH_INTERFACE_COMPONENT_KEY in components or GRAPH_VARIABLE_COMPONENT_KEY in components
+        ):
+            continue
+        else:
+            node_states[node_path] = components.get("state")
+    return node_states

@@ -8,7 +8,7 @@ load of a project, the runtime reading each stream asset's graph document under 
 project and loading its graph, the project's Python node types run in its own
 `.venv/bin/python`. Three shapes reach that call:
 
-- a `@stream` function of one of the suite's own modules, compiled in this process
+- a `@graph_generator` function of one of the suite's own modules, compiled in this process
   and run as a one-stream project of its own: its graph document
   `streams/<function>.graph.json` beside a link to each of the suite directory's
   own entries, so its modules import in every processor interpreter, and a `.venv`
@@ -45,7 +45,7 @@ from tatolab.stream._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
-from tatolab.stream._stream_graph_builder import compile_stream_to_graph
+from tatolab.stream._stream_graph_builder import run_graph_generator
 
 #: The file that makes a directory a project: its UUID and its name.
 PROJECT_FILE_NAME = "tatolab-project.json"
@@ -62,7 +62,7 @@ GRAPH_DOCUMENT_ASSET_KEY = "asset"
 #: The stream a hand-written graph is named when it names none of its own.
 HAND_WRITTEN_STREAM_NAME_WHEN_THE_GRAPH_NAMES_NONE = "main"
 
-#: How the suite compiles every `@stream` of a project's `stream.py`, in the suite venv.
+#: How the suite compiles every `@graph_generator` of a project's `stream.py`, in the suite venv.
 STREAM_PY_COMPILE_INVOCATION = (
     "-I",
     "-m",
@@ -72,7 +72,7 @@ STREAM_PY_COMPILE_INVOCATION = (
     "--every-stream",
 )
 
-#: Bounded: a compile imports a few modules and runs each `@stream` once.
+#: Bounded: a compile imports a few modules and runs each `@graph_generator` once.
 STREAM_PY_COMPILE_TIMEOUT_SECONDS = 60.0
 
 #: Longest a stream id is: the exposed-name cast's bound.
@@ -106,13 +106,13 @@ class TatolabRunOfAProject:
         return self.dir_as_typed if self.dir_as_typed is not None else str(self.working_directory)
 
 
-#: A `@stream` function of a suite module, a hand-written graph (a dict, or its
+#: A `@graph_generator` function of a suite module, a hand-written graph (a dict, or its
 #: text verbatim), or a project's own `tatolab run`.
 StreamOrGraph = Any
 
 
 class StreamFunctionNotRunnableFromTheSuiteProject(ValueError):
-    """A `@stream` function whose node classes a one-stream project could not import."""
+    """A `@graph_generator` function whose node classes a one-stream project could not import."""
 
 
 def write_the_project_file_unless_there(
@@ -153,21 +153,39 @@ def stream_asset_held_at(graph_document_path: Path) -> "str | None":
 
 
 def graph_nodes_holding_a_uuid_each(graph: "dict[str, Any]", asset: str) -> "dict[str, Any]":
-    """`graph` with a UUID given to each node holding no `id`, as the runtime gives one: the
-    same UUID for a node of one name in every write of one stream asset."""
-    nodes = graph.get("nodes")
+    """`graph` with a UUID given to each node holding no `id` at every level, as the runtime
+    gives one: the same UUID for a node of one path of names in every write of one stream
+    asset."""
+    return nodes_holding_a_uuid_each(graph, uuid.UUID(asset), "")
+
+
+def nodes_holding_a_uuid_each(
+    level: "dict[str, Any]", asset_namespace: uuid.UUID, path_of_names: str
+) -> "dict[str, Any]":
+    """`level` — a graph or a fragment — with a UUID given to each node holding none, inside
+    each fragment it holds too."""
+    nodes = level.get("nodes")
     if not isinstance(nodes, list):
-        return graph
-    asset_namespace = uuid.UUID(asset)
-    return {
-        **graph,
-        "nodes": [
-            {"id": str(uuid.uuid5(asset_namespace, str(node.get("name", "")))), **node}
-            if isinstance(node, dict) and "id" not in node
-            else node
-            for node in nodes
-        ],
-    }
+        return level
+    nodes_with_a_uuid: "list[Any]" = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            nodes_with_a_uuid.append(node)
+            continue
+        node_path = f"{path_of_names}{node.get('name', '')}"
+        node_with_a_uuid: "dict[str, Any]" = (
+            node if "id" in node else {"id": str(uuid.uuid5(asset_namespace, node_path)), **node}
+        )
+        fragment = node_with_a_uuid.get("fragment")
+        if isinstance(fragment, dict):
+            node_with_a_uuid = {
+                **node_with_a_uuid,
+                "fragment": nodes_holding_a_uuid_each(
+                    fragment, asset_namespace, f"{node_path}/"
+                ),
+            }
+        nodes_with_a_uuid.append(node_with_a_uuid)
+    return {**level, "nodes": nodes_with_a_uuid}
 
 
 def refuse_a_constant_json_does_not_carry(constant: str) -> Any:
@@ -270,7 +288,7 @@ def write_a_one_stream_project_of_a_suite_stream_function(
     link_every_suite_directory_entry_into(project_directory)
     write_the_project_file_unless_there(project_directory)
     write_a_graph_document(
-        project_directory, qualified_name, compile_stream_to_graph(stream_function)
+        project_directory, qualified_name, run_graph_generator(stream_function)
     )
     return TatolabRunOfAProject(working_directory=project_directory)
 
@@ -412,10 +430,10 @@ def write_a_hand_written_graph_project(
 
 
 def write_the_graph_documents_the_stream_py_compiles_to(project_directory: Path) -> "list[str]":
-    """Compile every `@stream` of the `stream.py` at `project_directory` in the suite venv and
+    """Compile every `@graph_generator` of the `stream.py` at `project_directory` in the suite venv and
     write each graph as `streams/<function>.graph.json` beside the project file, keeping the
-    stream asset of a document already there and removing each document no `@stream` gives
-    now; return the stream names. A `stream.py` that does not import, defines no `@stream` or
+    stream asset of a document already there and removing each document no `@graph_generator` gives
+    now; return the stream names. A `stream.py` that does not import, defines no `@graph_generator` or
     holds one that raises fails the test with why."""
     finished = subprocess.run(
         [str(SUITE_VENV_INTERPRETER), *STREAM_PY_COMPILE_INVOCATION],

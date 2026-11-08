@@ -31,7 +31,7 @@ from microphone_source_streams import (
     microphone_source_naming_an_unopenable_device,
     one_microphone_source_left_unnamed,
 )
-from tatolab.stream import compile_stream_to_graph
+from tatolab.stream import run_graph_generator
 
 READINESS_TIMEOUT_SECONDS = 10.0
 MICROPHONE_NODE_NAME = "microphonesource"
@@ -49,7 +49,7 @@ DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK = 100_000
 def test_node_name_defaults_to_the_type_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]",
 ):
-    graph = compile_stream_to_graph(one_microphone_source_left_unnamed)
+    graph = run_graph_generator(one_microphone_source_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == [MICROPHONE_NODE_NAME]
 
     outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)

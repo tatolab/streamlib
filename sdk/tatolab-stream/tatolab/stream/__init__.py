@@ -3,8 +3,9 @@
 
 """What a stream or node module imports.
 
-A stream is a `@stream` function that adds and links nodes on a
-`StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
+A graph generator is a `@graph_generator` function that adds and links nodes on a
+`StreamBuilder`; `run_graph_generator` returns the graph it builds, and one
+generator `add`ed in another is stored inside its graph as a fragment. A node
 declares its execution with `@node.process` and its ports as `Input` and `Output` class
 attributes of one family each, and receives a capability-typed context in every lifecycle hook. The contexts, link
 endpoints, GPU classes and timer a node is handed while it runs are
@@ -97,6 +98,7 @@ from ._graph_variable_nodes import GetVariable as GetVariable
 from ._graph_variable_nodes import GetVariableConfig as GetVariableConfig
 from ._graph_variable_nodes import SetVariable as SetVariable
 from ._graph_variable_nodes import SetVariableConfig as SetVariableConfig
+from ._stream_graph_builder import GraphFragmentReference as GraphFragmentReference
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
@@ -107,8 +109,8 @@ from ._stream_graph_builder import (
     SoleReferrerNodeReferenceToNodeType as SoleReferrerNodeReferenceToNodeType,
 )
 from ._stream_graph_builder import StreamBuilder as StreamBuilder
-from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
-from ._stream_graph_builder import stream as stream
+from ._stream_graph_builder import graph_generator as graph_generator
+from ._stream_graph_builder import run_graph_generator as run_graph_generator
 from .claimed_surface_pixel_access import (
     ClaimedSurfacePixelAccess as ClaimedSurfacePixelAccess,
 )
@@ -166,6 +168,7 @@ __all__ = [
     "DEFAULT_SCALED_STREAM_CLOCK_STEP_NS",
     "GetVariable",
     "GetVariableConfig",
+    "GraphFragmentReference",
     "GraphInput",
     "GraphInputConfig",
     "GraphOutput",
@@ -233,13 +236,13 @@ __all__ = [
     "StreamClockReading",
     "Time",
     "clock",
-    "compile_stream_to_graph",
     "from_config",
+    "graph_generator",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log",
     "monotonic_now_ns",
     "node",
+    "run_graph_generator",
     "start_monotonic_timer",
-    "stream",
     "stream_facts",
 ]

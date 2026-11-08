@@ -8,7 +8,7 @@ a timestamp or worker-thread scenario is a source into the sink that reports
 what it read.
 """
 
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 import capability_context_probes
 from zero_argument_process_processor import ZeroArgumentProcess
@@ -22,53 +22,53 @@ def _add_a_source_into_a_reporting_sink(
     stream_builder.connect(source.output("bags_to_downstream"), sink.input("bags_from_upstream"))
 
 
-@stream
+@graph_generator
 def setup_context_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.SetupContextProbe)
 
 
-@stream
+@graph_generator
 def process_context_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.ProcessContextProbe)
 
 
-@stream
+@graph_generator
 def config_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.ConfigProbe)
 
 
-@stream
+@graph_generator
 def time_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.TimeProbe)
 
 
-@stream
+@graph_generator
 def context_stasher_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.ContextStasher)
 
 
-@stream
+@graph_generator
 def pixel_buffer_acquirer_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.PixelBufferAcquirer)
 
 
-@stream
+@graph_generator
 def repeated_pixel_buffer_acquirer_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.RepeatedPixelBufferAcquirer)
 
 
-@stream
+@graph_generator
 def worker_thread_privileged_constructor_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(capability_context_probes.WorkerThreadPrivilegedConstructor)
 
 
-@stream
+@graph_generator
 def one_config_probe_with_gain_and_label(stream_builder: StreamBuilder) -> None:
     """A `ConfigProbe` configured with a gain and a label."""
     stream_builder.add(capability_context_probes.ConfigProbe, config={"gain": 2.5, "label": "left"})
 
 
-@stream
+@graph_generator
 def an_explicitly_stamped_source_into_a_timestamp_collecting_sink(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -79,7 +79,7 @@ def an_explicitly_stamped_source_into_a_timestamp_collecting_sink(
     )
 
 
-@stream
+@graph_generator
 def a_default_stamped_source_into_a_timestamp_collecting_sink(
     stream_builder: StreamBuilder,
 ) -> None:
@@ -90,7 +90,7 @@ def a_default_stamped_source_into_a_timestamp_collecting_sink(
     )
 
 
-@stream
+@graph_generator
 def a_worker_thread_source_into_a_worker_thread_bag_sink(stream_builder: StreamBuilder) -> None:
     _add_a_source_into_a_reporting_sink(
         stream_builder,
@@ -99,7 +99,7 @@ def a_worker_thread_source_into_a_worker_thread_bag_sink(stream_builder: StreamB
     )
 
 
-@stream
+@graph_generator
 def zero_argument_process(stream_builder: StreamBuilder) -> None:
     """The one processor whose `process` takes no ctx."""
     stream_builder.add(ZeroArgumentProcess)

@@ -19,16 +19,16 @@ read.
 ## What it is
 
 A stream is an ordinary Python project. You write nodes as Python classes and connect them in a
-function decorated `@stream`:
+function decorated `@graph_generator`:
 
 ```python
 from tatolab.camera import CameraSource
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from nodes.halftone_lens_effect import HalftoneLensEffect
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     camera = stream_builder.add(CameraSource)
     effect = stream_builder.add(HalftoneLensEffect)
@@ -40,7 +40,11 @@ other. `tatolab dev` runs it in the runtime. Each node runs in its own process, 
 blocks another. Tato Studio's viewer shows any node's output on the machine, and the
 `tatolab-moq` gateway nodes send one to a MoQ relay, where other streams and machines read it.
 
-This package holds the authoring API (`@stream`, `@node.process`, `StreamBuilder`), typed classes for
+A generator may `add` another generator as it adds a node class, its keyword arguments the settings
+the inner generator promotes. The inner graph is stored as a fragment, whose `GraphInput` and
+`GraphOutput` nodes are its ports, and it runs flattened under its path of names (`look/soft/blur`).
+
+This package holds the authoring API (`@graph_generator`, `@node.process`, `StreamBuilder`), typed classes for
 every built-in node (the converters between the Image, Array, Channels and Records families), and
 the protocols your nodes are handed at run time. It installs and imports without the runtime,
 with complete type hints, so your editor, type checker and unit tests work on any machine.
