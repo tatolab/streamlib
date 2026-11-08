@@ -4,10 +4,10 @@
 """The two processors this wheel supplies.
 
 Both sit on the encoded side of the codec blocks and touch no raw frame, no
-surface and no GPU: `WhipPublisher` consumes the media frames `H264Encoder` and
-`OpusEncoder` publish, and `WhepPlayer` writes the media frames `H264Decoder`
-and `OpusDecoder` consume — hang's legacy container, a QUIC varint timestamp in
-microseconds and then the Annex-B access unit or Opus packet. The codec, the
+surface and no GPU: `WhipPublisher` consumes the Annex-B access units and Opus
+packets `H264Encoder` and `OpusEncoder` publish, and `WhepPlayer` writes the
+ones `H264Decoder` and `OpusDecoder` consume, each bare and stamped on its
+message. The codec, the
 coded extent and the channel count ride the ports' stream facts. Each runs
 in its own helper process. The publisher calls this wheel's own Rust from its
 `process()`; the player lends its two output ports to a thread of this wheel's
@@ -224,7 +224,7 @@ class WhipPublisher:
         Packets,
         delivery="ordered",
         requires_codec=("h264", "opus"),
-        description="H.264 or Opus media frames; each inbound link becomes one track",
+        description="H.264 access units or Opus packets; each inbound link becomes one track",
     )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -266,14 +266,14 @@ class WhipPublisher:
         session = self._connected_session()
         try:
             if track.kind == "video":
-                session.write_video_media_frame(message.payload, message.timestamp_ns)
+                session.write_video_access_unit(message.payload, message.timestamp_ns)
             else:
-                session.write_audio_media_frame(message.payload)
-        except ValueError as refused_media_frame:
+                session.write_audio_opus_packet(message.payload)
+        except ValueError as refused_unit:
             raise ValueError(
                 f"WhipPublisher: a message on `{message.inbound_link}` is "
-                f"refused: {refused_media_frame}"
-            ) from refused_media_frame
+                f"refused: {refused_unit}"
+            ) from refused_unit
         self._report_progress()
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
@@ -387,7 +387,7 @@ class WhepPlayerConfig:
     description="Plays encoded video and audio back from a WHEP endpoint",
 )
 class WhepPlayer:
-    """One WHEP session in, media frames out.
+    """One WHEP session in, access units and Opus packets out.
 
     Two output ports rather than one per track: ports are declared statically,
     and a decoder downstream wants a port it can name when the graph is wired.
@@ -409,9 +409,9 @@ class WhepPlayer:
         self._reading_thread: "_native.WhepPlayerThread | None" = None
 
     encoded_video = Output(
-        Packets, codec="h264", description="H.264 access units, as media frames"
+        Packets, codec="h264", description="H.264 access units, Annex-B, one per message"
     )
-    encoded_audio = Output(Packets, codec="opus", description="Opus packets, as media frames")
+    encoded_audio = Output(Packets, codec="opus", description="Opus packets, one per message")
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Lend both outputs to a reading thread of this wheel's Rust.

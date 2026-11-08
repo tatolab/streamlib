@@ -4,7 +4,6 @@
 //! Publishing encoded media to a WHIP endpoint.
 
 use crate::error::{Result, WebRtcExtensionError};
-use crate::hang_legacy_container_media_frame::codec_payload_of_media_frame;
 use crate::http_signalling::WhipWhepSignallingClient;
 use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, describe_opus_packet};
 use crate::session_description::opus_format_parameters_for_offer;
@@ -109,26 +108,27 @@ impl WhipPublishingSession {
         })
     }
 
-    /// Hand the whole Annex-B access unit `media_frame` carries after its
-    /// varint to the H.264 payloader, which does the STAP-A aggregation and
-    /// FU-A fragmentation itself.
+    /// Hand the whole Annex-B access unit to the H.264 payloader, which does
+    /// the STAP-A aggregation and FU-A fragmentation itself.
     ///
     /// `duration` advances the track's RTP clock to the *next* sample, so it is
     /// the gap to the frame after this one and not this frame's own length.
-    pub(crate) async fn write_video_media_frame(
+    pub(crate) async fn write_video_access_unit(
         &self,
-        media_frame: Bytes,
+        annex_b_access_unit: Bytes,
         duration: Duration,
     ) -> Result<()> {
-        let annex_b_access_unit = codec_payload_of_media_frame(&media_frame)?;
+        if annex_b_access_unit.is_empty() {
+            return Err(WebRtcExtensionError::Refused {
+                what: "an empty message is no H.264 access unit".to_owned(),
+            });
+        }
         write_sample(self.video_track.as_ref(), annex_b_access_unit, duration).await
     }
 
-    /// Hand the Opus packet `media_frame` carries after its varint to the
-    /// audio track, its duration taken from the packet's own TOC rather than
+    /// Hand the Opus packet to the audio track, its duration taken from the packet's own TOC rather than
     /// assumed to be one 20 ms frame.
-    pub(crate) async fn write_audio_media_frame(&self, media_frame: Bytes) -> Result<()> {
-        let opus_packet = codec_payload_of_media_frame(&media_frame)?;
+    pub(crate) async fn write_audio_opus_packet(&self, opus_packet: Bytes) -> Result<()> {
         let sample_count = describe_opus_packet(&opus_packet)
             .map_err(|refusal| WebRtcExtensionError::Refused {
                 what: refusal.to_string(),

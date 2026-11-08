@@ -31,7 +31,6 @@ use crate::audio_window::DecodedAudioBlock;
 use crate::audio_window_to_encoded_packet_encoder::{
     OPUS_RFC6381_CODEC_STRING, OPUS_SAMPLE_RATE_HZ,
 };
-use crate::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 use crate::message_group_loss_recovery_gate::{
     MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
 };
@@ -177,7 +176,7 @@ pub struct EncodedPacketToAudioBlockDecoder {
 }
 
 impl EncodedPacketToAudioBlockDecoder {
-    /// Decode one arriving message — a media frame carrying one Opus packet —
+    /// Decode one arriving message — one bare Opus packet —
     /// in the stream format the upstream port's stream facts name, or hand
     /// back `None` when the doctrine says to discard it or when the whole
     /// packet was encoder priming.
@@ -209,18 +208,17 @@ impl EncodedPacketToAudioBlockDecoder {
         disposition: MessageGroupLossRecoveryDisposition,
         upstream_packets_stream_facts: Option<&UpstreamPacketsStreamFacts>,
     ) -> Result<Option<DecodedAudioBlock>> {
-        let media_frame =
-            read_hang_legacy_container_media_frame(message.payload_bytes).map_err(|refusal| {
-                OpusCodecRefusal(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
-            })?;
-        let stream_format = self.stream_format_for_the_packet(
-            upstream_packets_stream_facts,
-            media_frame.codec_payload_bytes,
-        )?;
+        if message.payload_bytes.is_empty() {
+            return Err(OpusCodecRefusal(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: an empty message is no Opus packet"
+            )));
+        }
+        let stream_format = self
+            .stream_format_for_the_packet(upstream_packets_stream_facts, message.payload_bytes)?;
         self.decode_one_packet_in_stream_format(
             message,
             disposition,
-            media_frame.codec_payload_bytes,
+            message.payload_bytes,
             stream_format,
         )
     }
@@ -514,25 +512,17 @@ mod tests {
         }
     }
 
-    /// One media frame, as the encoder publishes it, arriving on the link.
+    /// One Opus packet, as the encoder publishes it, arriving on the link.
     fn arriving(
-        media_frame: &[u8],
+        opus_packet_bytes: &[u8],
         timestamp_ns: i64,
         lost_since_last_read: u64,
     ) -> OwnedArrivingMessage {
         OwnedArrivingMessage {
-            payload_bytes: media_frame.to_vec(),
+            payload_bytes: opus_packet_bytes.to_vec(),
             timestamp_ns,
             lost_since_last_read,
         }
-    }
-
-    /// The Opus packet a media frame carries.
-    fn opus_packet_of(media_frame: &[u8]) -> Vec<u8> {
-        read_hang_legacy_container_media_frame(media_frame)
-            .expect("a media frame")
-            .codec_payload_bytes
-            .to_vec()
     }
 
     /// A 20 ms window of samples the encoder is handed.
@@ -550,7 +540,6 @@ mod tests {
                 channels: self.channels,
                 sample_count: WINDOW_SAMPLE_COUNT,
                 dtype: AudioSampleDtype::F32,
-                first_sample_timestamp_ns: self.first_sample_timestamp_ns,
             }
         }
     }
@@ -685,7 +674,7 @@ mod tests {
         let mut upstream_packets_stream_facts = None;
         for window_index in 0..windows {
             let window = a_window_from(&source, channels, window_index, anchor_ns);
-            let media_frame = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&window.borrowed())
                 .expect("encodes")
                 .expect("publishes a packet");
@@ -698,7 +687,7 @@ mod tests {
                 .push(window.first_sample_timestamp_ns);
             if let Some(block) = decoder
                 .decode_one_arriving_message(
-                    &arriving(&media_frame, window.first_sample_timestamp_ns, 0).borrowed(),
+                    &arriving(&opus_packet_bytes, window.first_sample_timestamp_ns, 0).borrowed(),
                     upstream_packets_stream_facts.as_ref(),
                 )
                 .expect("decodes")
@@ -827,7 +816,7 @@ mod tests {
         let mut published_after_the_loss = Vec::new();
         for window_index in 0..12u32 {
             let window = a_window_from(&source, channels, window_index, 0);
-            let media_frame = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&window.borrowed())
                 .expect("encodes")
                 .expect("publishes");
@@ -843,7 +832,7 @@ mod tests {
             let block = decoder
                 .decode_one_arriving_message(
                     &arriving(
-                        &media_frame,
+                        &opus_packet_bytes,
                         window.first_sample_timestamp_ns,
                         lost_since_last_read,
                     )
@@ -890,7 +879,7 @@ mod tests {
         for (window_index, channels) in [2u32, 2, 6, 6].into_iter().enumerate() {
             let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
             let window = a_window_from(&source, channels, 0, window_index as i64 * 20_000_000);
-            let media_frame = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&window.borrowed())
                 .expect("encodes")
                 .expect("publishes");
@@ -899,7 +888,7 @@ mod tests {
             }
             if let Some(block) = decoder
                 .decode_one_arriving_message(
-                    &arriving(&media_frame, window.first_sample_timestamp_ns, 0).borrowed(),
+                    &arriving(&opus_packet_bytes, window.first_sample_timestamp_ns, 0).borrowed(),
                     upstream_packets_stream_facts.as_ref(),
                 )
                 .expect("decodes across the re-mint")
@@ -924,7 +913,7 @@ mod tests {
         );
     }
 
-    fn one_stereo_media_frame() -> Vec<u8> {
+    fn one_stereo_packet() -> Vec<u8> {
         let source = a_tone(2, WINDOW_SAMPLE_COUNT);
         AudioWindowToEncodedPacketEncoder::default()
             .encode_one_window(&a_window_from(&source, 2, 0, 0).borrowed())
@@ -932,20 +921,15 @@ mod tests {
             .expect("publishes")
     }
 
-    fn one_stereo_packet() -> Vec<u8> {
-        opus_packet_of(&one_stereo_media_frame())
-    }
-
     /// An unbounded `pre_skip` would trim every sample of every packet for the
     /// rest of the run, and a decoder that goes silent without saying why is
     /// the concealment this module refuses to do.
     #[test]
     fn a_pre_skip_past_a_whole_packet_is_refused_rather_than_silently_swallowing_the_run() {
-        let media_frame = one_stereo_media_frame();
-        let opus_packet_bytes = opus_packet_of(&media_frame);
+        let opus_packet_bytes = one_stereo_packet();
         let refusal = EncodedPacketToAudioBlockDecoder::default()
             .decode_one_packet_in_stream_format(
-                &arriving(&media_frame, 0, 0).borrowed(),
+                &arriving(&opus_packet_bytes, 0, 0).borrowed(),
                 MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
                 &opus_packet_bytes,
                 OpusIdentificationHeader {
@@ -967,7 +951,7 @@ mod tests {
         // The bound refuses only the incredible: a real lookahead still trims.
         let block = EncodedPacketToAudioBlockDecoder::default()
             .decode_one_packet_in_stream_format(
-                &arriving(&media_frame, 0, 0).borrowed(),
+                &arriving(&opus_packet_bytes, 0, 0).borrowed(),
                 MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart,
                 &opus_packet_bytes,
                 OpusIdentificationHeader {
@@ -1006,8 +990,7 @@ mod tests {
     /// count the TOC codes and with nothing trimmed.
     #[test]
     fn with_no_opus_head_upstream_the_toc_names_the_channels_and_nothing_is_trimmed() {
-        let media_frame = one_stereo_media_frame();
-        let opus_packet_bytes = opus_packet_of(&media_frame);
+        let opus_packet_bytes = one_stereo_packet();
         let mut decoder = EncodedPacketToAudioBlockDecoder::default();
         assert_eq!(
             decoder
@@ -1019,7 +1002,7 @@ mod tests {
             }
         );
         let block = decoder
-            .decode_one_arriving_message(&arriving(&media_frame, 0, 0).borrowed(), None)
+            .decode_one_arriving_message(&arriving(&opus_packet_bytes, 0, 0).borrowed(), None)
             .unwrap()
             .expect("publishes a block");
         assert_eq!(block.sample_count, WINDOW_SAMPLE_COUNT);
@@ -1056,12 +1039,12 @@ mod tests {
     }
 
     #[test]
-    fn a_message_that_is_no_media_frame_is_refused_by_name() {
+    fn an_empty_message_is_refused_by_name_rather_than_concealed() {
         let refusal = EncodedPacketToAudioBlockDecoder::default()
             .decode_one_arriving_message(&arriving(&[], 0, 0).borrowed(), None)
             .expect_err("refused")
             .to_string();
-        assert!(refusal.contains("media frame"), "{refusal}");
+        assert!(refusal.contains("no Opus packet"), "{refusal}");
     }
 
     #[test]
@@ -1116,7 +1099,7 @@ mod tests {
         let mut blocks = Vec::new();
         for window_index in 0..4u32 {
             let window = a_window_from(&source, channels, window_index, 0);
-            let media_frame = encoder
+            let opus_packet_bytes = encoder
                 .encode_one_window(&window.borrowed())
                 .expect("encodes")
                 .expect("publishes");
@@ -1131,13 +1114,14 @@ mod tests {
                         &unreadable_message_reporting_a_loss.borrowed(),
                         upstream_packets_stream_facts.as_ref(),
                     )
-                    .expect_err("an empty message is no media frame");
+                    .expect_err("an empty message is no Opus packet");
                 continue;
             }
             blocks.extend(
                 decoder
                     .decode_one_arriving_message(
-                        &arriving(&media_frame, window.first_sample_timestamp_ns, 0).borrowed(),
+                        &arriving(&opus_packet_bytes, window.first_sample_timestamp_ns, 0)
+                            .borrowed(),
                         upstream_packets_stream_facts.as_ref(),
                     )
                     .expect("decodes"),

@@ -20,7 +20,7 @@ __all__ = [
 
 @final
 class AudioWindowToEncodedPacketEncoder:
-    """Encodes 20 ms windows of audio into Opus media frames."""
+    """Encodes 20 ms windows of audio into Opus packets."""
 
     def __new__(
         cls, bitrate_bps: int | None, application: str
@@ -34,10 +34,9 @@ class AudioWindowToEncodedPacketEncoder:
         channels: int,
         sample_count: int,
         dtype: str,
-        first_sample_timestamp_ns: int,
     ) -> bytes | None:
-        """One media frame stamped at the window's first sample, or `None` while
-        the encoder discards a source it already refused. A window that is not
+        """One Opus packet, or `None` while the encoder discards a source it
+        already refused. A window that is not
         what the port's contract promised raises `ValueError` naming it."""
 
     def take_stream_facts_owed_to_the_port(self) -> OpusEncoderPortStreamFacts | None:
@@ -63,7 +62,7 @@ class OpusEncoderPortStreamFacts:
 
 @final
 class EncodedPacketToAudioBlockDecoder:
-    """Decodes Opus media frames into audio blocks."""
+    """Decodes Opus packets into audio blocks."""
 
     def __new__(cls) -> EncodedPacketToAudioBlockDecoder: ...
     def decode_one_arriving_message(

@@ -8,8 +8,8 @@ error — one line per packet or block rather than one array at the
 end, so a run that stalls half way still says how far it got.
 
 The encoded probe reads the encoder's output the way a moq-dev player does:
-each message a media frame — the varint timestamp, then one Opus packet — and
-the port's catalog entry carrying the `OpusHead`. The decoded probe reads
+each message one bare Opus packet, stamped on the message, and the port's
+stream facts carrying the `OpusHead`. The decoded probe reads
 each Channels block's own stamp, because that stamp is what the trim and the
 derived-stamp assertions are about.
 
@@ -23,7 +23,6 @@ import math
 import struct
 
 import numpy
-from hang_media_frame_reading import split_hang_legacy_container_media_frame
 from tatolab.stream import (
     Channels,
     Input,
@@ -124,7 +123,7 @@ def opus_head_channels_and_pre_skip(hex_encoded_opus_head: str) -> tuple[int, in
 
 @node.process
 class EncodedOpusMediaFrameProbe:
-    """Reads the encoder's output as media frames and reports each packet.
+    """Reads the encoder's output as Opus packets and reports each one.
 
     No group gate, unlike the video probe: every Opus packet opens a group, so
     a reader enters wherever it attached.
@@ -141,9 +140,7 @@ class EncodedOpusMediaFrameProbe:
         message = ctx.inputs.read_message(ENCODED_PORT)
         if message is None:
             return
-        varint_timestamp_microseconds, opus_packet = split_hang_legacy_container_media_frame(
-            message.payload
-        )
+        opus_packet = bytes(memoryview(message.payload).cast("B"))
         upstream_stream_facts = ctx.inputs.upstream_stream_facts(ENCODED_PORT)
         if not isinstance(upstream_stream_facts, PacketsStreamFacts):
             raise RuntimeError(
@@ -159,7 +156,7 @@ class EncodedOpusMediaFrameProbe:
                 {
                     "starts_group": message.starts_group,
                     "lost_since_last_read": message.lost_since_last_read,
-                    "varint_timestamp_microseconds": varint_timestamp_microseconds,
+                    "toc_byte": opus_packet[0] if opus_packet else None,
                     "timestamp_ns": message.timestamp_ns,
                     "byte_count": len(opus_packet),
                     "stream_facts_codec": upstream_stream_facts.rfc6381_codec,

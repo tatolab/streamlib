@@ -140,7 +140,7 @@ fn json_string(text: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MessageTheWhepPlayerWrites {
     pub port: WhepPlayerOutputPort,
-    pub media_frame: Vec<u8>,
+    pub packets_unit_bytes: Vec<u8>,
     pub timestamp_ns: i64,
     /// Only a sync point opens a group on the video port; every Opus packet
     /// opens one.
@@ -155,7 +155,7 @@ impl MessageTheWhepPlayerWrites {
         Ok(match received_media {
             ReceivedMedia::Video(access_unit) => Self {
                 port: WhepPlayerOutputPort::EncodedVideo,
-                media_frame: access_unit.media_frame_bytes()?,
+                packets_unit_bytes: access_unit.annex_b_access_unit,
                 timestamp_ns: access_unit.timestamp_ns,
                 starts_group: access_unit.is_sync_point,
                 stream_facts: WhepPlayerPacketsStreamFacts::Video {
@@ -166,7 +166,7 @@ impl MessageTheWhepPlayerWrites {
             },
             ReceivedMedia::Audio(packet) => Self {
                 port: WhepPlayerOutputPort::EncodedAudio,
-                media_frame: packet.media_frame_bytes()?,
+                packets_unit_bytes: packet.opus_packet.to_vec(),
                 timestamp_ns: packet.timestamp_ns,
                 starts_group: true,
                 stream_facts: WhepPlayerPacketsStreamFacts::Audio {
@@ -192,7 +192,7 @@ pub(crate) trait WhepPlayerOutputPorts {
     fn write(
         &self,
         port: WhepPlayerOutputPort,
-        media_frame: &[u8],
+        packets_unit_bytes: &[u8],
         timestamp_ns: i64,
         starts_group: bool,
     ) -> Result<(), String>;
@@ -273,7 +273,7 @@ impl WhepPlayerStopSignal {
 struct WhatThePlayerStated {
     stream_facts_by_port: [Option<WhepPlayerPacketsStreamFacts>; 2],
     media_frames_written_by_port: [u64; 2],
-    reported_an_oversized_media_frame: bool,
+    reported_an_oversized_packets_unit: bool,
 }
 
 /// Why a drain ended.
@@ -391,24 +391,24 @@ fn write_one_message(
         );
         *stream_facts_stated = Some(message.stream_facts.clone());
     }
-    if message.media_frame.len() > HELPER_LINK_PAYLOAD_CEILING_BYTES
-        && !stated.reported_an_oversized_media_frame
+    if message.packets_unit_bytes.len() > HELPER_LINK_PAYLOAD_CEILING_BYTES
+        && !stated.reported_an_oversized_packets_unit
     {
-        stated.reported_an_oversized_media_frame = true;
+        stated.reported_an_oversized_packets_unit = true;
         output_ports.log(
             WhepPlayerLogLevel::Error,
             &format!(
-                "WhepPlayer: a {}-byte media frame on `{}` is past the \
+                "WhepPlayer: a {}-byte unit on `{}` is past the \
                  {HELPER_LINK_PAYLOAD_CEILING_BYTES}-byte link ceiling and will be dropped \
                  without reaching the decoder. Reported once.",
-                message.media_frame.len(),
+                message.packets_unit_bytes.len(),
                 port.port_name()
             ),
         );
     }
     output_ports.write(
         port,
-        &message.media_frame,
+        &message.packets_unit_bytes,
         message.timestamp_ns,
         message.starts_group,
     )?;

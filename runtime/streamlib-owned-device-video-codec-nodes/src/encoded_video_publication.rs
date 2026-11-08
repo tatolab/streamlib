@@ -2,26 +2,24 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Publishing encoded access units on `encoded_video`: the Packets stream
-//! facts a session's first sync point states, set ahead of the media frame
+//! facts a session's first sync point states, set ahead of the access unit
 //! they describe, and a refused write dropping to the next sync point.
 
 use streamlib_video_bitstream::VideoCodecElementaryStream;
 use streamlib_video_bitstream::annex_b_access_unit::parameter_sets_of_annex_b_access_unit;
 
-use crate::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
-
 /// The family whose stream facts `encoded_video` states.
 pub const ENCODED_VIDEO_STREAM_FACTS_FAMILY: &str = "packets";
 
-/// The output port encoded media frames are written to.
+/// The output port encoded access units are written to.
 pub trait EncodedVideoOutputPort {
     /// Replace the port's stream facts of `family` with `stream_facts_json`,
     /// one JSON object in `PacketsStreamFacts`' field names.
     fn set_stream_facts(&self, family: &str, stream_facts_json: &str) -> Result<(), String>;
-    /// Write one media frame, opening a group when `starts_group`.
+    /// Write one Annex-B access unit, opening a group when `starts_group`.
     fn write(
         &self,
-        media_frame: &[u8],
+        annex_b_access_unit: &[u8],
         timestamp_ns: i64,
         starts_group: bool,
     ) -> Result<(), String>;
@@ -51,7 +49,6 @@ pub struct EncodedVideoPublication {
     stream_facts_on_the_port: Option<String>,
     stream_facts_derived_for_this_session: bool,
     dropping_access_units_until_the_next_sync_point: bool,
-    media_frame_scratch: Vec<u8>,
     access_units_dropped_after_a_refusal: u64,
 }
 
@@ -63,7 +60,6 @@ impl EncodedVideoPublication {
             stream_facts_on_the_port: None,
             stream_facts_derived_for_this_session: false,
             dropping_access_units_until_the_next_sync_point: false,
-            media_frame_scratch: Vec::new(),
             access_units_dropped_after_a_refusal: 0,
         }
     }
@@ -115,24 +111,8 @@ impl EncodedVideoPublication {
                 self.access_units_dropped_after_a_refusal += 1;
                 continue;
             }
-            if write_hang_legacy_container_media_frame(
-                &mut self.media_frame_scratch,
-                timestamp_ns,
-                &access_unit.annex_b_access_unit_bytes,
-            )
-            .is_none()
-            {
-                outcome.refusal.get_or_insert_with(|| {
-                    format!(
-                        "a frame stamped {timestamp_ns} ns cannot be written: the hang \
-                         container's timestamp is an unsigned QUIC varint in microseconds"
-                    )
-                });
-                self.access_units_dropped_after_a_refusal += 1;
-                continue;
-            }
             match output_port.write(
-                &self.media_frame_scratch,
+                &access_unit.annex_b_access_unit_bytes,
                 timestamp_ns,
                 access_unit.is_sync_point,
             ) {
@@ -142,7 +122,7 @@ impl EncodedVideoPublication {
                     self.access_units_dropped_after_a_refusal += 1;
                     outcome.next_frame_must_be_a_sync_point = true;
                     outcome.refusal.get_or_insert_with(|| {
-                        format!("a media frame write was refused: {refusal}")
+                        format!("an access unit write was refused: {refusal}")
                     });
                 }
             }
@@ -200,16 +180,18 @@ mod tests {
 
         fn write(
             &self,
-            media_frame: &[u8],
+            annex_b_access_unit: &[u8],
             timestamp_ns: i64,
             starts_group: bool,
         ) -> Result<(), String> {
             if *self.refuse_writes.borrow() {
                 return Err("over the channel ceiling".to_owned());
             }
-            self.writes
-                .borrow_mut()
-                .push((media_frame.to_vec(), timestamp_ns, starts_group));
+            self.writes.borrow_mut().push((
+                annex_b_access_unit.to_vec(),
+                timestamp_ns,
+                starts_group,
+            ));
             Ok(())
         }
     }
@@ -229,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn the_first_sync_point_states_the_stream_facts_once_before_its_media_frame() {
+    fn the_first_sync_point_states_the_stream_facts_once_before_its_access_unit() {
         let port = RecordingOutputPort::default();
         let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
 
@@ -248,7 +230,7 @@ mod tests {
         assert_eq!(writes.len(), 2);
         assert_eq!((writes[0].1, writes[0].2), (1_000_000, true));
         assert_eq!((writes[1].1, writes[1].2), (2_000_000, false));
-        assert_eq!(writes[0].0[..2], [0x43, 0xE8]);
+        assert_eq!(writes[0].0, sync_point().annex_b_access_unit_bytes);
     }
 
     #[test]

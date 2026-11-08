@@ -19,7 +19,6 @@ use tatolab_module_sdk::{
 
 pub mod encoded_video_group_entry_gate;
 pub mod encoded_video_publication;
-pub mod hang_legacy_container_media_frame;
 pub mod image_frame_on_the_video_port;
 #[cfg(target_os = "linux")]
 pub mod owned_device_video_decoder;
@@ -38,7 +37,7 @@ use crate::video_encoder_settings::VideoEncoderSettings;
 /// The Image port decoded pictures travel on: an encoder's input, a
 /// decoder's output.
 pub const VIDEO_PORT: &str = "video";
-/// The Packets port media frames travel on: an encoder's output, a decoder's
+/// The Packets port access units travel on: an encoder's output, a decoder's
 /// input.
 pub const ENCODED_VIDEO_PORT: &str = "encoded_video";
 
@@ -132,7 +131,7 @@ impl VideoCodecNodeThread {
         })
     }
 
-    /// Start a decoder thread decoding the media frames `encoded_video`
+    /// Start a decoder thread decoding the access units `encoded_video`
     /// receives onto `video`.
     pub fn start_decoder(
         node: VideoCodecNodeIdentity,
@@ -206,7 +205,7 @@ impl VideoCodecNodeThread {
     }
 }
 
-/// `encoded_video` as the publication writes it: each media frame one
+/// `encoded_video` as the publication writes it: each access unit one
 /// Packets unit of the node's codec.
 struct EncodedVideoLentByTheModuleHost<'port> {
     encoded_video_output: &'port ModuleHostOutputPort,
@@ -222,13 +221,13 @@ impl EncodedVideoOutputPort for EncodedVideoLentByTheModuleHost<'_> {
 
     fn write(
         &self,
-        media_frame: &[u8],
+        annex_b_access_unit: &[u8],
         timestamp_ns: i64,
         starts_group: bool,
     ) -> Result<(), String> {
         self.encoded_video_output
             .write_described(
-                media_frame,
+                annex_b_access_unit,
                 Some(timestamp_ns),
                 starts_group,
                 &self.packets_unit,

@@ -27,7 +27,6 @@ use crate::VideoCodecNodeIdentity;
 use crate::encoded_video_group_entry_gate::{
     EncodedVideoGroupEntryDisposition, EncodedVideoGroupEntryGate,
 };
-use crate::hang_legacy_container_media_frame::annex_b_access_unit_of_a_hang_legacy_container_media_frame;
 use crate::image_frame_on_the_video_port::{
     H273ColorVuiWireNames, image_frame_payload_descriptor_of_a_decoded_picture,
 };
@@ -153,9 +152,12 @@ impl VideoToolboxVideoDecoder {
         video_output: &ModuleHostOutputPort,
     ) -> Result<(), String> {
         let node_type_name = self.node.node_type_name;
-        let annex_b_access_unit =
-            annex_b_access_unit_of_a_hang_legacy_container_media_frame(media_frame.payload())
-                .map_err(|refusal| format!("{node_type_name}: {refusal}"))?;
+        let annex_b_access_unit = media_frame.payload();
+        if annex_b_access_unit.is_empty() {
+            return Err(format!(
+                "{node_type_name}: an empty message is no access unit"
+            ));
+        }
         let pictures = self
             .decompression_session
             .decode_annex_b_access_unit(annex_b_access_unit)

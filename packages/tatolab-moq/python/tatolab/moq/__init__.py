@@ -266,7 +266,10 @@ class MoqTrackSendConfig:
 @node.process(
     description=(
         "Writes each message of `content` to the `MoqTrack` it names.\n\n"
-        "Payload bytes go to the relay as written, stamped with the message's own stamp; "
+        "Payload bytes go to the relay as written, stamped with the message's own stamp, "
+        "inside hang's legacy container — the stamp as a QUIC varint in microseconds ahead "
+        "of the bytes — when the track's catalog entry names that container, as an entry "
+        "built from stream facts does; "
         "a message with `starts_group` set opens a new group at the relay, and the rest "
         "continue it. Under backpressure, or after a message reporting a loss, the rest "
         "of the group is dropped and the next group starts clean. The stream facts of "
@@ -372,9 +375,11 @@ class MoqTrackReceiveConfig:
     paced_by_real_time=True,
     description=(
         "Reads one track of a broadcast at the relay its `MoqGateway` dials.\n\n"
-        "`content` carries each object's payload bytes as the relay delivered them, the "
-        "first object of each group starting a group, and its catalog entry is the "
-        "track's own from the broadcast's catalog. Groups arrive in sequence order; a "
+        "`content` carries each object's payload bytes as the relay delivered them — on a "
+        "track whose catalog entry names hang's legacy container, the bytes after its "
+        "timestamp, stamped at that timestamp — the first object of each group starting a "
+        "group, and its stream facts are the ones the track's entry in the broadcast's "
+        "catalog states. Groups arrive in sequence order; a "
         "missing group is waited for until newer content runs `max_age` past it in the "
         "track's own timestamps, then given up and counted in the reader's "
         "`lost_since_last_read`, and the read resumes at the next group start. Stamps are "
@@ -395,7 +400,7 @@ class MoqTrackReceive:
         Packets,
         family_from=from_config("family"),
         codec=from_config("codec"),
-        description="Each object of the track, as the relay delivered it",
+        description="Each object of the track, out of hang's container when it rides one",
     )
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
