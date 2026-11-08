@@ -378,11 +378,11 @@ def _the_evaluate_entry_a_rust_function_node_exports(
         output_ports=tuple(output_port.name for output_port in declaration.output_ports),
         config_fields=tuple(config_field.name for config_field in declaration.config_fields),
         config_field_defaults={
-            config_field.name: config_field.default or 0.0 for config_field in declaration.config_fields
+            config_field.name: config_field.default for config_field in declaration.config_fields
         },
         config_field_default_factories={},
         state_fields=tuple(state_field.name for state_field in declaration.state_fields),
-        initial_state_values=tuple(state_field.default or 0.0 for state_field in declaration.state_fields),
+        initial_state_values=tuple(state_field.default for state_field in declaration.state_fields),
         is_stateful=declaration.state_parameter is not None,
         body_loaded_from_numbas_cache=False,
         compiled_wrapper_kept_alive=function_node,

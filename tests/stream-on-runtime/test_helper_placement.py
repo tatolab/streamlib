@@ -494,6 +494,7 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_t
         "rust_function_node_fixture:ScaleAndOffset",
         "rust_function_node_fixture:CountsItsOwnCalls",
     }
+    assert rust_node_types <= {graph_node["type"] for graph_node in graph["nodes"]}, graph["nodes"]
     for graph_node in graph["nodes"]:
         if graph_node["type"] in rust_node_types:
             assert (graph_node.get("kind"), graph_node.get("language")) == ("function", "rust"), (

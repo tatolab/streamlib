@@ -580,16 +580,24 @@ def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_p
                 "links_into": [],
             },
             {
-                "node": "weighted-1",
+                "node": "tally-1",
                 "breadcrumb_number": 1,
+                "import_path": f"{__name__}:tally",
+                "config": None,
+                "links_into": [{"port": "x", "from": {"node": "lfo-1", "port": "result"}}],
+            },
+            {
+                "node": "weighted-1",
+                "breadcrumb_number": 2,
                 "import_path": f"{__name__}:WeightedSumCountingItsCalls",
                 "config": {"weight": 4.0},
-                "links_into": [{"port": "x", "from": {"node": "lfo-1", "port": "result"}}],
+                "links_into": [{"port": "x", "from": {"node": "tally-1", "port": "result"}}],
             },
         ],
     }
     function_nodes_by_import_path = {
         f"{__name__}:lfo": lfo,
+        f"{__name__}:tally": tally,
         f"{__name__}:WeightedSumCountingItsCalls": WeightedSumCountingItsCalls,
     }
     feed_each_input_port_from_its_function_node_island(
@@ -599,6 +607,7 @@ def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_p
     payload = data_plane.read_from_input_port("weighted")
     assert payload is not None
     (weighted,) = struct.unpack("<d", bytes(payload))
-    assert weighted == pytest.approx(0.25), (
-        "the LFO starts at 0, which the Rust node weights to 0 and moves by its `bias` pin"
+    assert weighted == pytest.approx(3 * 4.0 + 0.25), (
+        "`tally` hands the Rust node 3, which it weights by its config's 4 and moves by its "
+        "`bias` pin's 0.25"
     )

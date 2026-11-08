@@ -7,7 +7,7 @@
 #![cfg(feature = "function-node")]
 
 use tatolab_module_sdk::function_node::{
-    FunctionNodeInputPin, FunctionNodeNamedValue, FunctionNodeRecord,
+    FunctionNodeInputPin, FunctionNodeNamedValue, FunctionNodeOutput, FunctionNodeRecord,
     FunctionNodeRecordFieldWithItsDefault, FunctionNodeValueType, State, Stateful, Time,
     function_node,
 };
@@ -69,6 +69,39 @@ fn accumulate(
             started: true,
         },
     )
+}
+
+#[function_node]
+fn output_values(input_values: f64) -> f64 {
+    input_values * 3.0
+}
+
+#[derive(Clone, Copy, Default)]
+struct PanicsWritingItsSecondValue {
+    first: f64,
+}
+
+impl FunctionNodeOutput for PanicsWritingItsSecondValue {
+    const OUTPUT_PORTS: &'static [FunctionNodeNamedValue] = &[
+        FunctionNodeNamedValue {
+            name: "first",
+            value_type: FunctionNodeValueType::Float,
+        },
+        FunctionNodeNamedValue {
+            name: "second",
+            value_type: FunctionNodeValueType::Float,
+        },
+    ];
+
+    fn write_function_node_output_values(&self, output_values: &mut [f64]) {
+        output_values[0] = self.first;
+        panic!("a writer that fails part-way");
+    }
+}
+
+#[function_node]
+fn writes_half_its_outputs_then_panics(x: f64) -> PanicsWritingItsSecondValue {
+    PanicsWritingItsSecondValue { first: x }
 }
 
 #[function_node]
@@ -242,6 +275,42 @@ fn a_panicking_call_is_refused_and_writes_nothing() {
     };
     assert_eq!(status, MODULE_HOST_TABLE_STATUS_REFUSED);
     assert_eq!(output_values, [7.0]);
+}
+
+#[test]
+fn a_function_named_like_the_entrys_own_values_still_evaluates() {
+    let declaration = output_values_function_node_declaration();
+    let mut evaluated = [0.0];
+    // SAFETY: one value per input pin and per output port.
+    let status = unsafe {
+        (declaration.evaluate_entry)(
+            [2.0].as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            evaluated.as_mut_ptr(),
+            0,
+        )
+    };
+    assert_eq!(status, MODULE_HOST_TABLE_STATUS_OK);
+    assert_eq!(evaluated, [6.0]);
+}
+
+#[test]
+fn an_output_writer_that_panics_part_way_leaves_every_output_unwritten() {
+    let declaration = writes_half_its_outputs_then_panics_function_node_declaration();
+    let mut output_values = [7.0, 7.0];
+    // SAFETY: one value per input pin and per output port.
+    let status = unsafe {
+        (declaration.evaluate_entry)(
+            [1.0].as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            output_values.as_mut_ptr(),
+            0,
+        )
+    };
+    assert_eq!(status, MODULE_HOST_TABLE_STATUS_REFUSED);
+    assert_eq!(output_values, [7.0, 7.0]);
 }
 
 #[cfg(feature = "pyo3")]

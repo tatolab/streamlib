@@ -8,6 +8,7 @@ through its evaluate entry."""
 from __future__ import annotations
 
 import ctypes
+import math
 from typing import Any
 
 import pytest
@@ -170,3 +171,26 @@ def ramp_stream(stream_builder: StreamBuilder) -> None:
 def test_a_stream_adds_it_by_its_import_path():
     graph = compile_stream_to_graph(ramp_stream)
     assert [graph_node["type"] for graph_node in graph["nodes"]] == [f"{__name__}:Ramp"]
+
+
+def test_a_call_to_a_node_built_for_another_table_major_is_refused_before_its_entry_runs():
+    built_for_another_major = node.rust_function(a_ramp_declaration(module_host_table_abi_major=2))
+    with pytest.raises(RuntimeError, match="module host table 2.12"):
+        built_for_another_major(now=0)
+
+
+def test_an_integer_an_f64_cannot_hold_exactly_is_refused_by_name():
+    with pytest.raises(ValueError, match="`rate`"):
+        Ramp(2**53 + 1, now=0)
+    with pytest.raises(ValueError, match="`gain`"):
+        Ramp(now=0, config={"gain": 2**53 + 1})
+
+
+def test_a_negative_zero_default_keeps_its_sign():
+    negative_zero_gain = node.rust_function(
+        a_ramp_declaration(
+            config_fields=[{"name": "gain", "value_type": "float", "default": -0.0}]
+        )
+    )
+    schema = getattr(negative_zero_gain, NODE_DECLARATION_CONFIG_SCHEMA_STAMP)
+    assert math.copysign(1.0, schema["properties"]["gain"]["default"]) == -1.0

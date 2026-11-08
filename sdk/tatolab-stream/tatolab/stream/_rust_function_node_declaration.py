@@ -45,14 +45,28 @@ _EVALUATE_ENTRY_C_SIGNATURE = ctypes.CFUNCTYPE(
 )
 _MODULE_HOST_TABLE_STATUS_OK = 0
 
+# The module host table major whose evaluate entry `_EVALUATE_ENTRY_C_SIGNATURE` spells.
+_MODULE_HOST_TABLE_ABI_MAJOR_OF_THE_EVALUATE_ENTRY_SIGNATURE = 1
+
+# The largest integer magnitude an f64 holds exactly.
+_LARGEST_INTEGER_AN_F64_HOLDS_EXACTLY = 2**53
+
 
 @dataclasses.dataclass(frozen=True)
-class RustFunctionNodeNamedValue:
-    """An output port, or a config or state field with the value its record's `Default` gives it."""
+class RustFunctionNodeOutputPort:
+    """An output port, and the value it carries."""
 
     name: str
     value_type: str
-    default: Optional[float]
+
+
+@dataclasses.dataclass(frozen=True)
+class RustFunctionNodeRecordField:
+    """A config or state field, with the value its record's `Default` gives it."""
+
+    name: str
+    value_type: str
+    default: float
 
 
 @dataclasses.dataclass(frozen=True)
@@ -71,9 +85,9 @@ class RustFunctionNodeDeclaration:
     short_name: str
     description: str
     input_pins: "tuple[RustFunctionNodeInputPin, ...]"
-    output_ports: "tuple[RustFunctionNodeNamedValue, ...]"
-    config_fields: "tuple[RustFunctionNodeNamedValue, ...]"
-    state_fields: "tuple[RustFunctionNodeNamedValue, ...]"
+    output_ports: "tuple[RustFunctionNodeOutputPort, ...]"
+    config_fields: "tuple[RustFunctionNodeRecordField, ...]"
+    state_fields: "tuple[RustFunctionNodeRecordField, ...]"
     stream_time_parameter: Optional[str]
     state_parameter: Optional[str]
     config_parameter: Optional[str]
@@ -102,6 +116,13 @@ class RustFunctionNode(FunctionNode[..., Any]):
 
     def __call__(self, *input_values: Any, **values_by_name: Any) -> Any:
         declaration = self.rust_function_node_declaration
+        if declaration.module_host_table_abi_major != _MODULE_HOST_TABLE_ABI_MAJOR_OF_THE_EVALUATE_ENTRY_SIGNATURE:
+            raise RuntimeError(
+                f"{self.__name__} was built against module host table "
+                f"{declaration.module_host_table_abi_major}.{declaration.module_host_table_abi_minor}, "
+                f"whose evaluate entry this `tatolab-stream` cannot call; it calls major "
+                f"{_MODULE_HOST_TABLE_ABI_MAJOR_OF_THE_EVALUATE_ENTRY_SIGNATURE}"
+            )
         arguments_by_name = dict(values_by_name)
         input_pins = declaration.input_pins
         if len(input_values) > len(input_pins):
@@ -258,10 +279,9 @@ def read_rust_function_node_declaration(native_declaration: Mapping[str, Any]) -
     )
     ports_by_cast_name = {}
     output_ports = tuple(
-        RustFunctionNodeNamedValue(
+        RustFunctionNodeOutputPort(
             name=_a_port_name(short_name, output_port.text("name"), ports_by_cast_name),
             value_type=output_port.value_type(),
-            default=None,
         )
         for output_port in reading.entries("output_ports")
     )
@@ -336,14 +356,14 @@ class _NativeDeclarationReading:
             raise ValueError(f"a Rust function node's `{key}` is {value!r}, not a list of entries")
         return [_NativeDeclarationReading(entry) for entry in value]
 
-    def record_fields(self, key: str) -> "tuple[RustFunctionNodeNamedValue, ...]":
-        record_fields: "list[RustFunctionNodeNamedValue]" = []
+    def record_fields(self, key: str) -> "tuple[RustFunctionNodeRecordField, ...]":
+        record_fields: "list[RustFunctionNodeRecordField]" = []
         for record_field in self.entries(key):
             default = record_field.optional_number("default")
             if default is None:
                 raise ValueError(f"a Rust function node's `{key}` entry carries no default")
             record_fields.append(
-                RustFunctionNodeNamedValue(
+                RustFunctionNodeRecordField(
                     name=record_field.text("name"),
                     value_type=record_field.value_type(),
                     default=default,
@@ -366,7 +386,7 @@ def _a_port_name(short_name: str, spelling: str, ports_by_cast_name: "dict[str, 
     return port_name
 
 
-def _config_schema(config_fields: "tuple[RustFunctionNodeNamedValue, ...]") -> "dict[str, Any]":
+def _config_schema(config_fields: "tuple[RustFunctionNodeRecordField, ...]") -> "dict[str, Any]":
     if not config_fields:
         return json_schema_for_a_node_declaring_no_config()
     return {
@@ -374,7 +394,7 @@ def _config_schema(config_fields: "tuple[RustFunctionNodeNamedValue, ...]") -> "
         "properties": {
             config_field.name: {
                 "type": _JSON_SCHEMA_TYPE_BY_VALUE_TYPE[config_field.value_type],
-                "default": _from_f64(config_field.default or 0.0, config_field.value_type),
+                "default": _from_f64(config_field.default, config_field.value_type),
             }
             for config_field in config_fields
         },
@@ -393,12 +413,12 @@ def _the_input_value(short_name: str, input_pin: RustFunctionNodeInputPin, value
         if input_pin.pin_default is None:
             raise TypeError(f"{short_name}'s input `{input_pin.port}` has no default and was handed none")
         return input_pin.pin_default
-    return float(value)
+    return _exactly_as_f64(short_name, input_pin.port, value)
 
 
 def _record_values(
     short_name: str,
-    record_fields: "tuple[RustFunctionNodeNamedValue, ...]",
+    record_fields: "tuple[RustFunctionNodeRecordField, ...]",
     values_by_field: Optional[Mapping[str, Any]],
 ) -> "list[float]":
     values_by_field = dict(values_by_field or {})
@@ -406,9 +426,20 @@ def _record_values(
     if unknown_fields:
         raise TypeError(f"{short_name} declares no field {', '.join(unknown_fields)}")
     return [
-        float(values_by_field.get(record_field.name, record_field.default or 0.0))
+        _exactly_as_f64(short_name, record_field.name, values_by_field[record_field.name])
+        if record_field.name in values_by_field
+        else record_field.default
         for record_field in record_fields
     ]
+
+
+def _exactly_as_f64(short_name: str, name: str, value: Any) -> float:
+    if isinstance(value, int) and not isinstance(value, bool) and abs(value) > _LARGEST_INTEGER_AN_F64_HOLDS_EXACTLY:
+        raise ValueError(
+            f"{short_name}'s `{name}` is {value}, and an evaluate entry carries each value as an "
+            f"f64, which holds an integer exactly only up to 2**53"
+        )
+    return float(value)
 
 
 def _from_f64(value: float, value_type: str) -> Any:
