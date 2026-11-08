@@ -34,7 +34,7 @@ follow. Rationale: `docs/decisions/project-and-assets.md`.
    person chooses and copied only when they fork it; Python stays the language of nodes, and a
    `@graph_generator` function builds graph, and its output is stored as a frozen fragment.
 
-**A project after this change** (names assume decision 2's recommendation):
+**A project after this change** (names per decision 5):
 
 ```text
 robot-cell/
@@ -193,19 +193,14 @@ asset is used pinned to a revision and updated when the person chooses; a fork m
 2026-11-08).** No dependency on an installed Git; a project's history follows Artifacts' concepts
 (repos, branches, tags, forks, imports) and can be pushed to it as a remote.
 
-**[NEEDS DECISION] 5 — what the files are called.** Recommend `tatolab-project.json`,
-`<name>.graph.json` for a stream and `<file>.asset.json` for every other asset's sidecar, with
-`.tatolab/` for history, content and dependencies. Each is a name a person sees in Finder and in
-Git, so it is the owner's call; nothing else in this file depends on the spelling.
+**Decided 5 — the file names (owner, 2026-11-08).** `tatolab-project.json` for the project,
+`<name>.graph.json` for a stream, `<file>.asset.json` for every other asset's sidecar, and
+`.tatolab/` for history, content and dependencies.
 
-**[NEEDS DECISION] 6 — the Git engine the runtime carries.**
-- (a) `git2` over libgit2: mature fetch and push over smart HTTP, including the v1 `receive-pack`
-  Artifacts takes; GPLv2 with the linking exception, so it links into a BUSL binary.
-- (b) `gix` (gitoxide): pure Rust, no C build; reading and fetching are mature, pushing is not yet
-  complete.
-
-Recommend (a) for the first slice, behind one RHI-style seam so (b) can replace it once it pushes.
-To verify in ticket 1: libgit2's push against an Artifacts remote.
+**Decided 6 — the Git engine is libgit2, through `git2` (owner, 2026-11-08).** It fetches and
+pushes over smart HTTP, including the v1 `receive-pack` Artifacts takes, and its GPLv2 linking
+exception lets it link into a BUSL binary. It sits behind one seam, so `gix` can replace it once
+gitoxide pushes. Ticket 1 proves its push against an Artifacts remote.
 
 **Deferred, on the same transactions and history:** the cloud hub (one Durable Object per project,
 PartyKit-style, ordering transactions with no runtime), branches per person and merge rules, roles,
@@ -214,7 +209,7 @@ releases and variants, pushing content to cloud storage beside an Artifacts remo
 
 ## Tickets (as few tracer bullets as the change needs)
 
-Blocked on decisions 5 and 6, and on roadmap step 4 (#3214), because `exposed` leaves the spec
+Blocked on roadmap step 4 (#3214), because `exposed` leaves the spec
 keys and the record there.
 
 1. **A project is a repository of assets.** The project file, history in `.tatolab/history.git`
