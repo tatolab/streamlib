@@ -50,6 +50,10 @@ Avoid the two failure modes:
 - [@docs/learnings/nvidia-opaque-fd-after-swapchain.md](nvidia-opaque-fd-after-swapchain.md) —
   Same NVIDIA cap as DMA-BUF, but for OPAQUE_FD allocations (CUDA / OpenCL
   interop); engine pre-warms every export pool at `HostVulkanDevice` construction
+- [@docs/learnings/nvidia-opaque-fd-image-import-must-be-dedicated.md](nvidia-opaque-fd-image-import-must-be-dedicated.md) —
+  One OPAQUE_FD image of an imported pool samples as all zeros (a uniform black frame, no
+  validation error) when its memory is imported without `VkMemoryDedicatedAllocateInfo` naming
+  the image it binds; the exporter's allocation is dedicated, so the import must be too
 - [@docs/learnings/nvidia-external-handle-type-exclusivity.md](nvidia-external-handle-type-exclusivity.md) —
   One allocation cannot export both OPAQUE_FD and DMA-BUF on Linux +
   NVIDIA (buffer `compatibleHandleTypes` disjoint — measured, RTX 3090 /

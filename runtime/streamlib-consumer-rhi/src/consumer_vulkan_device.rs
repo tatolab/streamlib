@@ -1045,20 +1045,53 @@ impl ConsumerVulkanDevice {
         allocation_size: vk::DeviceSize,
         memory_type_index: u32,
     ) -> Result<vk::DeviceMemory> {
+        self.import_opaque_fd_memory(fd, allocation_size, memory_type_index, None)
+    }
+
+    /// [`Self::import_opaque_fd_memory_at_stated_memory_type_index`] for an
+    /// exporter's dedicated image allocation, imported dedicated to `image`,
+    /// the image it will bind. Same fd ownership rules.
+    ///
+    /// An image import that is not dedicated binds as a plain allocation,
+    /// and on NVIDIA some such imports sample as all zeros.
+    #[tracing::instrument(level = "trace", skip(self), fields(fd, allocation_size))]
+    pub fn import_opaque_fd_memory_dedicated_to_image_at_stated_memory_type_index(
+        &self,
+        fd: i32,
+        allocation_size: vk::DeviceSize,
+        memory_type_index: u32,
+        image: vk::Image,
+    ) -> Result<vk::DeviceMemory> {
+        self.import_opaque_fd_memory(fd, allocation_size, memory_type_index, Some(image))
+    }
+
+    fn import_opaque_fd_memory(
+        &self,
+        fd: i32,
+        allocation_size: vk::DeviceSize,
+        memory_type_index: u32,
+        dedicated_to_image: Option<vk::Image>,
+    ) -> Result<vk::DeviceMemory> {
         let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
             .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
             .fd(fd)
             .build();
+        let mut dedicated_allocation_info = vk::MemoryDedicatedAllocateInfo::builder()
+            .image(dedicated_to_image.unwrap_or_default())
+            .build();
 
-        let alloc_info = vk::MemoryAllocateInfo::builder()
+        let mut alloc_info_builder = vk::MemoryAllocateInfo::builder()
             .allocation_size(allocation_size)
             .memory_type_index(memory_type_index)
-            .push_next(&mut import_info)
-            .build();
+            .push_next(&mut import_info);
+        if dedicated_to_image.is_some() {
+            alloc_info_builder = alloc_info_builder.push_next(&mut dedicated_allocation_info);
+        }
+        let alloc_info = alloc_info_builder.build();
 
         let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
             ConsumerRhiError::Gpu(format!(
-                "ConsumerVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index failed: {e}"
+                "ConsumerVulkanDevice: OPAQUE_FD memory import failed: {e}"
             ))
         })?;
 

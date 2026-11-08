@@ -2777,6 +2777,317 @@ mod tests {
         }
     }
 
+    /// Record `record` into a one-shot command buffer on `queue`, submit it and
+    /// wait for its fence.
+    #[cfg(target_os = "linux")]
+    fn submit_one_shot_commands_and_wait(
+        device: &vulkanalia::Device,
+        queue: vk::Queue,
+        queue_family_index: u32,
+        record: impl FnOnce(vk::CommandBuffer),
+    ) {
+        // SAFETY: every handle is created and destroyed here, on `device`, and
+        // the fence wait retires the submission before the pool is destroyed.
+        unsafe {
+            let command_pool = device
+                .create_command_pool(
+                    &vk::CommandPoolCreateInfo::builder()
+                        .queue_family_index(queue_family_index)
+                        .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+                    None,
+                )
+                .expect("a command pool");
+            let command_buffer = device
+                .allocate_command_buffers(
+                    &vk::CommandBufferAllocateInfo::builder()
+                        .command_pool(command_pool)
+                        .level(vk::CommandBufferLevel::PRIMARY)
+                        .command_buffer_count(1),
+                )
+                .expect("a command buffer")[0];
+            device
+                .begin_command_buffer(
+                    command_buffer,
+                    &vk::CommandBufferBeginInfo::builder()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                )
+                .expect("the command buffer begins");
+            record(command_buffer);
+            device
+                .end_command_buffer(command_buffer)
+                .expect("the command buffer ends");
+            let fence = device
+                .create_fence(&vk::FenceCreateInfo::default(), None)
+                .expect("a fence");
+            let command_buffers = [command_buffer];
+            let submit_info = vk::SubmitInfo::builder().command_buffers(&command_buffers);
+            device
+                .queue_submit(queue, &[submit_info], fence)
+                .expect("the commands submit");
+            device
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .expect("the commands complete");
+            device.destroy_fence(fence, None);
+            device.destroy_command_pool(command_pool, None);
+        }
+    }
+
+    /// A barrier of the whole colour image from `old_layout` to `new_layout`.
+    #[cfg(target_os = "linux")]
+    fn whole_colour_image_barrier(
+        image: vk::Image,
+        old_layout: vk::ImageLayout,
+        new_layout: vk::ImageLayout,
+    ) -> vk::ImageMemoryBarrier {
+        vk::ImageMemoryBarrier::builder()
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+            .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)
+            .old_layout(old_layout)
+            .new_layout(new_layout)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(1)
+                    .layer_count(1)
+                    .build(),
+            )
+            .build()
+    }
+
+    /// A node output pool's worth of 1080p OPAQUE_FD images, each cleared to
+    /// its own colour and imported onto a consumer device that holds every
+    /// import at once — as a module's per-slot import cache does — reads back
+    /// on the consumer as the exporter wrote it, never as zeros.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn every_opaque_fd_image_of_a_held_pool_reads_back_on_a_consumer_as_the_exporter_wrote_it() {
+        use std::os::fd::{FromRawFd as _, OwnedFd};
+
+        use crate::vulkan::rhi::HostVulkanBuffer;
+        use streamlib_consumer_rhi::{
+            ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
+        };
+
+        const WIDTH: u32 = 1920;
+        const HEIGHT: u32 = 1080;
+        const POOL_SLOTS: u8 = 32;
+        const READBACK_BYTE_SIZE: u64 = WIDTH as u64 * HEIGHT as u64 * 4;
+
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_image_pool().is_none() {
+            println!("Skipping - OPAQUE_FD image pool unavailable on this driver");
+            return;
+        }
+        let consumer_device = match ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
+            device.physical_device_uuid(),
+        ) {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                println!("Skipping - ConsumerVulkanDevice unavailable: {e}");
+                return;
+            }
+        };
+
+        let readback_exported_by_the_host =
+            HostVulkanBuffer::new_opaque_fd_export(&device, READBACK_BYTE_SIZE)
+                .expect("a host-visible readback buffer the host exports");
+        let readback_fd = readback_exported_by_the_host
+            .export_opaque_fd_memory()
+            .expect("the readback buffer's fd");
+        let readback_on_the_consumer =
+            ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+                &consumer_device,
+                // SAFETY: a fresh fd the export just returned; nothing else holds it.
+                unsafe { OwnedFd::from_raw_fd(readback_fd) },
+                READBACK_BYTE_SIZE as vk::DeviceSize,
+                readback_exported_by_the_host
+                    .vma_allocation_memory_type_index()
+                    .expect("the readback buffer states its memory type index"),
+            )
+            .expect("the readback buffer imports onto the consumer");
+
+        let descriptor = TextureDescriptor::new(WIDTH, HEIGHT, TextureFormat::Rgba8Unorm)
+            .with_usage(
+                TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::STORAGE_BINDING
+                    | TextureUsages::COPY_SRC
+                    | TextureUsages::COPY_DST,
+            );
+        let slot_colour = |slot: u8| [slot.wrapping_mul(7).wrapping_add(40), 200, 255 - slot, 255];
+        let mut held_pool = Vec::new();
+        for slot in 0..POOL_SLOTS {
+            let exported = HostVulkanTexture::new_opaque_fd_export(&device, &descriptor)
+                .expect("an OPAQUE_FD export image");
+            let exported_image = exported.image().expect("an allocated image");
+            let [red, green, blue, alpha] =
+                slot_colour(slot).map(|channel| f32::from(channel) / 255.0);
+            submit_one_shot_commands_and_wait(
+                device.device(),
+                device.queue(),
+                device.queue_family_index(),
+                |command_buffer| unsafe {
+                    device.device().cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[] as &[vk::MemoryBarrier],
+                        &[] as &[vk::BufferMemoryBarrier],
+                        &[whole_colour_image_barrier(
+                            exported_image,
+                            vk::ImageLayout::UNDEFINED,
+                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        )],
+                    );
+                    device.device().cmd_clear_color_image(
+                        command_buffer,
+                        exported_image,
+                        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                        &vk::ClearColorValue {
+                            float32: [red, green, blue, alpha],
+                        },
+                        &[vk::ImageSubresourceRange::builder()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .level_count(1)
+                            .layer_count(1)
+                            .build()],
+                    );
+                    device.device().cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::DependencyFlags::empty(),
+                        &[] as &[vk::MemoryBarrier],
+                        &[] as &[vk::BufferMemoryBarrier],
+                        &[whole_colour_image_barrier(
+                            exported_image,
+                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        )],
+                    );
+                },
+            );
+            let memory_fd = exported
+                .export_opaque_fd_memory()
+                .expect("the image's OPAQUE_FD");
+            let imported = ConsumerVulkanTexture::from_opaque_fd(
+                &consumer_device,
+                memory_fd,
+                WIDTH,
+                HEIGHT,
+                TextureFormat::Rgba8Unorm,
+                exported.vk_image_meta.vk_image_usage_flags.bits(),
+                exported.vma_allocation_size(),
+                exported
+                    .vma_allocation_memory_type_index()
+                    .expect("the image states its memory type index"),
+            )
+            .unwrap_or_else(|failure| panic!("slot {slot} imports onto the consumer: {failure}"));
+            held_pool.push((slot, exported, imported));
+        }
+
+        let mut slots_read_back_wrong = Vec::new();
+        for (slot, _exported, imported) in &held_pool {
+            imported
+                .acquire_from_foreign_layout(
+                    streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                )
+                .expect("the consumer acquires the image");
+            let consumer = consumer_device.device();
+            submit_one_shot_commands_and_wait(
+                consumer,
+                consumer_device.queue(),
+                consumer_device.queue_family_index(),
+                |command_buffer| unsafe {
+                    consumer.cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::DependencyFlags::empty(),
+                        &[] as &[vk::MemoryBarrier],
+                        &[] as &[vk::BufferMemoryBarrier],
+                        &[whole_colour_image_barrier(
+                            imported.image(),
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                        )],
+                    );
+                    consumer.cmd_copy_image_to_buffer(
+                        command_buffer,
+                        imported.image(),
+                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                        readback_on_the_consumer.buffer(),
+                        &[vk::BufferImageCopy::builder()
+                            .image_subresource(
+                                vk::ImageSubresourceLayers::builder()
+                                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                    .layer_count(1)
+                                    .build(),
+                            )
+                            .image_extent(vk::Extent3D {
+                                width: WIDTH,
+                                height: HEIGHT,
+                                depth: 1,
+                            })
+                            .build()],
+                    );
+                    consumer.cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::DependencyFlags::empty(),
+                        &[] as &[vk::MemoryBarrier],
+                        &[] as &[vk::BufferMemoryBarrier],
+                        &[whole_colour_image_barrier(
+                            imported.image(),
+                            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        )],
+                    );
+                },
+            );
+            // SAFETY: the copy above completed, and the readback buffer is the
+            // host's own host-visible coherent export of the same memory.
+            let read_back = unsafe {
+                std::slice::from_raw_parts(
+                    readback_exported_by_the_host.mapped_ptr(),
+                    READBACK_BYTE_SIZE as usize,
+                )
+            };
+            let expected = slot_colour(*slot);
+            let (pixels_read_back, _) = read_back.as_chunks::<4>();
+            let pixels_read_back_wrong = pixels_read_back
+                .iter()
+                .filter(|pixel| **pixel != expected)
+                .count();
+            if pixels_read_back_wrong > 0 {
+                slots_read_back_wrong.push(format!(
+                    "slot {slot}: {pixels_read_back_wrong} of {} pixels differ from {expected:?}, \
+                     first pixel {:?}",
+                    WIDTH * HEIGHT,
+                    &read_back[..4]
+                ));
+            }
+        }
+        assert!(
+            slots_read_back_wrong.is_empty(),
+            "every held import must read back the exporter's pixels: {slots_read_back_wrong:#?}"
+        );
+    }
+
     /// The device query agrees with the allocation: every request the device
     /// reports exportable as OPAQUE_FD allocates, and one it does not — an
     /// sRGB storage image, which many devices cannot create at all — is
