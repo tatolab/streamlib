@@ -354,7 +354,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and loads every `@stream` in its `stream.py` (owner, 2026-10-28 and 2026-10-30). A package's
   streams load as the packs OPEN decides. [one-runtime-per-machine; stream-graph — SHIPPED
   #2618; authoring-names — SHIPPED #2682; stream-identity-and-persistence — SHIPPED #2962;
-  create-project — SHIPPED #2995; queued-stream-actions — SHIPPED #3004, #3009; amended by project-and-assets: a stream is a graph asset of the project; a `@stream` function is a generator stored as a fragment]
+  create-project — SHIPPED #2995; queued-stream-actions — SHIPPED #3004, #3009; amended by project-and-assets: a stream is a graph asset of the project; a `@graph_generator` function builds graph, stored as a fragment]
 - **DECIDED** — Loading a project loads every stream in it. Every load — `tatolab run`,
   `tatolab dev`, `run_project`, Tato Studio's Add, and create — loads every `@stream` in the
   project's `stream.py`, each as its own stream: its own location, stream id, display name,
