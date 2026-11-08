@@ -320,6 +320,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use serde_json::Value;
+    use serial_test::serial;
 
     use streamlib_ipc_types::{MessageReadFromAReservedSlot, OutputPortViewerReader};
 
@@ -443,6 +444,7 @@ mod tests {
     /// the port's node writes from its own iceoryx2 node, and the graph keeps
     /// no trace of it.
     #[test]
+    #[serial]
     fn a_viewer_reads_an_unlinked_port_without_changing_the_graph() {
         let camera = ARunningCameraWithNoLinks::load();
         let graph_before = the_links_and_exposures_of(&camera.stream);
@@ -493,6 +495,7 @@ mod tests {
     /// hold is refused, listing each node's id beside its name, and a port the
     /// node lacks is refused listing the ports it has.
     #[test]
+    #[serial]
     fn a_viewer_of_a_node_id_or_port_the_stream_does_not_hold_is_refused() {
         let camera = ARunningCameraWithNoLinks::load();
 
@@ -524,6 +527,7 @@ mod tests {
     /// A viewer that fell behind reads the latest message and counts every one
     /// written since its read before, and never holds the writer back.
     #[test]
+    #[serial]
     fn a_viewer_that_fell_behind_reads_the_latest_message_and_counts_what_it_skipped() {
         let camera = ARunningCameraWithNoLinks::load();
         let viewer = camera.open_a_viewer("out1").unwrap();
@@ -558,6 +562,7 @@ mod tests {
     /// exports OPAQUE_FD memory; skips where none comes up.
     #[cfg(target_os = "linux")]
     #[test]
+    #[serial]
     fn a_viewer_imports_the_pool_slot_an_image_message_names_from_its_hand_off() {
         use streamlib_consumer_rhi::ConsumerVulkanDevice;
         use streamlib_gpu_frame_import_client::GpuPoolFrameImporterOfAViewer;
