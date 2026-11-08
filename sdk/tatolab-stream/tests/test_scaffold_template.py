@@ -15,6 +15,7 @@ import ast
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -246,10 +247,14 @@ def test_the_scaffold_depends_on_tatolab_stream_the_testpattern_module_and_numpy
     ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
 
 
-def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():
-    """A uv index or source here would resolve `tatolab-stream` from somewhere other
-    than PyPI, where the release publishes it."""
-    assert "tool.uv" not in template_text("pyproject.toml")
+def test_the_scaffold_takes_first_party_modules_from_tatolabs_index_and_tatolab_stream_from_pypi():
+    """Tatolab's index serves the first-party modules and falls through to PyPI for
+    `tatolab-stream`; a uv source would pin a package somewhere else."""
+    uv_settings = tomllib.loads(template_text("pyproject.toml")).get("tool", {}).get("uv", {})
+    assert uv_settings.get("index") == [
+        {"name": "tatolab", "url": "https://get.tatolab.com/simple/"}
+    ]
+    assert "sources" not in uv_settings
 
 
 def test_the_scaffold_binds_to_no_floor():
