@@ -36,6 +36,7 @@ pub struct ProjectRepository {
 enum PerformedAssetEffect {
     Operation(ProjectAssetOperation),
     ImportThatPlacedItsFile(ProjectAsset),
+    DeleteThatRemovedItsFile(ProjectAsset),
 }
 
 impl ProjectRepository {
@@ -134,6 +135,33 @@ impl ProjectRepository {
     /// The project's history.
     pub fn history(&self) -> &ProjectHistoryRepository {
         &self.history
+    }
+
+    /// The newest `max_transactions` transactions history records, newest first, each read
+    /// back from its commit's trailer; a commit without one, such as the first, is skipped.
+    pub fn applied_transactions_newest_first(
+        &self,
+        max_transactions: usize,
+    ) -> Result<Vec<AppliedProjectTransaction>, ProjectRepositoryRefusal> {
+        let trailer_prefix = format!("{PROJECT_TRANSACTION_COMMIT_TRAILER}: ");
+        let mut applied_transactions = Vec::new();
+        for history_commit in self.history.commits_newest_first()? {
+            if applied_transactions.len() == max_transactions {
+                break;
+            }
+            let Some(transaction_json) = history_commit
+                .message
+                .lines()
+                .find_map(|line| line.strip_prefix(&trailer_prefix))
+            else {
+                continue;
+            };
+            applied_transactions.push(AppliedProjectTransaction {
+                transaction: serde_json::from_str(transaction_json)?,
+                commit: history_commit.commit,
+            });
+        }
+        Ok(applied_transactions)
     }
 
     /// Apply `changes` by `author` as one transaction, whole or not at all, and commit it.
@@ -247,6 +275,9 @@ impl ProjectRepository {
                             return Err(ProjectRepositoryRefusal::AssetPathHoldsAnotherFile {
                                 path: path.to_string(),
                             });
+                        }
+                        if destination.exists() {
+                            self.refuse_a_file_another_asset_already_is(staged_assets, &path)?;
                         }
                         self.content_store.store_the_file_at(source_path)?
                     }
@@ -368,13 +399,16 @@ impl ProjectRepository {
             ProjectAssetOperation::DeleteAsset { asset } => {
                 std::fs::remove_file(self.sidecar_on_disk(&asset.path))?;
                 let file = asset.path.on_disk_under(&self.project_directory);
-                if file.exists()
-                    && let Err(not_removed) = std::fs::remove_file(file)
-                {
+                if !file.exists() {
+                    return Ok(PerformedAssetEffect::Operation(operation.clone()));
+                }
+                if let Err(not_removed) = std::fs::remove_file(file) {
                     self.restore_the_sidecar_of(asset);
                     return Err(not_removed.into());
                 }
-                Ok(PerformedAssetEffect::Operation(operation.clone()))
+                Ok(PerformedAssetEffect::DeleteThatRemovedItsFile(
+                    asset.clone(),
+                ))
             }
             ProjectAssetOperation::RelocateAsset { from, to, .. } => {
                 let from_file = from.on_disk_under(&self.project_directory);
@@ -416,14 +450,14 @@ impl ProjectRepository {
                     std::fs::remove_file(self.sidecar_on_disk(&asset.path)).map_err(Into::into)
                 }
                 PerformedAssetEffect::Operation(ProjectAssetOperation::DeleteAsset { asset }) => {
+                    self.write_sidecar(&asset)
+                }
+                PerformedAssetEffect::DeleteThatRemovedItsFile(asset) => {
                     self.restore_the_sidecar_of(&asset);
-                    let file = asset.path.on_disk_under(&self.project_directory);
-                    if file.exists() {
-                        Ok(())
-                    } else {
-                        self.content_store
-                            .place_content_at(&asset.content_sha256, &file)
-                    }
+                    self.content_store.place_content_at(
+                        &asset.content_sha256,
+                        &asset.path.on_disk_under(&self.project_directory),
+                    )
                 }
                 PerformedAssetEffect::Operation(operation) => {
                     self.perform_effect(&operation.inverse()).map(|_| ())
@@ -493,13 +527,47 @@ impl ProjectRepository {
         for asset in assets.values() {
             tracked_files.insert(asset.path.sidecar_path(), asset.sidecar_bytes()?);
         }
-        for graph_document in
-            project_files_ending_with(&self.project_directory, GRAPH_DOCUMENT_FILE_SUFFIX)?
-        {
+        for graph_document in self.graph_documents_beside(assets)? {
             let bytes = std::fs::read(self.project_directory.join(&graph_document))?;
             tracked_files.insert(graph_document, bytes);
         }
         Ok(tracked_files)
+    }
+
+    /// The project's `*.graph.json` files, leaving out any path an asset holds.
+    fn graph_documents_beside(
+        &self,
+        assets: &BTreeMap<Uuid, ProjectAsset>,
+    ) -> Result<Vec<String>, ProjectRepositoryRefusal> {
+        let mut graph_documents =
+            project_files_ending_with(&self.project_directory, GRAPH_DOCUMENT_FILE_SUFFIX)?;
+        graph_documents.retain(|graph_document| {
+            !assets
+                .values()
+                .any(|asset| asset.path.as_str() == graph_document)
+        });
+        Ok(graph_documents)
+    }
+
+    /// Refuse an in-place import whose file the filesystem already resolves to another asset's.
+    fn refuse_a_file_another_asset_already_is(
+        &self,
+        assets: &BTreeMap<Uuid, ProjectAsset>,
+        path: &ProjectRelativeAssetPath,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let destination = path.on_disk_under(&self.project_directory);
+        match assets.values().find(|asset| {
+            same_file(
+                &asset.path.on_disk_under(&self.project_directory),
+                &destination,
+            )
+        }) {
+            Some(holder) => Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset {
+                path: path.to_string(),
+                holder: holder.asset,
+            }),
+            None => Ok(()),
+        }
     }
 
     fn graph_documents_referencing(
@@ -508,9 +576,7 @@ impl ProjectRepository {
     ) -> Result<Vec<String>, ProjectRepositoryRefusal> {
         let asset_text = asset.to_string();
         let mut referencing = Vec::new();
-        for graph_document in
-            project_files_ending_with(&self.project_directory, GRAPH_DOCUMENT_FILE_SUFFIX)?
-        {
+        for graph_document in self.graph_documents_beside(&self.assets_by_uuid)? {
             let bytes = std::fs::read(self.project_directory.join(&graph_document))?;
             let document = serde_json::from_slice::<Value>(&bytes).map_err(|not_parsed| {
                 ProjectRepositoryRefusal::GraphDocumentUnreadable {
@@ -680,7 +746,10 @@ fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRe
         std::fs::create_dir_all(parent)?;
     }
     let partial = path.with_extension(format!("partial-{}", Uuid::new_v4()));
-    std::fs::write(&partial, bytes)?;
+    if let Err(not_written) = std::fs::write(&partial, bytes) {
+        let _ = std::fs::remove_file(&partial);
+        return Err(not_written.into());
+    }
     if let Err(error) = std::fs::rename(&partial, path) {
         let _ = std::fs::remove_file(&partial);
         return Err(error.into());
@@ -688,6 +757,18 @@ fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRe
     Ok(())
 }
 
+/// Device and inode decide it, because a case-folding or normalizing filesystem such as APFS
+/// resolves differently spelled paths to one file while `canonicalize` keeps their spellings.
+#[cfg(unix)]
+fn same_file(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(left), std::fs::metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
 fn same_file(left: &Path, right: &Path) -> bool {
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,

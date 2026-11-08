@@ -5132,6 +5132,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
+ "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "tempfile",
  "tokio",
@@ -5143,6 +5144,7 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "utoipa-axum",
+ "uuid",
 ]
 
 [[package]]
@@ -5341,11 +5343,15 @@ name = "streamlib-project-repository"
 version = "0.68.34"
 dependencies = [
  "git2",
+ "parking_lot",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "uuid",
 ]

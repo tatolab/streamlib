@@ -120,6 +120,9 @@ const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
 /// The crate whose checkout carries libopus's own sources and `COPYING`.
 const OPUSIC_VENDORING_CRATE_NAME: &str = "opusic-sys";
 
+/// The crate whose checkout carries libgit2's own sources and `COPYING`.
+const LIBGIT2_VENDORING_CRATE_NAME: &str = "libgit2-sys";
+
 /// The extension wheel that links libopus.
 const OPUS_EXTENSION_PACKAGE_DIRECTORY: &str = "packages/tatolab-opus";
 
@@ -143,6 +146,7 @@ enum WheelCarryingTheNotice {
 enum NoticeRosterCargoAboutCannotProduce {
     LinkedThroughShadercSys,
     LinkedThroughOpusicSys,
+    LinkedThroughLibgit2Sys,
     CompiledByTheVulkanaliaVmaForksBuildScript,
     CompiledByTheEnginesBuildScript,
     CarriedPrebuiltInTheBundledVulkanLoader,
@@ -151,9 +155,10 @@ enum NoticeRosterCargoAboutCannotProduce {
 }
 
 impl NoticeRosterCargoAboutCannotProduce {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::LinkedThroughShadercSys,
         Self::LinkedThroughOpusicSys,
+        Self::LinkedThroughLibgit2Sys,
         Self::CompiledByTheVulkanaliaVmaForksBuildScript,
         Self::CompiledByTheEnginesBuildScript,
         Self::CarriedPrebuiltInTheBundledVulkanLoader,
@@ -170,6 +175,10 @@ impl NoticeRosterCargoAboutCannotProduce {
             Self::LinkedThroughOpusicSys => {
                 "Through the `opusic-sys` crate, linked statically into the native module as \
                  `libopus.a`"
+            }
+            Self::LinkedThroughLibgit2Sys => {
+                "Through the `libgit2-sys` crate, compiled from its bundled sources and linked \
+                 statically into `tatolabd`, which keeps each project's history with it"
             }
             Self::CompiledByTheVulkanaliaVmaForksBuildScript => {
                 "Checked into this repository, compiled by \
@@ -360,6 +369,17 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughOpusicSys,
         carried_by: WheelCarryingTheNotice::TheExtensionWheelIn(OPUS_EXTENSION_PACKAGE_DIRECTORY),
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "libgit2",
+        upstream_repository_url: "https://github.com/libgit2/libgit2",
+        license_summary: "GPL-2.0 with the libgit2 linking exception, and the terms of the dependencies it bundles, all reproduced in its `COPYING`",
+        notice_source: NoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name: LIBGIT2_VENDORING_CRATE_NAME,
+            path_relative_to_crate_root: "libgit2/COPYING",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughLibgit2Sys,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     // The projects below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
     // and `scripts/stage_linux_bundled_vulkan_driver.sh` put in the wheel, each
@@ -1822,6 +1842,11 @@ mod tests {
                 OPUSIC_VENDORING_CRATE_NAME => assert_eq!(
                     path_relative_to_crate_root, "opus/COPYING",
                     "{} reads libopus's own COPYING inside the bundled sources",
+                    project.display_name
+                ),
+                LIBGIT2_VENDORING_CRATE_NAME => assert_eq!(
+                    path_relative_to_crate_root, "libgit2/COPYING",
+                    "{} reads libgit2's own COPYING inside the bundled sources",
                     project.display_name
                 ),
                 other => panic!("{other} has no stated notice layout"),
