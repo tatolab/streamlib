@@ -650,7 +650,7 @@ mod tests {
             .expect_err("a name-stripped blob cannot be bound by name");
         let message = refusal.to_string();
         assert!(
-            message.contains("carries no name") && message.contains("glslc -g"),
+            message.contains("carries no name") && message.contains("Slang source"),
             "the refusal must name the cause and the fix: {message}"
         );
     }

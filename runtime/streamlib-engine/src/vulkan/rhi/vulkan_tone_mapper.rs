@@ -4,7 +4,7 @@
 //! Image→image tone-curve kernel backed by [`VulkanComputeKernel`].
 //!
 //! Sibling to [`super::vulkan_color_converter::VulkanColorConverter`].
-//! The shader (`vulkan/rhi/shaders/tone_curve.comp`) handles BT.2390
+//! The shader (`vulkan/rhi/shaders/tone_curve.slang`) handles BT.2390
 //! EETF (HDR→SDR) and BT.2446-1 method A2 inverse (SDR→HDR) per channel,
 //! plus pure transfer-conversion (no tone curve, peak rescale only).
 //! All variation rides per-frame push constants — one cached kernel
@@ -522,8 +522,8 @@ mod tests {
     /// pixel matches the CPU reference within an 8-bit-quantization
     /// tolerance (±2 ULPs).
     ///
-    /// Mentally revert the GLSL Hermite spline (drop the
-    /// `(b3 - 2.0*b2 + b) * (1.0 - ks)` term in `tone_curve.comp`'s
+    /// Mentally revert the Slang Hermite spline (drop the
+    /// `(b3 - 2.0*b2 + b) * (1.0 - ks)` term in `tone_curve.slang`'s
     /// `bt2390_eetf`) and this test fails — the GPU output diverges
     /// from the CPU reference everywhere above the knee.
     #[test]

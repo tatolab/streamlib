@@ -386,10 +386,19 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-io-surface",
  "objc2-metal",
+ "streamlib-slang-shader-compiler",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
  "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "streamlib-slang-shader-compiler"
+version = "0.68.34"
+dependencies = [
+ "libloading",
  "tracing",
 ]
 

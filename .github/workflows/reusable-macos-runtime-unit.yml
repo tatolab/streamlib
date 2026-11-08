@@ -41,14 +41,13 @@ jobs:
           # readable by it.
           persist-credentials: false
 
-      # `glslc` stages the engine's SPIR-V for `include_bytes!`; cmake and ninja
-      # build the bundled Vulkan loader.
-      - name: Install glslc and the C++ build tools
+      # cmake and ninja build the bundled Vulkan loader.
+      - name: Install the C++ build tools
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
-        run: brew install shaderc cmake ninja
+        run: brew install cmake ninja
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

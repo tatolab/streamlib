@@ -83,21 +83,20 @@ binding declaration, the kernel:
 
 ## Adding a new ray-tracing kernel — the recipe
 
-1. **Write the GLSL** in `runtime/streamlib-engine/src/vulkan/rhi/shaders/<name>.{rgen,rmiss,rchit,rahit,rint,rcall}`.
-   Use descriptor set 0; multi-set kernels are not supported. Each
-   shader needs `#version 460` and `#extension GL_EXT_ray_tracing :
-   require`. Acceleration-structure bindings declare as
-   `accelerationStructureEXT`; output images as `image2D` with a
-   format qualifier (`rgba8`, etc.).
+1. **Write the Slang** in `runtime/streamlib-engine/src/vulkan/rhi/shaders/<name>_ray_{generation,miss,closest_hit}.slang`.
+   Use descriptor set 0; multi-set kernels are not supported.
+   Acceleration-structure bindings declare as
+   `RaytracingAccelerationStructure`; output images as `WTexture2D<float4>`
+   or `RWTexture2D<float4>` with a `[format("rgba8")]` attribute where the
+   format matters.
 
 2. **Wire the shaders into `build.rs`.** Add an entry per stage to
-   the `rt_shaders` array in `runtime/streamlib-engine/build.rs`. RT shaders
-   are compiled with `--target-env=vulkan1.2 --target-spv=spv1.4`
-   so `SPV_KHR_ray_tracing` opcodes are available, and with `-g -O`;
-   the helper handles the per-stage
-   `-fshader-stage=rgen|rmiss|rchit|...` flag. The `-g` is not
-   optional: `-O` strips every `OpName`, and a binding whose name is
-   gone cannot be bound by name. SPIR-V is read via
+   the `shaders` array in `runtime/streamlib-engine/build.rs`, naming its
+   stage. Every shader compiles to SPIR-V 1.4 for Vulkan 1.2, so
+   `SPV_KHR_ray_tracing` opcodes are available, through the Slang compiler
+   `scripts/stage_slang_compiler_libraries.sh` stages under
+   `target/slang_compiler/`. The module keeps its `OpName`s, which binding
+   by name needs. SPIR-V is read via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.spv"))`.
 
 3. **Declare stages, groups, bindings, and push constants as data.**

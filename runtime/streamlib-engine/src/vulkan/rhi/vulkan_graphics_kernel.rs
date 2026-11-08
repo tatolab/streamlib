@@ -2238,10 +2238,13 @@ mod tests {
     }
 
     fn vert_spv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.vert.spv"))
+        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit_vertex.slang.spv"))
     }
     fn frag_spv() -> &'static [u8] {
-        include_bytes!(concat!(env!("OUT_DIR"), "/offscreen_blit.frag.spv"))
+        include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/offscreen_blit_fragment.slang.spv"
+        ))
     }
 
     fn default_pipeline_state() -> GraphicsPipelineState {
@@ -2443,7 +2446,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
         .expect_err("a name-stripped blob cannot be bound by name");
         let msg = format!("{err}");
         assert!(
-            msg.contains("carries no name") && msg.contains("glslc -g"),
+            msg.contains("carries no name") && msg.contains("Slang source"),
             "the refusal must name the cause and the fix, got: {msg}"
         );
     }

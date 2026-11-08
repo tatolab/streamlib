@@ -4,9 +4,9 @@
 //! Engine-owned color converter — `(src_format, dst_format)`-keyed
 //! kernel that consumes [`ResolvedColorInfo`] as push-constant state.
 //! The compute kernels are
-//! `vulkan/rhi/shaders/color_convert_nv12_buffer_to_rgba.comp`,
-//! `vulkan/rhi/shaders/color_convert_yuyv_buffer_to_rgba.comp` and, in the
-//! other direction, `vulkan/rhi/shaders/color_convert_rgba_image_to_yuyv_buffer.comp`.
+//! `vulkan/rhi/shaders/color_convert_nv12_buffer_to_rgba.slang`,
+//! `vulkan/rhi/shaders/color_convert_yuyv_buffer_to_rgba.slang` and, in the
+//! other direction, `vulkan/rhi/shaders/color_convert_rgba_image_to_yuyv_buffer.slang`.
 //!
 //! Per-frame [`ResolvedColorInfo`] changes cost one
 //! `set_push_constants_value` call rather than a pipeline rebuild.

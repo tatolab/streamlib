@@ -39,6 +39,10 @@ zip = { version = "8.6", default-features = false, features = ["deflate-flate2-z
 # Checks the runtime unit's uv archive against its pinned sha256.
 sha2 = "0.10"
 
+# The Slang compiler release and library file names `runtime_unit_layout`
+# reads, included by path above.
+streamlib-slang-shader-compiler = { path = "../runtime/streamlib-slang-shader-compiler" }
+
 # PNG decode/encode for `xtask psnr` — the codec proof's image measurements.
 # Same pin as the engine's, which decodes the very same reference set.
 png = "0.17"

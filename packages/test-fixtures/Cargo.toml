@@ -28,6 +28,9 @@ serde.workspace = true
 # Round-trip assertions pinning each fixture config's JSON encoding.
 serde_json.workspace = true
 
+[build-dependencies]
+# Compiles the fixtures' shaders for `include_bytes!`.
+streamlib-slang-shader-compiler = { path = "../../runtime/streamlib-slang-shader-compiler", version = "0.68.34" }
 
 [lints]
 workspace = true

@@ -3,127 +3,74 @@
 
 #![allow(clippy::disallowed_macros)] // build.rs uses println! for `cargo:` directives
 
+//! Compiles the fixtures' shaders to SPIR-V through the Slang compiler the
+//! workspace stages into `OUT_DIR` for `include_bytes!`.
+
+use std::path::{Path, PathBuf};
+
+use streamlib_slang_shader_compiler::{
+    ShaderCompilationTargetStage as Stage, compile_a_slang_shader_file,
+    open_the_workspace_staged_slang_compiler, workspace_staged_slang_compiler_library,
+};
+
 fn main() {
     // `CARGO_CFG_TARGET_OS` rather than `#[cfg(target_os = ...)]`, which in a
     // build script names the host compiling it rather than the target these
     // blobs are staged for — the same distinction the engine's own build
     // script draws.
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("cargo sets CARGO_CFG_TARGET_OS");
-    if target_os == "linux" || target_os == "macos" {
-        compile_cpu_ref_doubler();
-        compile_graphics_kernel_smoke();
-        compile_ray_tracing_kernel_smoke();
+    if target_os != "linux" && target_os != "macos" {
+        return;
     }
-}
-
-/// `glslc -O` strips every `OpName`, and a binding with no reflected name
-/// cannot be dispatched against by name. The engine's own `build.rs` applies
-/// this uniformly for that reason; a fixture compiled without it would be the
-/// one blob in the tree whose bindings cannot be bound.
-const KEEP_BINDING_NAMES: &str = "-g";
-
-fn compile_cpu_ref_doubler() {
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
-    let src = "shaders/cpu_ref_doubler.comp";
-    println!("cargo:rerun-if-changed={}", src);
-    let dst: PathBuf = Path::new(&out_dir).join("cpu_ref_doubler.spv");
-    let status = Command::new("glslc")
-        .arg("-fshader-stage=compute")
-        .arg(KEEP_BINDING_NAMES)
-        .arg("-O")
-        .arg(Path::new(src))
-        .arg("-o")
-        .arg(&dst)
-        .status()
-        .expect("Failed to run glslc for cpu_ref_doubler.comp (install Vulkan SDK or ensure glslc is in PATH)");
-    assert!(
-        status.success(),
-        "glslc failed to compile cpu_ref_doubler.comp"
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    println!(
+        "cargo:rerun-if-changed={}",
+        workspace_staged_slang_compiler_library(&workspace_root).display()
     );
-}
-
-fn compile_graphics_kernel_smoke() {
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
-    for (src, stage_arg, dst_name) in [
+    let slang_compiler = open_the_workspace_staged_slang_compiler(&workspace_root)
+        .unwrap_or_else(|refusal| panic!("{refusal}"));
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
+    for (shader_source, stage, spirv_file_name) in [
         (
-            "shaders/graphics_kernel_smoke.vert",
-            "-fshader-stage=vertex",
+            "shaders/cpu_ref_doubler.slang",
+            Stage::Compute,
+            "cpu_ref_doubler.spv",
+        ),
+        (
+            "shaders/graphics_kernel_smoke_vertex.slang",
+            Stage::Vertex,
             "graphics_kernel_smoke_vert.spv",
         ),
         (
-            "shaders/graphics_kernel_smoke.frag",
-            "-fshader-stage=fragment",
+            "shaders/graphics_kernel_smoke_fragment.slang",
+            Stage::Fragment,
             "graphics_kernel_smoke_frag.spv",
         ),
-    ] {
-        println!("cargo:rerun-if-changed={}", src);
-        let dst: PathBuf = Path::new(&out_dir).join(dst_name);
-        let status = Command::new("glslc")
-            .arg(stage_arg)
-            .arg(KEEP_BINDING_NAMES)
-            .arg("-O")
-            .arg(Path::new(src))
-            .arg("-o")
-            .arg(&dst)
-            .status()
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to run glslc for {src} (install Vulkan SDK or ensure glslc is in PATH): {e}"
-                )
-            });
-        assert!(status.success(), "glslc failed to compile {src}");
-    }
-}
-
-fn compile_ray_tracing_kernel_smoke() {
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-
-    // RT shaders need Vulkan 1.2 + SPIR-V 1.4 minimum for the
-    // SPV_KHR_ray_tracing opcodes — glslc's default target is
-    // Vulkan 1.0 / SPIR-V 1.0 which silently drops the GL_EXT_ray_tracing
-    // bindings.
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
-    for (src, stage_arg, dst_name) in [
         (
-            "shaders/ray_tracing_kernel_smoke.rgen",
-            "-fshader-stage=rgen",
+            "shaders/ray_tracing_kernel_smoke_ray_generation.slang",
+            Stage::RayGeneration,
             "ray_tracing_kernel_smoke_rgen.spv",
         ),
         (
-            "shaders/ray_tracing_kernel_smoke.rmiss",
-            "-fshader-stage=rmiss",
+            "shaders/ray_tracing_kernel_smoke_ray_miss.slang",
+            Stage::RayMiss,
             "ray_tracing_kernel_smoke_rmiss.spv",
         ),
         (
-            "shaders/ray_tracing_kernel_smoke.rchit",
-            "-fshader-stage=rchit",
+            "shaders/ray_tracing_kernel_smoke_ray_closest_hit.slang",
+            Stage::RayClosestHit,
             "ray_tracing_kernel_smoke_rchit.spv",
         ),
     ] {
-        println!("cargo:rerun-if-changed={}", src);
-        let dst: PathBuf = Path::new(&out_dir).join(dst_name);
-        let status = Command::new("glslc")
-            .arg(stage_arg)
-            .arg("--target-env=vulkan1.2")
-            .arg("--target-spv=spv1.4")
-            .arg(KEEP_BINDING_NAMES)
-            .arg("-O")
-            .arg(Path::new(src))
-            .arg("-o")
-            .arg(&dst)
-            .status()
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to run glslc for {src} (install Vulkan SDK or ensure glslc is in PATH): {e}"
-                )
-            });
-        assert!(status.success(), "glslc failed to compile {src}");
+        println!("cargo:rerun-if-changed={shader_source}");
+        compile_a_slang_shader_file(
+            &slang_compiler,
+            Path::new(shader_source),
+            stage,
+            &[],
+            &[],
+            &out_dir.join(spirv_file_name),
+        )
+        .unwrap_or_else(|refusal| panic!("{refusal}"));
     }
 }

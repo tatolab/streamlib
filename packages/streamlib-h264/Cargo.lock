@@ -431,6 +431,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-io-surface",
  "objc2-metal",
+ "streamlib-slang-shader-compiler",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
@@ -465,6 +466,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-slang-shader-compiler"
+version = "0.68.34"
+dependencies = [
+ "libloading",
+ "tracing",
+]
+
+[[package]]
 name = "streamlib-surface-client"
 version = "0.68.34"
 dependencies = [
@@ -488,6 +497,7 @@ name = "streamlib-vulkan-video"
 version = "0.68.34"
 dependencies = [
  "streamlib-consumer-rhi",
+ "streamlib-slang-shader-compiler",
  "streamlib-video-bitstream",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",

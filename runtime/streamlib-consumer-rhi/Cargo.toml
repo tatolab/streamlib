@@ -17,6 +17,8 @@ path = "src/lib.rs"
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
+# The Slang compiler release and library file names the runtime unit carries.
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.34" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 vulkanalia.workspace = true

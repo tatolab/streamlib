@@ -278,7 +278,7 @@ impl SimpleDecoder {
             // Exactly the extent `start_video_sequence` was handed above, which
             // is what the DPB images were created at. The conversion shader
             // samples the DPB through normalized coordinates derived from this
-            // extent (`shaders/nv12_to_rgb.comp`), so a converter sized to
+            // extent (`shaders/nv12_to_rgb.slang`), so a converter sized to
             // anything else rescales the picture instead of converting it.
             // The window is applied by the readback's copy region, never here.
             // The SPS is parsed by now, so the converter starts on the colour it

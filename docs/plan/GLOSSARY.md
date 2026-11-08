@@ -184,8 +184,8 @@ one-runtime-per-machine: the pivot's word is **runtime process**; this one names
 tree until the rename re-spells it._
 
 **Message** _(crosses)_: one thing a link carries — an **envelope** the engine owns (stamp,
-length, the group flag), a payload descriptor of its port's **family**, and a **payload**; at
-a relay, one object. _Avoid_: "bag" (retired 2026-10-16 — it named the msgpack map that was the whole
+length, the group flag), a payload descriptor — its port's **family**'s for a family write,
+`Bytes` for a by-name write — and a **payload**; at a relay, one object. _Avoid_: "bag" (retired 2026-10-16 — it named the msgpack map that was the whole
 payload), "frame" for anything but a video frame.
 
 **Payload**: a message's bytes, laid out by its port's family: empty for an Image frame, the

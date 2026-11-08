@@ -30,7 +30,12 @@ on:
         type: string
         required: true
       extension_build_needs_the_shader_compilers:
-        description: "Whether a build script in the extension's closure runs glslc, glslangValidator or spirv-opt, which the manylinux image lacks"
+        description: "Whether a build script in the extension's closure runs glslangValidator or spirv-opt, which the manylinux image lacks"
+        type: boolean
+        required: false
+        default: false
+      extension_build_needs_the_slang_compiler:
+        description: "Whether a build script in the extension's closure compiles shaders through the Slang compiler the workspace stages"
         type: boolean
         required: false
         default: false
@@ -76,6 +81,19 @@ jobs:
       # the 3.12 floor `requires-python` promises and every glibc from 2.28. A
       # single build per platform rather than an interpreter matrix, for the
       # same reason.
+      # Staged on the runner, under the workspace the manylinux container
+      # mounts, where the build script opens it.
+      - name: Cache the Slang compiler build
+        if: runner.os == 'Linux' && inputs.extension_build_needs_the_slang_compiler
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
+      - name: Stage the Slang compiler
+        if: runner.os == 'Linux' && inputs.extension_build_needs_the_slang_compiler
+        run: bash scripts/stage_slang_compiler_libraries.sh
+
       - name: Build the manylinux wheel
         if: runner.os == 'Linux'
         uses: PyO3/maturin-action@v1
@@ -120,7 +138,7 @@ jobs:
             install_build_dependencies_with_bounded_retry \
               pkgconfig clang-devel cmake ninja-build ${{ inputs.extension_build_extra_dnf_packages }}
             if [ "${{ inputs.extension_build_needs_the_shader_compilers }}" = true ]; then
-              bash "$GITHUB_WORKSPACE/scripts/install_shader_compilers_from_the_pinned_shaderc_sources.sh" /opt/shader-compilers
+              bash "$GITHUB_WORKSPACE/packages/tatolab-rive/install_the_glslang_and_spirv_tools_rive_runtime_needs.sh" /opt/shader-compilers
               export PATH="/opt/shader-compilers/bin:$PATH"
             fi
 
