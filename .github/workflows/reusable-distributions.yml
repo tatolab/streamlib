@@ -419,7 +419,7 @@ jobs:
           unzip -Z1 packages/tatolab-testpattern/dist/*.whl > /tmp/testpattern-wheel-member-names.txt
           for required_member in \
             tatolab/testpattern/__init__.py \
-            tatolab/testpattern/test_pattern_frame.comp \
+            tatolab/testpattern/test_pattern_frame.slang \
             tatolab/testpattern/potato_sprite_160x160.rgba \
             tatolab/testpattern/sample_stream_captions_548x62.rgba; do
             if ! grep -qx "$required_member" /tmp/testpattern-wheel-member-names.txt; then

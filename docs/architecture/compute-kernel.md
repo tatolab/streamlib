@@ -31,18 +31,17 @@ this doc exists to prevent.
 
 ## Two ways in
 
-A kernel is built from GLSL text or from a SPIR-V blob. GLSL is the source
-contract: `GpuContext::compile_glsl_shader_source_to_spirv` compiles it with
-the shaderc the engine links statically, so nothing on the machine has to
-supply a shader toolchain. Compilations are cached under the whole tuple that
-determines their output — source, stage, entry point, target environment,
+A kernel is built from Slang text or from a SPIR-V blob. Slang is the source
+contract: `GpuContext::compile_slang_shader_source_to_spirv` compiles it with
+the Slang compiler the runtime unit carries beside the engine, so nothing on
+the machine has to supply a shader toolchain. Compilations are cached under the
+whole tuple that determines their output — source, stage, entry point, backend,
 compiler version — never source alone.
 
-That compiler optimizes *and* emits debug info, and the two are not separable
-here: optimizing strips `OpName`, a binding with no reflected name cannot be
-bound by name at all, and by-name is the only way bindings are addressed. Debug
-info is what carries the names through — the same pairing `build.rs` uses. It
-costs the GLSL source embedded alongside them.
+That compiler optimizes with debug info off. Slang keeps each resource's
+`OpName` through optimization, and by-name is the only way bindings are
+addressed; debug info stays off because the engine's reflection refuses the
+`NonSemantic.Shader.DebugInfo` instructions Slang emits with it.
 
 Pre-compiled SPIR-V remains accepted. It is the caller's job to keep the
 `OpName` decorations there — `derive_bindings_from_spirv` refuses a blob that

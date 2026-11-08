@@ -38,6 +38,12 @@ jobs:
           path: target/linux_bundled_vulkan_driver_cache
           key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
 
+      - name: Cache the Slang compiler build
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_cache
+          key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
+
       - name: Build the tarball and run the portability gate over it
         run: bash scripts/build_linux_runtime_release_tarball.sh "$RUNNER_TEMP/linux-runtime-tarball"
 

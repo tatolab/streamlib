@@ -62,35 +62,31 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 SOURCE_BINDING = "source_image"
 
 # The vertices are the shaders' own: no escalate op mints a vertex buffer, so
-# the positions come out of `gl_VertexIndex`.
-FULL_SCREEN_TRIANGLE_VERTEX_GLSL = """\
-#version 450
-void main() {
-    vec2 corner = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-    gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+# the positions come out of the vertex index.
+FULL_SCREEN_TRIANGLE_VERTEX_SLANG = """\
+float4 main(uint vertex_index : SV_VulkanVertexID) : SV_Position {
+    float2 corner = float2((vertex_index << 1) & 2, vertex_index & 2);
+    return float4(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 """
 
-INVERT_SAMPLED_INPUT_FRAGMENT_GLSL = """\
-#version 450
-layout(set = 0, binding = 0) uniform sampler2D source_image;
-layout(location = 0) out vec4 painted_colour;
-void main() {
-    vec4 source = texelFetch(source_image, ivec2(gl_FragCoord.xy), 0);
-    painted_colour = vec4(vec3(1.0) - source.rgb, source.a);
+INVERT_SAMPLED_INPUT_FRAGMENT_SLANG = """\
+[[vk::binding(0, 0)]] Sampler2D source_image;
+float4 main(float4 fragment_position : SV_Position) : SV_Target {
+    float4 source = source_image.Load(int3(int2(fragment_position.xy), 0));
+    return float4(float3(1.0) - source.rgb, source.a);
 }
 """
 
 # A second binding no draw can name a surface for: no escalate op mints a
 # uniform buffer, so nothing resolves one by surface id.
-TINTED_SAMPLED_INPUT_FRAGMENT_GLSL = """\
-#version 450
-layout(set = 0, binding = 0) uniform sampler2D source_image;
-layout(set = 0, binding = 1) uniform TintBlock { vec4 tint; } tint_block;
-layout(location = 0) out vec4 painted_colour;
-void main() {
-    vec4 source = texelFetch(source_image, ivec2(gl_FragCoord.xy), 0);
-    painted_colour = source * tint_block.tint;
+TINTED_SAMPLED_INPUT_FRAGMENT_SLANG = """\
+[[vk::binding(0, 0)]] Sampler2D source_image;
+struct TintBlock { float4 tint; };
+[[vk::binding(1, 0)]] ConstantBuffer<TintBlock> tint_block;
+float4 main(float4 fragment_position : SV_Position) : SV_Target {
+    float4 source = source_image.Load(int3(int2(fragment_position.xy), 0));
+    return source * tint_block.tint;
 }
 """
 
@@ -140,8 +136,8 @@ def _invert_sampled_input_graphics_kernel(
     one colour target."""
     return gpu.create_graphics_kernel(
         color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
-        vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-        fragment_source=INVERT_SAMPLED_INPUT_FRAGMENT_GLSL,
+        vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+        fragment_source=INVERT_SAMPLED_INPUT_FRAGMENT_SLANG,
         bindings=bindings,
         label="python-fullscreen-triangle",
     )
@@ -251,8 +247,8 @@ class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
         undeclared_at_construction = _refusal_of(
             lambda: gpu.create_graphics_kernel(
                 color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
-                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-                fragment_source=TINTED_SAMPLED_INPUT_FRAGMENT_GLSL,
+                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+                fragment_source=TINTED_SAMPLED_INPUT_FRAGMENT_SLANG,
                 bindings=DECLARED_BINDINGS,
             )
         )
@@ -317,8 +313,8 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
         def declare_the_texture_for_a_stage_that_does_not_read_it() -> None:
             gpu.create_graphics_kernel(
                 color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
-                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-                fragment_source=INVERT_SAMPLED_INPUT_FRAGMENT_GLSL,
+                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+                fragment_source=INVERT_SAMPLED_INPUT_FRAGMENT_SLANG,
                 bindings={SOURCE_BINDING: ("sampled_texture", ["vertex"])},
             )
 
@@ -357,8 +353,8 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
         del kernel
         tinted = self.gpu_full_access.create_graphics_kernel(
             color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
-            vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-            fragment_source=TINTED_SAMPLED_INPUT_FRAGMENT_GLSL,
+            vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+            fragment_source=TINTED_SAMPLED_INPUT_FRAGMENT_SLANG,
             label="python-tinted-fullscreen-triangle",
         )
         binding_names = list(tinted.binding_names)
@@ -425,8 +421,8 @@ class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
                     COLOR_ATTACHMENT_FORMAT,
                     COLOR_ATTACHMENT_FORMAT,
                 ],
-                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-                fragment_source=INVERT_SAMPLED_INPUT_FRAGMENT_GLSL,
+                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+                fragment_source=INVERT_SAMPLED_INPUT_FRAGMENT_SLANG,
                 bindings=DECLARED_BINDINGS,
             )
         )
@@ -445,13 +441,11 @@ class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
 LEFT_HALF_RGBA = [255, 0, 0, 255]
 RIGHT_HALF_RGBA = [0, 0, 255, 255]
 
-TWO_HALVES_FRAGMENT_GLSL = f"""\
-#version 450
-layout(location = 0) out vec4 painted_colour;
-void main() {{
-    painted_colour = gl_FragCoord.x < {SURFACE_WIDTH // 2}.0
-        ? vec4(1.0, 0.0, 0.0, 1.0)
-        : vec4(0.0, 0.0, 1.0, 1.0);
+TWO_HALVES_FRAGMENT_SLANG = f"""\
+float4 main(float4 fragment_position : SV_Position) : SV_Target {{
+    return fragment_position.x < {SURFACE_WIDTH // 2}.0
+        ? float4(1.0, 0.0, 0.0, 1.0)
+        : float4(0.0, 0.0, 1.0, 1.0);
 }}
 """
 
@@ -472,8 +466,8 @@ class RenderedTextureFrameProducer:
             gpu = ctx.gpu_full_access
             kernel = gpu.create_graphics_kernel(
                 color_attachment_formats=[COLOR_ATTACHMENT_FORMAT],
-                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-                fragment_source=TWO_HALVES_FRAGMENT_GLSL,
+                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+                fragment_source=TWO_HALVES_FRAGMENT_SLANG,
                 label="python-two-halves",
             )
             self.color_target = NodeOutputTextureRing(

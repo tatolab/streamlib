@@ -32,17 +32,17 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 FRAME_WIDTH = 64
 FRAME_HEIGHT = 64
 
-INVERT_GLSL = """\
-#version 450
-layout(local_size_x = 8, local_size_y = 8) in;
-layout(set = 0, binding = 0, rgba8) uniform readonly image2D landed_frame;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D inverted_frame;
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(inverted_frame);
-    if (at.x >= extent.x || at.y >= extent.y) { return; }
-    vec4 landed = imageLoad(landed_frame, at);
-    imageStore(inverted_frame, at, vec4(1.0 - landed.rgb, landed.a));
+INVERT_SLANG = """\
+[[vk::binding(0, 0)]] [format("rgba8")] RWTexture2D<float4> landed_frame;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> inverted_frame;
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint width;
+    uint height;
+    inverted_frame.GetDimensions(width, height);
+    if (invocation.x >= width || invocation.y >= height) { return; }
+    float4 landed = landed_frame[invocation.xy];
+    inverted_frame[invocation.xy] = float4(1.0 - landed.rgb, landed.a);
 }
 """
 
@@ -99,7 +99,7 @@ class FrameLandingProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu = ctx.gpu_full_access
         self.kernel = gpu.create_compute_kernel(
-            source=INVERT_GLSL,
+            source=INVERT_SLANG,
             bindings={"landed_frame": "storage_image", "inverted_frame": "storage_image"},
         )
         self.landing_texture = gpu.acquire_texture(

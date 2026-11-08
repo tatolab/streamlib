@@ -12,11 +12,12 @@ beside it. Imported from anywhere else, the tests that read binaries fail.
 With `TATOLAB_RUNTIME_UNIT_GLIBC_FLOOR` set, as the release's Linux tarball
 build sets it, no ELF in the unit may need a newer glibc than that floor.
 
-The wheel carries a C++ GLSL compiler so a kernel author needs no shader
-toolchain. "Carries" has to mean statically linked: a `libshaderc.so` on the
-`NEEDED` list would make the wheel depend on a system library that manylinux
-does not ship and most machines do not have, turning the toolchain-free
-promise into a toolchain requirement discovered at import.
+The wheel carries the Slang shader compiler so a kernel author needs no shader
+toolchain. "Carries" has to mean inside the lend: the engine opens
+`libslang-compiler` from `tatolab/runtime/_slang_compiler/` by path, and the
+compiler opens the `libslang-glslang` beside it, so a missing one is a
+toolchain requirement discovered at the first kernel. Both are held to the
+same portability rules as every other binary the lend carries.
 
 The wheel also carries the Vulkan loader and a Vulkan driver — MoltenVK on
 macOS, Mesa's lavapipe on Linux — because a stock Mac has neither, and neither
@@ -68,8 +69,14 @@ LIBRARIES_THE_HOST_MAY_SUPPLY = frozenset(
 # load-command strings are matched and never `stat`ed.
 MACOS_PATH_PREFIXES_THE_HOST_MAY_SUPPLY = ("/usr/lib/", "/System/")
 
-# Every DSO name any of the vendored C++ shader compiler's pieces could take.
-SHADER_COMPILER_LIBRARY_STEMS = ("shaderc", "glslang", "SPIRV", "spirv")
+# Where the lend carries the Slang compiler, relative to the lend, and the
+# libraries it holds on each platform.
+SLANG_COMPILER_DIRECTORY_IN_THE_LEND = Path("tatolab") / "runtime" / "_slang_compiler"
+SLANG_COMPILER_VERSION = "2026.12"
+SLANG_COMPILER_LIBRARY_FILE_NAMES_PER_PLATFORM = {
+    "linux": ("libslang-compiler.so", f"libslang-glslang-{SLANG_COMPILER_VERSION}.so"),
+    "darwin": ("libslang-compiler.dylib", f"libslang-glslang-{SLANG_COMPILER_VERSION}.dylib"),
+}
 
 ELF_MAGIC = b"\x7fELF"
 DT_VERNEED = 0x6FFFFFFE
@@ -476,18 +483,20 @@ def wheel_minimum_macos_version(lend_directory: Path) -> Optional[MacOSVersion]:
     return min((int(major), int(minor), 0) for major, minor in macos_platform_tags)
 
 
-def test_the_glsl_compiler_is_linked_statically(native_extension_needed_libraries):
-    """The compiler is in the artifact, not on the host."""
-    linked_compilers = [
-        library
-        for library in native_extension_needed_libraries
-        if any(stem in library for stem in SHADER_COMPILER_LIBRARY_STEMS)
+def test_the_lend_carries_the_slang_compiler(lend_directory, native_binaries_the_lend_carries):
+    """The compiler is in the artifact, not on the host, and its libraries are
+    among the binaries the portability tests below read."""
+    slang_compiler_directory = lend_directory / SLANG_COMPILER_DIRECTORY_IN_THE_LEND
+    expected_libraries = [
+        slang_compiler_directory / file_name
+        for file_name in SLANG_COMPILER_LIBRARY_FILE_NAMES_PER_PLATFORM[sys.platform]
     ]
-    assert not linked_compilers, (
-        f"the wheel links the shader compiler dynamically: {linked_compilers}. "
-        "Its `build-from-source` feature exists to stop the build script finding "
-        "a system libshaderc; a hit here means that probe won"
-    )
+    missing_libraries = [str(library) for library in expected_libraries if not library.is_file()]
+    assert not missing_libraries, f"the lend carries no {missing_libraries}"
+    unread_libraries = [
+        str(library) for library in expected_libraries if library not in native_binaries_the_lend_carries
+    ]
+    assert not unread_libraries, f"the portability tests do not read {unread_libraries}"
 
 
 def test_every_elf_the_lend_carries_links_only_what_the_host_may_supply(

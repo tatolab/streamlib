@@ -23,17 +23,13 @@
 //! grows.
 //!
 //! The notice source is an enum because the trees genuinely differ.
-//! `shaderc-sys` extracts its C++ sources into its own build directory, each
-//! with a licence file. The trees `vendor/tatolab-vulkanalia-vma/build.rs`
-//! compiles `wrapper.cpp` against carry no licence file at all — their
-//! copyright line exists only in the comment block heading a header. The
-//! PipeWire/SPA headers are checked in here with their own `COPYING`.
-//!
-//! Some of the shaderc-side texts reach the generated half by accident:
-//! `cargo about` scans a crate's own directory for licence files, and finds the
-//! extracted sources under one. They are appended again regardless — there the
-//! text is attributed to the crate `shaderc-sys`, and a reader needs to know
-//! which upstream project each set of terms actually covers.
+//! `opusic-sys` and `libgit2-sys` carry their C sources in their own registry
+//! checkouts, each with a licence file. The trees
+//! `vendor/tatolab-vulkanalia-vma/build.rs` compiles `wrapper.cpp` against
+//! carry no licence file at all — their copyright line exists only in the
+//! comment block heading a header. The PipeWire/SPA headers, and the projects
+//! compiled into the prebuilt libraries a wheel carries, are checked in here
+//! with their own licence files.
 //!
 //! Not a CI gate, and deliberately so. This needs `cargo-about` installed and
 //! reaches the network for crates that ship no licence file of their own. The
@@ -114,9 +110,6 @@ const CARGO_ABOUT_TEMPLATE_FILE_NAME: &str = "about.hbs";
 /// The accepted-licence policy every project in this repo is generated against.
 const CARGO_ABOUT_CONFIG_FILE_NAME: &str = "about.toml";
 
-/// The crate whose build directory holds the extracted vendored C++ trees.
-const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
-
 /// The crate whose checkout carries libopus's own sources and `COPYING`.
 const OPUSIC_VENDORING_CRATE_NAME: &str = "opusic-sys";
 
@@ -144,7 +137,7 @@ enum WheelCarryingTheNotice {
 /// check that nothing fell out of it from being two lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NoticeRosterCargoAboutCannotProduce {
-    LinkedThroughShadercSys,
+    CarriedPrebuiltInTheSlangCompiler,
     LinkedThroughOpusicSys,
     LinkedThroughLibgit2Sys,
     CompiledByTheVulkanaliaVmaForksBuildScript,
@@ -156,7 +149,7 @@ enum NoticeRosterCargoAboutCannotProduce {
 
 impl NoticeRosterCargoAboutCannotProduce {
     const ALL: [Self; 8] = [
-        Self::LinkedThroughShadercSys,
+        Self::CarriedPrebuiltInTheSlangCompiler,
         Self::LinkedThroughOpusicSys,
         Self::LinkedThroughLibgit2Sys,
         Self::CompiledByTheVulkanaliaVmaForksBuildScript,
@@ -169,8 +162,9 @@ impl NoticeRosterCargoAboutCannotProduce {
     /// How the bullet introduces the projects it then names.
     fn how_the_code_reaches_the_binary(self) -> &'static str {
         match self {
-            Self::LinkedThroughShadercSys => {
-                "Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`"
+            Self::CarriedPrebuiltInTheSlangCompiler => {
+                "In the macOS and Linux wheels, compiled into the Slang shader compiler \
+                 libraries each carries beside the engine"
             }
             Self::LinkedThroughOpusicSys => {
                 "Through the `opusic-sys` crate, linked statically into the native module as \
@@ -215,9 +209,8 @@ impl NoticeRosterCargoAboutCannotProduce {
 enum NoticeSource {
     /// A licence file inside a build-script crate's own registry checkout,
     /// reproduced whole. The path is relative to the crate root rather than to
-    /// any one crate's layout, because the two that use this differ:
-    /// `shaderc-sys` extracts its trees under `build/`, and `opusic-sys`
-    /// carries libopus's `COPYING` at its root.
+    /// any one crate's layout, so each crate's own convention is spelled where
+    /// its projects are listed.
     RegistryCrateLicenseFile {
         vendoring_crate_name: &'static str,
         path_relative_to_crate_root: &'static str,
@@ -255,7 +248,7 @@ struct ProjectWhoseNoticeCargoAboutCannotProduce {
     upstream_repository_url: &'static str,
     /// What the notice actually contains, for the section heading. glslang's is
     /// not a single licence: it is a manifest covering several, which is why
-    /// it is 54 KB and the others are 11–23 KB.
+    /// it is 54 KB where most are under 25 KB.
     license_summary: &'static str,
     notice_source: NoticeSource,
     /// Which bullet of the roster this project is named under. Explicit
@@ -268,51 +261,116 @@ struct ProjectWhoseNoticeCargoAboutCannotProduce {
 
 const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
     &[ProjectWhoseNoticeCargoAboutCannotProduce] = &[
+    // The projects below are what `scripts/stage_slang_compiler_libraries.sh`
+    // puts in the wheel: `libslang-compiler` and the `libslang-glslang` it
+    // opens to optimise SPIR-V, each notice checked in at the revision Slang
+    // 2026.12 pins as a submodule.
     ProjectWhoseNoticeCargoAboutCannotProduce {
-        display_name: "shaderc",
-        upstream_repository_url: "https://github.com/google/shaderc",
-        license_summary: "Apache-2.0",
-        notice_source: NoticeSource::RegistryCrateLicenseFile {
-            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
-            path_relative_to_crate_root: "build/shaderc/LICENSE",
+        display_name: "Slang",
+        upstream_repository_url: "https://github.com/shader-slang/slang",
+        license_summary: "Apache-2.0 WITH LLVM-exception",
+        // Slang states its copyright only in `REUSE.toml`, so this is that
+        // file's copyright lines for the whole tree, then `LICENSE`.
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/Slang/NOTICE",
         },
-        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "DirectX Shader Compiler API header",
+        upstream_repository_url: "https://github.com/microsoft/DirectXShaderCompiler",
+        license_summary: "NCSA",
+        // Slang's `external/dxc/dxcapi.h`, which its compiler core compiles
+        // against on every platform: the block heading it, then the licence
+        // `REUSE.toml` names for it.
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/DirectXShaderCompiler/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
         carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "glslang",
         upstream_repository_url: "https://github.com/KhronosGroup/glslang",
         license_summary: "BSD-3-Clause, BSD-2-Clause, MIT, Apache-2.0, and GPL-3.0 WITH Bison-exception-2.2",
-        // `LICENSE.txt`, where the other three are `LICENSE`. Spelled out per
-        // project rather than globbed for exactly this reason: a glob hides the
-        // asymmetry, and hiding it is how a rename becomes a dropped notice.
-        notice_source: NoticeSource::RegistryCrateLicenseFile {
-            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
-            path_relative_to_crate_root: "build/glslang/LICENSE.txt",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/glslang/LICENSE.txt",
         },
-        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
         carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "SPIRV-Tools",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Tools",
         license_summary: "Apache-2.0",
-        notice_source: NoticeSource::RegistryCrateLicenseFile {
-            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
-            path_relative_to_crate_root: "build/spirv-tools/LICENSE",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/SPIRV-Tools/LICENSE",
         },
-        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
         carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "SPIRV-Headers",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Headers",
         license_summary: "MIT, with an Apache-2.0 carve-out the file names",
-        notice_source: NoticeSource::RegistryCrateLicenseFile {
-            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
-            path_relative_to_crate_root: "build/spirv-headers/LICENSE",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/SPIRV-Headers/LICENSE",
         },
-        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "miniz",
+        upstream_repository_url: "https://github.com/richgel999/miniz",
+        license_summary: "MIT",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/miniz/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "LZ4",
+        upstream_repository_url: "https://github.com/lz4/lz4",
+        license_summary: "BSD-2-Clause",
+        // `lib/LICENSE`: Slang compiles only the library, whose terms differ
+        // from the rest of the repository's.
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/LZ4/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "unordered_dense",
+        upstream_repository_url: "https://github.com/martinus/unordered_dense",
+        license_summary: "MIT",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/unordered_dense/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "fast_float",
+        upstream_repository_url: "https://github.com/fastfloat/fast_float",
+        license_summary: "MIT",
+        // Triple-licensed Apache-2.0, MIT or BSL-1.0; distributed under MIT.
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/fast_float/LICENSE-MIT",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "cmark-gfm",
+        upstream_repository_url: "https://github.com/swiftlang/swift-cmark",
+        license_summary: "BSD-2-Clause, and the terms of the sources it carries, all reproduced in its `COPYING`",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/slang-compiler-notices/cmark-gfm/COPYING",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltInTheSlangCompiler,
         carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
     ProjectWhoseNoticeCargoAboutCannotProduce {
@@ -357,12 +415,9 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         display_name: "libopus",
         upstream_repository_url: "https://gitlab.xiph.org/xiph/opus",
         license_summary: "BSD-3-Clause",
-        // libopus's own `COPYING`, inside the sources `opusic-sys` bundles —
-        // the same relationship shaderc's `build/shaderc/LICENSE` has to its
-        // vendoring crate, rather than the crate's own root `LICENSE`, which
-        // is opusic-sys's copy of the same text. Different layout, same
-        // mechanism, which is why the path is relative to the crate root
-        // rather than to any one crate's convention.
+        // libopus's own `COPYING`, inside the sources `opusic-sys` bundles,
+        // rather than the crate's own root `LICENSE`, which is opusic-sys's
+        // copy of the same text.
         notice_source: NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name: OPUSIC_VENDORING_CRATE_NAME,
             path_relative_to_crate_root: "opus/COPYING",
@@ -909,7 +964,7 @@ fn registry_crate_root_in(
             "expected exactly one {vendoring_crate_name} in the graph, found {}. {}",
             manifest_paths.len(),
             if manifest_paths.is_empty() {
-                "Its vendored C++ notices would be dropped entirely — update the vendoring \
+                "The notices of the C sources it bundles would be dropped entirely — update the vendoring \
                  crate name on the roster if the code moved to another crate"
             } else {
                 "The appendix would cover whichever copy came first, and say nothing about \
@@ -1309,8 +1364,8 @@ mod tests {
             .to_path_buf()
     }
 
-    /// A stand-in for `<shaderc-sys>/build/` holding every licence file the
-    /// shaderc-side projects declare, each naming the project it covers.
+    /// A stand-in for each vendoring crate's registry checkout, holding every
+    /// licence file the roster reads from one, each naming the project it covers.
     ///
     /// Paired with the real workspace root, so the comment-block projects read
     /// the actual vendored headers — `check-vendored-trees` hashes those
@@ -1582,14 +1637,14 @@ mod tests {
         let (fixture, source_trees) = notice_source_trees_fixture();
         let moved = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
             .iter()
-            .find(|project| project.display_name == "glslang")
-            .expect("glslang is one of the vendored projects");
+            .find(|project| project.display_name == "libopus")
+            .expect("libopus is one of the vendored projects");
         let NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name,
             path_relative_to_crate_root,
         } = moved.notice_source
         else {
-            panic!("glslang's notice comes from a registry crate's licence file")
+            panic!("libopus's notice comes from a registry crate's licence file")
         };
         fs::remove_file(
             fixture
@@ -1599,12 +1654,11 @@ mod tests {
         )
         .expect("remove");
 
-        let failure =
-            rendered_appendix_of(&NoticesGenerationTarget::EngineWorkspace, &source_trees)
-                .expect_err("a missing licence file must not render as an omitted section");
+        let failure = rendered_appendix_of(&opus_extension_target(), &source_trees)
+            .expect_err("a missing licence file must not render as an omitted section");
         let reported = format!("{failure:#}");
         assert!(
-            reported.contains("glslang"),
+            reported.contains("libopus"),
             "unhelpful failure: {reported}"
         );
         assert!(
@@ -1689,27 +1743,6 @@ mod tests {
     }
 
     #[test]
-    fn glslang_is_the_one_project_whose_licence_file_is_not_named_license() {
-        // Not trivia: it is the whole reason the paths are spelled out instead
-        // of globbed, and a future reader deleting the "redundant" extension is
-        // exactly the edit this locks.
-        let named_license_txt: Vec<&str> = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
-            .iter()
-            .filter(|project| {
-                matches!(
-                    project.notice_source,
-                    NoticeSource::RegistryCrateLicenseFile {
-                        path_relative_to_crate_root: path,
-                        ..
-                    } if path.ends_with("LICENSE.txt")
-                )
-            })
-            .map(|project| project.display_name)
-            .collect();
-        assert_eq!(named_license_txt, ["glslang"]);
-    }
-
-    #[test]
     fn a_line_comment_run_is_taken_whole() {
         let notice = leading_comment_block_notice(
             "// Copyright (c) 2017-2025 Someone\n//\n// Permission is granted.\n\n#ifndef GUARD\n",
@@ -1766,8 +1799,8 @@ mod tests {
     #[test]
     fn a_graph_without_the_vendoring_crate_names_what_would_be_dropped() {
         let metadata = serde_json::json!({ "packages": [{ "name": "serde" }] });
-        let failure = registry_crate_root_in(&metadata, SHADERC_VENDORING_CRATE_NAME)
-            .expect_err("no shaderc-sys means four notices vanish");
+        let failure = registry_crate_root_in(&metadata, LIBGIT2_VENDORING_CRATE_NAME)
+            .expect_err("no libgit2-sys means its notice vanishes");
         let reported = format!("{failure:#}");
         assert!(
             reported.contains("found 0"),
@@ -1783,11 +1816,11 @@ mod tests {
     fn two_copies_of_the_vendoring_crate_are_refused_rather_than_guessed_between() {
         let metadata = serde_json::json!({
             "packages": [
-                { "name": SHADERC_VENDORING_CRATE_NAME, "manifest_path": "/a/Cargo.toml" },
-                { "name": SHADERC_VENDORING_CRATE_NAME, "manifest_path": "/b/Cargo.toml" },
+                { "name": LIBGIT2_VENDORING_CRATE_NAME, "manifest_path": "/a/Cargo.toml" },
+                { "name": LIBGIT2_VENDORING_CRATE_NAME, "manifest_path": "/b/Cargo.toml" },
             ]
         });
-        let failure = registry_crate_root_in(&metadata, SHADERC_VENDORING_CRATE_NAME)
+        let failure = registry_crate_root_in(&metadata, LIBGIT2_VENDORING_CRATE_NAME)
             .expect_err("two copies means the appendix silently covers one");
         assert!(
             format!("{failure:#}").contains("found 2"),
@@ -1800,8 +1833,8 @@ mod tests {
         let metadata = serde_json::json!({
             "packages": [
                 {
-                    "name": SHADERC_VENDORING_CRATE_NAME,
-                    "manifest_path": "/registry/shaderc-sys-0.10.1/Cargo.toml",
+                    "name": LIBGIT2_VENDORING_CRATE_NAME,
+                    "manifest_path": "/registry/libgit2-sys-0.18.8+1.9.7/Cargo.toml",
                 },
                 {
                     "name": OPUSIC_VENDORING_CRATE_NAME,
@@ -1810,8 +1843,8 @@ mod tests {
             ]
         });
         assert_eq!(
-            registry_crate_root_in(&metadata, SHADERC_VENDORING_CRATE_NAME).expect("resolve"),
-            PathBuf::from("/registry/shaderc-sys-0.10.1")
+            registry_crate_root_in(&metadata, LIBGIT2_VENDORING_CRATE_NAME).expect("resolve"),
+            PathBuf::from("/registry/libgit2-sys-0.18.8+1.9.7")
         );
         assert_eq!(
             registry_crate_root_in(&metadata, OPUSIC_VENDORING_CRATE_NAME).expect("resolve"),
@@ -1819,10 +1852,10 @@ mod tests {
         );
     }
 
-    /// The two vendoring crates lay their notices out differently — one under
-    /// `build/`, one at the crate root — and the roster is what says so. A
-    /// path written for the wrong crate's convention reads nothing, so the
-    /// prefixes are locked rather than left to a reviewer to notice.
+    /// Each vendoring crate lays its bundled sources out its own way, and the
+    /// roster is what says so. A path written for the wrong crate's convention
+    /// reads nothing, so the paths are locked rather than left to a reviewer to
+    /// notice.
     #[test]
     fn each_vendoring_crates_notice_paths_follow_that_crates_own_layout() {
         for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
@@ -1834,11 +1867,6 @@ mod tests {
                 continue;
             };
             match vendoring_crate_name {
-                SHADERC_VENDORING_CRATE_NAME => assert!(
-                    path_relative_to_crate_root.starts_with("build/"),
-                    "{} extracts its trees under build/, got {path_relative_to_crate_root}",
-                    project.display_name
-                ),
                 OPUSIC_VENDORING_CRATE_NAME => assert_eq!(
                     path_relative_to_crate_root, "opus/COPYING",
                     "{} reads libopus's own COPYING inside the bundled sources",

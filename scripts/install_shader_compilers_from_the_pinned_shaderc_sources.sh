@@ -4,31 +4,21 @@
 #
 # Builds the GLSL compilers build scripts call by name:
 #
-#   scripts/install_shader_compilers_from_the_locked_shaderc_sources.sh <install-prefix>
+#   scripts/install_shader_compilers_from_the_pinned_shaderc_sources.sh <install-prefix>
 #
 # writes glslc, glslangValidator and spirv-opt to <install-prefix>/bin/.
 # AlmaLinux 8, under manylinux_2_28, packages no glslc, and its glslang and
-# SPIRV-Tools are older than rive-runtime's shaders need. Built
-# from the shaderc sources vendored in the `shaderc-sys` crate the workspace's
-# Cargo.lock pins, fetched from crates.io and checked against the lock's
-# checksum, so no cargo, and no lockfile of the caller's own, is needed. Needs
-# curl, cmake, ninja, a C++ compiler and a Python 3.11 or later.
+# SPIRV-Tools are older than rive-runtime's shaders need. Built from the
+# shaderc sources the `shaderc-sys` crate vendors, fetched from crates.io and
+# checked against the checksum pinned here, so no cargo is needed. Needs curl,
+# cmake, ninja and a C++ compiler.
 
 set -euo pipefail
 
-install_prefix="${1:?usage: install_shader_compilers_from_the_locked_shaderc_sources.sh <install-prefix>}"
-workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
+install_prefix="${1:?usage: install_shader_compilers_from_the_pinned_shaderc_sources.sh <install-prefix>}"
 
-python_with_tomllib="$(command -v python3.12 || command -v python3)"
-read -r shaderc_sys_version shaderc_sys_checksum < <("$python_with_tomllib" - "$workspace_root/Cargo.lock" <<'EOF'
-import sys
-import tomllib
-
-with open(sys.argv[1], "rb") as cargo_lock:
-    shaderc_sys = next(package for package in tomllib.load(cargo_lock)["package"] if package["name"] == "shaderc-sys")
-print(shaderc_sys["version"], shaderc_sys["checksum"])
-EOF
-)
+shaderc_sys_version="0.10.1"
+shaderc_sys_checksum="bdceb85b2c6d2c27b95ffe2d341063dfded0aca8046f7f60c544bbeaeaf8bcae"
 
 shaderc_sys_download_directory="$(mktemp -d)"
 shaderc_sys_crate="$shaderc_sys_download_directory/shaderc-sys-$shaderc_sys_version.crate"

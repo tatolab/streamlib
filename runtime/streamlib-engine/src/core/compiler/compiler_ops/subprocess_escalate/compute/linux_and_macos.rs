@@ -23,7 +23,7 @@ use crate::core::context::{
     BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding, GpuContextLimitedAccess,
     TextureRegistration,
 };
-use crate::core::rhi::{GlslCompilationTargetStage, SurfaceBoundKernelBindingKind};
+use crate::core::rhi::{ShaderCompilationTargetStage, SurfaceBoundKernelBindingKind};
 
 /// The binding kind a wire enum names.
 pub(super) fn compute_binding_kind_from_wire(
@@ -59,7 +59,7 @@ pub(super) fn compute_binding_kind_to_wire(
 /// declaration is checked against it rather than replacing it. Re-registering
 /// an identical kernel is a cache hit and answers with the same `kernel_id`.
 ///
-/// The shader arrives as GLSL `source` the engine compiles, or as the
+/// The shader arrives as Slang `source` the engine compiles, or as the
 /// pre-compiled `spv_hex` escape hatch.
 ///
 /// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
@@ -81,8 +81,8 @@ pub(in super::super) fn handle_register_compute_kernel(
     // get different answers: one lists the stages that exist, the other says
     // which one this op means.
     if !req.stage.is_empty() {
-        match GlslCompilationTargetStage::from_wire_name(&req.stage) {
-            Ok(GlslCompilationTargetStage::Compute) => {}
+        match ShaderCompilationTargetStage::from_wire_name(&req.stage) {
+            Ok(ShaderCompilationTargetStage::Compute) => {}
             Ok(other) => {
                 return EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
@@ -90,7 +90,7 @@ pub(in super::super) fn handle_register_compute_kernel(
                         "register_compute_kernel carries stage `{}`; this op registers a \
                          compute kernel, so the only stage it compiles for is `{}`",
                         other.wire_name(),
-                        GlslCompilationTargetStage::Compute.wire_name()
+                        ShaderCompilationTargetStage::Compute.wire_name()
                     ),
                 });
             }
@@ -107,7 +107,7 @@ pub(in super::super) fn handle_register_compute_kernel(
         "",
         &req.source,
         &req.spv_hex,
-        GlslCompilationTargetStage::Compute,
+        ShaderCompilationTargetStage::Compute,
         &req.entry_point,
     ) {
         Ok(shader_source) => shader_source,

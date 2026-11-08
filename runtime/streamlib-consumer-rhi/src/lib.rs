@@ -83,6 +83,8 @@ mod iosurface_backed_image;
 #[cfg(target_os = "linux")]
 mod owned_vulkan_video_codec_device;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod slang_compiler_library;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_extension_names;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_image_usage;
@@ -139,6 +141,8 @@ pub use iosurface_backed_image::{
 };
 #[cfg(target_os = "linux")]
 pub use owned_vulkan_video_codec_device::OwnedVulkanVideoCodecDevice;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use slang_compiler_library::slang_compiler_library_candidate_paths;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

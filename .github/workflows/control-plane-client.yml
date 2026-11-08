@@ -28,10 +28,7 @@ jobs:
       # iceoryx2-pal-posix runs bindgen — which needs libclang and clang's
       # builtin headers — and the audio path links opus. The same Linux engine dep set
       # as ci.yml.
-      # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
-      # `build-from-source`); `ninja-build` is what makes that ~64s instead of
-      # minutes — shaderc-sys picks the Ninja generator whenever `ninja` is on
-      # PATH, so installing it is the whole configuration. Explicit rather than
+      # `cmake` and `ninja-build` build aws-lc-sys's C. Explicit rather than
       # leaning on the runner image having either, whose contents move.
       - name: Install system dependencies
         timeout-minutes: 12

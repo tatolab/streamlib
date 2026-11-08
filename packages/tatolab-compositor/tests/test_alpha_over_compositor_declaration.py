@@ -19,7 +19,7 @@ from tatolab.compositor import (
     AlphaOverLayerPlacement,
 )
 from tatolab.compositor.alpha_over_compositor import (
-    alpha_over_compute_kernel_glsl,
+    alpha_over_compute_kernel_slang,
     pack_layer_placements,
 )
 from tatolab.stream._node_declaration import (
@@ -84,13 +84,16 @@ def test_the_push_constant_block_packs_each_placement_at_its_std430_offset():
 
 
 def test_the_kernel_samples_every_layer_and_writes_one_composite():
-    kernel_glsl = alpha_over_compute_kernel_glsl()
+    kernel_slang = alpha_over_compute_kernel_slang()
 
     for index in range(ALPHA_OVER_LAYER_COUNT):
-        assert f"uniform sampler2D layer_{index}_texture;" in kernel_glsl
-        assert f"placements.layers[{index}]" in kernel_glsl
-    assert f"binding = {ALPHA_OVER_LAYER_COUNT}, rgba8) uniform writeonly image2D" in kernel_glsl
-    assert "above + below * (1.0 - above.a)" in kernel_glsl
+        assert f"Sampler2D layer_{index}_texture;" in kernel_slang
+        assert f"placements.layers[{index}]" in kernel_slang
+    assert (
+        f"[[vk::binding({ALPHA_OVER_LAYER_COUNT}, 0)]] [format(\"rgba8\")] RWTexture2D<float4>"
+        in kernel_slang
+    )
+    assert "above + below * (1.0 - above.a)" in kernel_slang
 
 
 def test_the_installed_entry_point_names_the_class_by_its_own_import_path():

@@ -339,16 +339,15 @@ class HeldTensorRereadingSink:
 KERNEL_WRITTEN_TENSOR_SHAPE = [4, 64, 64]
 KERNEL_TENSOR_UNWRITTEN_SENTINEL = -1.0
 INDEX_PATTERN_TENSOR_BINDING = "index_pattern_tensor"
-WRITE_INDEX_PATTERN_GLSL = """\
-#version 450
-layout(local_size_x = 64) in;
-layout(set = 0, binding = 0, std430) writeonly buffer IndexPatternTensor {
-    float values[];
-} index_pattern_tensor;
-void main() {
-    uint at = gl_GlobalInvocationID.x;
-    if (at < index_pattern_tensor.values.length()) {
-        index_pattern_tensor.values[at] = float(at);
+WRITE_INDEX_PATTERN_SLANG = """\
+[[vk::binding(0, 0)]] RWStructuredBuffer<float> index_pattern_tensor;
+[numthreads(64, 1, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    uint element_count;
+    uint element_stride;
+    index_pattern_tensor.GetDimensions(element_count, element_stride);
+    if (invocation.x < element_count) {
+        index_pattern_tensor[invocation.x] = float(invocation.x);
     }
 }
 """
@@ -359,25 +358,20 @@ PAINT_COLOUR_BINDING = "paint_colour_tensor"
 # no rounding to argue about.
 PAINT_COLOUR = [0.2, 0.4, 0.6, 1.0]
 CONTROL_PAINT_COLOUR = [0.6, 0.2, 0.4, 1.0]
-FULL_SCREEN_TRIANGLE_VERTEX_GLSL = """\
-#version 450
-void main() {
-    vec2 corner = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-    gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+FULL_SCREEN_TRIANGLE_VERTEX_SLANG = """\
+float4 main(uint vertex_index : SV_VulkanVertexID) : SV_Position {
+    float2 corner = float2((vertex_index << 1) & 2, vertex_index & 2);
+    return float4(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 """
-PAINT_THE_TENSORS_COLOUR_FRAGMENT_GLSL = """\
-#version 450
-layout(set = 0, binding = 0, std430) readonly buffer PaintColourTensor {
-    float values[4];
-} paint_colour_tensor;
-layout(location = 0) out vec4 painted_colour;
-void main() {
-    painted_colour = vec4(
-        paint_colour_tensor.values[0],
-        paint_colour_tensor.values[1],
-        paint_colour_tensor.values[2],
-        paint_colour_tensor.values[3]
+PAINT_THE_TENSORS_COLOUR_FRAGMENT_SLANG = """\
+[[vk::binding(0, 0)]] StructuredBuffer<float> paint_colour_tensor;
+float4 main() : SV_Target {
+    return float4(
+        paint_colour_tensor[0],
+        paint_colour_tensor[1],
+        paint_colour_tensor[2],
+        paint_colour_tensor[3]
     );
 }
 """
@@ -413,7 +407,7 @@ class TensorStorageBufferKernelBindingProbe:
                 .to(NATURAL_TORCH_DEVICE_TYPE)
             )
             compute_kernel = gpu.create_compute_kernel(
-                source=WRITE_INDEX_PATTERN_GLSL
+                source=WRITE_INDEX_PATTERN_SLANG
             )
             with (
                 gpu.acquire_storage_buffer(
@@ -458,8 +452,8 @@ class TensorStorageBufferKernelBindingProbe:
 
             graphics_kernel = gpu.create_graphics_kernel(
                 color_attachment_formats=["rgba8_unorm"],
-                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-                fragment_source=PAINT_THE_TENSORS_COLOUR_FRAGMENT_GLSL,
+                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+                fragment_source=PAINT_THE_TENSORS_COLOUR_FRAGMENT_SLANG,
                 label="python-tensor-painted-fullscreen-triangle",
             )
             colour_target = gpu.acquire_texture(

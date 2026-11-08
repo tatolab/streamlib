@@ -122,12 +122,6 @@ Avoid the two failure modes:
   gdb/api_dump/validation overhead shifts *which* crash you hit, so never use
   them to decide the production failure mode; re-verify the symptom after each
   fix
-- [@docs/learnings/shaderc-ignores-a-glsl-entry-point-rename.md](shaderc-ignores-a-glsl-entry-point-rename.md) —
-  `shaderc_compile_into_spv` takes an `entry_point_name` and silently ignores
-  it for GLSL, returning a module still declaring `main`; the parameter is an
-  HLSL affordance, and GLSL has no selectable entry point at all. Refuse a
-  non-`main` entry point at construction rather than letting the mismatch
-  surface as a Vulkan pipeline-creation error
 - [@docs/learnings/iosurface-in-use-tracks-ports-and-use-counts.md](iosurface-in-use-tracks-ports-and-use-counts.md) —
   `IOSurfaceIsInUse` is true for an outstanding Mach port or a use count in any process, not
   for a cached `IOSurfaceRef`; a killed holder's use count clears promptly but asynchronously,
