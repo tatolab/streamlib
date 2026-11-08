@@ -198,6 +198,16 @@ impl RuntimeContext {
         &self.loaded_stream.project_directory
     }
 
+    /// Where the bytes of the project asset `asset` sit: a content-addressed file to open and
+    /// read, never to write. Refused when the stream's project holds no such asset or lacks its bytes.
+    pub fn asset_content_path(&self, asset: uuid::Uuid) -> crate::core::Result<std::path::PathBuf> {
+        streamlib_project_repository::the_content_path_of_an_asset(
+            self.stream_project_directory(),
+            asset,
+        )
+        .map_err(|refusal| crate::core::Error::Configuration(refusal.to_string()))
+    }
+
     /// The process-unique tag of the stream this context serves.
     pub fn stream_tag(&self) -> LoadedStreamTag {
         self.loaded_stream.identity.stream_tag
@@ -592,6 +602,11 @@ impl<'a> RuntimeContextFullAccess<'a> {
     pub fn stream_project_directory(&self) -> &std::path::Path {
         self.host_base().stream_project_directory()
     }
+
+    /// See [`RuntimeContext::asset_content_path`].
+    pub fn asset_content_path(&self, asset: uuid::Uuid) -> crate::core::Result<std::path::PathBuf> {
+        self.host_base().asset_content_path(asset)
+    }
 }
 
 impl<'a> RuntimeContextLimitedAccess<'a> {
@@ -663,6 +678,11 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     /// The project directory of the stream this processor runs in.
     pub fn stream_project_directory(&self) -> &std::path::Path {
         self.host_base().stream_project_directory()
+    }
+
+    /// See [`RuntimeContext::asset_content_path`].
+    pub fn asset_content_path(&self, asset: uuid::Uuid) -> crate::core::Result<std::path::PathBuf> {
+        self.host_base().asset_content_path(asset)
     }
 
     /// See [`RuntimeContextFullAccess::host_base`].

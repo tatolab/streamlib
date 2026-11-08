@@ -479,6 +479,14 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
         """The project directory of the stream this node runs in."""
         ...
 
+    def asset_content_path(self, asset: str) -> str:
+        """Where the bytes of the project asset with UUID `asset` sit: a file to open and read, never to write.
+
+        Raises `ValueError` for a string that is not a UUID, and `LookupError` when the stream's
+        project holds no such asset or its content store lacks the bytes.
+        """
+        ...
+
     def is_paused(self) -> bool:
         """Whether the node is paused."""
         ...

@@ -338,6 +338,22 @@ pub fn every_asset_uuid_the_project_holds(
     Ok(asset_uuids)
 }
 
+/// Where the bytes of the asset `asset` sit in the project's content store: a content-addressed
+/// file a reader opens and never writes. Refused when the project holds no such asset, or when
+/// the store lacks its bytes.
+pub fn the_content_path_of_an_asset(
+    project_directory: &Path,
+    asset: Uuid,
+) -> Result<PathBuf, ProjectRepositoryRefusal> {
+    let held_asset = read_every_asset_sidecar(project_directory)?
+        .remove(&asset)
+        .ok_or(ProjectRepositoryRefusal::NoSuchAsset(asset))?;
+    let content_store =
+        crate::project_content_store::ProjectContentStore::of_project(project_directory)?;
+    content_store.stored_content(&held_asset.content_sha256)?;
+    Ok(content_store.content_path(&held_asset.content_sha256))
+}
+
 pub(crate) fn read_every_asset_sidecar(
     project_directory: &Path,
 ) -> Result<BTreeMap<Uuid, ProjectAsset>, ProjectRepositoryRefusal> {
