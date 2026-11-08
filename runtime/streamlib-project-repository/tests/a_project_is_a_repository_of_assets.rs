@@ -642,3 +642,60 @@ fn a_create_that_fails_leaves_no_project_behind() {
     assert!(!fixture.project_directory.join(PROJECT_FILE_NAME).exists());
     assert!(fixture.project_directory.join(".tatolab").is_file());
 }
+
+#[test]
+fn an_asset_whose_file_ends_like_a_graph_document_never_enters_history() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let data = fixture.import_source("table.json", b"{\"secret\": 1}");
+    repository
+        .apply_asset_changes(&agent(), vec![import_from(&data, "data/table.json")])
+        .unwrap();
+    drop(repository);
+    let data_directory = fixture.project_directory.join("data");
+    std::fs::rename(
+        data_directory.join("table.json"),
+        data_directory.join("table.graph.json"),
+    )
+    .unwrap();
+    std::fs::rename(
+        data_directory.join("table.json.asset.json"),
+        data_directory.join("table.graph.json.asset.json"),
+    )
+    .unwrap();
+
+    let mut repository = ProjectRepository::open(&fixture.project_directory).unwrap();
+    let image = fixture.import_source("logo.png", b"png");
+    repository
+        .apply_asset_changes(&agent(), vec![import_from(&image, "images/logo.png")])
+        .unwrap();
+    let files_at_head = repository.history().files_at_head().unwrap();
+    assert!(files_at_head.contains_key("data/table.graph.json.asset.json"));
+    assert!(!files_at_head.contains_key("data/table.graph.json"));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_in_place_import_of_a_file_that_is_another_assets_file_is_refused() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let image = fixture.import_source("logo.png", b"png");
+    let holder = imported_asset(
+        &repository
+            .apply_asset_changes(&agent(), vec![import_from(&image, "images/logo.png")])
+            .unwrap(),
+    );
+    let alias = fixture.project_directory.join("images/alias.png");
+    std::os::unix::fs::symlink(fixture.project_directory.join("images/logo.png"), &alias).unwrap();
+    match repository.apply_asset_changes(&agent(), vec![import_from(&alias, "images/alias.png")]) {
+        Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset {
+            holder: refused_for,
+            ..
+        }) => {
+            assert_eq!(refused_for, holder)
+        }
+        other => panic!("expected the alias to be refused, got {other:?}"),
+    }
+}
