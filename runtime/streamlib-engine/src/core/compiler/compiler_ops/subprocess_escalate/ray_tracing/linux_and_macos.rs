@@ -294,10 +294,10 @@ pub(super) fn refuse_a_device_without_ray_tracing(
 /// to compile for, the other names the stage a module fills.
 pub(super) fn ray_tracing_pipeline_stage_from_wire(
     stage: EscalateRequestRegisterRayTracingKernelStageStage,
-) -> crate::core::rhi::GlslCompilationTargetStage {
+) -> crate::core::rhi::ShaderCompilationTargetStage {
     use EscalateRequestRegisterRayTracingKernelStageStage as Wire;
 
-    use crate::core::rhi::GlslCompilationTargetStage as Compiled;
+    use crate::core::rhi::ShaderCompilationTargetStage as Compiled;
     match stage {
         Wire::AnyHit => Compiled::RayAnyHit,
         Wire::Callable => Compiled::RayCallable,

@@ -216,7 +216,7 @@ pub(super) struct PixelBufferPoolManager {
 /// Cache key for a compute kernel built from a pre-compiled blob.
 ///
 /// The blob fixes stage, entry point and target environment on its own, so the
-/// bytes plus the declared push-constant size are the whole key. A GLSL source
+/// bytes plus the declared push-constant size are the whole key. A Slang source
 /// contract keys on the compiler's version too, because then the engine is what
 /// turns source into bytes.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1543,14 +1543,14 @@ pub struct GpuContext {
     /// blobs, never evicted, so a kernel survives its registering helper.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     compute_kernel_cache: Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>>>,
-    /// The engine's GLSL compiler and the SPIR-V it has already produced.
+    /// The engine's Slang compiler and the SPIR-V it has already produced.
     ///
-    /// GLSL text is the kernel source contract, so compilation happens here at
+    /// Slang text is the kernel source contract, so compilation happens here at
     /// kernel construction rather than in a build step the author has to own.
     /// Sits in front of `compute_kernel_cache`: this one spares the
     /// compilation, that one spares the pipeline.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    glsl_shader_source_compiler: Arc<crate::core::rhi::GlslShaderSourceToSpirvCompiler>,
+    slang_shader_source_compiler: Arc<crate::core::rhi::SlangShaderSourceCompiler>,
     /// The recorder every compute dispatch — batched or a recording of one —
     /// records into, built on first use and kept for this context's lifetime.
     ///
@@ -1650,8 +1650,8 @@ impl GpuContext {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            glsl_shader_source_compiler: Arc::new(
-                crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
+            slang_shader_source_compiler: Arc::new(
+                crate::core::rhi::SlangShaderSourceCompiler::new(),
             ),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
@@ -3595,32 +3595,32 @@ impl GpuContext {
     // Compute kernels for the escalate ops — always present, never installed
     // =========================================================================
 
-    /// Compile GLSL kernel source to SPIR-V, reusing what an identical earlier
+    /// Compile Slang kernel source to SPIR-V, reusing what an identical earlier
     /// request compiled.
     ///
     /// `label` is what the compiler's diagnostics name the source as, so it is
     /// the prefix an author sees on a syntax error.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn compile_glsl_shader_source_to_spirv(
+    pub fn compile_slang_shader_source_to_spirv(
         &self,
         source: &str,
-        stage: crate::core::rhi::GlslCompilationTargetStage,
+        stage: crate::core::rhi::ShaderCompilationTargetStage,
         entry_point: &str,
         label: &str,
     ) -> Result<Arc<[u8]>> {
-        self.glsl_shader_source_compiler
+        self.slang_shader_source_compiler
             .compile_or_reuse(source, stage, entry_point, label)
     }
 
-    /// How many times this context has actually run the GLSL compiler.
+    /// How many times this context has actually run the Slang compiler.
     ///
     /// What a cache-hit assertion counts; elapsed time cannot stand in for it,
     /// since re-creating a kernel is free of compilation while still
     /// allocating handles.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[must_use]
-    pub fn glsl_shader_compiler_invocation_count(&self) -> u64 {
-        self.glsl_shader_source_compiler.invocation_count()
+    pub fn slang_shader_compiler_invocation_count(&self) -> u64 {
+        self.slang_shader_source_compiler.invocation_count()
     }
 
     /// How many queue submissions this context's device has made.
@@ -3656,7 +3656,7 @@ impl GpuContext {
     /// The cache key covers everything that changes the compiled output. For a
     /// pre-compiled blob that is the blob itself plus the declared
     /// push-constant size — the bytes already fix stage, entry point and target
-    /// environment. A GLSL source contract adds the compiler's own version to
+    /// environment. A Slang source contract adds the compiler's own version to
     /// the key, because then the engine is what produces the bytes.
     ///
     /// Returns the cache key as the kernel id: a caller re-registering the same

@@ -95,7 +95,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `@stream`, `TestPatternSource` (the branded animation, §Media I/O) → `HalftoneLensEffect`
   → `H264Encoder` → `expose(…, PUBLIC)`, the source and the encoder imported from the
   `tatolab-testpattern` and `tatolab-h264` modules, and two nodes, each in its own module under
-  `nodes/` — the `HalftoneLensEffect` over `GlslPixelEffect`, a drifting lens that turns what
+  `nodes/` — the `HalftoneLensEffect` over a Slang compute kernel, a drifting lens that turns what
   it covers into dots (owner, 2026-10-19), and a numpy `BrightnessMeter` on a fan-out of the
   effect's output that reads the frame through `frame.cpu()` and logs its mean once a
   second, paced on `ctx.time`, the stream's clock — with dependencies `tatolab-stream`, `tatolab-h264`,
@@ -801,7 +801,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   exactly when a stream or node module imports it: the declarations (`@node`, `@stream`, the
   `StreamBuilder`, the references, the compile entry), the config schema deriver, the data
   types (`AudioBlock`, `VideoFrame` and its colour types), the composable pieces (`ClaimedSurfacePixelAccess`,
-  `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the `ModelInputTensor` family,
+  `PixelAccessToOneClaimedSurface`, the `ModelInputTensor` family,
   `NodeOutputTextureRing`), `clock`, `log`, and the cross-floor check the compile entry runs.
   `@node` registers nothing — it writes the class's declaration stamps — and the proof is the
   stream suite itself, run with no runtime on any path. [package-split-and-lend — SHIPPED

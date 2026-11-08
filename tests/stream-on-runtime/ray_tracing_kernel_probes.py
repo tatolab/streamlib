@@ -58,54 +58,57 @@ RAY_TRACING_UNAVAILABLE = "VK_KHR_ray_tracing_pipeline"
 SCENE_BINDING = "scene_structure"
 TRACED_OUTPUT_BINDING = "traced_output_image"
 
-RAY_GENERATION_GLSL = """\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_structure;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D traced_output_image;
-layout(location = 0) rayPayloadEXT vec3 ray_payload_colour;
+RAY_GENERATION_SLANG = """\
+[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene_structure;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> traced_output_image;
+struct RayPayload { float3 colour; };
 void main() {
-    vec2 in_view =
-        (vec2(gl_LaunchIDEXT.xy) + vec2(0.5)) / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
-    ray_payload_colour = vec3(0.0);
-    traceRayEXT(scene_structure, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0,
-                vec3(in_view, 0.0), 0.001, vec3(0.0, 0.0, 1.0), 10.0, 0);
-    imageStore(traced_output_image, ivec2(gl_LaunchIDEXT.xy),
-               vec4(ray_payload_colour, 1.0));
+    float2 in_view =
+        (float2(DispatchRaysIndex().xy) + float2(0.5)) / float2(DispatchRaysDimensions().xy) * 2.0 - 1.0;
+    RayDesc ray;
+    ray.Origin = float3(in_view, 0.0);
+    ray.TMin = 0.001;
+    ray.Direction = float3(0.0, 0.0, 1.0);
+    ray.TMax = 10.0;
+    RayPayload payload;
+    payload.colour = float3(0.0);
+    TraceRay(scene_structure, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, ray, payload);
+    traced_output_image[DispatchRaysIndex().xy] = float4(payload.colour, 1.0);
 }
 """
 
-MISS_GLSL = """\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(location = 0) rayPayloadInEXT vec3 ray_payload_colour;
-void main() { ray_payload_colour = vec3(0.0, 0.0, 1.0); }
+MISS_SLANG = """\
+struct RayPayload { float3 colour; };
+void main(inout RayPayload payload) { payload.colour = float3(0.0, 0.0, 1.0); }
 """
 
-CLOSEST_HIT_GLSL = """\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(location = 0) rayPayloadInEXT vec3 ray_payload_colour;
-void main() { ray_payload_colour = vec3(0.0, 1.0, 0.0); }
+CLOSEST_HIT_SLANG = """\
+struct RayPayload { float3 colour; };
+void main(inout RayPayload payload, BuiltInTriangleIntersectionAttributes hit) {
+    payload.colour = float3(0.0, 1.0, 0.0);
+}
 """
 
 # A third binding no trace can name a surface for: no escalate op mints a
 # uniform buffer, so nothing resolves one by surface id.
-RAY_GENERATION_WITH_A_UNIFORM_BUFFER_GLSL = """\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_structure;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D traced_output_image;
-layout(set = 0, binding = 2) uniform TintBlock { vec4 tint; } tint_block;
-layout(location = 0) rayPayloadEXT vec3 ray_payload_colour;
+RAY_GENERATION_WITH_A_UNIFORM_BUFFER_SLANG = """\
+[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene_structure;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> traced_output_image;
+struct TintBlock { float4 tint; };
+[[vk::binding(2, 0)]] ConstantBuffer<TintBlock> tint_block;
+struct RayPayload { float3 colour; };
 void main() {
-    vec2 in_view =
-        (vec2(gl_LaunchIDEXT.xy) + vec2(0.5)) / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
-    ray_payload_colour = vec3(0.0);
-    traceRayEXT(scene_structure, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, 0,
-                vec3(in_view, 0.0), 0.001, vec3(0.0, 0.0, 1.0), 10.0, 0);
-    imageStore(traced_output_image, ivec2(gl_LaunchIDEXT.xy),
-               vec4(ray_payload_colour * tint_block.tint.rgb, 1.0));
+    float2 in_view =
+        (float2(DispatchRaysIndex().xy) + float2(0.5)) / float2(DispatchRaysDimensions().xy) * 2.0 - 1.0;
+    RayDesc ray;
+    ray.Origin = float3(in_view, 0.0);
+    ray.TMin = 0.001;
+    ray.Direction = float3(0.0, 0.0, 1.0);
+    ray.TMax = 10.0;
+    RayPayload payload;
+    payload.colour = float3(0.0);
+    TraceRay(scene_structure, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, ray, payload);
+    traced_output_image[DispatchRaysIndex().xy] = float4(payload.colour * tint_block.tint.rgb, 1.0);
 }
 """
 
@@ -117,9 +120,9 @@ TRIANGLE_INDICES = [0, 1, 2]
 # order the shader binding table is laid out. A group names its modules by
 # index into `stages`, because two modules can fill the same stage.
 RAY_TRACING_STAGES = [
-    {"stage": "ray_gen", "source": RAY_GENERATION_GLSL},
-    {"stage": "miss", "source": MISS_GLSL},
-    {"stage": "closest_hit", "source": CLOSEST_HIT_GLSL},
+    {"stage": "ray_gen", "source": RAY_GENERATION_SLANG},
+    {"stage": "miss", "source": MISS_SLANG},
+    {"stage": "closest_hit", "source": CLOSEST_HIT_SLANG},
 ]
 RAY_TRACING_GROUPS = [
     {"kind": "general", "general_stage": 0},
@@ -395,9 +398,9 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
     def observe(self) -> dict:
         tinted = self.gpu_full_access.create_ray_tracing_kernel(
             stages=[
-                {"stage": "ray_gen", "source": RAY_GENERATION_WITH_A_UNIFORM_BUFFER_GLSL},
-                {"stage": "miss", "source": MISS_GLSL},
-                {"stage": "closest_hit", "source": CLOSEST_HIT_GLSL},
+                {"stage": "ray_gen", "source": RAY_GENERATION_WITH_A_UNIFORM_BUFFER_SLANG},
+                {"stage": "miss", "source": MISS_SLANG},
+                {"stage": "closest_hit", "source": CLOSEST_HIT_SLANG},
             ],
             groups=RAY_TRACING_GROUPS,
             label="python-tinted-traced-triangle",

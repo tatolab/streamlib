@@ -95,8 +95,8 @@ jobs:
 
       # The engine's build script compiles GLSL with glslc, the Linux engine
       # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
-      # build the vendored shaderc. `timeout-minutes` is the backstop the
-      # composite action cannot declare itself.
+      # build aws-lc-sys's C. `timeout-minutes` is the backstop the composite
+      # action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -333,6 +333,17 @@ jobs:
           echo "VK_ADD_DRIVER_FILES=$bundled_vulkan_driver_directory/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$bundled_vulkan_driver_directory" >> "$GITHUB_ENV"
 
+      - name: Cache the Slang compiler release
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_release_cache
+          key: slang-compiler-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh') }}
+
+      # The engine opens the Slang compiler at run time; a debug build's tests
+      # find it where this stages it under target/.
+      - name: Stage the Slang compiler
+        run: bash scripts/stage_slang_compiler_libraries.sh
+
       # The compile-fail test builds the engine a second time, in trybuild's
       # own target directory; it runs on `main` and in the merge queue.
       - name: Unit, integration and hardware tests
@@ -461,8 +472,8 @@ jobs:
 
       # The engine's build script compiles GLSL with glslc, the Linux engine
       # links Vulkan and iceoryx2's PAL crates run bindgen; cmake and ninja
-      # build the vendored shaderc. `timeout-minutes` is the backstop the
-      # composite action cannot declare itself.
+      # build aws-lc-sys's C. `timeout-minutes` is the backstop the composite
+      # action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -646,7 +657,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install glslc and the shaderc crate's build tools
+      - name: Install glslc and the C++ build tools
         run: brew install shaderc cmake ninja
 
       - name: Install the Rust toolchain rust-toolchain.toml pins
@@ -684,6 +695,19 @@ jobs:
           --exclude streamlib-adapter-skia
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::disallowed_macros -D warnings
+
+      - name: Cache the Slang compiler release
+        if: github.event_name != 'pull_request'
+        uses: actions/cache@v5
+        with:
+          path: target/slang_compiler_release_cache
+          key: slang-compiler-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh') }}
+
+      # The engine opens the Slang compiler at run time; a debug build's tests
+      # find it where this stages it under target/.
+      - name: Stage the Slang compiler
+        if: github.event_name != 'pull_request'
+        run: bash scripts/stage_slang_compiler_libraries.sh
 
       - name: Run unit tests
         if: github.event_name != 'pull_request'

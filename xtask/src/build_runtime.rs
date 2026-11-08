@@ -124,6 +124,12 @@ use bundled_vulkan_driver_on_this_host::{
     WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE,
 };
 
+/// The script that writes the Slang shader compiler into the maturin
+/// project's package tree and the workspace's `target/`, relative to the
+/// workspace.
+const SLANG_COMPILER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
+    "scripts/stage_slang_compiler_libraries.sh";
+
 /// Left in the lend so the namespace gate refuses it by path.
 const TATOLAB_NAMESPACE_PACKAGE_INIT_MEMBER: &str = "tatolab/__init__.py";
 
@@ -181,6 +187,7 @@ pub fn run(
     let wheel_directory = runtime_unit_wheel_directory_in_the_workspace(workspace_root);
     let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
     stage_bundled_vulkan_driver(workspace_root)?;
+    stage_slang_compiler_libraries(workspace_root)?;
     let macos_deployment_target = if cfg!(target_os = "macos") {
         let maturin_pyproject_path = maturin_project_directory.join("pyproject.toml");
         let maturin_pyproject = std::fs::read_to_string(&maturin_pyproject_path)
@@ -212,6 +219,8 @@ pub fn run(
     replace_lend_directory_with_wheel_contents(&runtime_unit_wheel, &lend_directory)?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     ensure_lend_carries_the_bundled_vulkan_driver(&lend_directory)?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    ensure_lend_carries_the_slang_compiler(&lend_directory)?;
     tracing::info!(
         "build-runtime: {} unpacked into the lend at {}",
         runtime_unit_wheel.display(),
@@ -450,6 +459,23 @@ fn stage_bundled_vulkan_driver(_workspace_root: &Path) -> Result<()> {
     anyhow::bail!("`cargo xtask build-runtime` builds the runtime unit on macOS and Linux only")
 }
 
+/// Run the script that stages the Slang compiler the engine opens at run time.
+fn stage_slang_compiler_libraries(workspace_root: &Path) -> Result<()> {
+    let staging_script = workspace_root.join(SLANG_COMPILER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE);
+    let exit_status = std::process::Command::new("bash")
+        .arg(&staging_script)
+        .current_dir(workspace_root)
+        .status()
+        .with_context(|| format!("failed to run {}", staging_script.display()))?;
+    anyhow::ensure!(
+        exit_status.success(),
+        "{} failed ({exit_status}) — the lend would carry no shader compiler, and no kernel \
+         written in Slang could be built",
+        staging_script.display()
+    );
+    Ok(())
+}
+
 /// maturin writes this into the wheel's tag but does not hand it to the link,
 /// so the binaries would otherwise claim whatever macOS rustc defaults to.
 pub fn macos_deployment_target_from_maturin_pyproject(maturin_pyproject: &str) -> Result<String> {
@@ -655,6 +681,29 @@ fn ensure_lend_carries_the_bundled_vulkan_driver(lend_directory: &Path) -> Resul
         "the lend's {} lacks {} — {WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE}",
         bundled_vulkan_driver_directory.display(),
         missing_driver_files.join(", ")
+    );
+    Ok(())
+}
+
+/// Refuse a lend missing either Slang compiler library.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn ensure_lend_carries_the_slang_compiler(lend_directory: &Path) -> Result<()> {
+    let bundled_slang_compiler_directory =
+        runtime_unit_layout::bundled_slang_compiler_directory_in_the_lend(lend_directory);
+    let missing_compiler_files: Vec<&str> = runtime_unit_layout::BUNDLED_SLANG_COMPILER_FILE_NAMES
+        .iter()
+        .copied()
+        .filter(|compiler_file_name| {
+            !bundled_slang_compiler_directory
+                .join(compiler_file_name)
+                .is_file()
+        })
+        .collect();
+    anyhow::ensure!(
+        missing_compiler_files.is_empty(),
+        "the lend's {} lacks {} — no kernel written in Slang could be built",
+        bundled_slang_compiler_directory.display(),
+        missing_compiler_files.join(", ")
     );
     Ok(())
 }
@@ -1072,5 +1121,51 @@ mod tests {
             std::fs::write(driver_directory.join(missing_driver_file_name), "").unwrap();
             ensure_lend_carries_the_bundled_vulkan_driver(lend_directory.path()).unwrap();
         }
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn a_lend_missing_either_slang_compiler_library_is_refused_naming_it() {
+        for missing_compiler_file_name in runtime_unit_layout::BUNDLED_SLANG_COMPILER_FILE_NAMES {
+            let lend_directory = tempfile::TempDir::new().unwrap();
+            let compiler_directory =
+                runtime_unit_layout::bundled_slang_compiler_directory_in_the_lend(
+                    lend_directory.path(),
+                );
+            std::fs::create_dir_all(&compiler_directory).unwrap();
+            for carried_compiler_file_name in runtime_unit_layout::BUNDLED_SLANG_COMPILER_FILE_NAMES
+                .iter()
+                .filter(|compiler_file_name| **compiler_file_name != missing_compiler_file_name)
+            {
+                std::fs::write(compiler_directory.join(carried_compiler_file_name), "").unwrap();
+            }
+
+            let refusal = ensure_lend_carries_the_slang_compiler(lend_directory.path())
+                .unwrap_err()
+                .to_string();
+            assert!(refusal.contains(missing_compiler_file_name), "{refusal}");
+
+            std::fs::write(compiler_directory.join(missing_compiler_file_name), "").unwrap();
+            ensure_lend_carries_the_slang_compiler(lend_directory.path()).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_staging_script_pins_the_slang_release_the_layout_names() {
+        let staging_script = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join(SLANG_COMPILER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE),
+        )
+        .unwrap();
+        assert!(
+            staging_script.contains(&format!(
+                "SLANG_VERSION=\"{}\"",
+                runtime_unit_layout::BUNDLED_SLANG_COMPILER_VERSION
+            )),
+            "the staging script pins a Slang release other than the one the runtime unit layout \
+             names its optimiser library after"
+        );
     }
 }

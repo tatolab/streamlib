@@ -75,9 +75,12 @@ recorded here so the tickets need not re-derive them.
   global session and what it creates are not thread-safe. A compile runs at kernel
   construction or a graph edit, about 40 ms, never per frame.
   It replaces `glsl_shader_source_compiler.rs` and keeps its role and its cache.
-- **The binding is `shader-slang`, pinned by exact version** behind that module. Its three
-  missing calls, loading from a source string, `findAndCheckEntryPoint`, and a global session
-  go through its raw tables in that module only. Nothing else imports it.
+- **The binding is that module's own**: it opens `libslang-compiler` by path from beside the
+  engine with `libloading` and calls Slang's COM interfaces through tables declared there,
+  each struct's layout held to Slang's headers by a size test. The `shader-slang` crate links
+  Slang at build time from a machine's install, where the runtime unit opens the copy it
+  carries, and lacks three of the calls the module makes. Assumed unless overruled
+  (`slang-shader-compiler` ticket 1).
 - **Compile settings:** SPIR-V 1.4 for Vulkan 1.2, optimisation on with the optimiser shipped,
   debug info off. Slang keeps binding names without it, and the engine's reflection refuses
   Slang's debug instructions.
@@ -107,7 +110,8 @@ recorded here so the tickets need not re-derive them.
 - Every GLSL shader in the engine tree is rewritten in Slang, one file each: the engine's
   (`vulkan/rhi/shaders`, 21), `streamlib-vulkan-video`'s (2), `packages/test-fixtures`' (6) and
   the SDK's GLSL kernels (`model_input_tensor_kernel.py`). The build scripts compile them
-  through the same library.
+  through the same library. `packages/test-fixtures`' six move with the build-time shaders
+  (ticket 2), because its build script compiles them.
 - **A new project's first stream never breaks.** The scaffold's sample stream runs
   `packages/tatolab-testpattern`'s kernel and the scaffold's `HalftoneLensEffect`, so both move
   in the ticket that makes the constructors Slang-only: the testpattern kernel is rewritten in
@@ -143,6 +147,11 @@ recorded here so the tickets need not re-derive them.
 - REMOVED: sdk/tatolab-stream/tatolab/stream/glsl_pixel_effect.py
 - REMOVED: tests/stream-on-runtime/test_glsl_pixel_effect.py
 - REMOVED: sdk/tatolab-stream/tests/test_glsl_pixel_effect_refusals.py
+- REMOVED: tests/stream-on-runtime/glsl_pixel_effect_probes.py
+- REMOVED: tests/stream-on-runtime/glsl_pixel_effect_streams.py
+- REMOVED: GlslShaderSourceToSpirvCompiler
+- REMOVED: compile_glsl_shader_source_to_spirv
+- REMOVED: docs/learnings/shaderc-ignores-a-glsl-entry-point-rename.md
 
 ## Decisions
 
@@ -152,6 +161,11 @@ recorded here so the tickets need not re-derive them.
   front-end gaps to document. Rejected: keeping GLSL with `source_language="glsl"`.
 - Assumed unless overruled: the entry point stays `main` by default, as today, and any name
   is accepted, since Slang renames entry points where glslang would not.
+- Assumed unless overruled: a vertex shader reads its index as `SV_VulkanVertexID`.
+  `SV_VertexID` makes Slang declare the `DrawParameters` capability, which the engine's
+  device does not enable.
+- Assumed unless overruled: GLSL text is refused naming its `#version` line, the one line
+  every GLSL source carries, where Slang's own diagnostic names a module it does not ship.
 
 ## Proof
 

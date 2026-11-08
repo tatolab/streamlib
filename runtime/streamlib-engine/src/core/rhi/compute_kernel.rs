@@ -28,11 +28,10 @@ pub enum ComputeBindingKind {
     /// Uniform buffer (UBO) — read-only, fixed-size, fast-path.
     UniformBuffer,
     /// Sampled image with a combined sampler — read-only with filtering /
-    /// addressing baked into the descriptor. GLSL `sampler2D` /
-    /// `samplerExternalOES` style.
+    /// addressing baked into the descriptor: a Slang `Sampler2D`.
     SampledTexture,
     /// Sampled image without a combined sampler — read-only, addressed by
-    /// integer coordinates via GLSL `texture2D` + `texelFetch` (no
+    /// integer coordinates through a Slang `Texture2D`'s `Load` (no
     /// filtering). Backs Vulkan `VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE`.
     SampledImage,
     /// Storage image — read/write, no filtering, exact pixel access.
@@ -193,10 +192,7 @@ pub struct ComputeKernelDescriptor<'a> {
     /// Compiled SPIR-V bytecode for the compute shader.
     pub spv: &'a [u8],
     /// Name of the shader's entry point — the function the pipeline stage is
-    /// built against. `"main"` for everything the engine compiles: GLSL names
-    /// its entry point `main` and glslang will not rename one. Variable only
-    /// on the pre-compiled-SPIR-V escape hatch, where the blob's
-    /// `OpEntryPoint` may say something else.
+    /// built against, and the name the module's `OpEntryPoint` carries.
     pub entry_point: &'a str,
     /// Binding declarations for descriptor set 0.
     pub bindings: &'a [ComputeBindingSpec],

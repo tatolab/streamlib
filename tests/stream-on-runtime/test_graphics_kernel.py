@@ -8,7 +8,7 @@ installation step and no runtime-absent case, so the pass here — a fullscreen
 triangle sampling an acquired texture into an acquired colour target — needs
 nothing from the application but the processor itself.
 
-A kernel is an object: built in `setup()` from GLSL text the engine compiles,
+A kernel is an object: built in `setup()` from Slang text the engine compiles,
 drawn per frame in `process()`, with bindings passed at draw by the shaders'
 own names and never persisting on the kernel. What is worth breaking a build
 over is that the draw runs, and that every way of getting the bindings wrong is

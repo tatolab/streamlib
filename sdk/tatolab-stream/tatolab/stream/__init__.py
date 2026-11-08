@@ -119,8 +119,6 @@ from .clock import StreamClock as StreamClock
 from .clock import StreamClockReading as StreamClockReading
 from .clock import monotonic_now_ns as monotonic_now_ns
 from .clock import start_monotonic_timer as start_monotonic_timer
-from .glsl_pixel_effect import GlslPixelEffect as GlslPixelEffect
-from .glsl_pixel_effect import GlslPixelEffectDialType as GlslPixelEffectDialType
 from .model_input_tensor_kernel import ModelInputTensor as ModelInputTensor
 from .model_input_tensor_kernel import (
     ModelInputTensorChannelOrder as ModelInputTensorChannelOrder,
@@ -167,8 +165,6 @@ __all__ = [
     "GraphInputConfig",
     "GraphOutput",
     "GraphOutputConfig",
-    "GlslPixelEffect",
-    "GlslPixelEffectDialType",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",

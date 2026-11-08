@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::hex_encoded_wire_bytes::decode_hex;
 use crate::core::context::GpuContextLimitedAccess;
-use crate::core::rhi::GlslCompilationTargetStage;
+use crate::core::rhi::ShaderCompilationTargetStage;
 
 /// Which of the two shader sources a register op supplied for one stage.
 ///
@@ -16,10 +16,10 @@ use crate::core::rhi::GlslCompilationTargetStage;
 /// a malformed request, and refusing one must not cost a turn of the device
 /// gate — the same reason every other `_hex` field is decoded up here.
 pub(super) enum RegisteredShaderStageSource {
-    /// GLSL text, compiled once the handler holds Full access.
-    GlslSource {
+    /// Slang text, compiled once the handler holds Full access.
+    SlangSource {
         source: String,
-        stage: GlslCompilationTargetStage,
+        stage: ShaderCompilationTargetStage,
         entry_point: String,
         field_name: String,
     },
@@ -32,14 +32,14 @@ pub(super) enum RegisteredShaderStageSource {
 
 /// Read one stage's shader out of a register op, without touching the device.
 ///
-/// GLSL source and pre-compiled SPIR-V are alternatives: both is ambiguous
+/// Slang source and pre-compiled SPIR-V are alternatives: both is ambiguous
 /// about which the caller meant to run, and neither leaves nothing to build.
 /// Neither is guessable, so both are named.
 pub(super) fn registered_shader_stage_source(
     field_prefix: &str,
     source: &str,
     spv_hex: &str,
-    stage: GlslCompilationTargetStage,
+    stage: ShaderCompilationTargetStage,
     entry_point: &str,
 ) -> std::result::Result<RegisteredShaderStageSource, String> {
     let source_field = format!("{field_prefix}source");
@@ -47,7 +47,7 @@ pub(super) fn registered_shader_stage_source(
     match (source.is_empty(), spv_hex.is_empty()) {
         (true, true) => Err(format!(
             "neither {source_field} nor {spv_field} was supplied for the {} stage; a kernel is \
-             built from GLSL source or from pre-compiled SPIR-V, and one of the two has to \
+             built from Slang source or from pre-compiled SPIR-V, and one of the two has to \
              be there",
             stage.wire_name()
         )),
@@ -56,7 +56,7 @@ pub(super) fn registered_shader_stage_source(
              alternatives, and which one the kernel should run is not something to guess at",
             stage.wire_name()
         )),
-        (false, true) => Ok(RegisteredShaderStageSource::GlslSource {
+        (false, true) => Ok(RegisteredShaderStageSource::SlangSource {
             source: source.to_string(),
             stage,
             entry_point: normalized_shader_entry_point(entry_point).to_string(),
@@ -72,7 +72,7 @@ pub(super) fn registered_shader_stage_source(
 }
 
 impl RegisteredShaderStageSource {
-    /// The stage's SPIR-V, compiling the GLSL if that is what was supplied.
+    /// The stage's SPIR-V, compiling the Slang if that is what was supplied.
     ///
     /// Takes the sandbox rather than a `GpuContextFullAccess`, so it needs no
     /// escalate scope and every handler calls it before opening one:
@@ -84,12 +84,12 @@ impl RegisteredShaderStageSource {
         sandbox: &GpuContextLimitedAccess,
     ) -> crate::core::error::Result<Arc<[u8]>> {
         match self {
-            Self::GlslSource {
+            Self::SlangSource {
                 source,
                 stage,
                 entry_point,
                 field_name,
-            } => sandbox.host_inner().compile_glsl_shader_source_to_spirv(
+            } => sandbox.host_inner().compile_slang_shader_source_to_spirv(
                 source,
                 *stage,
                 entry_point,
@@ -103,7 +103,7 @@ impl RegisteredShaderStageSource {
     /// the module was compiled against, normalized once at resolution.
     pub(super) fn entry_point(&self) -> &str {
         match self {
-            Self::GlslSource { entry_point, .. } | Self::PreCompiledSpirv { entry_point, .. } => {
+            Self::SlangSource { entry_point, .. } | Self::PreCompiledSpirv { entry_point, .. } => {
                 entry_point
             }
         }

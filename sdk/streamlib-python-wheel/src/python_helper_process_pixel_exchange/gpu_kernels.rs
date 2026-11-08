@@ -246,7 +246,7 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("frame_index", 0u32)?;
         op.set_item("push_constants_hex", draw.push_constants_hex)?;
         // No escalate op mints a VertexBuffer, so this array is always empty
-        // and the shaders fabricate their vertices from `gl_VertexIndex`. The
+        // and the shaders fabricate their vertices from the vertex index. The
         // field is required on the wire, and the host refuses a non-empty one.
         op.set_item("vertex_buffers", PyList::empty(python))?;
         // `viewport` / `scissor` are omitted: the host fills them with the

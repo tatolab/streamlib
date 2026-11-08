@@ -8,7 +8,7 @@ at slot 0, output-only — which is why no Python compute filter had ever
 existed: the wire could not express read-one-write-another. These tests are
 that pass, written the way a user writes it.
 
-A kernel is an object: built in `setup()` from GLSL text the engine compiles,
+A kernel is an object: built in `setup()` from Slang text the engine compiles,
 dispatched per frame in `process()`, with bindings passed at dispatch by the
 shader's own names and never persisting on the kernel. Nothing here shells out
 to a shader compiler, and that absence is load-bearing: authoring a kernel
@@ -240,22 +240,22 @@ def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
     """The claim the whole change rests on, made falsifiable.
 
     Asserting "the probe does not shell out" by *reading* the probe proves
-    nothing durable — someone adds a `subprocess.run(["glslc", ...])` later and
-    every test still passes. So `glslc` and `glslangValidator` are shadowed
-    with stubs that exit 127 and say so, and `tatolabd` plus the processor
-    interpreter it spawns inherit that PATH. A kernel still builds, so the
-    compiler that built it is the one linked into the runtime.
+    nothing durable — someone adds a `subprocess.run(["slangc", ...])` later and
+    every test still passes. So `slangc`, `glslc` and `glslangValidator` are
+    shadowed with stubs that exit 127 and say so, and `tatolabd` plus the
+    processor interpreter it spawns inherit that PATH. A kernel still builds, so
+    the compiler that built it is the one the runtime carries.
     """
     sabotaged = tmp_path / "no-shader-toolchain"
     sabotaged.mkdir()
-    for tool in ("glslc", "glslangValidator"):
+    for tool in ("slangc", "glslc", "glslangValidator"):
         stub = sabotaged / tool
         stub.write_text(
             f"#!/bin/sh\necho '{tool} was invoked; the engine must not shell out' >&2\nexit 127\n"
         )
         stub.chmod(0o755)
     sabotaged_path = f"{sabotaged}{os.pathsep}{os.environ['PATH']}"
-    assert shutil.which("glslc", path=sabotaged_path) == str(sabotaged / "glslc"), (
+    assert shutil.which("slangc", path=sabotaged_path) == str(sabotaged / "slangc"), (
         "the stub must be what a shell-out would find, or this test proves nothing"
     )
 
@@ -295,9 +295,13 @@ def test_a_shader_that_does_not_compile_reports_the_compilers_own_diagnostic(
     assert ":2" in observed["does_not_compile"]
 
 
-def test_a_glsl_entry_point_other_than_main_is_refused(start_tatolabd_running_stream):
-    """glslang will not rename a GLSL entry point, so accepting one would build
-    a pipeline against a function the module does not contain."""
+def test_a_missing_entry_point_is_refused_by_name(start_tatolabd_running_stream):
     observed = run_probe(start_tatolabd_running_stream, "ShaderSourceRefusalProbe")
-    assert "sharpen" in observed["non_main_entry_point"]
-    assert "main" in observed["non_main_entry_point"]
+    assert "sharpen" in observed["missing_entry_point"]
+
+
+def test_glsl_source_is_refused_naming_its_version_line(start_tatolabd_running_stream):
+    """Slang is the only kernel source language, and the refusal says so."""
+    observed = run_probe(start_tatolabd_running_stream, "ShaderSourceRefusalProbe")
+    assert "`#version`" in observed["glsl_source"]
+    assert "Slang" in observed["glsl_source"]

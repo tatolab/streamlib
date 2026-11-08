@@ -223,7 +223,7 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         bindings: dict[str, str] | None = None,
         entry_point: str = "main",
     ) -> ComputeKernel:
-        """Build a compute kernel from GLSL `source`, or from pre-compiled SPIR-V.
+        """Build a compute kernel from Slang `source`, or from pre-compiled SPIR-V.
 
         Constructed once in `setup()`, dispatched per frame in `process()`. The
         engine compiles the source and reflects the shader at construction,
@@ -232,9 +232,8 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         compilation. Authoring needs no shader toolchain: the compiler is in
         the wheel.
 
-        `source` and `spirv` are alternatives — supply exactly one. A GLSL
-        entry point is always `main`; `entry_point` is meaningful only with
-        `spirv`.
+        `source` and `spirv` are alternatives — supply exactly one.
+        `entry_point` names the shader's entry function in either.
 
         `bindings` optionally asserts `{name: kind}` against reflection; each
         kind is one of `sampled_image`, `sampled_texture`, `storage_buffer`,
@@ -266,7 +265,7 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         color_blend: Mapping[str, str] | None = None,
         dynamic_state: str = "viewport_scissor",
     ) -> GraphicsKernel:
-        """Build a graphics kernel from GLSL sources, or from pre-compiled SPIR-V.
+        """Build a graphics kernel from Slang sources, or from pre-compiled SPIR-V.
 
         Constructed once in `setup()`, drawn per frame in `process()`. The
         engine compiles both stages and reflects them at construction, taking
@@ -276,7 +275,7 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         Each stage takes `*_source` or `*_spirv`, never both. The vertices are
         the shaders' own: no vertex or index buffer is reachable from a Python
         node, so a vertex stage fabricates its positions from
-        `gl_VertexIndex`. The pass attaches colour targets only, so the
+        `SV_VulkanVertexID`. The pass attaches colour targets only, so the
         pipeline carries no depth state.
 
         `bindings` optionally asserts the shape against reflection — `{name:
@@ -305,7 +304,7 @@ class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
         bindings: dict[str, str | tuple[str, Sequence[str]]] | None = None,
         label: str = "",
     ) -> RayTracingKernel:
-        """Build a ray-tracing kernel from GLSL sources, or from pre-compiled SPIR-V.
+        """Build a ray-tracing kernel from Slang sources, or from pre-compiled SPIR-V.
 
         `stages` is one mapping per shader module — `{"stage": "ray_gen",
         "source": …}`, where `stage` is one of `ray_gen`, `miss`,

@@ -2277,26 +2277,29 @@ mod tests {
         }
     }
 
-    const SUBGROUP_ELECTING_VERTEX_GLSL: &str = r#"#version 450
-#extension GL_KHR_shader_subgroup_basic : require
-layout(location = 0) out vec2 uv;
-void main() {
-    uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-    float elected_lane_depth = subgroupElect() ? 0.0 : 0.5;
-    gl_Position = vec4(uv * 2.0 - 1.0, elected_lane_depth, 1.0);
+    const SUBGROUP_ELECTING_VERTEX_SLANG: &str = r#"
+struct BlitVertexOutput {
+    [[vk::location(0)]] float2 uv : TEXCOORD0;
+    float4 position : SV_Position;
+};
+BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
+    BlitVertexOutput output;
+    output.uv = float2((vertex_index << 1) & 2, vertex_index & 2);
+    float elected_lane_depth = WaveIsFirstLane() ? 0.0 : 0.5;
+    output.position = float4(output.uv * 2.0 - 1.0, elected_lane_depth, 1.0);
+    return output;
 }
 "#;
-
     #[test]
     fn a_vertex_stage_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_where_not()
      {
         let Some(device) = try_vulkan_device() else {
             return;
         };
-        let vertex_spv = crate::core::rhi::GlslShaderSourceToSpirvCompiler::new()
+        let vertex_spv = crate::core::rhi::SlangShaderSourceCompiler::new()
             .compile_or_reuse(
-                SUBGROUP_ELECTING_VERTEX_GLSL,
-                crate::core::rhi::GlslCompilationTargetStage::Vertex,
+                SUBGROUP_ELECTING_VERTEX_SLANG,
+                crate::core::rhi::ShaderCompilationTargetStage::Vertex,
                 "main",
                 "subgroup-electing-vertex",
             )

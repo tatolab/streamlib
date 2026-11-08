@@ -162,9 +162,9 @@ def pack_push_constants_for_frame(frame_index: int, frame_width: int, frame_heig
     )
 
 
-def compute_kernel_glsl_rendering_a_test_pattern_frame() -> str:
+def compute_kernel_slang_rendering_a_test_pattern_frame() -> str:
     """The compute kernel that renders one frame."""
-    return resources.files(_THIS_PACKAGE).joinpath("test_pattern_frame.comp").read_text()
+    return resources.files(_THIS_PACKAGE).joinpath("test_pattern_frame.slang").read_text()
 
 
 def _is_plain_int(value: Any) -> bool:
@@ -254,7 +254,7 @@ class TestPatternSource:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu_full_access = ctx.gpu_full_access
         self._compute_kernel = gpu_full_access.create_compute_kernel(
-            source=compute_kernel_glsl_rendering_a_test_pattern_frame(),
+            source=compute_kernel_slang_rendering_a_test_pattern_frame(),
             push_constant_size=_PUSH_CONSTANT_BLOCK_STRUCT.size,
             bindings={
                 _POTATO_SPRITE_BINDING_NAME: "sampled_texture",

@@ -45,7 +45,7 @@ _WORKGROUP_TILE_SIZE_IN_PIXELS = 8
 
 _COMPOSITE_OUTPUT_BINDING_NAME = "composite_output"
 
-# One std430 `LayerPlacement`: `ivec2 offset`, `float opacity`, `int present`.
+# One std430 `LayerPlacement`: `int2 offset`, `float opacity`, `int present`.
 _LAYER_PLACEMENT_STRUCT = struct.Struct("<iifi")
 
 # Eight placements fill Vulkan's guaranteed 128-byte `maxPushConstantsSize` exactly,
@@ -57,11 +57,10 @@ def _layer_texture_binding_name(layer_index: int) -> str:
     return f"layer_{layer_index}_texture"
 
 
-def alpha_over_compute_kernel_glsl() -> str:
+def alpha_over_compute_kernel_slang() -> str:
     """The compositor's compute kernel: every layer over the one below it, onto transparent black."""
     layer_texture_declarations = "".join(
-        f"layout(set = 0, binding = {index}) uniform sampler2D "
-        f"{_layer_texture_binding_name(index)};\n"
+        f"[[vk::binding({index}, 0)]] Sampler2D {_layer_texture_binding_name(index)};\n"
         for index in range(ALPHA_OVER_LAYER_COUNT)
     )
     layer_applications = "".join(
@@ -70,42 +69,45 @@ def alpha_over_compute_kernel_glsl() -> str:
         for index in range(ALPHA_OVER_LAYER_COUNT)
     )
     return (
-        "#version 450\n"
-        f"layout(local_size_x = {_WORKGROUP_TILE_SIZE_IN_PIXELS}, "
-        f"local_size_y = {_WORKGROUP_TILE_SIZE_IN_PIXELS}) in;\n"
         f"{layer_texture_declarations}"
-        f"layout(set = 0, binding = {ALPHA_OVER_LAYER_COUNT}, rgba8) uniform writeonly image2D "
+        f"[[vk::binding({ALPHA_OVER_LAYER_COUNT}, 0)]] [format(\"rgba8\")] RWTexture2D<float4> "
         f"{_COMPOSITE_OUTPUT_BINDING_NAME};\n"
         "struct LayerPlacement {\n"
-        "    ivec2 offset;\n"
+        "    int2 offset;\n"
         "    float opacity;\n"
         "    int present;\n"
         "};\n"
-        "layout(push_constant) uniform AlphaOverLayerPlacements {\n"
+        "struct AlphaOverLayerPlacements {\n"
         f"    LayerPlacement layers[{ALPHA_OVER_LAYER_COUNT}];\n"
-        "} placements;\n"
-        "vec4 layer_over(vec4 below, sampler2D layer_texture, LayerPlacement placement, ivec2 at) {\n"
+        "};\n"
+        "[[vk::push_constant]] ConstantBuffer<AlphaOverLayerPlacements> placements;\n"
+        "float4 layer_over(float4 below, Sampler2D layer_texture, LayerPlacement placement, int2 at) {\n"
         "    if (placement.present == 0) {\n"
         "        return below;\n"
         "    }\n"
-        "    ivec2 within_layer = at - placement.offset;\n"
-        "    ivec2 layer_extent = textureSize(layer_texture, 0);\n"
-        "    if (any(lessThan(within_layer, ivec2(0)))\n"
-        "            || any(greaterThanEqual(within_layer, layer_extent))) {\n"
+        "    int2 within_layer = at - placement.offset;\n"
+        "    uint layer_width;\n"
+        "    uint layer_height;\n"
+        "    layer_texture.GetDimensions(layer_width, layer_height);\n"
+        "    if (any(within_layer < int2(0))\n"
+        "            || any(within_layer >= int2(int(layer_width), int(layer_height)))) {\n"
         "        return below;\n"
         "    }\n"
-        "    vec4 above = texelFetch(layer_texture, within_layer, 0) * placement.opacity;\n"
+        "    float4 above = layer_texture.Load(int3(within_layer, 0)) * placement.opacity;\n"
         "    return above + below * (1.0 - above.a);\n"
         "}\n"
-        "void main() {\n"
-        "    ivec2 at = ivec2(gl_GlobalInvocationID.xy);\n"
-        f"    ivec2 canvas_extent = imageSize({_COMPOSITE_OUTPUT_BINDING_NAME});\n"
-        "    if (at.x >= canvas_extent.x || at.y >= canvas_extent.y) {\n"
+        f"[numthreads({_WORKGROUP_TILE_SIZE_IN_PIXELS}, {_WORKGROUP_TILE_SIZE_IN_PIXELS}, 1)]\n"
+        "void main(uint3 invocation : SV_DispatchThreadID) {\n"
+        "    int2 at = int2(invocation.xy);\n"
+        "    uint canvas_width;\n"
+        "    uint canvas_height;\n"
+        f"    {_COMPOSITE_OUTPUT_BINDING_NAME}.GetDimensions(canvas_width, canvas_height);\n"
+        "    if (at.x >= int(canvas_width) || at.y >= int(canvas_height)) {\n"
         "        return;\n"
         "    }\n"
-        "    vec4 composite = vec4(0.0);\n"
+        "    float4 composite = float4(0.0);\n"
         f"{layer_applications}"
-        f"    imageStore({_COMPOSITE_OUTPUT_BINDING_NAME}, at, composite);\n"
+        f"    {_COMPOSITE_OUTPUT_BINDING_NAME}[at] = composite;\n"
         "}\n"
     )
 
@@ -281,7 +283,7 @@ class AlphaOverCompositor:
         }
         bindings[_COMPOSITE_OUTPUT_BINDING_NAME] = "storage_image"
         self._compute_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=alpha_over_compute_kernel_glsl(),
+            source=alpha_over_compute_kernel_slang(),
             push_constant_size=_PUSH_CONSTANT_BLOCK_BYTE_SIZE,
             bindings=bindings,
         )
