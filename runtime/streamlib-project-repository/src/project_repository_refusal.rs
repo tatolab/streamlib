@@ -46,6 +46,16 @@ pub enum ProjectRepositoryRefusal {
         asset: Uuid,
         referencing_documents: Vec<String>,
     },
+    #[error("the project holds no stream asset {0}")]
+    NoSuchStream(Uuid),
+    #[error("the graph document {path} refused the change: {why}")]
+    GraphOperationRefused { path: String, why: String },
+    #[error("node {node}'s config references the asset {asset}, which the project does not hold")]
+    ConfigReferencesNoAsset { node: Uuid, asset: Uuid },
+    #[error("{author} has no transaction left to undo")]
+    NothingToUndo { author: String },
+    #[error("{author} has undone nothing that is left to redo")]
+    NothingToRedo { author: String },
     #[error("the import source {path} could not be read: {why}")]
     ImportSourceUnreadable { path: PathBuf, why: String },
     #[error("the project's content store holds no content {0}")]

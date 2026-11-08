@@ -17,6 +17,7 @@ use crate::core::graph::{
     ProcessorUniqueId, StateComponent, node_named_or_refused,
     refuse_a_link_between_ports_whose_families_do_not_match,
 };
+use crate::core::graph_snapshot::NodeChangeADrawnLinkBlocks;
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
 };
@@ -599,7 +600,10 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
-        if let Err(refusal) = self.refuse_removing_a_node_a_drawn_link_names(&processor_id) {
+        if let Err(refusal) = self.refuse_a_node_change_a_drawn_link_names(
+            &processor_id,
+            NodeChangeADrawnLinkBlocks::Removal,
+        ) {
             return Box::pin(std::future::ready(Err(refusal)));
         }
         self.in_this_streams_log_route(remove_processor_impl(
@@ -618,6 +622,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
         self.in_this_streams_log_route(disconnect_impl(self.live_graph_change(), link_id))
+    }
+
+    fn apply_a_stream_graph_operation_live(
+        &self,
+        graph_operation: streamlib_project_repository::StreamGraphOperation,
+    ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>> {
+        self.in_this_streams_log_route(
+            self.apply_a_stream_graph_operation_to_the_live_graph(graph_operation),
+        )
     }
 
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
@@ -646,7 +659,10 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
-        self.refuse_removing_a_node_a_drawn_link_names(processor_id)?;
+        self.refuse_a_node_change_a_drawn_link_names(
+            processor_id,
+            NodeChangeADrawnLinkBlocks::Removal,
+        )?;
         self.block_on_the_engines_tokio_runtime(remove_processor_impl(
             self.live_graph_change(),
             processor_id.clone(),

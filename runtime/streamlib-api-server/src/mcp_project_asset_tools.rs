@@ -14,8 +14,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib_project_repository::{
     AppliedProjectTransaction, ProjectAsset, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetKind, ProjectAssetOperation, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectAssetKind, ProjectAssetOperation, ProjectOperation, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, DescribeAssetToolResult, ListAssetsToolResult,
@@ -33,7 +33,7 @@ const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
     "The project, by absolute path: a folder holding `tatolab-project.json`.";
 const ASSET_ARGUMENT_DESCRIPTION: &str =
     "The asset, by the UUID `import_asset` or `list_assets` answered.";
-const AUTHOR_ARGUMENT_DESCRIPTION: &str = "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.";
+pub(crate) const AUTHOR_ARGUMENT_DESCRIPTION: &str = "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.";
 
 /// What an asset is, as a caller names it.
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
@@ -65,7 +65,7 @@ impl From<ProjectAssetKindToolArgument> for ProjectAssetKind {
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(rename_all = "snake_case")]
-enum ProjectTransactionAuthorKindToolArgument {
+pub(crate) enum ProjectTransactionAuthorKindToolArgument {
     /// A person, through the studio or the CLI.
     Person,
     /// An agent.
@@ -75,7 +75,7 @@ enum ProjectTransactionAuthorKindToolArgument {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct ProjectTransactionAuthorToolArgument {
+pub(crate) struct ProjectTransactionAuthorToolArgument {
     #[schemars(description = "`person` or `agent`.")]
     kind: ProjectTransactionAuthorKindToolArgument,
     #[schemars(description = "The author's name as history shows it.")]
@@ -463,13 +463,17 @@ impl LocalApiMcpServerHandler {
                     commit,
                 } = applied;
                 let changed_asset = match transaction.operations.first() {
-                    Some(ProjectAssetOperation::ImportAsset { asset })
-                    | Some(ProjectAssetOperation::DeleteAsset { asset }) => asset.clone(),
-                    Some(ProjectAssetOperation::RelocateAsset { asset, .. })
-                    | Some(ProjectAssetOperation::SetAssetSettings { asset, .. }) => {
-                        project_repository.asset(*asset)?
+                    Some(ProjectOperation::Asset(
+                        ProjectAssetOperation::ImportAsset { asset }
+                        | ProjectAssetOperation::DeleteAsset { asset },
+                    )) => asset.clone(),
+                    Some(ProjectOperation::Asset(
+                        ProjectAssetOperation::RelocateAsset { asset, .. }
+                        | ProjectAssetOperation::SetAssetSettings { asset, .. },
+                    )) => project_repository.asset(*asset)?,
+                    Some(ProjectOperation::StreamGraph(_)) | None => {
+                        return Err(ProjectRepositoryRefusal::EmptyTransaction);
                     }
-                    None => return Err(ProjectRepositoryRefusal::EmptyTransaction),
                 };
                 Ok((
                     AssetTransactionToolResult {
@@ -486,7 +490,7 @@ impl LocalApiMcpServerHandler {
 }
 
 /// The author a change names: the caller's own, or the agent its MCP client is.
-fn the_author_of_a_change(
+pub(crate) fn the_author_of_a_change(
     author: Option<ProjectTransactionAuthorToolArgument>,
     peer: &Peer<RoleServer>,
 ) -> ProjectTransactionAuthor {
