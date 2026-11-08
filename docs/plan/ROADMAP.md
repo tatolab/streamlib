@@ -61,7 +61,16 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), ticket 2.
 - Done when the removal gate passes on every `REMOVED:` bullet of the change and
   `/ship-change` has folded it.
 
-## 5. New capability: lightweight nodes, then shaders
+## 5. The graph document
+
+Change: [`changes/graph-document.md`](changes/graph-document.md).
+
+A stream's source of truth becomes its graph document, edited only through transactions the
+runtime applies, with stable node ids and no `stream.py`. It waits on step 4, because `exposed`
+leaves the spec keys and the stream record there. Tickets: loading from the document, edits as
+transactions, `@stream` generators as frozen fragments, and the project read that replaces #3152.
+
+## 6. New capability: lightweight nodes, then shaders
 
 Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) and
 [`changes/slang-shader-compiler.md`](changes/slang-shader-compiler.md).
@@ -80,4 +89,6 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
 5. The pool, phase 4: #3237, one pool interpreter per stream for Python function nodes no
    Python class reads. It is required, not optional.
 
-Nothing in steps 1 to 4 waits on this step.
+Step 6 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
+transaction ticket, so live edits and pin values are built once, as transactions. Nothing in steps
+1 to 5 waits on this step.
