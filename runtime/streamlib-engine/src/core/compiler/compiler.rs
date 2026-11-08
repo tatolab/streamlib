@@ -20,6 +20,7 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::function_node_promotion::{
     FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
+    place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own,
     plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
     record_each_promotion_on_its_nodes_metrics,
 };
@@ -227,6 +228,11 @@ impl Compiler {
             &plan.links_to_add,
             &plan.links_to_remove,
             &plan.config_updates,
+        )?;
+        place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
+            &mut graph_arc.write(),
+            &plan.processors_to_add,
+            &plan.processors_to_remove,
         )?;
 
         // Early return if nothing to do

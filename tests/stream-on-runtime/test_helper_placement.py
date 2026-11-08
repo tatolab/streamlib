@@ -37,6 +37,7 @@ from helper_placement_streams import (
     raw_message_payload_source_into_sink,
     reaped_labelled_source_into_sink,
     stateful_counter_into_python_sink_that_dies_once,
+    stateful_counter_read_by_two_python_sinks,
     two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock,
     stale_build_labelled_source,
     two_labelled_sources_each_into_its_own_sink,
@@ -409,6 +410,45 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
     assert len(tatolabd.marker_payloads("FRESH_COUNT_SINK_ABOUT_TO_DIE")) == 1, (
         f"only the fresh count reaches twenty:\n{tatolabd.recent_stderr()}"
     )
+
+
+def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its_own(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A stateful function node read by two Python classes is evaluated once,
+    in a helper of its own, and both read the counts that one evaluation wrote.
+
+    Each reader reads every count in order, so each reads a run of consecutive
+    counts from the one counter, and `graph` shows the counter holding a count
+    at least as high as any either read.
+
+    Fail-without-fix: the counter runs inside each reader with a copy of its
+    state each, and the stream starts only the two readers' helpers.
+    """
+    tatolabd = start_tatolabd_running_stream(stateful_counter_read_by_two_python_sinks)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_reader = tatolabd.await_marker("COUNTS_READ_IN_ORDER")
+    second_reader = tatolabd.await_marker("COUNTS_READ_IN_ORDER", occurrence=2)
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    reader_pids = {first_reader["pid"], second_reader["pid"]}
+    assert len(reader_pids) == 2, (first_reader, second_reader)
+    assert len(set(helper_pids)) == 3 and reader_pids < set(helper_pids), (
+        f"the two readers and the counter each get a helper, and the stream started "
+        f"{helper_pids}:\n{tatolabd.recent_stderr()}"
+    )
+    for reader in (first_reader, second_reader):
+        counts = reader["counts"]
+        assert counts == [counts[0] + offset for offset in range(len(counts))], (
+            f"a reader of the one counter reads each count it wrote once, in order: {counts}"
+        )
+    counter = next(node for node in graph["nodes"] if node["name"] == "counter")
+    assert counter["components"]["function_node_state"]["calls"] >= max(
+        first_reader["counts"][-1], second_reader["counts"][-1]
+    ), counter["components"]
 
 
 def test_a_stateful_function_node_replays_the_same_values_on_a_stepped_clock(

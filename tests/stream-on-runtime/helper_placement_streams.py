@@ -15,6 +15,7 @@ from helper_placement_processors import (
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
+    ReportsTheCountsItReadInOrderSink,
     ReportsTheFunctionNodeValuesItReadSink,
     ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
@@ -133,6 +134,15 @@ def stateful_counter_into_python_sink_that_dies_once(stream_builder: StreamBuild
     counter = stream_builder.add(CountsItsOwnCalls, name="counter")
     sink = stream_builder.add(ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty, name="sink")
     stream_builder.connect(counter.output("result"), sink.input("count"))
+
+
+@stream
+def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
+    """One stateful function node counting its calls, read by two Python classes."""
+    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
+    for reader_name in ("first_reader", "second_reader"):
+        reader = stream_builder.add(ReportsTheCountsItReadInOrderSink, name=reader_name)
+        stream_builder.connect(counter.output("result"), reader.input("count"))
 
 
 @stream
