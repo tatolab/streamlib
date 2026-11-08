@@ -10,21 +10,44 @@ permissions:
   packages: write
   actions: write
 
+# `main` takes changes only through its merge queue, whose required checks must
+# pass on a pull request before it can join. GitHub holds a pull request run
+# raised by the default GITHUB_TOKEN for approval, so a release PR opened with it
+# never runs those checks and never merges. Every write here is made with
+# RELEASE_PLEASE_TOKEN, a fine-grained token for this repository (contents and
+# pull requests, read and write) that Infisical syncs to the repository's
+# secrets, so the release PR runs CI like any other.
+#
+# A release takes two runs: one opens the release PR and queues it, and the push
+# the queue makes when it merges runs this again, which cuts the tag and the
+# GitHub release and publishes the distributions.
 jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.tag.outputs.release_created || steps.open.outputs.release_created }}
-      tag_name: ${{ steps.tag.outputs.tag_name || steps.open.outputs.tag_name }}
-      version: ${{ steps.tag.outputs.major || steps.open.outputs.major }}.${{ steps.tag.outputs.minor || steps.open.outputs.minor }}.${{ steps.tag.outputs.patch || steps.open.outputs.patch }}
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v5
+      - name: The release token reaches this repository
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_PLEASE_TOKEN" ]; then
+            echo "::error::RELEASE_PLEASE_TOKEN does not reach this repository — add a fine-grained token for tatolab/streamlib (contents and pull requests, read and write) to Infisical's prod environment, which syncs it to the organization's secrets"
+            exit 1
+          fi
 
-      # Pass 1 — open / refresh the standing release PR (version bump + changelog)
-      # for the feat/fix commits landed since the last release.
-      - uses: googleapis/release-please-action@v5
-        id: open
+      - uses: actions/checkout@v5
         with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      # Cuts the tag and the GitHub release when the merged release PR is what
+      # this push landed; otherwise opens or refreshes the standing release PR
+      # (version bump + changelog) for the feat/fix commits since the last one.
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
@@ -64,7 +87,7 @@ jobs:
       # PR, so the pins can only ever drift here, at the bump.
       - name: Sync the version pins and Cargo.lock to the release version
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
           BRANCH=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
             --json headRefName,labels \
@@ -105,66 +128,28 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -u -- '*Cargo.lock' '*Cargo.toml'
-          # `[skip ci]` keeps this push from creating a batch of pull_request runs
-          # that could only ever wait for approval — see the step below.
-          git commit -m "chore: sync the version pins and Cargo.lock to the release version" -m "[skip ci]"
+          # The release PR's required checks run on this commit, its head.
+          git commit -m "chore: sync the version pins and Cargo.lock to the release version"
           git push origin "$BRANCH"
 
       # A version cut is pure bookkeeping — version + changelog, no code — so it
-      # needs no human gate; auto-merge the release PR the moment it exists. The
-      # PR is found by release-please's own `autorelease: pending` label rather
-      # than an action output, so a freshly-opened PR is caught unambiguously.
-      - name: Auto-merge the release PR
+      # needs no human gate: the release PR joins the merge queue the moment it
+      # exists, and merges once its checks pass. The PR is found by
+      # release-please's own `autorelease: pending` label rather than an action
+      # output, so a freshly-opened PR is caught unambiguously.
+      - name: Queue the release PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
           PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
             --json number,labels \
             --jq 'map(select(.labels[].name == "autorelease: pending")) | .[0].number // empty')
           if [ -z "$PR_NUMBER" ]; then
-            echo "no open release PR to merge this run"
+            echo "no open release PR to queue this run"
             exit 0
           fi
-          # Since GitHub's 2026-06-11 change, a PR opened by github-actions[bot]
-          # gets its pull_request runs created but held for a maintainer's
-          # approval. Merging closes them unapproved, and GitHub then concludes
-          # each as a zero-job `failure` on the release PR and its commits.
-          # Delete them while they are still only awaiting approval: a held run
-          # reports `completed` / `action_required` with no jobs, and its
-          # `pull_requests` list is empty, so it is matched by the release
-          # branch and the PR's own commits instead.
-          RELEASE_BRANCH=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-            --json headRefName --jq '.headRefName')
-          export RELEASE_BRANCH
-          for head_sha in $(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
-              --json commits --jq '.commits[].oid'); do
-            for run_id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$head_sha&event=pull_request&status=action_required" \
-                --jq '.workflow_runs[] | select(.head_branch == env.RELEASE_BRANCH and .conclusion == "action_required") | .id'); do
-              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
-                || echo "::warning::could not delete unapproved release-PR run $run_id"
-            done
-          done
-          for attempt in 1 2 3 4 5; do
-            if gh pr merge "$PR_NUMBER" --squash --repo "$GITHUB_REPOSITORY"; then
-              echo "merged release PR #$PR_NUMBER"
-              exit 0
-            fi
-            echo "attempt $attempt: release PR #$PR_NUMBER not yet mergeable, retrying in 5s..."
-            sleep 5
-          done
-          echo "::error::could not merge release PR #$PR_NUMBER after retries"
-          exit 1
-
-      # A GITHUB_TOKEN merge does NOT re-fire this `push: main` workflow, so the
-      # tag would never be cut. Pass 2 runs release-please again in-run: it now
-      # sees the merged release PR, creates the git tag + GitHub Release, and sets
-      # release_created so trigger-schemas publishes the client. No-op when the
-      # step above merged nothing.
-      - uses: googleapis/release-please-action@v5
-        id: tag
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          gh pr merge "$PR_NUMBER" --auto --repo "$GITHUB_REPOSITORY"
+          echo "release PR #$PR_NUMBER merges through the queue once its checks pass"
 
   # `trigger-schemas` is deliberately not called, and `control-plane-client.yml` no longer
   # offers a `workflow_call` to call. The half that failed on every release since
@@ -173,14 +158,14 @@ jobs:
   # consumes the `@tatolab/streamlib-client` package it publishes. Restoring it
   # to the release path is a decision for whenever a consumer exists.
 
-  # Publish the release just cut to PyPI. Called in-run because the release was
-  # created by GITHUB_TOKEN, so `on: release` would never fire.
+  # Publish the release just cut: `tatolab-stream` to PyPI, every first-party
+  # module to Tatolab's index, and the Linux runtime to get.tatolab.com.
   #
   # Every distribution this repository publishes releases on the one tag, so
   # one call builds and uploads them all. This call alone passes
   # `dry_run: false`; any other run of reusable-distributions.yml is a dry run unless
   # dispatched with `dry_run` unticked.
-  publish-release-to-pypi:
+  publish-the-release:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     # Write, for attaching the Linux runtime tarball to the release just cut.

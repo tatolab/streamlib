@@ -5307,6 +5307,7 @@ name = "streamlib-project-repository"
 version = "0.68.34"
 dependencies = [
  "git2",
+ "libz-sys",
  "parking_lot",
  "rustls",
  "rustls-platform-verifier",
