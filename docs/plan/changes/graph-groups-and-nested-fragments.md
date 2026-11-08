@@ -68,8 +68,10 @@ def look(graph):
   may belong to groups inside it. Groups are saved, rendered by `graph` and read by Tato Studio;
   the compiler never reads them.
 - **The group operations**, each a transaction as #3258 defines one: `add_group {stream, title,
-  description, colour, nodes}` (answers the UUID), `set_group_fields`, `remove_group` (its nodes
-  stay, ungrouped). A node joins or leaves a group through `set_studio_fields`. A group inside a
+  description, colour, nodes}` (answers the UUID; sets each named node's `studio.group`), `set_group_fields`, `remove_group` (its nodes
+  stay, ungrouped; its inverse carries the group and the UUIDs of every node that belonged to it,
+  as `remove_node`'s carries its node and links). Membership lives only on the node, in
+  `studio.group`; a group holds no node list. A node joins or leaves a group through `set_studio_fields`. A group inside a
   fragment comes only from its generator, through `graph.group(title, nodes, description=,
   colour=)`, and is read-only like the fragment.
 
