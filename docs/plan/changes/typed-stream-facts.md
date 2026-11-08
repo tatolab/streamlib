@@ -37,7 +37,7 @@ class H264Encoder(Node):
     def process(self, ctx):
         ...
         ctx.outputs.set_stream_facts(self.encoded, PacketsStreamFacts(
-            coded_width=1920, coded_height=1080, codec_configuration=avcc_record))
+            rfc6381_codec="avc1.64001f", coded_width=1920, coded_height=1080))
 
 class OpusDecoder(Node):
     encoded = Input(Packets, delivery="ordered", requires_codec=("opus",))
@@ -88,12 +88,16 @@ payload layout every codec node reads.
   defines, describing the stream rather than one message. `connect` never compares them and the
   engine inserts nothing on their account; a mismatch a node cannot handle is that node's refusal
   in its own words. [typed-stream-facts]
-  - `ImageStreamFacts`: `frame_rate` (a rational, `numerator`/`denominator`), `content_light`
-    (`max_cll`, `max_fall`, cd/m²), `mastering_display` (SMPTE ST 2086: three primaries and the
-    white point as CIE 1931 xy, `max_luminance`, `min_luminance`). Every field optional.
-  - `PacketsStreamFacts`: `coded_width`, `coded_height` (video), `sample_rate`, `channel_count`
-    (audio), `codec_configuration` (the codec's out-of-band configuration record, such as
-    `avcC`, `hvcC` or `OpusHead`, absent when the stream carries it in band). Every field optional.
+  - `ImageStreamFacts`: `frame_rate` (a rational, `numerator`/`denominator`),
+    `content_light_level` (`max_content_light_level`, `max_frame_average_light_level`, cd/m²),
+    `mastering_display_colour_volume` (SMPTE ST 2086 in the H.265 SEI's units: three primaries
+    and the white point, `max_display_mastering_luminance`, `min_display_mastering_luminance`).
+    Every field optional.
+  - `PacketsStreamFacts`: `rfc6381_codec` (the codec with profile and level, `avc1.64001f`),
+    `coded_width`, `coded_height` (video), `sample_rate`, `channel_count` (audio),
+    `codec_configuration_hex` (the codec's out-of-band configuration record, such as `avcC`,
+    `hvcC` or `OpusHead`, as lowercase hex, absent when the stream carries it in band). Every
+    field optional.
   - Channels, Array and Records have no stream facts beyond their declared keys (`rate=`, `names=`,
     `dtype=`, `residency=`): what they carry is stated per message or by name.
 - **ADDED (same section, DECIDED):** `Output(Image, rate=…)` declares the frame rate as a literal
@@ -111,7 +115,7 @@ payload layout every codec node reads.
   `values_checked: false` — the node catalog's "unchecked" mark. [typed-stream-facts]
 - **ADDED (§Networking, DECIDED):** `MoqTrack` builds its track's hang catalog entry from the
   upstream port's family, its declared codec and its stream facts — Image's `frame_rate` and
-  HDR facts, Packets' coded extent, rate, channel count and `codec_configuration` as hang's
+  HDR facts, Packets' coded extent, rate, channel count and `codec_configuration_hex` as hang's
   `description` — and its optional `catalog` config still overrides it. `MoqTrackSend` wraps each
   unit in hang's container on the way out; `MoqTrackReceive` unwraps it and states the facts it
   read from the remote catalog on its output. hang's words exist only in `tatolab-moq`.
@@ -162,8 +166,8 @@ payload layout every codec node reads.
 - REMOVED: hang_legacy_container_media_frame
 - REMOVED: UpstreamCatalogEntry
   Continuation: `catalog=` on `Output` goes with `catalog.py`; the engine's `hang` dependency goes
-  with `output_port_catalog_entries` and the container (checked by hand in the ship PR, since the
-  pattern also names `tatolab-moq`'s). `tatolab-moq` keeps its own `moq_catalog.rs` and a
+  with the container in ticket 2 (checked by hand in the ship PR, since the pattern also names
+  `tatolab-moq`'s). `tatolab-moq` keeps its own `moq_catalog.rs` and a
   container module named for MoQ.
 
 ## Not in this change
@@ -179,9 +183,10 @@ payload layout every codec node reads.
    and Image's `rate=` in the schema, the macro, `tatolab-stream` and its Protocols; the
    set/read plumbing retyped; `graph`/registry render `stream_facts` and `values_checked`; every
    writer and reader in Current state moves over; `MoqTrack` builds the hang entry; the catalog
-   entry and the engine's `hang` dependency are removed. Proven by engine tests for set, read,
+   entry is removed. Proven by engine tests for set, read,
    rendering and refusal of the wrong family's facts, a `tatolab-moq` test that the built entry
    parses with hang, and the Opus round trip.
-2. **The Packets unit without hang's container.** Codec nodes, `tatolab-opus` and
+2. **The Packets unit without hang's container** (#3290). Codec nodes, `tatolab-opus` and
    `streamlib-webrtc` read and write the bare unit; `MoqTrackSend`/`MoqTrackReceive` wrap and
-   unwrap. Proven by the codec round trips and the moq send/receive test. Blocked by nothing.
+   unwrap; the engine's `hang` dependency goes with the container. Proven by the codec round
+   trips and the moq send/receive test. Blocked by nothing.
