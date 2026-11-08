@@ -886,9 +886,14 @@ const HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION: u32 = 2;
 /// The board section holding the helper's one function-node call breadcrumb.
 const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION: u32 = 3;
 
+/// The board section holding one state entry per stateful function node the
+/// helper calls, by the node's breadcrumb number.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_STATE_SECTION: u32 = 4;
+
 /// The key of one entry on a helper process's loss-count blackboard: an
 /// inbound-link slot, a declared output port by its index, the helper's step
-/// progress, or its function-node call breadcrumb.
+/// progress, its function-node call breadcrumb, or the state of one stateful
+/// function node it calls.
 ///
 /// The iceoryx2 type name is pinned for the reason
 /// [`DataChannelSampleUserHeader`]'s is: the parent creates the board
@@ -929,6 +934,15 @@ impl HelperProcessLossCountBoardKey {
         section: HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION,
         index_within_section: 0,
     };
+
+    /// The key of the state entry of the stateful function node numbered
+    /// `function_node_breadcrumb_number` on the helper's setup command.
+    pub const fn function_node_state(function_node_breadcrumb_number: u32) -> Self {
+        Self {
+            section: HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_STATE_SECTION,
+            index_within_section: function_node_breadcrumb_number,
+        }
+    }
 }
 
 /// One inbound link's loss counts as a helper process last wrote them, beside
@@ -1005,6 +1019,55 @@ pub struct HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
     /// How many function-node calls the helper has under way, this oldest one
     /// among them; zero between calls.
     pub function_node_calls_under_way: u32,
+}
+
+/// The most state values one function node's state entry holds: a state record
+/// of at most this many numbers.
+pub const STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS: usize = 30;
+
+/// The state one stateful function node's last call returned, as its helper
+/// process last wrote it: what its parent reads to carry the state across a
+/// restart, a promotion and a reload, and what `graph` shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, ZeroCopySend)]
+#[type_name("HelperProcessFunctionNodeStateBoardEntry")]
+#[repr(C)]
+pub struct HelperProcessFunctionNodeStateBoardEntry {
+    /// How many times the helper wrote this entry; zero before its first
+    /// write, when the entry holds no state.
+    pub state_writes: u64,
+    /// How many of `state_values` hold the state, in the state record's field
+    /// order.
+    pub state_value_count: u32,
+    /// Always zero; keeps `state_values` 8-byte aligned.
+    pub reserved: u32,
+    /// The state record's fields, each as an f64; past `state_value_count`
+    /// always zero.
+    pub state_values: [f64; STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS],
+}
+
+impl HelperProcessFunctionNodeStateBoardEntry {
+    /// The entry holding `state_values` as its `state_writes`-th write;
+    /// `None` when there are more values than an entry holds.
+    pub fn holding(state_values: &[f64], state_writes: u64) -> Option<Self> {
+        let mut entry = Self {
+            state_writes,
+            state_value_count: u32::try_from(state_values.len()).ok()?,
+            ..Self::default()
+        };
+        entry
+            .state_values
+            .get_mut(..state_values.len())?
+            .copy_from_slice(state_values);
+        Some(entry)
+    }
+
+    /// The state the entry holds, or `None` before the helper's first write.
+    pub fn state_values_written(&self) -> Option<&[f64]> {
+        if self.state_writes == 0 {
+            return None;
+        }
+        self.state_values.get(..self.state_value_count as usize)
+    }
 }
 
 /// The breadcrumb number of the function node a helper runs as its own
@@ -1288,6 +1351,63 @@ mod tests {
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
             unsafe { <HelperProcessLossCountBoardKey as ZeroCopySend>::type_name() },
             "HelperProcessLossCountBoardKey"
+        );
+    }
+
+    #[test]
+    fn a_function_node_state_entry_is_two_counts_then_its_values_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<HelperProcessFunctionNodeStateBoardEntry>(),
+            16 + 8 * STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS
+        );
+        assert_eq!(
+            std::mem::align_of::<HelperProcessFunctionNodeStateBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, state_writes),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, state_value_count),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, reserved),
+            12
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeStateBoardEntry, state_values),
+            16
+        );
+        assert_ne!(
+            HelperProcessLossCountBoardKey::function_node_state(0),
+            HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB,
+            "a function node's state is in a section of its own"
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <HelperProcessFunctionNodeStateBoardEntry as ZeroCopySend>::type_name() },
+            "HelperProcessFunctionNodeStateBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_function_node_state_entry_holds_what_was_written_and_nothing_before_its_first_write() {
+        assert_eq!(
+            HelperProcessFunctionNodeStateBoardEntry::default().state_values_written(),
+            None
+        );
+        let written = HelperProcessFunctionNodeStateBoardEntry::holding(&[0.25, -1.0], 3)
+            .expect("two values fit");
+        assert_eq!(written.state_values_written(), Some(&[0.25, -1.0][..]));
+        assert!(
+            HelperProcessFunctionNodeStateBoardEntry::holding(
+                &[0.0; STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS + 1],
+                1
+            )
+            .is_none(),
+            "a state past what an entry holds is refused"
         );
     }
 

@@ -46,6 +46,9 @@ struct FunctionNodeCompiledIntoAnIsland {
     state_values: Vec<f64>,
     state_values_of_the_call_under_way: Vec<f64>,
     output_values: Vec<f64>,
+    /// Whether each call's new state is written on the helper's board, which
+    /// carries an entry for the node exactly when its state is carried.
+    writes_its_state_on_the_board: bool,
 }
 
 /// The values every node of an island last took, and the stream time they were
@@ -117,7 +120,31 @@ fn call_noting_its_breadcrumb_on(
     {
         board_writer.note_the_function_node_call_returned(call_under_way);
     }
-    called
+    called?;
+    if let Some(board_writer) = call_breadcrumb_board_writer
+        && function_node.writes_its_state_on_the_board
+    {
+        board_writer.write_the_state_of_a_function_node(
+            function_node.breadcrumb_number,
+            &function_node.state_values,
+        )?;
+    }
+    Ok(())
+}
+
+/// The state a function node starts its first call from: the state its stream
+/// carries for it when that is one of the same length, its state record's
+/// defaults otherwise.
+fn the_state_a_function_node_starts_from(
+    initial_state_values: Vec<f64>,
+    state_resumed_from: Option<Vec<f64>>,
+) -> Vec<f64> {
+    match state_resumed_from {
+        Some(state_resumed_from) if state_resumed_from.len() == initial_state_values.len() => {
+            state_resumed_from
+        }
+        _ => initial_state_values,
+    }
 }
 
 impl FunctionNodeCompiledIntoAnIsland {
@@ -191,6 +218,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         (island_output_node_index, island_output_index): (usize, usize),
         stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
         call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
+        state_resumed_from: &dyn Fn(u32) -> Option<Vec<f64>>,
     ) -> std::result::Result<Self, String> {
         let mut function_nodes_each_after_what_it_reads = Vec::with_capacity(function_nodes.len());
         for (
@@ -245,6 +273,16 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                     evaluate_entry_address,
                 )
             };
+            let writes_its_state_on_the_board = !initial_state_values.is_empty()
+                && call_breadcrumb_board_writer
+                    .as_deref()
+                    .is_some_and(|board_writer| {
+                        board_writer.carries_a_state_entry_for(breadcrumb_number)
+                    });
+            let state_values = the_state_a_function_node_starts_from(
+                initial_state_values,
+                state_resumed_from(breadcrumb_number),
+            );
             function_nodes_each_after_what_it_reads.push(FunctionNodeCompiledIntoAnIsland {
                 node_id,
                 breadcrumb_number,
@@ -252,9 +290,10 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 input_values: vec![0.0; where_each_input_takes_its_value_read.len()],
                 where_each_input_takes_its_value: where_each_input_takes_its_value_read,
                 config_values,
-                state_values_of_the_call_under_way: vec![0.0; initial_state_values.len()],
-                state_values: initial_state_values,
+                state_values_of_the_call_under_way: vec![0.0; state_values.len()],
+                state_values,
                 output_values: vec![0.0; output_count],
+                writes_its_state_on_the_board,
             });
         }
         let reads_an_output_of_the_island = function_nodes_each_after_what_it_reads
@@ -323,21 +362,34 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
                 evaluate_entry_address,
             )
         };
+        let breadcrumb_number =
+            BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
+        let call_breadcrumb_board_writer =
+            link_data_access.shared_loss_count_board_writer_of_this_helper();
+        let writes_its_state_on_the_board = !initial_state_values.is_empty()
+            && call_breadcrumb_board_writer
+                .as_deref()
+                .is_some_and(|board_writer| {
+                    board_writer.carries_a_state_entry_for(breadcrumb_number)
+                });
+        let state_values = the_state_a_function_node_starts_from(
+            initial_state_values,
+            link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number),
+        );
         Ok(Self {
             function_node: Mutex::new(FunctionNodeCompiledIntoAnIsland {
                 node_id,
-                breadcrumb_number:
-                    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
+                breadcrumb_number,
                 evaluate_entry,
                 where_each_input_takes_its_value: Vec::new(),
                 config_values,
                 input_values: vec![0.0; input_count],
-                state_values_of_the_call_under_way: vec![0.0; initial_state_values.len()],
-                state_values: initial_state_values,
+                state_values_of_the_call_under_way: vec![0.0; state_values.len()],
+                state_values,
                 output_values: vec![0.0; output_count],
+                writes_its_state_on_the_board,
             }),
-            call_breadcrumb_board_writer: link_data_access
-                .shared_loss_count_board_writer_of_this_helper(),
+            call_breadcrumb_board_writer,
         })
     }
 
@@ -390,6 +442,9 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
             island_output,
             Box::new(helper_stream_clock_now_ns),
             link_data_access.shared_loss_count_board_writer_of_this_helper(),
+            &|breadcrumb_number| {
+                link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number)
+            },
         )
         .map_err(PyValueError::new_err)?;
     input_mailboxes.feed_an_input_port_from_a_function_node_island(input_port, Arc::new(island));
@@ -477,6 +532,7 @@ mod tests {
             (1, 0),
             stream_clock_now_ns,
             None,
+            &|_| None,
         )
         .unwrap()
     }
@@ -532,6 +588,7 @@ mod tests {
                 (0, 0),
                 a_stream_clock_the_test_sets().1,
                 None,
+                &|_| None,
             )
             .unwrap();
         let refusal = island
@@ -544,6 +601,88 @@ mod tests {
                 .lock()
                 .function_nodes_each_after_what_it_reads[0]
                 .state_values,
+            vec![1.0]
+        );
+    }
+
+    /// A board as a parent creates it for a helper calling the stateful node
+    /// numbered `breadcrumb_number`, and the writer that helper opens on it.
+    fn a_board_carrying_the_state_of_node(
+        breadcrumb_number: u32,
+    ) -> (
+        streamlib::sdk::iceoryx2::HelperProcessLossCountBoard,
+        Arc<HelperProcessLossCountBoardWriter>,
+    ) {
+        let board_name = format!(
+            "island{}_state{breadcrumb_number}/loss-counts",
+            std::process::id()
+        );
+        let parent_board = streamlib::sdk::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .create_helper_process_loss_count_board(
+                &board_name,
+                Vec::new(),
+                vec![breadcrumb_number],
+            )
+            .unwrap();
+        let board_writer = streamlib::sdk::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_helper_process_loss_count_board_writer(&board_name, &[], &[breadcrumb_number])
+            .unwrap();
+        (parent_board, Arc::new(board_writer))
+    }
+
+    #[test]
+    fn a_stateful_node_resumes_from_the_state_its_stream_carries_and_writes_each_new_one() {
+        let (parent_board, board_writer) = a_board_carrying_the_state_of_node(4);
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let island =
+            FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+                vec![(
+                    "counts_calls".to_string(),
+                    4,
+                    add_one_and_count_calls as *const () as usize,
+                    vec![(None, 0.0)],
+                    vec![],
+                    vec![0.0],
+                    1,
+                )],
+                (0, 0),
+                stream_clock_now_ns,
+                Some(board_writer),
+                &|breadcrumb_number| (breadcrumb_number == 4).then(|| vec![41.0]),
+            )
+            .unwrap();
+        assert_eq!(
+            parent_board
+                .function_node_state_entry(4)
+                .unwrap()
+                .state_values_written(),
+            None,
+            "nothing is written before the first call"
+        );
+        stream_time_ns.store(1, Ordering::SeqCst);
+        island.evaluate_the_island_output_for_this_read().unwrap();
+        assert_eq!(
+            parent_board
+                .function_node_state_entry(4)
+                .unwrap()
+                .state_values_written(),
+            Some(&[42.0][..]),
+            "the first call carries on from the state it resumed from"
+        );
+    }
+
+    #[test]
+    fn a_stored_state_of_another_length_is_not_resumed_from() {
+        assert_eq!(
+            the_state_a_function_node_starts_from(vec![0.0, 0.0], Some(vec![5.0])),
+            vec![0.0, 0.0]
+        );
+        assert_eq!(
+            the_state_a_function_node_starts_from(vec![0.0], Some(vec![5.0])),
+            vec![5.0]
+        );
+        assert_eq!(
+            the_state_a_function_node_starts_from(vec![1.0], None),
             vec![1.0]
         );
     }
@@ -564,6 +703,7 @@ mod tests {
                 (0, 0),
                 a_stream_clock_the_test_sets().1,
                 None,
+                &|_| None,
             )
             .err()
             .unwrap();

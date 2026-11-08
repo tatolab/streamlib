@@ -707,6 +707,8 @@ impl ProcessorInterpreterSpawnHostProcessor {
     ) {
         self.give_up_on_the_helper_process();
         self.bridge.take();
+        self.link_wiring
+            .keep_every_function_node_state_its_far_side_wrote();
         if let Some(HelperProcessShutdownOutcome::Reaped(exit_status)) = outcome {
             tracing::debug!(
                 "[{}] helper process exited: {exit_status}",
@@ -1789,6 +1791,7 @@ pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
         .number_the_function_node_its_far_side_runs_as_its_processor(
             node.id.as_str(),
             &node.display_name,
+            descriptor.function_node_state_fields.clone(),
         );
     Ok(host)
 }
@@ -2702,7 +2705,10 @@ sys.exit(0)
     ) {
         let host = spawn_host_for_test_driven_in(child_process_execution);
         let (board, board_writer, helper_node) =
-            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(
+                &[],
+                &[],
+            );
         host.link_wiring
             .helper_placed_processor_loss_counts()
             .hold_the_board_of_this_spawn(board);

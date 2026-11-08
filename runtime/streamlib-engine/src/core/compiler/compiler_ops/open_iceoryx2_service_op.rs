@@ -1656,6 +1656,7 @@ mod tests {
             .expect("the stub records its own wiring")
             .create_the_loss_count_board_for_this_helper_spawn_on(
                 &Iceoryx2Node::for_this_test_process(),
+                &Arc::default(),
                 proc_id,
                 output_port_names.clone(),
             )
@@ -1671,6 +1672,7 @@ mod tests {
                     .as_str()
                     .expect("the setup command names the board"),
                 &output_port_names,
+                &[],
             )
             .expect("the helper opens the board its setup command names");
         (Arc::new(writer), helper_node)

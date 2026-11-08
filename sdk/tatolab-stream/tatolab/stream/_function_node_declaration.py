@@ -52,6 +52,7 @@ PYTHON_FUNCTION_NODE_LANGUAGE = "python"
 # beside the declaration stamps every node carries.
 NODE_DECLARATION_LANGUAGE_STAMP = "__tatolab_node_language__"
 NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP = "__tatolab_node_function_signature__"
+NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP = "__tatolab_node_function_state_fields__"
 
 # The value a scalar pin carries, by the annotation that names it.
 _SCALAR_PIN_VALUE_TYPES: "dict[Any, str]" = {float: "float", int: "int", bool: "bool"}
@@ -109,6 +110,7 @@ def declare_function_node(
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
+        NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP: signature_reading.state_fields,
     }
     for stamp, value in stamps.items():
         setattr(function_node, stamp, value)
@@ -190,6 +192,13 @@ class _FunctionNodeSignatureReading:
             ),
             "config_parameter": self._config_parameter,
         }
+
+    @property
+    def state_fields(self) -> "list[str]":
+        """The state record's fields, in the order the runtime carries their values; none when stateless."""
+        if self._state_record_class is None:
+            return []
+        return [field.name for field in dataclasses.fields(self._state_record_class)]
 
     def _resolved_annotations(self, function: Callable[..., Any]) -> "dict[str, Any]":
         try:

@@ -16,7 +16,7 @@ import time
 
 import numpy
 
-from tatolab.stream import Channels, Input, Output, Packets, Records, log, node
+from tatolab.stream import Channels, Input, Output, Packets, Records, State, Stateful, log, node
 
 #: A payload no msgpack decoder reads: `0xc1` is the one type byte msgpack never
 #: uses, then every byte value once, so an encode or decode anywhere between
@@ -283,3 +283,82 @@ def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
     while climbing > 0.0:
         climbing = climbing + 1.0
     return climbing
+
+
+@dataclasses.dataclass(frozen=True)
+class CallsCountedSoFar:
+    calls: float = 0.0
+
+
+@node.function
+def CountsItsOwnCalls(  # noqa: N802
+    step: float = 1.0, *, previous: State[CallsCountedSoFar]
+) -> Stateful[float, CallsCountedSoFar]:
+    """The number of times it has been called, carried between calls in its state."""
+    calls = previous.calls + step
+    return calls, CallsCountedSoFar(calls)
+
+
+#: The count at which a sink whose count started fresh takes its own helper down.
+COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES = 20.0
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty:
+    """Reports the first count it reads with its own pid, and takes its own
+    helper down once a count that started at one reaches twenty. A count it
+    first reads above one was carried over, so it reads on without dying."""
+
+    def __init__(self) -> None:
+        self.first_count_read: "float | None" = None
+
+    count = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        block = ctx.inputs.read(self.count)
+        if block is None:
+            return
+        count_read = float(numpy.from_dlpack(block)[0][0])
+        if self.first_count_read is None:
+            self.first_count_read = count_read
+            report("FIRST_COUNT_READ", {"pid": os.getpid(), "count": count_read})
+        if self.first_count_read <= 1.0 and count_read >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES:
+            report("FRESH_COUNT_SINK_ABOUT_TO_DIE", {"pid": os.getpid(), "count": count_read})
+            os._exit(1)
+
+
+#: The stream milliseconds between the steps of the stepped LFO stream.
+STEPPED_LFO_STEP_MS = 100
+
+#: Steps of the stepped LFO stream a sink reads before it reports them.
+STEPPED_LFO_STEPS_REPORTED = 12
+
+
+@node.process(execution="continuous", interval_ms=STEPPED_LFO_STEP_MS)
+class ReportsTheLfoValueOfEachStepSink:
+    """Reads the value an `Lfo` island evaluates to at each step, and reports
+    the first `STEPPED_LFO_STEPS_REPORTED` with their step indices."""
+
+    def __init__(self) -> None:
+        self.value_read_at_each_step: "dict[int, float]" = {}
+
+    wave = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        step_index = ctx.stream_clock.step_index
+        if step_index in self.value_read_at_each_step:
+            return
+        if len(self.value_read_at_each_step) >= STEPPED_LFO_STEPS_REPORTED:
+            return
+        block = ctx.inputs.read(self.wave)
+        if block is None:
+            return
+        self.value_read_at_each_step[step_index] = float(numpy.from_dlpack(block)[0][0])
+        if len(self.value_read_at_each_step) == STEPPED_LFO_STEPS_REPORTED:
+            report(
+                "STEPPED_LFO_VALUES_READ",
+                {
+                    "pid": os.getpid(),
+                    "steps": [[step, value] for step, value in sorted(self.value_read_at_each_step.items())],
+                },
+            )

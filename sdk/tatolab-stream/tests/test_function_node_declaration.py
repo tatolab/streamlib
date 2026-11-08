@@ -14,6 +14,7 @@ import pytest
 from tatolab.stream import ImageFrame, State, Stateful, Time, node
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
+    NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
     NODE_DECLARATION_LANGUAGE_STAMP,
 )
 from tatolab.stream._node_declaration import (
@@ -116,6 +117,11 @@ def test_time_and_state_are_found_by_type_and_are_never_pins():
     assert signature["state_parameter"] == "previous"
     assert signature["state_record_class"] == f"{__name__}:SmoothedValue"
     assert [each["port"] for each in signature["outputs"]] == ["result"]
+
+
+def test_a_stateful_node_declares_its_state_fields_and_a_stateless_one_none():
+    assert getattr(smooth, NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP) == ["value"]
+    assert getattr(remap, NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP) == []
 
 
 def test_a_returned_dataclass_is_one_output_per_field():

@@ -5,6 +5,7 @@
 //! stream, named by its id and written whole or not at all, changed only
 //! through one read-edit-write at a time, and the stream actions queued on it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,7 +17,7 @@ use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
 };
 use streamlib_runtime_client_contract::owner_only_file_written_whole::write_an_owner_only_file_whole;
 
-use super::{StreamEnvironment, StreamListingState, StreamLocation};
+use super::{FunctionNodeState, StreamEnvironment, StreamListingState, StreamLocation};
 use crate::core::graph::is_in_exposed_name_cast_form;
 use crate::core::{Error, Result};
 
@@ -54,6 +55,48 @@ pub struct StreamRecord {
     /// finished, in queue order; each is finalised only by its own action.
     #[serde(default)]
     pub pending_stream_actions: Vec<PendingStreamActionOnTheRecord>,
+    /// The state each stateful function node of the stream held at the
+    /// stream's last end, by node name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub function_node_states_by_node_name: BTreeMap<String, RecordedFunctionNodeState>,
+}
+
+/// One stateful function node's state as a stream record keeps it: each value
+/// as its f64 bit pattern, so a NaN, an infinity and a negative zero come back
+/// exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedFunctionNodeState {
+    /// The state record's fields, in the order the values travel in.
+    pub state_fields: Vec<String>,
+    /// One value per field, as `f64::to_bits` gives it.
+    pub state_values_as_f64_bits: Vec<u64>,
+}
+
+impl RecordedFunctionNodeState {
+    /// `state` as a record keeps it.
+    pub fn of(state: &FunctionNodeState) -> Self {
+        Self {
+            state_fields: state.state_fields.clone(),
+            state_values_as_f64_bits: state
+                .state_values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect(),
+        }
+    }
+
+    /// The state the record keeps.
+    pub fn state(&self) -> FunctionNodeState {
+        FunctionNodeState {
+            state_fields: self.state_fields.clone(),
+            state_values: self
+                .state_values_as_f64_bits
+                .iter()
+                .map(|bits| f64::from_bits(*bits))
+                .collect(),
+        }
+    }
 }
 
 /// A stream action queued on a record, which the runtime's start finishes when
@@ -98,6 +141,7 @@ impl StreamRecord {
             failed_because: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             pending_stream_actions: Vec::new(),
+            function_node_states_by_node_name: BTreeMap::new(),
         }
     }
 
@@ -183,11 +227,33 @@ impl StreamRecord {
     }
 
     /// Take the record's attributes from `current`, the record as it is on
-    /// disk: the display name and the pending actions,
-    /// none of which a load changes.
+    /// disk: the display name, the pending actions and the function-node
+    /// states, none of which a load changes.
     pub fn keep_the_attributes_of(&mut self, current: &StreamRecord) {
         self.display_name = current.display_name.clone();
         self.pending_stream_actions = current.pending_stream_actions.clone();
+        self.function_node_states_by_node_name = current.function_node_states_by_node_name.clone();
+    }
+
+    /// The function-node states the record keeps, by node name.
+    pub fn function_node_states(&self) -> BTreeMap<String, FunctionNodeState> {
+        self.function_node_states_by_node_name
+            .iter()
+            .map(|(function_node_name, recorded)| (function_node_name.clone(), recorded.state()))
+            .collect()
+    }
+
+    /// Keep `states` as the function-node states of the stream's last end.
+    pub fn keep_the_function_node_states(&mut self, states: &BTreeMap<String, FunctionNodeState>) {
+        self.function_node_states_by_node_name = states
+            .iter()
+            .map(|(function_node_name, state)| {
+                (
+                    function_node_name.clone(),
+                    RecordedFunctionNodeState::of(state),
+                )
+            })
+            .collect();
     }
 }
 
@@ -615,6 +681,55 @@ mod tests {
             file_names_in(records.streams_directory()),
             [format!("{stream_id}.json")]
         );
+    }
+
+    #[test]
+    fn a_records_function_node_states_read_back_exactly_and_a_load_keeps_them() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let states_at_its_end = BTreeMap::from([(
+            "lfo".to_string(),
+            FunctionNodeState {
+                state_fields: vec!["phase".into(), "held".into(), "floor".into()],
+                state_values: vec![0.1 + 0.2, f64::NEG_INFINITY, -0.0],
+            },
+        )]);
+        let mut record = a_record_of("synth", "main");
+        record.keep_the_function_node_states(&states_at_its_end);
+        records.write(&record).unwrap();
+
+        let Some(StreamRecordAsRead::Current(read_back)) = records.read(&record.stream_id).unwrap()
+        else {
+            panic!("the record reads back as this runtime's");
+        };
+        let state_read_back = &read_back.function_node_states()["lfo"];
+        assert_eq!(state_read_back.state_fields, ["phase", "held", "floor"]);
+        assert_eq!(
+            state_read_back
+                .state_values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            [0.1f64 + 0.2, f64::NEG_INFINITY, -0.0]
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            "each value comes back bit for bit"
+        );
+
+        let reloaded = records
+            .write_the_record_a_load_made(a_record_of("synth", "main"))
+            .unwrap();
+        assert_eq!(
+            reloaded.function_node_states_by_node_name, record.function_node_states_by_node_name,
+            "a load never forgets the states the stream's last end recorded"
+        );
+    }
+
+    #[test]
+    fn a_record_with_no_function_node_states_writes_no_key_for_them() {
+        let rendered = serde_json::to_value(a_record_of("synth", "main")).unwrap();
+        assert!(rendered.get("function_node_states_by_node_name").is_none());
     }
 
     #[test]

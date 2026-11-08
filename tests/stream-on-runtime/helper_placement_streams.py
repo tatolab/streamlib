@@ -4,14 +4,19 @@
 """The `@stream` functions `test_helper_placement.py` runs from the suite project."""
 
 from tatolab.ops import Lfo, Remap
-from tatolab.stream import ChannelsToRecords, StreamBuilder, stream
+from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, stream
 
 from helper_placement_processors import (
+    STEPPED_LFO_STEP_MS,
+    STEPPED_LFO_STEPS_REPORTED,
+    CountsItsOwnCalls,
     DiesAbruptlyProbe,
     ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
+    ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
     ReportsTheFunctionNodeValuesItReadSink,
+    ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
@@ -119,3 +124,29 @@ def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuil
     spinner = stream_builder.add(SpinsForever, name="spinner")
     sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(spinner.output("result"), sink.input("brightness"))
+
+
+@stream
+def stateful_counter_into_python_sink_that_dies_once(stream_builder: StreamBuilder) -> None:
+    """A stateful function node counting its calls, read by a Python class that
+    takes its own helper down once a fresh count reaches twenty."""
+    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
+    sink = stream_builder.add(ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty, name="sink")
+    stream_builder.connect(counter.output("result"), sink.input("count"))
+
+
+@stream
+def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
+    stream_builder: StreamBuilder,
+) -> None:
+    """The same `Lfo` island twice, each read by its own Python class, on an unpaced stepped clock."""
+    stream_builder.run_on_clock(
+        SteppedStreamClock(
+            step_ns=STEPPED_LFO_STEP_MS * 1_000_000,
+            stop_after_steps=STEPPED_LFO_STEPS_REPORTED * 4,
+        )
+    )
+    for run in ("first", "second"):
+        lfo = stream_builder.add(Lfo, name=f"{run}_lfo")
+        sink = stream_builder.add(ReportsTheLfoValueOfEachStepSink, name=f"{run}_sink")
+        stream_builder.connect(lfo.output("result"), sink.input("wave"))

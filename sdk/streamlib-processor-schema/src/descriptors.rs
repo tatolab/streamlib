@@ -149,6 +149,10 @@ pub struct ProcessorDescriptor {
     /// in a stepped stream it stands outside the step barrier.
     #[serde(default)]
     pub paced_by_real_time: bool,
+    /// A stateful function node's state record fields, in the order its state
+    /// values travel in; empty for every other node type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub function_node_state_fields: Vec<String>,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -171,6 +175,7 @@ impl ProcessorDescriptor {
             config_schema: None,
             scheduling: ProcessorScheduling::default(),
             paced_by_real_time: false,
+            function_node_state_fields: Vec::new(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
