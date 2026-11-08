@@ -81,7 +81,10 @@ reshapes #3216.
   A named index takes priority over PyPI, and uv's default `first-index` strategy takes a package
   from the first index that has it and never looks further. So every `tatolab-*` module comes from
   ours, a direct dependency or a transitive one through a third party's module alike, and a
-  `tatolab-*` name on PyPI never stands in for it; every name our index does not serve (`numpy`,
+  `tatolab-*` name on PyPI never stands in for one our index serves. A name our index does not
+  serve falls through to PyPI, which is why every first-party name is also held on PyPI by
+  Tatolab (decision 2), a new module's name included, registered when its directory lands in
+  `packages/`; every other name our index does not serve (`numpy`,
   `tatolab-stream`, a third party's module) answers 404 there and resolves from PyPI. A per-package
   `explicit = true` pin is not used: uv applies `[tool.uv.sources]` only to a project's own
   dependencies, so a first-party module reached through a third party's would miss it.
@@ -168,7 +171,8 @@ reshapes #3216.
 
    Recommendation: (a) now, and (c) once `tatolab-ops` ships, which changes one template line.
 2. **Assumed unless overruled: the PyPI copies.** The first-party projects already on PyPI stay
-   registered so nobody else takes the names, take no further uploads, and have every release
+   registered so nobody else takes the names, and a new module's name is registered there with a
+   placeholder that installs nothing, as the bare `tatolab` name is. They take no further uploads, and have every release
    yanked once the index serves the same version, so uv and pip skip them unless a project pins
    one exactly. Yanking is reversible. An existing project gains the `[[tool.uv.index]]` table by
    hand, as the release note says, before its next `uv lock --upgrade`; nothing rewrites it on
