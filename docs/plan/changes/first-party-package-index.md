@@ -95,7 +95,8 @@ reshapes #3216.
   dependencies, so a first-party module reached through a third party's would miss it. Every
   first-party requirement the runtime writes is floored at the runtime's version, and a PyPI
   placeholder is version `0.0.x`, so a placeholder never satisfies one: resolution fails naming
-  the module instead of syncing an environment without it.
+  the module instead of syncing an environment without it. A placeholder's one release is yanked
+  once uploaded, so a third party's looser requirement fails the same way.
 - **Samples in the runtime unit.** The unit carries sample projects at its own version: the Linux
   tarball under `samples/<name>/`, the macOS helper bundle under `Contents/Resources/samples/<name>/`.
   A sample is a project directory as a created project is, naming the index. The local API lists them (`list_samples`: name, title, summary per sample) and
