@@ -152,21 +152,40 @@ def stream_asset_held_at(graph_document_path: Path) -> "str | None":
     return asset if isinstance(asset, str) else None
 
 
+def graph_nodes_holding_a_uuid_each(graph: "dict[str, Any]", asset: str) -> "dict[str, Any]":
+    """`graph` with a UUID given to each node holding no `id`, as the runtime gives one: the
+    same UUID for a node of one name in every write of one stream asset."""
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return graph
+    asset_namespace = uuid.UUID(asset)
+    return {
+        **graph,
+        "nodes": [
+            {"id": str(uuid.uuid5(asset_namespace, str(node.get("name", "")))), **node}
+            if isinstance(node, dict) and "id" not in node
+            else node
+            for node in nodes
+        ],
+    }
+
+
 def graph_document_text_holding_an_asset(graph: "dict[str, Any] | str", asset: str) -> str:
-    """`graph` as a graph document's text holding `asset`: a dict as JSON, text verbatim but
-    for the `asset` key opened into a JSON object that holds none. Text that is no JSON
-    object stays verbatim, so the runtime reads it as it was handed."""
-    if isinstance(graph, dict):
-        return json.dumps({GRAPH_DOCUMENT_ASSET_KEY: asset, **graph}, allow_nan=False)
-    try:
-        parsed = json.loads(graph)
-    except (ValueError, RecursionError):
-        return graph
-    if not isinstance(parsed, dict) or GRAPH_DOCUMENT_ASSET_KEY in parsed:
-        return graph
-    opened = graph.lstrip()[1:]
-    separator = "" if opened.lstrip().startswith("}") else ", "
-    return "{" + json.dumps(GRAPH_DOCUMENT_ASSET_KEY) + ": " + json.dumps(asset) + separator + opened
+    """`graph` as a graph document's text holding `asset` and a UUID for each node: a dict as
+    JSON, text that parses as a JSON object holding no `asset` likewise, and any other text
+    verbatim, so the runtime reads it as it was handed."""
+    if isinstance(graph, str):
+        try:
+            parsed = json.loads(graph)
+        except (ValueError, RecursionError):
+            return graph
+        if not isinstance(parsed, dict) or GRAPH_DOCUMENT_ASSET_KEY in parsed:
+            return graph
+        graph = parsed
+    return json.dumps(
+        {GRAPH_DOCUMENT_ASSET_KEY: asset, **graph_nodes_holding_a_uuid_each(graph, asset)},
+        allow_nan=False,
+    )
 
 
 def write_a_graph_document(

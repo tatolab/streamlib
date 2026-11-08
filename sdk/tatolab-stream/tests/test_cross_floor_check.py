@@ -10,6 +10,7 @@ The compile that prints the block is tested in
 """
 
 import os
+import subprocess
 import sys
 import textwrap
 import warnings
@@ -444,6 +445,36 @@ def test_a_clean_app_renders_nothing(tmp_path: Path):
     assert render_cross_floor_warning_block(
         check_app_directory_for_floor_bindings(tmp_path), tmp_path
     ) == ""
+
+
+def test_the_module_run_prints_a_projects_findings_on_standard_error(tmp_path):
+    (tmp_path / "nodes").mkdir()
+    (tmp_path / "nodes" / "effect.py").write_text("import cupy\n", encoding="utf-8")
+
+    finished = subprocess.run(
+        [sys.executable, "-I", "-m", "tatolab.stream._cross_floor_check", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    assert finished.stdout == ""
+    assert "the cross-floor check found 1 thing" in finished.stderr
+    assert "nodes/effect.py:1:" in finished.stderr
+
+
+def test_the_module_run_over_a_portable_project_prints_nothing(tmp_path):
+    (tmp_path / "effect.py").write_text("import torch\n", encoding="utf-8")
+
+    finished = subprocess.run(
+        [sys.executable, "-I", "-m", "tatolab.stream._cross_floor_check", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert (finished.returncode, finished.stdout, finished.stderr) == (0, "", "")
 
 
 # ---------------------------------------------------------------------------

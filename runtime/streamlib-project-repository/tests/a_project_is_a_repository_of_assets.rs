@@ -909,3 +909,70 @@ fn a_project_whose_files_are_already_written_is_committed_whole_as_its_first_com
         Err(ProjectRepositoryRefusal::ProjectAlreadyCommitted { .. })
     ));
 }
+
+#[test]
+fn the_history_records_the_whole_project_but_what_is_generated_hidden_or_held_by_the_content_store()
+{
+    let fixture = ProjectBesideItsImportSources::new();
+    let project = &fixture.project_directory;
+    let project_file = streamlib_project_repository::TatolabProjectFile::of_a_new_project("rig");
+    for (path, bytes) in [
+        ("nodes/halftone.py", &b"class Halftone: ...\n"[..]),
+        ("pyproject.toml", b"[project]\nname = \"rig\"\n"),
+        (".python-version", b"3.12\n"),
+        (".gitignore", b".venv/\n"),
+        (".venv/pyvenv.cfg", b"home = /usr\n"),
+        ("venv/pyvenv.cfg", b"home = /usr\n"),
+        ("venv/lib/site.py", b""),
+        (".git/HEAD", b"ref: refs/heads/main\n"),
+        ("node_modules/left-pad/index.js", b""),
+        ("nodes/__pycache__/halftone.cpython-312.pyc", b"\0"),
+        ("media/dropped.wav", b"wav"),
+    ] {
+        let on_disk = project.join(path);
+        std::fs::create_dir_all(on_disk.parent().unwrap()).unwrap();
+        std::fs::write(on_disk, bytes).unwrap();
+    }
+    std::os::unix::fs::symlink(
+        fixture.import_source("elsewhere.py", b""),
+        project.join("nodes/linked.py"),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join(PROJECT_FILE_NAME),
+        project_file.canonical_bytes().unwrap(),
+    )
+    .unwrap();
+    write_stream_document(
+        project,
+        "streams/main.graph.json",
+        &json!({"asset": Uuid::new_v4().to_string(), "nodes": [], "links": []}),
+    );
+    let mut repository =
+        ProjectRepository::commit_a_written_project_as_its_first(project, &agent()).unwrap();
+
+    repository
+        .apply_asset_changes(
+            &agent(),
+            vec![import_from(
+                &project.join("media/dropped.wav"),
+                "media/dropped.wav",
+            )],
+        )
+        .unwrap();
+
+    let files_at_head = repository.history().files_at_head().unwrap();
+    assert_eq!(
+        files_at_head.keys().collect::<Vec<_>>(),
+        vec![
+            ".gitignore",
+            ".python-version",
+            "media/dropped.wav.asset.json",
+            "nodes/halftone.py",
+            "pyproject.toml",
+            "streams/main.graph.json",
+            PROJECT_FILE_NAME,
+        ]
+    );
+    assert_eq!(files_at_head["nodes/halftone.py"], b"class Halftone: ...\n");
+}

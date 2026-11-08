@@ -15,10 +15,11 @@ from __future__ import annotations
 import ast
 import os
 import re
+import sys
 import tomllib
 import warnings
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import NamedTuple, Optional, Sequence
 
 __all__ = [
     "CrossFloorFinding",
@@ -448,3 +449,33 @@ def render_cross_floor_warning_block(report: CrossFloorCheckReport, app_director
         lines.append(f"  {shown_path}:{finding.line}: {finding.what_binds_it}")
         lines.append(f"      portable: {finding.portable_spelling}")
     return "\n".join(lines) + "\n"
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Print the warning block of the project directory `argv` names on standard error.
+
+    The runtime runs this as a load reads the project. Advisory, so a defect in the check
+    itself is reported and never fails the run.
+    """
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if len(arguments) != 1:
+        print(
+            "usage: python -m tatolab.stream._cross_floor_check <project-directory>",
+            file=sys.stderr,
+        )
+        return 2
+    project_directory = Path(arguments[0])
+    try:
+        cross_floor_warning_block = render_cross_floor_warning_block(
+            check_app_directory_for_floor_bindings(project_directory), project_directory
+        )
+    except Exception as cross_floor_check_failure:  # noqa: BLE001 — advisory only
+        cross_floor_warning_block = (
+            f"tatolab: the cross-floor check could not run: {cross_floor_check_failure!r}\n"
+        )
+    print(cross_floor_warning_block, end="", file=sys.stderr, flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
