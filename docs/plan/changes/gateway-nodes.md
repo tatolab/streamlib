@@ -134,9 +134,7 @@ and the runtime unit's contents (`moq-relay`, the preview page).
   shipping.
 - **The MCP instructions** tell an agent to look at a port through the viewer read path and
   to send it off the machine with gateway nodes. They do not mention `expose_port`.
-- **The scaffold** drops `H264Encoder` and `expose`. `TestPatternSource` → `HalftoneLensEffect`,
-  with `BrightnessMeter` on a fan-out; the person sees the effect's output in Tato Studio's viewer.
-  `tatolab-h264` leaves the scaffold's dependencies.
+- **The scaffold** drops `H264Encoder` and `expose`, and `tatolab-h264` leaves its dependencies.
 
 ## REMOVED
 

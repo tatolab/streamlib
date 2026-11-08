@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -111,7 +111,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
   stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; moq-relays —
   SHIPPED #2866; amended by stream-interface-and-routing-policy: the scaffold's `expose` takes no
-  level; amended by gateway-nodes: the scaffold drops `H264Encoder` and `expose`, and the effect's output is seen in a viewer]
+  level; amended by gateway-nodes: the scaffold drops `H264Encoder` and `expose`, and the effect's output is seen in a viewer; amended by first-party-package-index: the starter is one source node, `tatolab-testpattern` from Tatolab's index, and camera projects live in the samples the runtime unit carries]
   Rejected: a camera in the scaffold, as the default or as a flag — a user whose camera does
   not open meets a failure as the first thing (owner, 2026-10-16).
 - **DECIDED** — The lead demo is an agent building a live visual system while the person
@@ -475,7 +475,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: across streams, a stream reads another's track through gateway nodes; amended by project-and-assets: a generator's output is stored as a fragment, a container in the document]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes, first-party-package-index)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -896,7 +896,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pip-published pack becomes that directory, the registry's owner and standards, a manager UI,
   and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — IN-FLIGHT (→ gateway-nodes)
+## Consumers — examples & packages — IN-FLIGHT (→ gateway-nodes, first-party-package-index)
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
   current authoring idiom, converted gradually and never a contract source: engine
@@ -915,7 +915,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Externally, packages publish to PyPI beside `tatolab-stream` (owner, 2026-10-08).
   `test-fixtures` remains as the tree's one engine-adjacent Rust crate.
   [consumer-tree-disposition — SHIPPED #2052; extension-model; package-split-and-lend —
-  SHIPPED #2697]
+  SHIPPED #2697; amended by first-party-package-index: packages publish to Tatolab's index]
 - **DECIDED** — Conversion is a from-scratch rewrite in the current idiom, never an
   in-place upgrade: start from the `tatolab new` scaffold, mine the old directory for
   its logic only, author against today's full surface (delivery profiles, window
@@ -3684,7 +3684,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722; amended by
   runtime-lives-with-tato-studio: Tato Studio as the runtime's parent]
 
-## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
+## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, first-party-package-index; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -3694,7 +3694,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   as "a Python library". Owner, 2026-10-08.
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
   SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; amended by tatolab-names: the crate
-  is `tatolab-stream`]
+  is `tatolab-stream`; amended by first-party-package-index: the first-party modules publish to
+  Tatolab's index, `tatolab-stream` alone to PyPI]
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
@@ -3777,7 +3778,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
   Python suite and the integration suite's GPU-free half on it.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697;
-  moq-relays — SHIPPED #2845, #2866; amended by gateway-nodes: the scaffolded stream carries no `H264Encoder`, so the proof checks the effect's frames alone]
+  moq-relays — SHIPPED #2845, #2866; amended by gateway-nodes: the scaffolded stream carries no `H264Encoder`, so the proof checks the effect's frames alone; amended by first-party-package-index: the starter holds the source alone, so the proof checks `TestPatternSource.video`'s frames]
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
   it. On every PR `Build (macOS)` compiles the whole workspace with the wheel in it
   (clippy on default targets, `check --all-targets`); on `main` it also runs the Rust
