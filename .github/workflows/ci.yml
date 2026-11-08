@@ -21,21 +21,16 @@ name: CI
 #   Integration test (macOS)   the same end-to-end tests on macOS; merge queue
 #                              and `main`
 #
-# A change that touches only prose or code CI never builds runs nothing. Caches
+# A change that touches only prose or code CI never builds skips every job, and a
+# skipped job satisfies a required check. Caches
 # are saved by `main` alone and restored by pull requests. A failed job cancels
 # the rest of its run, and a newer push cancels the run before it.
 
 on:
+  # No path filter: a required check must report on every pull request, so a
+  # pull request that touches only paths CI never builds runs and skips its jobs.
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - '.claude/**'
-      - 'LICENSES/**'
-      - 'examples/**'
-      - 'docker/**'
-      - 'installer/**'
   push:
     branches: [main]
     paths-ignore:
@@ -81,6 +76,8 @@ jobs:
   # Everything that needs no test build.
   lint:
     name: Lint
+    needs: changes-on-the-pull-request
+    if: needs.changes-on-the-pull-request.outputs.paths_ci_checks_changed == 'true'
     # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
     # built on this image, and cargo cannot see which libpython a cached artifact links.
     runs-on: ubuntu-24.04
@@ -181,14 +178,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
 
-  # Whether a pull request touches anything the workspace's Rust tests build
-  # from. Consumer packages, the stream suite, the Python SDK and Python files
-  # are not; every other path is, and every non-pull-request event is.
-  changes-affecting-the-workspace-rust-build:
-    name: Changes affecting the workspace Rust build
+  # Which checks a pull request's changed paths call for. Prose, the Claude
+  # rules, examples, docker and the installer call for none. Consumer packages,
+  # the stream suite, the Python SDK and Python files call for no workspace Rust
+  # build; every other path does. Every non-pull-request event calls for all.
+  changes-on-the-pull-request:
+    name: Changes on the pull request
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      paths_ci_checks_changed: ${{ steps.classify.outputs.paths_ci_checks_changed }}
       workspace_rust_build_affected: ${{ steps.classify.outputs.workspace_rust_build_affected }}
     steps:
       - uses: actions/checkout@v5
@@ -201,16 +200,28 @@ jobs:
           PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "paths_ci_checks_changed=true" >> "$GITHUB_OUTPUT"
             echo "workspace_rust_build_affected=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          paths_affecting_the_workspace_rust_build="$(
+          paths_ci_checks="$(
             git diff --name-only "$PULL_REQUEST_BASE_SHA" HEAD \
+              | grep -Ev '^(docs|\.claude|LICENSES|examples|docker|installer)/' \
+              | grep -Ev '\.md$' || true
+          )"
+          if [ -n "$paths_ci_checks" ]; then
+            echo "paths_ci_checks_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "paths_ci_checks_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          paths_affecting_the_workspace_rust_build="$(
+            printf '%s\n' "$paths_ci_checks" \
               | grep -Ev '^packages/[^/]+/' \
               | grep -Ev '^(tests/stream-on-runtime|sdk/tatolab-stream)/' \
-              | grep -Ev '\.pyi?$' || true
+              | grep -Ev '\.pyi?$' \
+              | grep -v '^$' || true
           )"
-          git diff --name-only "$PULL_REQUEST_BASE_SHA" HEAD | grep '^packages/test-fixtures/' \
+          printf '%s\n' "$paths_ci_checks" | grep -q '^packages/test-fixtures/' \
             && paths_affecting_the_workspace_rust_build="packages/test-fixtures"
           if [ -n "$paths_affecting_the_workspace_rust_build" ]; then
             echo "workspace_rust_build_affected=true" >> "$GITHUB_OUTPUT"
@@ -226,8 +237,8 @@ jobs:
   # fails the job.
   test-linux:
     name: Unit Test (Linux)
-    needs: changes-affecting-the-workspace-rust-build
-    if: needs.changes-affecting-the-workspace-rust-build.outputs.workspace_rust_build_affected == 'true'
+    needs: changes-on-the-pull-request
+    if: needs.changes-on-the-pull-request.outputs.workspace_rust_build_affected == 'true'
     # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
     # built on this image, and cargo cannot see which libpython a cached artifact links.
     runs-on: ubuntu-24.04
