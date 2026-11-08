@@ -686,6 +686,34 @@ pub(crate) fn host_visible_dlpack_capsule<'py>(
     )
 }
 
+/// A capsule owner that is dropped holding the interpreter's thread state.
+///
+/// A consumer runs the DLPack deleter wherever it frees the tensor: torch
+/// can free one inside its own `gil_scoped_release`, on a thread pyo3 still
+/// counts as attached, so a bare `Python::attach` in the owner's `Drop`
+/// would run Python (or `detach`) with no thread state and abort the
+/// interpreter. `PyGILState_Ensure` asks CPython itself, so it reacquires
+/// a released thread state, nests under a held one, and creates one on a
+/// foreign thread.
+struct CapsuleOwnerDroppedWithTheInterpreterAttached(Option<dlpack::CapsuleOwner>);
+
+impl Drop for CapsuleOwnerDroppedWithTheInterpreterAttached {
+    fn drop(&mut self) {
+        let owner = self.0.take();
+        // SAFETY: `Py_IsInitialized` may be called at any time; the ensure is
+        // paired with exactly one release on this thread.
+        unsafe {
+            if pyo3::ffi::Py_IsInitialized() == 0 {
+                drop(owner);
+                return;
+            }
+            let interpreter_state_before_the_owner_drop = pyo3::ffi::PyGILState_Ensure();
+            drop(owner);
+            pyo3::ffi::PyGILState_Release(interpreter_state_before_the_owner_drop);
+        }
+    }
+}
+
 /// Wrap `address` in the negotiated DLPack exchange shape — the one
 /// place the shape selection and the read-only flag derivation live, so
 /// the host and device exports cannot drift.
@@ -698,6 +726,8 @@ pub(crate) fn dlpack_capsule_over<'py>(
     read_only: bool,
     owner: dlpack::CapsuleOwner,
 ) -> PyResult<Bound<'py, PyAny>> {
+    let owner: dlpack::CapsuleOwner =
+        Box::new(CapsuleOwnerDroppedWithTheInterpreterAttached(Some(owner)));
     match exchange_shape {
         DlpackExchangeShape::Versioned => {
             let flags = if read_only {
@@ -1552,6 +1582,87 @@ mod tests {
             let deleter = (*adopted).deleter.expect("deleter");
             deleter(adopted);
         }
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    /// An owner that, like every helper release debt, attaches and then
+    /// detaches for its blocking round trip.
+    struct OwnerThatDetachesOnDrop(Arc<AtomicUsize>);
+    impl Drop for OwnerThatDetachesOnDrop {
+        fn drop(&mut self) {
+            Python::attach(|python| python.detach(|| self.0.fetch_add(1, Ordering::SeqCst)));
+        }
+    }
+
+    /// A consumed capsule from `dlpack_capsule_over`, handed back as the raw
+    /// managed tensor its consumer now owns.
+    fn adopted_managed_tensor_over_an_owner_that_detaches_on_drop(
+        python: Python<'_>,
+        drops: &Arc<AtomicUsize>,
+    ) -> *mut ManagedTensor {
+        let layout = PixelExchangeTensorLayout::for_pixel_format(PixelFormat::Rgba32, 4, 4, 16)
+            .expect("an rgba layout");
+        let capsule = dlpack_capsule_over(
+            python,
+            0xCAFE_F00D,
+            layout,
+            HOST_VISIBLE_DLPACK_DEVICE,
+            DlpackExchangeShape::Unversioned,
+            false,
+            Box::new(OwnerThatDetachesOnDrop(Arc::clone(drops))),
+        )
+        .expect("capsule");
+        unsafe {
+            let adopted =
+                pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), DLPACK_CAPSULE_NAME.as_ptr())
+                    as *mut ManagedTensor;
+            assert_eq!(
+                pyo3::ffi::PyCapsule_SetName(
+                    capsule.as_ptr(),
+                    DLPACK_CONSUMED_CAPSULE_NAME.as_ptr()
+                ),
+                0,
+            );
+            adopted
+        }
+    }
+
+    /// torch frees a tensor inside its own `gil_scoped_release`, on the very
+    /// thread pyo3 counts as attached for `process()`. The owner's drop must
+    /// not run Python, or detach, with that thread state released.
+    #[test]
+    fn a_consumer_releasing_the_tensor_with_the_thread_state_released_does_not_abort() {
+        Python::initialize();
+        let drops = Arc::new(AtomicUsize::new(0));
+        Python::attach(|python| {
+            let adopted =
+                adopted_managed_tensor_over_an_owner_that_detaches_on_drop(python, &drops);
+            unsafe {
+                let released_thread_state = pyo3::ffi::PyEval_SaveThread();
+                let deleter = (*adopted).deleter.expect("deleter");
+                deleter(adopted);
+                pyo3::ffi::PyEval_RestoreThread(released_thread_state);
+            }
+        });
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    /// A consumer may free the tensor on a thread of its own that has never
+    /// touched the interpreter.
+    #[test]
+    fn a_consumer_releasing_the_tensor_from_a_foreign_thread_does_not_abort() {
+        Python::initialize();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let adopted_address = Python::attach(|python| {
+            adopted_managed_tensor_over_an_owner_that_detaches_on_drop(python, &drops) as usize
+        });
+        std::thread::spawn(move || unsafe {
+            let adopted = adopted_address as *mut ManagedTensor;
+            let deleter = (*adopted).deleter.expect("deleter");
+            deleter(adopted);
+        })
+        .join()
+        .expect("the foreign thread's release");
         assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 
