@@ -53,7 +53,8 @@ pub use module_host_shared_native_service::{
 };
 pub use module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR,
-    MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHostTable, ModuleHostTablePayloadDescriptor,
+    MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME, ModuleHostTable,
+    ModuleHostTableFunctionNodeEvaluateEntry, ModuleHostTablePayloadDescriptor,
 };
 pub use module_host_virtual_camera::{
     ModuleHostVirtualCameraFramePresentation, ModuleHostVirtualCameraStream,

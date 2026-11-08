@@ -15,6 +15,7 @@ mod python_bag_conversion;
 mod python_class_from_source_for_tests;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
+mod python_function_node_island;
 mod python_gpu_surface_pixel_exchange;
 #[cfg(target_os = "macos")]
 mod python_helper_process_parent_death_watch;
@@ -88,6 +89,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(unix)]
     module.add_function(wrap_pyfunction!(
         python_helper_scheduling_loop::run_the_scheduling_loop_of_this_helper,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_function_node_island::feed_an_input_port_from_a_function_node_island,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

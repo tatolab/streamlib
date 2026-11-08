@@ -21,7 +21,7 @@ const MODULE_SDK_MANIFEST: &str = "sdk/tatolab-module-sdk/Cargo.toml";
 
 /// The scalar types a table field may be built from.
 const PLAIN_DATA_TYPE_NAMES: &[&str] = &[
-    "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "c_void",
+    "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64", "c_void",
 ];
 
 /// The prefix every type the table defines for itself carries.

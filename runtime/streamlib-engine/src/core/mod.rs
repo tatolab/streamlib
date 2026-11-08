@@ -95,7 +95,7 @@ pub mod processor_interpreter {
         SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, processor_interpreter_bootstrap_path,
     };
     pub use super::compiler::compiler_ops::python_processor_declaration::{
-        AudioWindowFieldRefusal, PythonProcessorDeclaration,
+        AudioWindowFieldRefusal, HowAPythonNodeOfTheTypeRuns, PythonProcessorDeclaration,
         read_a_channel_count_or_the_source_spelling,
     };
     pub use streamlib_consumer_rhi::runtime_unit_layout::{

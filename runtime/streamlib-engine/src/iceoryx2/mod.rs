@@ -13,6 +13,7 @@ pub(crate) mod channel_sample_test_support;
 mod channel_sizing_tests;
 mod child_process_start_outside_listener_binds;
 mod delivery_profile;
+mod function_node_island_input_port;
 mod helper_process_loss_count_board;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod iceoryx2_domain_for_this_test_process;
@@ -55,6 +56,9 @@ pub(crate) use child_process_start_outside_listener_binds::bind_an_iceoryx2_list
 pub use child_process_start_outside_listener_binds::spawn_outside_every_iceoryx2_listener_bind;
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
+pub use function_node_island_input_port::{
+    FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
+};
 #[cfg(test)]
 pub(crate) use helper_process_loss_count_board::a_loss_count_board_and_its_helpers_writer_for_this_test_process;
 pub use helper_process_loss_count_board::{

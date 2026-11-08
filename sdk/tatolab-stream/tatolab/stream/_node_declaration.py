@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import typing
-from typing import Any, NoReturn, Optional, TypeVar
+from typing import Any, Callable, NoReturn, Optional, ParamSpec, TypeVar, overload
 
 from .catalog import AudioEntry, BinaryEntry, JsonEntry, TextEntry, VideoEntry
 
@@ -28,6 +28,7 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
+from ._function_node_declaration import FunctionNode, declare_function_node
 from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
     derive_config_class_json_schema,
@@ -54,6 +55,20 @@ NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
 NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
 
 PROCESS_NODE_KIND = "process"
+
+# Every kind stamps these, by the role each plays in the declaration.
+_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
+    "declared": NODE_DECLARATION_DECLARED_STAMP,
+    "kind": NODE_DECLARATION_KIND_STAMP,
+    "config_class": NODE_DECLARATION_CONFIG_CLASS_STAMP,
+    "config_schema": NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
+    "description": NODE_DECLARATION_DESCRIPTION_STAMP,
+    "input_ports": NODE_DECLARATION_INPUT_PORTS_STAMP,
+    "output_ports": NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+}
+
+_FunctionNodeParameters = ParamSpec("_FunctionNodeParameters")
+_FunctionNodeReturn = TypeVar("_FunctionNodeReturn")
 """The kind a class node is: it runs in a process of its own."""
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
@@ -284,8 +299,52 @@ class NodeDeclarationDecorator:
             "bare `@node` declares no kind; every node names its kind. A class with "
             "`setup()` / `process()` and ports is `@node.process`, bare or with the same "
             "keyword arguments (`execution`, `interval_ms`, `scheduling`, "
-            "`paced_by_real_time`, `description`)."
+            "`paced_by_real_time`, `description`). A function that computes its outputs "
+            "from its inputs is `@node.function`."
         )
+
+    @overload
+    def function(
+        self,
+        node_function: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]",
+        *,
+        description: str = "",
+    ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
+
+    @overload
+    def function(
+        self, node_function: None = None, *, description: str = ""
+    ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]]": ...
+
+    def function(
+        self, node_function: "Optional[Callable[..., Any]]" = None, *, description: str = ""
+    ) -> Any:
+        """Mark a function as a function node: one that computes its outputs from its inputs.
+
+        Usable bare (`@node.function`) or with `description=`. The signature is
+        the node: each plain parameter is an input pin, its default the pin's
+        value when nothing is wired, and `T | None = None` an optional input.
+        The return annotation is the output `result`, or one output per field
+        of a returned dataclass. `float`, `int` and `bool` are one-channel
+        Channels, `dict` is Records, and a read type is its family. `config`
+        names the node's one config dataclass. A parameter typed `Time` is
+        handed the stream time of the read; one typed `State[Record]` the state
+        the last call returned in its `Stateful[Output, Record]`. The decorated
+        function is still called as itself.
+        """
+
+        def apply_to_function(
+            function_under_decoration: "Callable[..., Any]",
+        ) -> "FunctionNode[..., Any]":
+            return declare_function_node(
+                function_under_decoration,
+                description=description,
+                declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
+            )
+
+        if node_function is None:
+            return apply_to_function
+        return apply_to_function(node_function)
 
     def process(
         self,
@@ -363,7 +422,7 @@ class NodeDeclarationDecorator:
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports."""
+"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports."""
 
 
 def _declare_node(

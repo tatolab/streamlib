@@ -74,6 +74,10 @@ from ._node_context_protocols import (
 from ._message import Message as Message
 from ._node_declaration import AudioWindowContract as AudioWindowContract
 from ._node_declaration import node as node
+from ._function_node_declaration import FunctionNode as FunctionNode
+from ._function_node_declaration import State as State
+from ._function_node_declaration import Stateful as Stateful
+from ._function_node_declaration import Time as Time
 from ._port_family_declaration import Array as Array
 from ._port_family_declaration import Channels as Channels
 from ._port_family_declaration import Image as Image
@@ -197,8 +201,11 @@ __all__ = [
     "NodeReference",
     "NodeReferenceToNodeType",
     "ExposedNameCastsToNothingError",
+    "FunctionNode",
     "cast_exposed_name_to_url_safe",
     "SoleReferrerNodeReferenceToNodeType",
+    "State",
+    "Stateful",
     "OpaqueFdAllocationExport",
     "Output",
     "Packets",
@@ -222,6 +229,7 @@ __all__ = [
     "StreamBuilder",
     "StreamClock",
     "StreamClockReading",
+    "Time",
     "catalog",
     "clock",
     "compile_stream_to_graph",

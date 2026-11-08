@@ -1314,7 +1314,7 @@ mod tests {
                         crate::core::descriptors::PortFamily::Image,
                     ),
                 )),
-                Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|_node| Err(Error::NotSupported("never constructed".into())))),
             )
             .expect("the type is described into the stream");
         let graph = GraphSnapshot::from_graph_document(serde_json::json!({
@@ -1389,7 +1389,7 @@ mod tests {
             node_types
                 .register_a_type_described_in_this_streams_processor_interpreter(
                     descriptor,
-                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                    crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|_node| Err(Error::NotSupported("never constructed".into())))),
                 )
                 .expect("the type is described into the stream");
         }
@@ -1742,7 +1742,7 @@ mod tests {
             node_types
                 .register_a_type_described_in_this_streams_processor_interpreter(
                     descriptor,
-                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                    crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|_node| Err(Error::NotSupported("never constructed".into())))),
                 )
                 .expect("the type is described into the stream");
         }

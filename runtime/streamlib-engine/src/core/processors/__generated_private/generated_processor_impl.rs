@@ -73,6 +73,7 @@ enum HowALinkReachesTheFarSide {
 struct RecordedLinksAndHowTheNextReachesTheFarSide {
     input_links: Vec<JsonValue>,
     output_links: Vec<JsonValue>,
+    function_node_islands_feeding_its_input_ports: Vec<JsonValue>,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -124,6 +125,7 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         serde_json::json!({
             "inputs": self.input_links,
             "outputs": self.output_links,
+            "islands": self.function_node_islands_feeding_its_input_ports,
         })
     }
 }
@@ -201,6 +203,7 @@ impl OutOfProcessLinkWiringEnvelope {
                 RecordedLinksAndHowTheNextReachesTheFarSide {
                     input_links: Vec::new(),
                     output_links: Vec::new(),
+                    function_node_islands_feeding_its_input_ports: Vec::new(),
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
@@ -319,6 +322,48 @@ impl OutOfProcessLinkWiringEnvelope {
                 Err(crate::core::error::Error::Runtime(reason.clone()))
             }
         }
+    }
+
+    /// Record the function node island feeding one of this processor's input
+    /// ports, which only a setup command carries.
+    ///
+    /// Refused once setup has begun: a running far side is not re-islanded.
+    pub(crate) fn record_a_function_node_island_on_the_setup_command(
+        &self,
+        function_node_island: JsonValue,
+    ) -> Result<()> {
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        match &recorded.how_a_link_reaches_the_far_side {
+            HowALinkReachesTheFarSide::RidesTheSetupCommand => {
+                recorded
+                    .function_node_islands_feeding_its_input_ports
+                    .push(function_node_island);
+                Ok(())
+            }
+            HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
+            | HowALinkReachesTheFarSide::HandedOverTo(_) => {
+                Err(crate::core::error::Error::InvalidLink(format!(
+                    "link `{}` feeds a function node island into a node whose helper has \
+                     already begun its setup; a running node is not re-islanded in this \
+                     release, so connect function nodes before the stream starts",
+                    link_id_of(&function_node_island).unwrap_or_default()
+                )))
+            }
+            HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason) => {
+                Err(crate::core::error::Error::Runtime(reason.clone()))
+            }
+        }
+    }
+
+    /// Forget the function node island `link_id` carries, so no later setup
+    /// command carries it.
+    pub(crate) fn forget_a_function_node_island(&self, link_id: &str) {
+        self.recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .function_node_islands_feeding_its_input_ports
+            .retain(|island| link_id_of(island).as_deref() != Some(link_id));
     }
 
     /// Forget one link, in both directions, on disconnect, and ask a far side

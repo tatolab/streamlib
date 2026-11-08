@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod apply_processor_config_update_op;
+pub(crate) mod function_node_island;
 mod open_iceoryx2_service_op;
 mod prepare_processor_op;
 pub(crate) mod processor_interpreter_describe;

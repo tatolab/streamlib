@@ -138,6 +138,11 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     log,
 )
+from tatolab.stream._function_node_declaration import (
+    NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
+    NODE_DECLARATION_LANGUAGE_STAMP,
+    FunctionNode,
+)
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_DECLARED_STAMP,
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
@@ -161,6 +166,10 @@ from tatolab.runtime._engine import (
     open_node_link_data_access_for_helper_process,
     open_runtime_context_full_access_for_helper_process,
     run_the_scheduling_loop_of_this_helper,
+)
+from tatolab.runtime._function_node_compilation import (
+    FunctionNodeCompiledToItsEvaluateEntry,
+    feed_each_input_port_from_its_function_node_island,
 )
 from tatolab.runtime._processor_hosting import (
     apply_configuration,
@@ -829,7 +838,7 @@ def load_processor_class(import_path: str) -> type:
 # Describing processor classes
 # =============================================================================
 
-#: Each key of a described node type the class's own `@node.process` stamp fills, in wire order.
+#: Each key of a described process node type the class's own `@node.process` stamp fills, in wire order.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
     ("kind", NODE_DECLARATION_KIND_STAMP),
@@ -839,6 +848,18 @@ DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+)
+
+
+#: Each key of a described function node type its `@node.function` stamp fills, in wire order.
+DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
+    ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
+    ("kind", NODE_DECLARATION_KIND_STAMP),
+    ("language", NODE_DECLARATION_LANGUAGE_STAMP),
+    ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
+    ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
+    ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+    ("function_signature", NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP),
 )
 
 
@@ -879,21 +900,29 @@ def _describe_the_processor_class_its_imported_module_defines(
         resolved: Any = load_processor_class(import_path)
     except HelperProcessProtocolError as unresolvable:
         raise ProcessorClassNotDescribable(str(unresolvable)) from None
-    if not isinstance(resolved, type):
+    if isinstance(resolved, FunctionNode):
+        described_keys_and_their_stamps = DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
+        the_decorator_that_stamps_them = "@node.function"
+        what_it_names = "function"
+    elif isinstance(resolved, type):
+        described_keys_and_their_stamps = DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
+        the_decorator_that_stamps_them = "@node.process"
+        what_it_names = "class"
+    else:
         raise ProcessorClassNotDescribable(
-            f"it names a {type(resolved).__name__}, not a class"
+            f"it names a {type(resolved).__name__}, not a class or a `@node.function`"
         )
     if getattr(resolved, NODE_DECLARATION_DECLARED_STAMP, False) is not True:
         raise ProcessorClassNotDescribable(
-            f"the class `{resolved.__qualname__}` carries no `@node.process` declaration, so it "
-            f"is not a node"
+            f"the {what_it_names} `{resolved.__qualname__}` carries no "
+            f"`{the_decorator_that_stamps_them}` declaration, so it is not a node"
         )
     own_import_path = (
         f"{getattr(resolved, '__module__', None)}:{getattr(resolved, '__qualname__', None)}"
     )
     if own_import_path != import_path:
         raise ProcessorClassNotDescribable(
-            f"the class it names identifies as `{own_import_path}`; a node is named by "
+            f"the {what_it_names} it names identifies as `{own_import_path}`; a node is named by "
             f"its own import path, the one its processor interpreter imports it back by"
         )
     described_node_type: "dict[str, Any]" = {
@@ -903,15 +932,16 @@ def _describe_the_processor_class_its_imported_module_defines(
     for (
         described_node_type_key,
         node_declaration_stamp,
-    ) in DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS:
+    ) in described_keys_and_their_stamps:
         try:
             described_node_type[described_node_type_key] = getattr(
                 resolved, node_declaration_stamp
             )
         except AttributeError:
             raise ProcessorClassNotDescribable(
-                f"the class `{resolved.__qualname__}` carries no `{node_declaration_stamp}`, "
-                f"which `@node.process` sets; a class stamped by hand is not a node"
+                f"the {what_it_names} `{resolved.__qualname__}` carries no "
+                f"`{node_declaration_stamp}`, which `{the_decorator_that_stamps_them}` sets; a "
+                f"{what_it_names} stamped by hand is not a node"
             ) from None
     try:
         json.dumps(described_node_type, allow_nan=False)
@@ -1271,6 +1301,9 @@ class HelperProcessLifecycle:
         self._paused = False
         self._scheduling_loop_runs = False
         self._pause_hook_last_called: "Optional[str]" = None
+        self._function_nodes_compiled_for_the_islands_it_reads: (
+            "list[FunctionNodeCompiledToItsEvaluateEntry]"
+        ) = []
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -1373,7 +1406,15 @@ class HelperProcessLifecycle:
                     self._board_service_name_of_a_stream_clock_that_may_step = (
                         stream_clock_board_service_name
                     )
-            wire_link_data_access(self._link_data_access, command.get("ports") or {})
+            port_wiring = command.get("ports") or {}
+            wire_link_data_access(self._link_data_access, port_wiring)
+            function_node_islands = port_wiring.get("islands") or []
+            if function_node_islands:
+                self._function_nodes_compiled_for_the_islands_it_reads = (
+                    feed_each_input_port_from_its_function_node_island(
+                        self._link_data_access, function_node_islands, load_processor_class
+                    )
+                )
             self._hosted = construct_hosted_processor(
                 self._processor_class,
                 command.get("config"),

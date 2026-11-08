@@ -73,7 +73,7 @@ class ChannelsBlock(Protocol):
 
     @property
     def sample_rate(self) -> int:
-        """Samples per second, per channel."""
+        """Samples per second, per channel; 0 on a control value, which has no regular rate."""
         ...
 
     @property
