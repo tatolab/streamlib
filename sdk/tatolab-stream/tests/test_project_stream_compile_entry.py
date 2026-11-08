@@ -13,7 +13,6 @@ Nothing here needs a runtime.
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -21,14 +20,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 import pytest
-from h264_module_stand_in import write_the_h264_module_stand_in_into
 from testpattern_module_stand_in import (
     TESTPATTERN_MODULE_NODE_TYPE,
     write_the_testpattern_module_stand_in_into,
 )
 
 COMPILE_ENTRY_MODULE = "tatolab.stream._project_stream_compile_entry"
-SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parents[1] / "scaffold_template"
 # Bounded: a compile imports a few modules and runs one function.
 COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
 
@@ -1056,30 +1053,6 @@ def test_a_syntax_error_is_reported_as_the_apps_traceback(anchor_directory: Path
 
     assert "SyntaxError" in import_failure, import_failure
     assert "stream.py" in import_failure, "the traceback must name the file"
-
-
-def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(tmp_path: Path):
-    """The bad save the scaffold invites.
-
-    `stream.py` holds wiring the user rarely touches; the file they edit is the
-    node module, which reaches the compile only as an import from the entry
-    file. So the traceback has to walk through `stream.py` and land in the
-    module — naming only the entry file would point at the wrong file.
-    """
-    app_directory = tmp_path.resolve() / "demo"
-    shutil.copytree(SCAFFOLD_TEMPLATE_DIRECTORY, app_directory)
-    write_the_h264_module_stand_in_into(app_directory)
-    write_the_testpattern_module_stand_in_into(app_directory)
-    (app_directory / "nodes" / "halftone_lens_effect.py").write_text(
-        "def process(self ctx:\n    this does not parse\n"
-    )
-
-    import_failure = import_failure_of(run_compile_entry(app_directory, verb="dev"))
-
-    assert "SyntaxError" in import_failure, import_failure
-    assert "halftone_lens_effect.py" in import_failure, (
-        f"the traceback must name the module the user edited:\n{import_failure}"
-    )
 
 
 def test_a_raise_at_import_time_surfaces_as_the_apps_traceback(anchor_directory: Path):

@@ -73,15 +73,13 @@ pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use output_port_viewer::{OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen};
 pub use project_stream_action_queue::{
-    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, ProjectStreamsListing, StreamAction,
-    StreamActionKind, StreamActionQueued, StreamActionState, StreamActionStep,
-    StreamActionWorkingOnAStream, StreamOfAStreamAction, StreamTheLastCompileOfTheProjectNamed,
-    WhatTheLastCompileOfTheProjectGave,
+    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, StreamAction, StreamActionKind, StreamActionQueued,
+    StreamActionState, StreamActionStep, StreamActionWorkingOnAStream, StreamOfAStreamAction,
 };
 pub(crate) use runtime::what_interrupted_a_load;
 pub use runtime::{
-    EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
-    StreamLoadObservingInterrupts, WhatALoadedStreamIsKeyedBy,
+    CreatedProjectFirstCommit, EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner,
+    RunnerConstructionOptions, StreamLoadObservingInterrupts, WhatALoadedStreamIsKeyedBy,
 };
 pub use runtime_crash_pinned_on_a_stream::{
     CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, RuntimeRunInProgressRecord,

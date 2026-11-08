@@ -3,15 +3,16 @@
 
 """How the harness turns what a test hands it into the project `tatolab run` loads.
 
-Needs no runtime: these check the project the harness would hand `tatolab run`,
-compiled by the suite venv's own compile entry, and the wrapper interpreter of a
-hand-written graph's project, run directly.
+Needs no runtime: these check the project the harness would hand `tatolab run` — its
+project file and the graph documents it writes — and the interpreter of a hand-written
+graph's project, run directly.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -23,24 +24,27 @@ from runtime_unit_under_test import (
     SUITE_VENV_PREFIX,
 )
 from stream_runs_on_tatolabd import (
-    COMPILE_ENTRY_INVOCATION,
+    PROJECT_FILE_NAME,
     StreamFunctionNotRunnableFromTheSuiteProject,
     TatolabRunOfAProject,
+    graph_document_path_of,
+    stream_id_named,
     stream_id_of_a_one_stream_project,
-    stream_id_of_the_location,
     write_a_hand_written_graph_project,
     write_a_one_stream_project_of_a_suite_stream_function,
+    write_the_graph_documents_the_stream_py_compiles_to,
 )
 from tatolab.stream import StreamBuilder
+from tatolab.stream._stream_graph_builder import compile_stream_to_graph
 
 WRAPPER_INVOCATION_TIMEOUT_SECONDS = 30.0
 
 
 def a_stream_function_defined_in_this_test_module(stream_builder: StreamBuilder) -> None:
-    """Never run: a test module is no place a compile interpreter imports."""
+    """Never run: a test module is no place a processor interpreter imports."""
 
 
-def test_a_suite_stream_function_runs_as_a_one_stream_project_compiling_to_its_own_graph(
+def test_a_suite_stream_function_runs_as_a_one_stream_project_holding_its_graph_document(
     tmp_path: Path,
 ):
     project_directory = tmp_path / "project"
@@ -54,29 +58,30 @@ def test_a_suite_stream_function_runs_as_a_one_stream_project_compiling_to_its_o
     assert (project_directory / "runtime_load_streams.py").resolve() == (
         STREAM_ON_RUNTIME_SUITE_DIRECTORY / "runtime_load_streams.py"
     )
-    compiled = subprocess.run(
-        [
-            str(project_directory / ".venv" / "bin" / "python"),
-            *COMPILE_ENTRY_INVOCATION,
-            "--verb",
-            "run",
-            "--every-stream",
-        ],
-        cwd=project_directory,
-        capture_output=True,
-        text=True,
-        timeout=WRAPPER_INVOCATION_TIMEOUT_SECONDS,
-        check=True,
+    assert not (project_directory / "stream.py").exists()
+    project_file = json.loads((project_directory / PROJECT_FILE_NAME).read_text())
+    assert project_file["name"] == "project"
+    graph_document = json.loads(
+        graph_document_path_of(project_directory, "named_pattern_into_a_named_sink").read_text()
     )
-    compiled_document = json.loads(compiled.stdout.splitlines()[-1])
-    [compiled_stream] = compiled_document["streams"]
-    assert compiled_stream["stream_function"] == "stream:named_pattern_into_a_named_sink"
-    assert compiled_stream["stream_graph"]["stream"] == "named_pattern_into_a_named_sink"
+    stream_asset = graph_document.pop("asset")
+    assert graph_document == compile_stream_to_graph(named_pattern_into_a_named_sink)
     assert stream_id_of_a_one_stream_project(
         project_directory, named_pattern_into_a_named_sink
-    ) == stream_id_of_the_location(
-        Path(compiled_document["project_directory"]), compiled_stream["stream_function"]
+    ) == stream_id_named(
+        "project", "named_pattern_into_a_named_sink", project_file["project"], stream_asset
     )
+
+
+def test_the_stream_id_oracle_is_the_project_name_the_stream_name_and_six_hex_of_the_two_uuids():
+    project = "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10"
+    stream_asset = "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"
+
+    stream_id = stream_id_named("Robot Cell", "arm control", project, stream_asset)
+
+    assert stream_id.startswith("robot-cell-arm-control-")
+    assert len(stream_id.rsplit("-", 1)[-1]) == 6
+    assert stream_id != stream_id_named("Robot Cell", "arm control", project, str(uuid.uuid4()))
 
 
 def test_a_stream_function_in_a_test_module_is_refused_naming_where_to_move_it(tmp_path: Path):
@@ -103,44 +108,46 @@ def test_a_stream_function_defined_inside_a_function_is_refused_as_not_importabl
     assert "not a module-level function" in str(refusal.value)
 
 
-def test_a_hand_written_graph_projects_interpreter_prints_the_graph_as_the_compile_document(
-    tmp_path: Path,
-):
+def test_a_hand_written_graph_is_written_verbatim_but_for_its_stream_asset(tmp_path: Path):
     graph_text = '{"stream": "hand-written", "nodes": [], "value": NaN}'
-    project = write_a_hand_written_graph_project(
-        tmp_path / "project", graph_text, reported_project_directory=tmp_path / "nodes-live-here"
-    )
 
-    compiled = subprocess.run(
-        [str(project.venv_interpreter), *COMPILE_ENTRY_INVOCATION, "--verb", "run"],
-        capture_output=True,
-        text=True,
-        timeout=WRAPPER_INVOCATION_TIMEOUT_SECONDS,
-        check=True,
-    )
+    project = write_a_hand_written_graph_project(tmp_path / "project", graph_text)
 
-    assert compiled.stdout == (
-        '{"stream_graph": ' + graph_text + ', "project_directory": '
-        + json.dumps(str(tmp_path / "nodes-live-here"))
-        + ', "stream_function": "stream:hand-written"}\n'
+    document_text = project.graph_document_path.read_text()
+    assert project.graph_document_path == graph_document_path_of(
+        tmp_path / "project", "hand-written"
     )
-    every_stream_compiled = subprocess.run(
-        [str(project.venv_interpreter), *COMPILE_ENTRY_INVOCATION, "--verb", "run", "--every-stream"],
-        capture_output=True,
-        text=True,
-        timeout=WRAPPER_INVOCATION_TIMEOUT_SECONDS,
-        check=True,
-    )
-    assert every_stream_compiled.stdout == (
-        '{"project_directory": '
-        + json.dumps(str(tmp_path / "nodes-live-here"))
-        + ', "streams": [{"stream_function": "stream:hand-written", "description": null, '
-        + '"stream_graph": ' + graph_text + "}]}\n"
-    )
+    assert document_text.endswith(' "stream": "hand-written", "nodes": [], "value": NaN}')
+    assert document_text.startswith('{"asset": "')
     assert project.tatolab_run == TatolabRunOfAProject(working_directory=tmp_path / "project")
 
+    rewritten = write_a_hand_written_graph_project(
+        tmp_path / "project", "not json", reported_project_directory=tmp_path / "project"
+    )
+    assert rewritten.stream_name == "main"
+    assert rewritten.graph_document_path.read_text() == "not json"
 
-def test_a_hand_written_graph_projects_interpreter_execs_the_processor_interpreter_otherwise(
+
+def test_hand_written_graphs_of_one_reported_project_share_its_project_file(tmp_path: Path):
+    nodes_live_here = tmp_path / "nodes-live-here"
+
+    first = write_a_hand_written_graph_project(
+        tmp_path / "unused", {"stream": "first", "nodes": []},
+        reported_project_directory=nodes_live_here,
+    )
+    project_file_text = (nodes_live_here / PROJECT_FILE_NAME).read_text()
+    second = write_a_hand_written_graph_project(
+        tmp_path / "unused", {"stream": "second", "nodes": []},
+        reported_project_directory=nodes_live_here,
+    )
+
+    assert first.project_directory == second.project_directory == nodes_live_here
+    assert (nodes_live_here / PROJECT_FILE_NAME).read_text() == project_file_text
+    assert first.stream_id != second.stream_id
+    assert not (tmp_path / "unused").exists()
+
+
+def test_a_hand_written_graph_projects_interpreter_execs_the_processor_interpreter(
     tmp_path: Path,
 ):
     project = write_a_hand_written_graph_project(tmp_path / "project", {"stream": "x", "nodes": []})
@@ -154,4 +161,29 @@ def test_a_hand_written_graph_projects_interpreter_execs_the_processor_interpret
     )
 
     assert ran.stdout.strip() == str(SUITE_VENV_INTERPRETER)
-    assert project.reported_project_directory == STREAM_ON_RUNTIME_SUITE_DIRECTORY
+    assert (project.project_directory / "runtime_load_streams.py").resolve() == (
+        STREAM_ON_RUNTIME_SUITE_DIRECTORY / "runtime_load_streams.py"
+    )
+
+
+def test_a_stream_py_compiles_to_one_graph_document_per_stream_keeping_each_asset(
+    tmp_path: Path,
+):
+    (tmp_path / "stream.py").write_text(
+        "from tatolab.stream import StreamBuilder, stream\n\n\n"
+        "@stream\ndef camera(stream_builder: StreamBuilder) -> None: ...\n\n\n"
+        "@stream\ndef preview(stream_builder: StreamBuilder) -> None: ...\n",
+        encoding="utf-8",
+    )
+
+    assert write_the_graph_documents_the_stream_py_compiles_to(tmp_path) == ["camera", "preview"]
+    camera_id = json.loads(graph_document_path_of(tmp_path, "camera").read_text())["asset"]
+    (tmp_path / "stream.py").write_text(
+        "from tatolab.stream import StreamBuilder, stream\n\n\n"
+        "@stream\ndef camera(stream_builder: StreamBuilder) -> None: ...\n",
+        encoding="utf-8",
+    )
+
+    assert write_the_graph_documents_the_stream_py_compiles_to(tmp_path) == ["camera"]
+    assert json.loads(graph_document_path_of(tmp_path, "camera").read_text())["asset"] == camera_id
+    assert not graph_document_path_of(tmp_path, "preview").exists()

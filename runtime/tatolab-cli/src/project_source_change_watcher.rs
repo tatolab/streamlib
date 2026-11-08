@@ -13,13 +13,17 @@ pub(crate) const PROJECT_SOURCE_SCAN_INTERVAL: Duration = Duration::from_millis(
 type ProjectSourceSnapshot = BTreeMap<PathBuf, (Option<SystemTime>, u64)>;
 
 fn is_watched_project_source_file(file_name: &str) -> bool {
-    file_name.ends_with(".py") || file_name == "pyproject.toml"
+    file_name.ends_with(".py")
+        || file_name.ends_with(".graph.json")
+        || file_name == "pyproject.toml"
+        || file_name == "tatolab-project.json"
 }
 
 fn is_skipped_project_directory(directory_path: &Path, directory_name: &str) -> bool {
     directory_name.starts_with('.')
         || directory_name == "venv"
         || directory_name == "__pycache__"
+        || directory_name == "node_modules"
         || directory_path.join("pyvenv.cfg").exists()
 }
 

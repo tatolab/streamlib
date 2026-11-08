@@ -3,9 +3,9 @@
 
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -83,6 +83,11 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
     }
 }
 
+/// What commits the files of a project [`Runner::create_project`] wrote, in the directory it
+/// is handed, as the first commit of the project's history; the error says why it did not.
+pub type CreatedProjectFirstCommit =
+    Arc<dyn Fn(&Path) -> std::result::Result<(), String> + Send + Sync>;
+
 /// What every stream loaded in one [`Runner`] shares: the engine's tokio
 /// runtime, iceoryx2 node, surface-sharing service, GPU context, lend
 /// directory and the table of loaded streams.
@@ -112,6 +117,8 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) processor_interpreter_lend_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// The uv the host handed this runtime, which makes every project's `.venv`.
     pub(crate) runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce,
+    /// What the host commits a created project's files with, as its history's first commit.
+    pub(crate) created_project_first_commit: OnceLock<CreatedProjectFirstCommit>,
     /// The native services the host offered every node, such as the browser host.
     pub(crate) shared_native_services:
         Arc<crate::core::shared_native_services::SharedNativeServicesOfTheEngine>,
@@ -384,9 +391,13 @@ pub struct RunnerConstructionOptions {
 /// Where a loaded stream's id comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WhatALoadedStreamIsKeyedBy {
-    /// The location its code lives at: its id is the one the location
-    /// computes to.
-    ItsLocation(StreamLocation),
+    /// Its project and stream asset, under the id the runtime records it by.
+    ItsLocation {
+        /// The id the stream is recorded under.
+        stream_id: String,
+        /// Its project and stream asset.
+        stream_location: StreamLocation,
+    },
     /// The id its host gave it, cast.
     TheIdItsHostGave(String),
 }
@@ -395,7 +406,7 @@ impl WhatALoadedStreamIsKeyedBy {
     /// The id the load asks for, before the cast.
     fn requested_stream_id(&self) -> String {
         match self {
-            Self::ItsLocation(stream_location) => stream_location.stream_id(),
+            Self::ItsLocation { stream_id, .. } => stream_id.clone(),
             Self::TheIdItsHostGave(stream_id) => stream_id.clone(),
         }
     }
@@ -403,7 +414,9 @@ impl WhatALoadedStreamIsKeyedBy {
     /// The location, when the stream is keyed by one.
     fn into_stream_location(self) -> Option<StreamLocation> {
         match self {
-            Self::ItsLocation(stream_location) => Some(stream_location),
+            Self::ItsLocation {
+                stream_location, ..
+            } => Some(stream_location),
             Self::TheIdItsHostGave(_) => None,
         }
     }
@@ -475,11 +488,14 @@ impl OptionsForLoadingOneStream {
         }
     }
 
-    /// These options, loading the stream under the id its code's location
-    /// `stream_location` computes to.
-    pub fn at_stream_location(self, stream_location: StreamLocation) -> Self {
+    /// These options, loading the stream of `stream_location` under the id `stream_id` the
+    /// runtime records it by.
+    pub fn at_stream_location(self, stream_id: String, stream_location: StreamLocation) -> Self {
         Self {
-            keyed_by: Some(WhatALoadedStreamIsKeyedBy::ItsLocation(stream_location)),
+            keyed_by: Some(WhatALoadedStreamIsKeyedBy::ItsLocation {
+                stream_id,
+                stream_location,
+            }),
             ..self
         }
     }
@@ -668,6 +684,7 @@ impl Runner {
                 runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce::naming(
                     "the runtime unit's uv",
                 ),
+                created_project_first_commit: OnceLock::new(),
                 shared_native_services:
                     crate::core::shared_native_services::SharedNativeServicesOfTheEngine::in_directory(
                         runtime_directory.shared_native_services_directory(),
@@ -837,6 +854,49 @@ impl Runner {
         self.engine_resources_shared_by_every_stream
             .runtime_unit_uv_executable
             .set(runtime_unit_uv)
+    }
+
+    /// Hand this runtime what commits a project [`Runner::create_project`] wrote as the first
+    /// commit of its history. The host calls it once, before any load; a second call is
+    /// refused. A runtime never handed one creates projects with no history, which the
+    /// project's first transaction starts.
+    pub fn set_created_project_first_commit(
+        &self,
+        created_project_first_commit: CreatedProjectFirstCommit,
+    ) -> Result<()> {
+        self.engine_resources_shared_by_every_stream
+            .created_project_first_commit
+            .set(created_project_first_commit)
+            .map_err(|_| {
+                Error::Configuration(
+                    "this runtime was already handed what commits a created project; it is \
+                     handed once"
+                        .to_string(),
+                )
+            })
+    }
+
+    /// Commit the project the scaffold wrote into `project_directory` as its history's first
+    /// commit, with what the host handed; nothing without it.
+    pub(crate) fn commit_the_first_revision_of_a_created_project(
+        &self,
+        project_directory: &Path,
+    ) -> Result<()> {
+        match self
+            .engine_resources_shared_by_every_stream
+            .created_project_first_commit
+            .get()
+        {
+            Some(created_project_first_commit) => created_project_first_commit(project_directory)
+                .map_err(|not_committed| {
+                    Error::Runtime(format!(
+                        "the project in {} was written, and its first commit was not: \
+                         {not_committed}",
+                        project_directory.display()
+                    ))
+                }),
+            None => Ok(()),
+        }
     }
 
     /// Offer every node the native service `offer` names, started at its first

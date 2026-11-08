@@ -8,7 +8,7 @@
 //! of each project.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -24,7 +24,7 @@ pub const FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT: usize = 64;
 /// What a stream action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamActionKind {
-    /// Loads every `@stream` of a project.
+    /// Loads every graph document of a project.
     Load,
     /// Loads and starts one stopped or failed stream.
     Start,
@@ -95,9 +95,9 @@ impl StreamActionState {
 pub enum StreamActionStep {
     /// Making the project's `.venv` with the runtime's uv.
     MakingTheVenv,
-    /// Compiling the project's `@stream` functions in its interpreter.
-    Compiling,
-    /// Loading and starting the streams the compile gave.
+    /// Reading the project's file and each stream asset's graph document.
+    ReadingTheGraphDocuments,
+    /// Loading and starting the streams the graph documents hold.
     Starting,
     /// Unloading the streams it works on.
     Stopping,
@@ -108,14 +108,14 @@ impl StreamActionStep {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MakingTheVenv => "making_the_venv",
-            Self::Compiling => "compiling",
+            Self::ReadingTheGraphDocuments => "reading_the_graph_documents",
             Self::Starting => "starting",
             Self::Stopping => "stopping",
         }
     }
 }
 
-/// One stream a stream action works on: each its compile named, then how
+/// One stream a stream action works on: each its project's graph documents hold, then how
 /// each ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamOfAStreamAction {
@@ -145,7 +145,7 @@ pub struct StreamAction {
     pub state: StreamActionState,
     /// The step it is on while it runs.
     pub step: Option<StreamActionStep>,
-    /// The streams it works on, once its compile named them.
+    /// The streams it works on, once its project's graph documents named them.
     pub streams: Vec<StreamOfAStreamAction>,
     /// Why it failed; `None` unless it did.
     pub failed_because: Option<String>,
@@ -168,38 +168,6 @@ pub struct StreamActionWorkingOnAStream {
     pub action_id: String,
     /// The step it is on; `None` while it waits in its queue.
     pub step: Option<StreamActionStep>,
-}
-
-/// What the last every-stream compile of a project gave.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WhatTheLastCompileOfTheProjectGave {
-    /// Every `@stream` its `stream.py` defines, in definition order.
-    Streams(Vec<StreamTheLastCompileOfTheProjectNamed>),
-    /// Its `stream.py` did not import, with the traceback.
-    EntryDidNotImport(String),
-    /// Its `stream.py` imported and defines no `@stream`, with why.
-    EntryDefinesNoStream(String),
-}
-
-/// One `@stream` the last compile of a project named.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StreamTheLastCompileOfTheProjectNamed {
-    /// Where the stream's code lives.
-    pub stream_location: StreamLocation,
-    /// The function's docstring; `None` when it has none.
-    pub description: Option<String>,
-}
-
-/// A project's streams as [`Runner::list_project_streams`] answers them:
-/// what its last compile gave, and whether an action is preparing it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectStreamsListing {
-    /// The project, symlinks resolved.
-    pub project_directory: PathBuf,
-    /// The action under way on the project, when one is queued or running.
-    pub stream_action_under_way: Option<StreamActionWorkingOnAStream>,
-    /// What the project's last compile gave; `None` before its first.
-    pub what_the_last_compile_gave: Option<WhatTheLastCompileOfTheProjectGave>,
 }
 
 /// An action's body, run by its project's worker once the actions ahead of it
@@ -240,13 +208,11 @@ pub(crate) enum StreamActionCancelOutcome {
     AskedOfTheRunningAction(StreamAction),
 }
 
-/// Every project's stream action queue, the actions the engine holds and
-/// each project's last compile.
+/// Every project's stream action queue and the actions the engine holds.
 #[derive(Default)]
 pub(crate) struct StreamActionQueueOfEachProject {
     stream_action_queue_of_each_project: Mutex<HashMap<PathBuf, ProjectStreamActionQueue>>,
     stream_actions_held: Mutex<StreamActionsHeld>,
-    last_compile_of_each_project: Mutex<HashMap<PathBuf, WhatTheLastCompileOfTheProjectGave>>,
     stream_actions_queued_by_this_runtime: AtomicU64,
     runner_the_workers_run_actions_on: OnceLock<Weak<Runner>>,
 }
@@ -493,30 +459,6 @@ impl StreamActionQueueOfEachProject {
         under_way.sort_by_key(|action| the_number_of_the_action(&action.action_id));
         under_way
     }
-
-    /// Remember what the every-stream compile of the project in
-    /// `project_directory` gave.
-    pub(crate) fn remember_the_last_compile_of(
-        &self,
-        project_directory: &Path,
-        what_it_gave: WhatTheLastCompileOfTheProjectGave,
-    ) {
-        self.last_compile_of_each_project
-            .lock()
-            .insert(project_directory.to_path_buf(), what_it_gave);
-    }
-
-    /// What the last every-stream compile of the project in
-    /// `project_directory` gave; `None` before its first.
-    pub(crate) fn the_last_compile_of(
-        &self,
-        project_directory: &Path,
-    ) -> Option<WhatTheLastCompileOfTheProjectGave> {
-        self.last_compile_of_each_project
-            .lock()
-            .get(project_directory)
-            .cloned()
-    }
 }
 
 /// The refusal of a call naming the action `action_id`, which the engine never
@@ -538,7 +480,7 @@ fn the_number_of_the_action(action_id: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-/// How a running stream action reports its step and the streams its compile
+/// How a running stream action reports its step and the streams its project's graph documents
 /// named, so a listing shows them while it runs, and learns that its cancel was
 /// asked for.
 pub(crate) struct StreamActionProgress<'runner> {
@@ -628,7 +570,7 @@ impl<'runner> StreamActionProgress<'runner> {
             });
     }
 
-    /// The action's compile named `streams`, which it takes in next.
+    /// The project's graph documents named `streams`, which it takes in next.
     pub(crate) fn works_on(&self, streams: Vec<StreamOfAStreamAction>) {
         self.queue_of_each_project
             .change_the_held_stream_action(&self.action_id, |action| {
@@ -749,7 +691,7 @@ mod tests {
         assert_eq!(
             queue_of_each_project
                 .stream_action_queue_of_each_project
-                .lock()[Path::new("/srv/desk")]
+                .lock()[std::path::Path::new("/srv/desk")]
             .actions_waiting
             .iter()
             .map(|waiting| waiting.action_id.as_str())

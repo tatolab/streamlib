@@ -610,7 +610,7 @@ fn the_stream_listed_running_from(project_directory: &Path) -> StubToolAnswer {
     StubToolAnswer::tool_result(
         &json!({"streams": [{
             "stream": STREAM_ID, "display_name": "main", "state": "running",
-            "location": {"project_directory": project_directory, "stream_function": "stream:main"},
+            "location": {"project_directory": project_directory, "project": "4b2a8c58-9d9f-4f43-9a52-1f1f6b7f2a10", "stream_asset": "e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21"},
             "node_count": 3, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null,
         }]})
         .to_string(),

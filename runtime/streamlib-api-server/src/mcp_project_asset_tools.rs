@@ -201,7 +201,8 @@ impl LocalApiMcpServerHandler {
                 project_directory,
                 move |project_repository| {
                     let mut assets: Vec<ProjectAssetOnTheWire> = project_repository
-                        .assets()
+                        .assets()?
+                        .iter()
                         .filter(|asset| kind.is_none_or(|kind| asset.kind == kind))
                         .map(project_asset_on_the_wire)
                         .collect();
@@ -243,7 +244,7 @@ impl LocalApiMcpServerHandler {
                             .content_store()
                             .content_path(&described_asset.content_sha256)
                             .is_file(),
-                        asset: project_asset_on_the_wire(described_asset),
+                        asset: project_asset_on_the_wire(&described_asset),
                     })
                 },
             )
@@ -332,7 +333,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Stop tracking an asset as one transaction: its file and sidecar leave the project, and its bytes stay in the content store, so undoing the transaction brings it back. Refused while a stream's graph document references the asset, the refusal naming each document. Answers the asset as it was, with the `transaction` and `commit`."
+        description = "Stop tracking an asset as one transaction: its file and sidecar leave the project, and its bytes stay in the content store, so undoing the transaction brings it back. A stream asset's graph document leaves the project, and its stream is unloaded and forgotten. Refused while a stream's graph document references the asset, the refusal naming each document. Answers the asset as it was, with the `transaction` and `commit`."
     )]
     async fn delete_asset(
         &self,
@@ -343,15 +344,31 @@ impl LocalApiMcpServerHandler {
             author,
         }): Parameters<DeleteAssetToolArguments>,
     ) -> ToolCallAnswer {
-        self.one_asset_change_as_a_transaction(
-            "delete_asset",
-            project_directory,
-            the_author_of_a_change(author, &peer),
-            ProjectAssetChangeRequest::DeleteAsset {
-                asset: the_asset_a_call_names("delete_asset", &asset)?,
-            },
-        )
-        .await
+        let (deleted, project) = self
+            .an_asset_change_applied_as_a_transaction(
+                "delete_asset",
+                project_directory,
+                the_author_of_a_change(author, &peer),
+                ProjectAssetChangeRequest::DeleteAsset {
+                    asset: the_asset_a_call_names("delete_asset", &asset)?,
+                },
+            )
+            .await?;
+        if deleted.asset.kind == project_asset_kind_on_the_wire(ProjectAssetKind::Stream) {
+            let stream_asset = the_asset_a_call_names("delete_asset", &deleted.asset.asset)?;
+            self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+                operations_on_the_loaded_streams
+                    .forget_the_stream_of_a_deleted_stream_asset(project, stream_asset)
+            })
+            .await
+            .map_err(|not_forgotten| {
+                format!(
+                    "delete_asset applied its transaction, and the stream of the asset was not \
+                     unloaded: {not_forgotten}"
+                )
+            })?;
+        }
+        serialized_tool_result("delete_asset", &deleted)
     }
 
     #[tool(
@@ -418,37 +435,53 @@ impl LocalApiMcpServerHandler {
         author: ProjectTransactionAuthor,
         change: ProjectAssetChangeRequest,
     ) -> ToolCallAnswer {
+        let (answered, _project) = self
+            .an_asset_change_applied_as_a_transaction(tool_name, project_directory, author, change)
+            .await?;
+        serialized_tool_result(tool_name, &answered)
+    }
+
+    /// Apply `change` by `author` to the project as one transaction, answering the asset it
+    /// changed and the project's UUID.
+    async fn an_asset_change_applied_as_a_transaction(
+        &self,
+        tool_name: &'static str,
+        project_directory: PathBuf,
+        author: ProjectTransactionAuthor,
+        change: ProjectAssetChangeRequest,
+    ) -> Result<(AssetTransactionToolResult, Uuid), String> {
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
-        let answered = self
-            .a_project_repository_call_off_the_async_runtime(
-                tool_name,
-                project_directory,
-                move |project_repository| {
-                    let applied = project_repository.apply_asset_changes(&author, vec![change])?;
-                    project_repositories
-                        .announce_applied_transaction(project_repository, applied.clone());
-                    let AppliedProjectTransaction {
-                        transaction,
-                        commit,
-                    } = applied;
-                    let changed_asset = match transaction.operations.first() {
-                        Some(ProjectAssetOperation::ImportAsset { asset })
-                        | Some(ProjectAssetOperation::DeleteAsset { asset }) => asset.clone(),
-                        Some(ProjectAssetOperation::RelocateAsset { asset, .. })
-                        | Some(ProjectAssetOperation::SetAssetSettings { asset, .. }) => {
-                            project_repository.asset(*asset)?.clone()
-                        }
-                        None => return Err(ProjectRepositoryRefusal::EmptyTransaction),
-                    };
-                    Ok(AssetTransactionToolResult {
+        self.a_project_repository_call_off_the_async_runtime(
+            tool_name,
+            project_directory,
+            move |project_repository| {
+                let applied = project_repository.apply_asset_changes(&author, vec![change])?;
+                project_repositories
+                    .announce_applied_transaction(project_repository, applied.clone());
+                let AppliedProjectTransaction {
+                    transaction,
+                    commit,
+                } = applied;
+                let changed_asset = match transaction.operations.first() {
+                    Some(ProjectAssetOperation::ImportAsset { asset })
+                    | Some(ProjectAssetOperation::DeleteAsset { asset }) => asset.clone(),
+                    Some(ProjectAssetOperation::RelocateAsset { asset, .. })
+                    | Some(ProjectAssetOperation::SetAssetSettings { asset, .. }) => {
+                        project_repository.asset(*asset)?
+                    }
+                    None => return Err(ProjectRepositoryRefusal::EmptyTransaction),
+                };
+                Ok((
+                    AssetTransactionToolResult {
                         asset: project_asset_on_the_wire(&changed_asset),
                         transaction: transaction.transaction.to_string(),
                         commit,
-                    })
-                },
-            )
-            .await?;
-        serialized_tool_result(tool_name, &answered)
+                    },
+                    project_repository.project_file().project,
+                ))
+            },
+        )
+        .await
     }
 }
 

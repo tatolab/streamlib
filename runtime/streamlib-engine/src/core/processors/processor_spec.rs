@@ -19,6 +19,15 @@ pub struct ProcessorSpec {
     /// Display name override. If `None`, defaults to the processor's PascalCase short name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// The node's UUID from its graph document; `None` generates one as the node is placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_uuid: Option<uuid::Uuid>,
+    /// The values the graph document sets on the node's unlinked inputs, by input name.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub pins: serde_json::Map<String, serde_json::Value>,
+    /// What the studio draws the node with: canvas position, group, comment, colour.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub studio: serde_json::Map<String, serde_json::Value>,
 }
 
 impl ProcessorSpec {
@@ -28,7 +37,27 @@ impl ProcessorSpec {
             name,
             config,
             display_name: None,
+            node_uuid: None,
+            pins: serde_json::Map::new(),
+            studio: serde_json::Map::new(),
         }
+    }
+
+    /// Place the node under the UUID its graph document gives it.
+    pub fn with_node_uuid(mut self, node_uuid: uuid::Uuid) -> Self {
+        self.node_uuid = Some(node_uuid);
+        self
+    }
+
+    /// Carry the graph document's pin values and studio fields onto the node.
+    pub fn with_pins_and_studio_fields(
+        mut self,
+        pins: serde_json::Map<String, serde_json::Value>,
+        studio: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        self.pins = pins;
+        self.studio = studio;
+        self
     }
 
     /// Set a custom display name for this processor.

@@ -16,8 +16,8 @@ mod common;
 use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_native_only_stream_graph,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    the_local_apis_answer_to_get, the_mode_of, the_reloads_queued_at_the_start,
-    the_stream_action_once_ended,
+    the_local_apis_answer_to_get, the_location_of_the_stream, the_mode_of,
+    the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
@@ -252,11 +252,11 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
             .unwrap_or_else(|| panic!("`{stream_id}` is listed: {listed}"))
             .clone()
     };
-    let location_of = |function: &str| {
-        serde_json::json!({
-            "project_directory": machine_root.project_directory(),
-            "stream_function": format!("stream:{function}"),
-        })
+    let location_of = |stream_name: &str| {
+        serde_json::json!(the_location_of_the_stream(
+            &machine_root.project_directory(),
+            stream_name
+        ))
     };
     assert_eq!(listed_streams.len(), 4, "{listed}");
     assert_eq!(

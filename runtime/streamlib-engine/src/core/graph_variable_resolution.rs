@@ -221,13 +221,18 @@ impl GraphVariablesAsDrawn {
             graph_response.nodes.insert(
                 position,
                 ProcessorNodeOutput {
-                    id: String::new(),
+                    id: variable_node
+                        .id
+                        .map(|node_uuid| node_uuid.to_string())
+                        .unwrap_or_default(),
                     processor_type: variable_node.processor_type.clone(),
                     kind: None,
                     language: None,
                     name: variable_node_cast,
                     config: Some(variable_node.config.clone()),
                     config_checksum: compute_json_checksum(&variable_node.config),
+                    pins: variable_node.pins.clone(),
+                    studio: variable_node.studio.clone(),
                     ports: ProcessorNodePortsOutput {
                         inputs: if is_a_setter {
                             vec![value_port.clone()]
@@ -520,6 +525,7 @@ impl GraphSnapshot {
         Ok(GraphSnapshotWithVariablesResolved {
             values_the_set_variables_hold,
             graph_the_runtime_runs: GraphSnapshot {
+                asset: self.asset,
                 stream: self.stream.clone(),
                 clock: self.clock,
                 nodes: runtime_nodes,
@@ -1000,6 +1006,8 @@ mod tests {
                 outputs: Vec::new(),
             },
             components: serde_json::Map::new(),
+            pins: serde_json::Map::new(),
+            studio: serde_json::Map::new(),
         }
     }
 
@@ -1042,6 +1050,7 @@ mod tests {
         graph["links"][0]["source"]["port"] = serde_json::json!("VIDEO");
         let resolution = resolved(graph).unwrap();
         let mut graph_response = GraphResponse {
+            asset: None,
             stream: None,
             clock: Default::default(),
             nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
@@ -1072,6 +1081,7 @@ mod tests {
     fn the_render_carries_each_runtime_links_id_and_drops_a_drawn_link_whose_reader_is_gone() {
         let resolution = resolved(a_camera_variable_read_by_two_displays()).unwrap();
         let mut graph_response = GraphResponse {
+            asset: None,
             stream: None,
             clock: Default::default(),
             nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],

@@ -2,23 +2,33 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The files a new stream project starts from, rendered from the templates the
-//! SDK carries, and their write into the project's directory.
+//! SDK carries — its project file and one stream asset's graph document among them — and
+//! their write into the project's directory.
 
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use streamlib_project_repository::{PROJECT_FILE_NAME, TatolabProjectFile};
+use uuid::Uuid;
+
+use super::StreamLocation;
+use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::{Error, Result};
 
 /// The licence header each `.py` template opens with; the project it starts is the user's own.
 const SCAFFOLD_TEMPLATE_LICENSE_HEADER: &str =
     "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n";
 
-/// The `module:qualname` of the one `@stream` the scaffold's `stream.py` defines.
-pub(crate) const NEW_PROJECT_SCAFFOLD_STREAM_FUNCTION: &str = "stream:main";
+/// The name of the one stream asset a new project starts with.
+pub(crate) const NEW_PROJECT_SCAFFOLD_STREAM_NAME: &str = "main";
 
-const STREAM_PY_TEMPLATE: &str =
-    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/stream.py");
+/// Where a new project's one stream asset's graph document sits in it.
+const NEW_PROJECT_SCAFFOLD_STREAM_DOCUMENT_PATH: &str = "streams/main.graph.json";
+
+/// The graph a new project's stream asset starts as, its nodes and links named by node name.
+const MAIN_GRAPH_DOCUMENT_TEMPLATE: &str =
+    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/streams/main.graph.json");
 const NODES_INIT_PY_TEMPLATE: &str =
     include_str!("../../../../../sdk/tatolab-stream/scaffold_template/nodes/__init__.py");
 const HALFTONE_LENS_EFFECT_PY_TEMPLATE: &str = include_str!(
@@ -61,10 +71,78 @@ fn without_license_header(python_template: &'static str) -> &'static str {
         .unwrap_or(python_template)
 }
 
-/// Every file a new project starts with, in write order, rendered from the embedded templates.
+/// A new project as the scaffold starts it: its name, its project's UUID and its one stream
+/// asset's, each drawn fresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewProjectScaffold {
+    /// The project's name: the folder it is created in.
+    pub(crate) project_name: String,
+    /// The project's UUID.
+    pub(crate) project: Uuid,
+    /// Its one stream asset's UUID.
+    pub(crate) stream_asset: Uuid,
+}
+
+impl NewProjectScaffold {
+    /// A new project in `project_directory`, named after its folder, with fresh UUIDs.
+    pub(crate) fn of_a_new_project_in(project_directory: &Path) -> Self {
+        Self {
+            project_name: project_directory
+                .file_name()
+                .map(|folder_name| folder_name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            project: Uuid::new_v4(),
+            stream_asset: Uuid::new_v4(),
+        }
+    }
+
+    /// Where its one stream asset lives once it is written into `project_directory`.
+    pub(crate) fn stream_location_in(&self, project_directory: &Path) -> StreamLocation {
+        StreamLocation {
+            project_directory: project_directory.to_path_buf(),
+            project: self.project,
+            stream_asset: self.stream_asset,
+        }
+    }
+
+    /// The id its one stream asset is first recorded under.
+    pub(crate) fn stream_id_in(&self, project_directory: &Path) -> String {
+        self.stream_location_in(project_directory)
+            .stream_id_named(&self.project_name, NEW_PROJECT_SCAFFOLD_STREAM_NAME)
+    }
+
+    /// Its `tatolab-project.json`, canonical.
+    fn project_file_contents(&self) -> Result<String> {
+        let project_file = TatolabProjectFile {
+            project: self.project,
+            name: self.project_name.clone(),
+            dependencies: Vec::new(),
+        };
+        let bytes = project_file.canonical_bytes().map_err(|refusal| {
+            Error::Runtime(format!("the project file was not written: {refusal}"))
+        })?;
+        String::from_utf8(bytes).map_err(|not_utf8| {
+            Error::Runtime(format!("the project file is not UTF-8: {not_utf8}"))
+        })
+    }
+
+    /// Its stream asset's graph document: the template's graph, holding the stream asset's
+    /// UUID and a fresh UUID on each node.
+    fn main_graph_document_contents(&self) -> Result<String> {
+        let mut graph = GraphSnapshot::from_json_str(MAIN_GRAPH_DOCUMENT_TEMPLATE)?
+            .with_a_uuid_minted_for_each_node_holding_none();
+        graph.asset = Some(self.stream_asset);
+        String::from_utf8(graph.graph_document_bytes()?).map_err(|not_utf8| {
+            Error::Runtime(format!("the graph document is not UTF-8: {not_utf8}"))
+        })
+    }
+}
+
+/// Every file `scaffold` starts with, in write order, rendered from the embedded templates.
 pub(crate) fn render_scaffold_template_files(
     distribution_name: &str,
-) -> Vec<ScaffoldedProjectFile> {
+    scaffold: &NewProjectScaffold,
+) -> Result<Vec<ScaffoldedProjectFile>> {
     let rendered_pyproject_toml = PYPROJECT_TOML_TEMPLATE
         .replace(
             PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER,
@@ -79,10 +157,14 @@ pub(crate) fn render_scaffold_template_files(
             &format!("\"tatolab-testpattern>={}\"", env!("CARGO_PKG_VERSION")),
         );
 
-    vec![
+    Ok(vec![
         ScaffoldedProjectFile {
-            path_in_project: "stream.py",
-            rendered_contents: without_license_header(STREAM_PY_TEMPLATE).to_owned(),
+            path_in_project: PROJECT_FILE_NAME,
+            rendered_contents: scaffold.project_file_contents()?,
+        },
+        ScaffoldedProjectFile {
+            path_in_project: NEW_PROJECT_SCAFFOLD_STREAM_DOCUMENT_PATH,
+            rendered_contents: scaffold.main_graph_document_contents()?,
         },
         ScaffoldedProjectFile {
             path_in_project: "nodes/__init__.py",
@@ -108,7 +190,7 @@ pub(crate) fn render_scaffold_template_files(
             path_in_project: ".gitignore",
             rendered_contents: GITIGNORE_TEMPLATE.to_owned(),
         },
-    ]
+    ])
 }
 
 /// A PEP 503 name for the scaffolded project, from its directory name.
@@ -132,19 +214,19 @@ pub(crate) fn python_distribution_name_for(directory_name: &str) -> String {
     }
 }
 
-/// Write the files a new stream project starts from into `project_directory`,
-/// created when absent, its distribution named after the folder. Refused,
-/// with nothing written, when any of those files is already there.
-pub(crate) fn write_the_new_project_scaffold_into(project_directory: &Path) -> Result<()> {
-    let directory_name = project_directory
-        .file_name()
-        .map(|file_name| file_name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let scaffolded_files =
-        render_scaffold_template_files(&python_distribution_name_for(&directory_name));
+/// Write the files `scaffold` starts from into `project_directory`, created when absent, its
+/// distribution named after the folder. Refused, with nothing written, when any of those files
+/// is already there.
+pub(crate) fn write_the_new_project_scaffold_into(
+    project_directory: &Path,
+    scaffold: &NewProjectScaffold,
+) -> Result<()> {
+    let scaffolded_files = render_scaffold_template_files(
+        &python_distribution_name_for(&scaffold.project_name),
+        scaffold,
+    )?;
 
-    // Checked before anything is written: a half-scaffolded directory is worse than a
-    // refusal, and the user's own `stream.py` is the file most likely to already be there.
+    // Checked before anything is written: a half-scaffolded directory is worse than a refusal.
     let mut already_present: Vec<&str> = scaffolded_files
         .iter()
         .map(|scaffolded_file| scaffolded_file.path_in_project)
@@ -192,8 +274,7 @@ mod tests {
     use super::*;
 
     /// Every `.py` template, each opening with [`SCAFFOLD_TEMPLATE_LICENSE_HEADER`].
-    const EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES: [&str; 4] = [
-        STREAM_PY_TEMPLATE,
+    const EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES: [&str; 3] = [
         NODES_INIT_PY_TEMPLATE,
         HALFTONE_LENS_EFFECT_PY_TEMPLATE,
         BRIGHTNESS_METER_PY_TEMPLATE,
@@ -269,9 +350,29 @@ mod tests {
         );
     }
 
+    fn a_scaffold_named(project_name: &str) -> NewProjectScaffold {
+        NewProjectScaffold {
+            project_name: project_name.to_string(),
+            project: Uuid::new_v4(),
+            stream_asset: Uuid::new_v4(),
+        }
+    }
+
+    fn the_rendered_file_at<'rendered>(
+        rendered_files: &'rendered [ScaffoldedProjectFile],
+        path_in_project: &str,
+    ) -> &'rendered str {
+        &rendered_files
+            .iter()
+            .find(|rendered_file| rendered_file.path_in_project == path_in_project)
+            .unwrap_or_else(|| panic!("the scaffold writes no {path_in_project}"))
+            .rendered_contents
+    }
+
     #[test]
     fn every_file_is_rendered_without_the_licence_header_and_names_its_distribution() {
-        let rendered_files = render_scaffold_template_files("probe-app");
+        let rendered_files =
+            render_scaffold_template_files("probe-app", &a_scaffold_named("probe-app")).unwrap();
         for rendered_file in &rendered_files {
             assert!(
                 !rendered_file
@@ -287,8 +388,9 @@ mod tests {
                 rendered_file.path_in_project
             );
         }
+        let rendered_pyproject_toml = the_rendered_file_at(&rendered_files, "pyproject.toml");
         assert!(
-            rendered_files[4].rendered_contents.contains(&format!(
+            rendered_pyproject_toml.contains(&format!(
                 "dependencies = [\"tatolab-stream>={runtime_version}\", \
                  \"tatolab-testpattern>={runtime_version}\", \"numpy>=2.1\"]",
                 runtime_version = env!("CARGO_PKG_VERSION")
@@ -296,42 +398,94 @@ mod tests {
             "a new project floors tatolab-stream and tatolab-testpattern at the \
              version of the runtime that created it"
         );
+        assert!(rendered_pyproject_toml.contains("name = \"probe-app\""));
+    }
+
+    #[test]
+    fn the_sample_stream_is_a_graph_document_running_the_test_pattern_through_the_effect() {
+        let scaffold = a_scaffold_named("probe-app");
+        let rendered_files = render_scaffold_template_files("probe-app", &scaffold).unwrap();
+
+        let project_file: TatolabProjectFile =
+            serde_json::from_str(the_rendered_file_at(&rendered_files, PROJECT_FILE_NAME)).unwrap();
+        assert_eq!(project_file.project, scaffold.project);
+        assert_eq!(project_file.name, "probe-app");
+        let graph_document =
+            the_rendered_file_at(&rendered_files, NEW_PROJECT_SCAFFOLD_STREAM_DOCUMENT_PATH);
+        let graph = GraphSnapshot::from_json_str(graph_document).unwrap();
+        assert_eq!(graph.asset, Some(scaffold.stream_asset));
+        let node_types: Vec<&str> = graph
+            .nodes
+            .iter()
+            .map(|node| node.processor_type.as_str())
+            .collect();
+        assert_eq!(
+            node_types,
+            [
+                "tatolab.testpattern:TestPatternSource",
+                "nodes.halftone_lens_effect:HalftoneLensEffect",
+                "nodes.brightness_meter:BrightnessMeter",
+            ]
+        );
+        assert!(graph.nodes.iter().all(|node| node.id.is_some()));
+        assert_eq!(graph.links.len(), 2);
+        assert_eq!(
+            graph.graph_document_bytes().unwrap(),
+            graph_document.as_bytes(),
+            "the scaffold writes the document canonically"
+        );
         assert!(
-            rendered_files[4]
-                .rendered_contents
-                .contains("name = \"probe-app\"")
+            !rendered_files.iter().any(|rendered_file| rendered_file
+                .path_in_project
+                .ends_with(".py")
+                && !rendered_file.path_in_project.starts_with("nodes/")),
+            "a new project holds no stream code outside its node modules"
         );
     }
 
     #[test]
-    fn the_sample_stream_runs_the_test_pattern_through_the_effect_and_opens_no_window() {
-        let rendered_stream_py = &render_scaffold_template_files("probe-app")[0].rendered_contents;
-        for present in [
-            "stream_builder.add(TestPatternSource)",
-            "stream_builder.add(HalftoneLensEffect)",
-            "stream_builder.add(BrightnessMeter)",
-        ] {
-            assert!(
-                rendered_stream_py.contains(present),
-                "the sample stream lacks {present}:\n{rendered_stream_py}"
-            );
-        }
-        for absent in ["DisplayWindow", "H264Encoder", "expose"] {
-            assert!(
-                !rendered_stream_py.contains(absent),
-                "the sample stream holds {absent}:\n{rendered_stream_py}"
-            );
-        }
+    fn two_new_projects_never_share_a_node_uuid() {
+        let node_uuids_of = |scaffold: &NewProjectScaffold| -> Vec<Uuid> {
+            let rendered_files = render_scaffold_template_files("probe-app", scaffold).unwrap();
+            GraphSnapshot::from_json_str(the_rendered_file_at(
+                &rendered_files,
+                NEW_PROJECT_SCAFFOLD_STREAM_DOCUMENT_PATH,
+            ))
+            .unwrap()
+            .nodes
+            .iter()
+            .filter_map(|node| node.id)
+            .collect()
+        };
+        let first = node_uuids_of(&a_scaffold_named("probe-app"));
+        let second = node_uuids_of(&a_scaffold_named("probe-app"));
+        assert!(first.iter().all(|node_uuid| !second.contains(node_uuid)));
     }
 
     #[test]
     fn the_scaffold_is_written_into_a_missing_directory_naming_its_distribution_after_the_folder() {
         let parent_directory = tempfile::tempdir().unwrap();
         let project_directory = parent_directory.path().join("Bright Lens");
+        let scaffold = NewProjectScaffold::of_a_new_project_in(&project_directory);
 
-        write_the_new_project_scaffold_into(&project_directory).unwrap();
+        write_the_new_project_scaffold_into(&project_directory, &scaffold).unwrap();
 
-        for scaffolded_file in render_scaffold_template_files("bright-lens") {
+        assert_eq!(scaffold.project_name, "Bright Lens");
+        for scaffolded_file in render_scaffold_template_files("bright-lens", &scaffold).unwrap() {
+            if scaffolded_file.path_in_project == NEW_PROJECT_SCAFFOLD_STREAM_DOCUMENT_PATH {
+                assert_eq!(
+                    GraphSnapshot::from_json_str(
+                        &fs::read_to_string(
+                            project_directory.join(scaffolded_file.path_in_project)
+                        )
+                        .unwrap()
+                    )
+                    .unwrap()
+                    .asset,
+                    Some(scaffold.stream_asset)
+                );
+                continue;
+            }
             assert_eq!(
                 fs::read_to_string(project_directory.join(scaffolded_file.path_in_project))
                     .unwrap(),
@@ -346,20 +500,26 @@ mod tests {
     fn a_directory_already_holding_a_scaffold_file_is_refused_with_nothing_written() {
         let project_directory = tempfile::tempdir().unwrap();
         fs::write(
-            project_directory.path().join("stream.py"),
-            "# the user's own\n",
+            project_directory.path().join(PROJECT_FILE_NAME),
+            "{\"the user's own\": true}\n",
         )
         .unwrap();
 
-        let refusal = write_the_new_project_scaffold_into(project_directory.path())
-            .unwrap_err()
-            .to_string();
+        let refusal = write_the_new_project_scaffold_into(
+            project_directory.path(),
+            &NewProjectScaffold::of_a_new_project_in(project_directory.path()),
+        )
+        .unwrap_err()
+        .to_string();
 
-        assert!(refusal.contains("already has stream.py"), "{refusal}");
+        assert!(
+            refusal.contains(&format!("already has {PROJECT_FILE_NAME}")),
+            "{refusal}"
+        );
         assert!(!project_directory.path().join("pyproject.toml").exists());
         assert_eq!(
-            fs::read_to_string(project_directory.path().join("stream.py")).unwrap(),
-            "# the user's own\n"
+            fs::read_to_string(project_directory.path().join(PROJECT_FILE_NAME)).unwrap(),
+            "{\"the user's own\": true}\n"
         );
     }
 }

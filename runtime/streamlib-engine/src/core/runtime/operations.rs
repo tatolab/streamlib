@@ -80,7 +80,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 
-    /// Hold output port `port_name` of node `node_id` open for a viewer,
+    /// Hold output port `port_name` of the node whose UUID, as `graph` lists it under `id`, is
+    /// `node_id` open for a viewer,
     /// answering how the viewer subscribes to its channel's reserved slot from
     /// its own process. No node is added and the graph is not changed; the
     /// channel stays open until what this answers drops. Refused while the
@@ -89,7 +90,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// surface-sharing service while the viewer stays open.
     fn open_a_viewer_of_an_output_port(
         &self,
-        node_id: ProcessorUniqueId,
+        node_id: String,
         port_name: String,
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;

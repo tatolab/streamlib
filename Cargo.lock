@@ -5182,6 +5182,7 @@ dependencies = [
  "streamlib-ipc-types",
  "streamlib-macros",
  "streamlib-processor-schema",
+ "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
@@ -5363,6 +5364,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5593,11 +5595,13 @@ dependencies = [
  "streamlib",
  "streamlib-api-server",
  "streamlib-media-builtins",
+ "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -6254,6 +6258,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 

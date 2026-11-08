@@ -239,6 +239,7 @@ impl GraphSnapshot {
 
         Ok(GraphSnapshotWithInterfaceResolved {
             graph_the_runtime_runs: GraphSnapshot {
+                asset: self.asset,
                 stream: self.stream.clone(),
                 clock: self.clock,
                 nodes: runtime_nodes,
@@ -394,13 +395,19 @@ impl GraphInterfaceAsDrawn {
             graph_response.nodes.insert(
                 position,
                 ProcessorNodeOutput {
-                    id: String::new(),
+                    id: interface_node
+                        .node
+                        .id
+                        .map(|node_uuid| node_uuid.to_string())
+                        .unwrap_or_default(),
                     processor_type: interface_node.node.processor_type.clone(),
                     kind: None,
                     language: None,
                     name: cast_or_as_written(&interface_node.node.name),
                     config: Some(interface_node.node.config.clone()),
                     config_checksum: compute_json_checksum(&interface_node.node.config),
+                    pins: interface_node.node.pins.clone(),
+                    studio: interface_node.node.studio.clone(),
                     ports: ProcessorNodePortsOutput { inputs, outputs },
                     components,
                 },
@@ -818,6 +825,8 @@ mod tests {
                 outputs: Vec::new(),
             },
             components: serde_json::Map::new(),
+            pins: serde_json::Map::new(),
+            studio: serde_json::Map::new(),
         };
         let mut graph_response: GraphResponse = serde_json::from_value(serde_json::json!({
             "machine": "rig", "nodes": [], "links": [],

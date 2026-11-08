@@ -4,13 +4,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use uuid::Uuid;
+
 use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 
 use super::operations::RuntimeOperations;
 use super::{
-    CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectStreamsListing,
-    RunProjectRequest, Runner, StreamAction, StreamActionQueued, StreamListing,
-    StreamRenameOutcome,
+    CreateProjectRequest, MachineName, ProjectCreationQueued, RunProjectRequest, Runner,
+    StreamAction, StreamActionQueued, StreamListing, StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::context::StreamClockReading;
@@ -81,8 +82,12 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::cancel_stream_action`].
     fn cancel_stream_action(&self, action_id: &str) -> Result<StreamAction>;
 
-    /// [`Runner::list_project_streams`].
-    fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing>;
+    /// [`Runner::forget_the_stream_of_a_deleted_stream_asset`].
+    fn forget_the_stream_of_a_deleted_stream_asset(
+        &self,
+        project: Uuid,
+        stream_asset: Uuid,
+    ) -> Result<Option<String>>;
 
     /// [`Runner::stop_stream`].
     fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued>;
@@ -170,8 +175,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::cancel_stream_action(self, action_id)
     }
 
-    fn list_project_streams(&self, project_directory: &Path) -> Result<ProjectStreamsListing> {
-        Runner::list_project_streams(self, project_directory)
+    fn forget_the_stream_of_a_deleted_stream_asset(
+        &self,
+        project: Uuid,
+        stream_asset: Uuid,
+    ) -> Result<Option<String>> {
+        Runner::forget_the_stream_of_a_deleted_stream_asset(self, project, stream_asset)
     }
 
     fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {

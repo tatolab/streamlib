@@ -34,7 +34,12 @@ from helper_process_observation import assert_runs_in_a_process_of_its_own_benea
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from processor_interpreter_lend_streams import interpreter_reporting_source_into_counting_sink
 from runtime_unit_under_test import SUITE_VENV_INTERPRETER, SUITE_VENV_PREFIX, RuntimeUnitUnderTest
-from stream_runs_on_tatolabd import TatolabRunOfAProject, stream_id_of_the_location
+from stream_runs_on_tatolabd import (
+    TatolabRunOfAProject,
+    stream_id_of_the_stream_in,
+    write_a_graph_document,
+    write_the_project_file_unless_there,
+)
 
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
@@ -263,7 +268,7 @@ def test_a_type_described_against_the_lend_imports_the_runtime_the_runtime_unit_
 def test_a_relative_dir_names_the_project_from_the_callers_directory(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
-    """The runtime compiles in the project directory, and is not in the caller's,
+    """The runtime reads the project's graph documents, and not the caller's directory,
     so `tatolab run --dir project` names the project from where it was typed."""
     callers_directory = tmp_path / "callers-directory"
     project_directory = callers_directory / "project"
@@ -283,18 +288,11 @@ def test_a_relative_dir_names_the_project_from_the_callers_directory(
             def process(self, ctx) -> None: ...
         """,
     )
-    write_project_module(
+    write_the_project_file_unless_there(project_directory)
+    write_a_graph_document(
         project_directory,
-        "stream",
-        """
-        from relatively_loaded_nodes import RelativelyLoadedSource
-        from tatolab.stream import StreamBuilder, stream
-
-
-        @stream
-        def relatively_loaded(stream_builder: StreamBuilder) -> None:
-            stream_builder.add(RelativelyLoadedSource)
-        """,
+        "relatively_loaded",
+        graph_naming_one_node_of_type("relatively_loaded_nodes:RelativelyLoadedSource"),
     )
 
     load_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
@@ -302,8 +300,8 @@ def test_a_relative_dir_names_the_project_from_the_callers_directory(
     )
 
     assert loaded_with(load_outcome) == 1
-    assert load_outcome.loaded_stream_id == stream_id_of_the_location(
-        project_directory.resolve(), "stream:relatively_loaded"
+    assert load_outcome.loaded_stream_id == stream_id_of_the_stream_in(
+        project_directory, "relatively_loaded"
     )
 
 

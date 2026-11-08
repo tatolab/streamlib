@@ -112,6 +112,20 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "{no_uv}; every stream whose project's .venv needs making is recorded failed"
         ),
     }
+    if let Err(first_commit_refusal) =
+        engine.set_created_project_first_commit(std::sync::Arc::new(|project_directory| {
+            streamlib_project_repository::ProjectRepository::commit_a_written_project_as_its_first(
+                project_directory,
+                &streamlib_project_repository::ProjectTransactionAuthor::the_runtime(),
+            )
+            .map(|_| ())
+            .map_err(|refusal| refusal.to_string())
+        }))
+    {
+        return write_refusal_to_standard_error(&format!(
+            "the engine could not be handed what commits a created project: {first_commit_refusal}"
+        ));
+    }
     offer_the_browser_host_when_the_runtime_unit_carries_it(
         &engine,
         &lend_directory,

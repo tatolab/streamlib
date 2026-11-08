@@ -21,7 +21,7 @@ use common::{
     AN_INTERRUPTED_RUNTIME_EXITS_WITHIN, SpawnedTatolabd, TatolabTestMachineRoot,
     TemporaryRuntimeUnit, a_native_only_stream_graph, a_stream_graph_crashing_while,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    expect_the_runtime_to_crash_on_segv, the_local_apis_answer_to_get,
+    expect_the_runtime_to_crash_on_segv, the_local_apis_answer_to_get, the_location_of_the_stream,
     the_stream_action_once_ended,
 };
 
@@ -35,7 +35,7 @@ fn the_stream_started_log_line(stream_id: &str) -> String {
     format!("[start] The stream `{stream_id}` started")
 }
 
-/// A `tatolabd` on a fresh machine whose recorded stream, the function `main`, is
+/// A `tatolabd` on a fresh machine whose recorded stream, the stream `main`, is
 /// re-loaded and started at its start; returns it and the stream's id.
 fn start_tatolabd_re_loading_the_recorded_native_only_stream(
     runtime_unit: &TemporaryRuntimeUnit,
@@ -86,10 +86,7 @@ fn a_recorded_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_b
         serde_json::json!([{
             "stream": main_stream_id,
             "display_name": "main",
-            "location": {
-                "project_directory": machine_root.project_directory(),
-                "stream_function": "stream:main",
-            },
+            "location": the_location_of_the_stream(&machine_root.project_directory(), "main"),
             "state": "running",
             "node_count": 1,
             "failed_because": null,
