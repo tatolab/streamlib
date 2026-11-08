@@ -1058,3 +1058,36 @@ def test_a_live_feed_of_a_stateful_node_another_port_reads_is_refused_and_leaves
     assert fed.ran_compiled_by_node_id == {"counter-1": True}
     assert the_value_read_from(data_plane, "count") == 1.0
     assert data_plane.read_from_input_port("also_count") is None
+
+
+def test_an_unlinked_input_takes_its_pin_value_before_its_default():
+    import_path = f"{__name__}:remap"
+    island = an_island_of_one_node("level", import_path, None, "remap-1")
+    island["nodes"][0]["pins"] = {"x": 0.5, "high": 4.0}
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["level"], [])
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], {import_path: remap}.__getitem__
+    )
+    assert the_value_read_from(data_plane, "level") == 2.0, "x pinned to 0.5 over 0..4"
+
+
+def test_an_input_with_no_link_pin_or_default_is_refused_naming_all_three():
+    island = an_island_of_one_node("level", f"{__name__}:remap", None, "remap-1")
+    with pytest.raises(FunctionNodeDoesNotCompile, match="linked to nothing, has no pin value"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [island],
+            _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
+        )
+
+
+def test_a_pin_value_that_is_not_a_number_is_refused_by_name():
+    island = an_island_of_one_node("level", f"{__name__}:remap", None, "remap-1")
+    island["nodes"][0]["pins"] = {"x": "half"}
+    with pytest.raises(FunctionNodeDoesNotCompile, match="pin on input `x` is 'half'"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [island],
+            _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
+        )

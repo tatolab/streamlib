@@ -357,8 +357,8 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 ///
 /// Wire contract with the helper bootstrap: `{"input_port", "link_id",
 /// "output": {"node", "port"}, "nodes": [{"node", "name", "import_path",
-/// "config", "links_into": [{"port", "from": {"node", "port"}}]}]}`, and a
-/// stateful node's `"state_fields"` beside its `"node"`.
+/// "config", "pins": {input: value}, "links_into": [{"port", "from": {"node",
+/// "port"}}]}]}`, and a stateful node's `"state_fields"` beside its `"node"`.
 pub(crate) fn the_island_feeding_a_link(
     graph: &Graph,
     link_id: &LinkUniqueId,
@@ -419,6 +419,7 @@ fn place_a_function_node_after_what_it_reads(
     let import_path = node.processor_type.to_string();
     let node_name = node.display_name.clone();
     let config = node.config.clone().unwrap_or(JsonValue::Null);
+    let pins = JsonValue::Object(node.pins.clone());
 
     on_the_path_from_the_output.push(node_id.clone());
     let links_into_this_node: Vec<&Link> = graph
@@ -460,6 +461,7 @@ fn place_a_function_node_after_what_it_reads(
         "name": node_name,
         "import_path": import_path,
         "config": config,
+        "pins": pins,
         "links_into": links_into,
     });
     let state_fields = the_state_fields_of_a_function_node(graph, &node.processor_type);
@@ -1221,6 +1223,48 @@ pub(crate) mod tests {
             link_state_of(&graph, &into_the_reader),
             LinkState::Pending,
             "pending until the reader says it evaluates the island"
+        );
+    }
+
+    #[test]
+    fn a_pin_edit_on_an_island_node_hands_its_running_reader_the_island_carrying_it() {
+        let delivery =
+            crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery::default();
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let reader = a_helper_reader_past_its_setup(&mut graph, &delivery);
+        let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
+        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
+        assert_eq!(
+            delivery.late_fed_function_node_islands.lock()[0]["nodes"][0]["pins"],
+            serde_json::json!({})
+        );
+
+        graph
+            .traversal_mut()
+            .v(&lfo)
+            .first_mut()
+            .unwrap()
+            .pins
+            .insert("rate_hz".to_string(), serde_json::json!(4.0));
+        hand_each_reader_the_island_a_compile_changed(&mut graph, &[]).unwrap();
+
+        let handed_over = delivery.late_fed_function_node_islands.lock().clone();
+        assert_eq!(
+            handed_over.len(),
+            2,
+            "the pin edit re-sends the island once"
+        );
+        assert_eq!(
+            handed_over[1]["nodes"][0]["pins"],
+            serde_json::json!({ "rate_hz": 4.0 })
+        );
+        hand_each_reader_the_island_a_compile_changed(&mut graph, &[]).unwrap();
+        assert_eq!(
+            delivery.late_fed_function_node_islands.lock().len(),
+            2,
+            "an island no edit changed is not re-sent"
         );
     }
 

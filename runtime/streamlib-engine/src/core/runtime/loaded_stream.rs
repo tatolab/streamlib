@@ -1057,7 +1057,10 @@ impl LoadedStreamInThisRuntime {
                     node.pins.remove(input);
                 }
             }
-            Ok(())
+            crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed(
+                graph,
+                &[],
+            )
         })?;
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())

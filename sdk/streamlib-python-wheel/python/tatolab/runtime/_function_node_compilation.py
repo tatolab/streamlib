@@ -162,6 +162,7 @@ class FunctionNodeIslandsFedToTheirPorts:
                         prepared,
                         node_id,
                         island_node["links_into"],
+                        island_node.get("pins") or {},
                         node_index_by_node_id,
                         output_ports_by_node_id,
                     ),
@@ -547,9 +548,11 @@ def _where_each_input_takes_its_value(
     prepared: FunctionNodeReadyToEvaluate,
     node_id: str,
     links_into: "list[dict[str, Any]]",
+    pin_values_by_input_port: "dict[str, Any]",
     node_index_by_node_id: "dict[str, int]",
     output_ports_by_node_id: "dict[str, tuple[str, ...]]",
 ) -> "list[tuple[Optional[tuple[int, int]], float]]":
+    """Each input's earlier node output, or else its pin value, or else its declared default."""
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
     where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], float]]" = []
     for input_port in prepared.input_ports:
@@ -565,15 +568,19 @@ def _where_each_input_takes_its_value(
                     0.0,
                 )
             )
+        elif input_port in pin_values_by_input_port:
+            where_each_input_takes_its_value.append(
+                (None, _a_pin_value_as_f64(node_id, input_port, pin_values_by_input_port[input_port]))
+            )
         elif input_port in prepared.pin_defaults_by_input_port:
             where_each_input_takes_its_value.append(
                 (None, prepared.pin_defaults_by_input_port[input_port])
             )
         else:
             raise FunctionNodeDoesNotCompile(
-                f"function node `{node_id}`'s input `{input_port}` is linked to nothing and "
-                f"declares no default, so it has no value to evaluate with. To fix: link it, or "
-                f"give its parameter a default."
+                f"function node `{node_id}`'s input `{input_port}` is linked to nothing, has no "
+                f"pin value and declares no default, so it has no value to evaluate with. To fix: "
+                f"link it, set its pin, or give its parameter a default."
             )
     return where_each_input_takes_its_value
 
@@ -977,6 +984,16 @@ def _evaluate_entry_wrapper_source(
         lines.append(f"    outputs[0] = {output_value}")
     lines.append("    return 0")
     return "\n".join(lines) + "\n", wrapper_globals
+
+
+def _a_pin_value_as_f64(node_id: str, input_port: str, pin_value: Any) -> float:
+    what_it_is = f"function node `{node_id}`'s pin on input `{input_port}`"
+    if not isinstance(pin_value, (bool, int, float)):
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is {pin_value!r}, and an island input takes a number or a bool. "
+            f"To fix: set the pin to a number, or link the input."
+        )
+    return _exactly_as_f64(pin_value, what_it_is)
 
 
 def _exactly_as_f64(value: Any, what_it_is: str) -> float:
