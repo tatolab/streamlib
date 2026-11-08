@@ -198,9 +198,9 @@ def test_each_node_lives_outside_the_entry_file(module_path: str, class_name: st
     node_source = template_text(module_path)
     module_name = module_path.removesuffix(".py").replace("/", ".")
 
-    assert "@node" not in entry_source
+    assert "@node.process" not in entry_source
     assert f"class {class_name}" not in entry_source
-    assert "@node" in node_source, "the class belongs in the importable module"
+    assert "@node.process" in node_source, "the class belongs in the importable module"
     assert f"class {class_name}" in node_source
     assert f"from {module_name} import {class_name}" in entry_source, (
         "the entry file imports the class it wires"

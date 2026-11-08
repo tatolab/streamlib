@@ -15,7 +15,7 @@ H264_MODULE_PROCESSORS_STAND_IN_SOURCE = (
     "from tatolab.stream import Image, Input, Output, Packets, node\n"
     "\n"
     "\n"
-    '@node(execution="manual")\n'
+    '@node.process(execution="manual")\n'
     "class H264Encoder:\n"
     '    video = Input(Image, delivery="ordered")\n'
     '    encoded_video = Output(Packets, codec="h264")\n'

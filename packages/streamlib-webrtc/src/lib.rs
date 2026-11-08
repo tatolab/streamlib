@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The native half of `tatolab-webrtc` — the module the wheel's two
-//! `@node` classes import as `tatolab.webrtc._native`.
+//! `@node.process` classes import as `tatolab.webrtc._native`.
 //!
 //! The engine never calls anything here. A processor extension's per-frame work
 //! is its own package's Rust: the publisher's is reached from its own Python,

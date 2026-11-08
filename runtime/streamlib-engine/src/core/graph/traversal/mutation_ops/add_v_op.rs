@@ -58,7 +58,15 @@ impl<'a> TraversalSourceMut<'a> {
         // `GET /api/graph` names exactly what the caller asked for.
         let (inputs, outputs) = resolved_ports.unwrap_or_default();
 
-        let node = ProcessorNode::new(spec.name, name, Some(spec.config), inputs, outputs);
+        let node_kind = node_types.node_kind(&spec.name);
+        let node = ProcessorNode::new(
+            spec.name,
+            node_kind,
+            name,
+            Some(spec.config),
+            inputs,
+            outputs,
+        );
 
         let node_idx = self.graph.add_node(node);
 

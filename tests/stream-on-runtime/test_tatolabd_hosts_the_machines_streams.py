@@ -96,7 +96,7 @@ PROJECT_FRAME_READER_SOURCE = '''\
 from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
 
 
-@node
+@node.process
 class PatternFrameReader:
     """Reads each frame it receives and keeps none."""
 

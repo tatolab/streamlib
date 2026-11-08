@@ -15,7 +15,7 @@ import os
 from tatolab.stream import Image, Input, log, node
 
 
-@node
+@node.process
 class ReportsItsProcessOnFirstFrame:
     """Announces its own process the first time a frame reaches it."""
 

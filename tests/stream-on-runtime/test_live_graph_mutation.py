@@ -85,7 +85,7 @@ class LiveAddedEffectConfig:
     marker: str = "LIVE_FRAME"
 
 
-@node
+@node.process
 class LiveAddedEffect:
     """Republishes each frame on a texture of its own and counts them."""
 
@@ -461,7 +461,7 @@ if "STREAMLIB_ENTRYPOINT" in os.environ:
     time.sleep({HELPER_IMPORT_SECONDS})
 
 
-@node
+@node.process
 class SlowlyImportingSink:
     """Reads and drops every frame."""
 

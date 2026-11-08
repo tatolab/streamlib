@@ -57,6 +57,7 @@ mod tests {
             "import_path": format!("{module}:{qualname}"),
             "short_name": declared_class.getattr("__name__")?.extract::<String>()?,
             "description": stamp("__tatolab_node_description__")?,
+            "kind": stamp("__tatolab_node_kind__")?,
             "execution": stamp("__tatolab_node_execution__")?,
             "scheduling_priority": stamp("__tatolab_node_scheduling_priority__")?,
             "paced_by_real_time": stamp("__tatolab_node_paced_by_real_time__")?,
@@ -183,7 +184,7 @@ class AudioConsumerConfig:
     label: str = 'unlabelled'
 
 
-@node(execution='manual')
+@node.process(execution='manual')
 class AudioConsumer:
     def __init__(self, config: AudioConsumerConfig) -> None:
         self.config = config
@@ -224,7 +225,7 @@ class AudioConsumerConfig:
     fallback: typing.Optional[str] = None
 
 
-@node(execution='manual')
+@node.process(execution='manual')
 class AudioConsumer:
     def __init__(self, config: AudioConsumerConfig) -> None:
         self.config = config
@@ -271,7 +272,7 @@ class AudioConsumer:
     fn a_class_declaring_no_config_carries_the_same_document_rust_publishes() {
         let declaration = read_python_declaration(
             "\
-@node(execution='manual')
+@node.process(execution='manual')
 class AudioConsumer:
     def __init__(self) -> None:
         self.frames = 0
@@ -356,7 +357,7 @@ class AudioConsumer:
     #[test]
     fn a_python_declared_catalog_entry_and_a_rust_declared_one_are_the_same_entry() {
         let python_outputs = read_python_declaration(
-            "@node(execution='manual')\n\
+            "@node.process(execution='manual')\n\
              class AudioConsumer:\n\
              \x20   encoded_video = Output(Packets,\n\
              \x20       catalog=VideoEntry(codec='avc1.64001f', codedWidth=1280, codedHeight=720))\n",
@@ -387,7 +388,7 @@ class AudioConsumer:
     #[test]
     fn a_python_declared_catalog_entry_hang_does_not_read_is_refused_naming_the_port() {
         let refusal = python_declaration_refusal(
-            "@node(execution='manual')\n\
+            "@node.process(execution='manual')\n\
              class AudioConsumer:\n\
              \x20   encoded_video = Output(Packets, catalog=VideoEntry(codec='avc1.zz'))\n",
         );
@@ -402,7 +403,7 @@ class AudioConsumer:
     #[test]
     fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
         let python_ports = python_declared_ports(
-            "@node\n\
+            "@node.process\n\
              class AudioConsumer:\n\
              \x20   audio = Input(Channels, delivery='ordered',\n\
              \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
@@ -432,12 +433,12 @@ class AudioConsumer:
     }
 
     /// A helper-placed processor opens no device stream, so the sentinel it
-    /// would need to settle never resolves — and `@node` says so at the class
+    /// would need to settle never resolves — and `@node.process` says so at the class
     /// the author wrote, not three seams later in placement vocabulary.
     #[test]
     fn a_python_declared_sentinel_is_refused_at_decoration() {
         let refusal = python_declaration_refusal(
-            "@node(execution='manual')\n\
+            "@node.process(execution='manual')\n\
              class AudioConsumer:\n\
              \x20   audio = Input(Channels, delivery='ordered', window=AUDIO_WINDOW_MATCH_DEVICE)\n",
         );
@@ -454,7 +455,7 @@ class AudioConsumer:
     #[test]
     fn a_python_port_declaring_no_contract_reaches_the_descriptor_with_none() {
         let ports = python_declared_ports(
-            "@node\n\
+            "@node.process\n\
              class AudioConsumer:\n\
              \x20   audio = Input(Channels, delivery='newest')\n",
         );
@@ -468,7 +469,7 @@ class AudioConsumer:
     #[test]
     fn a_python_port_reaches_the_descriptor_under_its_cast_name() {
         let declaration = read_python_declaration(
-            "@node\n\
+            "@node.process\n\
              class AudioConsumer:\n\
              \x20   Video = Input(Image, delivery='newest')\n\
              \x20   Frames_Out = Output(Image)\n",
@@ -482,7 +483,7 @@ class AudioConsumer:
     #[test]
     fn a_python_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
         let refusal = python_declaration_refusal(
-            "@node\n\
+            "@node.process\n\
              class AudioConsumer:\n\
              \x20   audio = Input(Channels, delivery='newest',\n\
              \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\

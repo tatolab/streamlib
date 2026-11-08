@@ -122,7 +122,7 @@ class MoqGatewayConfig:
         }
 
 
-@node(
+@node.process(
     execution="manual",
     paced_by_real_time=True,
     description=(
@@ -209,7 +209,7 @@ class MoqTrackConfig:
             )
 
 
-@node(
+@node.process(
     execution="manual",
     description=(
         "Declares one outgoing track of a `MoqGateway`'s broadcast.\n\n"
@@ -262,7 +262,7 @@ class MoqTrackSendConfig:
     ]
 
 
-@node(
+@node.process(
     description=(
         "Writes each message of `content` to the `MoqTrack` it names.\n\n"
         "Payload bytes go to the relay as written, stamped with the message's own stamp; "
@@ -364,7 +364,7 @@ class MoqTrackReceiveConfig:
             )
 
 
-@node(
+@node.process(
     execution="manual",
     paced_by_real_time=True,
     description=(

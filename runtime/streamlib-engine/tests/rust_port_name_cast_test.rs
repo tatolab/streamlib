@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! A port a Rust processor declares is registered under its cast, the way
-//! `@node` declares a Python port, and `connect` reaches it by the spelling the
+//! `@node.process` declares a Python port, and `connect` reaches it by the spelling the
 //! author declared or by the cast.
 
 #![deny(non_camel_case_types)]

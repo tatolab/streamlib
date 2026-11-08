@@ -60,7 +60,7 @@ ENTRY_FILE_PROCESSOR_STREAM_SOURCE = '''\
 from tatolab.stream import StreamBuilder, node, stream
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class EntryFileProcessor:
     """Declared in the entry file, which is exactly what makes it unhostable."""
 
@@ -79,7 +79,7 @@ from tatolab.stream import StreamBuilder, node, stream
 @stream
 def a_function_local_processor(stream_builder: StreamBuilder) -> None:
     def build_processor() -> type:
-        @node(execution="continuous", interval_ms=1)
+        @node.process(execution="continuous", interval_ms=1)
         class FunctionLocalProcessor:
             def process(self, ctx) -> None: ...
 
@@ -104,7 +104,7 @@ ZERO_ARGUMENT_PROCESS_PROCESSOR_SOURCE = '''\
 from tatolab.stream import node
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class ZeroArgumentProcess:
     def process(self, ctx) -> None: ...
 '''

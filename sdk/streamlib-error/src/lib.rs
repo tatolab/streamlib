@@ -149,7 +149,7 @@ pub enum Error {
 
     #[error(
         "processor `{processor_class_import_path}` declares the port `{port_name}`, which is \
-         not a cast name — a descriptor carries every port the way `#[processor]` and `@node` \
+         not a cast name — a descriptor carries every port the way `#[processor]` and `@node.process` \
          declare it: lowercase a-z 0-9 - . _ ~, no leading, trailing or doubled '-', at most \
          {max} characters",
         max = streamlib_processor_schema::EXPOSED_NAME_MAXIMUM_LENGTH

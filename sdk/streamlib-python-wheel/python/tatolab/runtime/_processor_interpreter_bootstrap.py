@@ -5,7 +5,7 @@
 
 """The bootstrap a processor interpreter runs — one Python processor, one process.
 
-Every `@node` class runs in a processor interpreter: the stream's own venv
+Every `@node.process` class runs in a processor interpreter: the stream's own venv
 interpreter running this file by path, with the lend directory (the one holding
 `tatolab/runtime/`) and then the project directory on `PYTHONPATH`. It imports
 the class by the import path the parent derived from it, opens that processor's
@@ -146,6 +146,7 @@ from tatolab.stream._node_declaration import (
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
     NODE_DECLARATION_EXECUTION_STAMP,
+    NODE_DECLARATION_KIND_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
     NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP,
@@ -850,9 +851,10 @@ def load_processor_class(import_path: str) -> type:
 # Describing processor classes
 # =============================================================================
 
-#: Each key of a described node type the class's own `@node` stamp fills, in wire order.
+#: Each key of a described node type the class's own `@node.process` stamp fills, in wire order.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
+    ("kind", NODE_DECLARATION_KIND_STAMP),
     ("execution", NODE_DECLARATION_EXECUTION_STAMP),
     ("scheduling_priority", NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP),
     ("paced_by_real_time", NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP),
@@ -867,7 +869,7 @@ class ProcessorClassNotDescribable(Exception):
 
 
 def describe_one_processor_class(import_path: str) -> "dict[str, Any]":
-    """The declaration the `@node` class at `import_path` carries, as JSON data.
+    """The declaration the `@node.process` class at `import_path` carries, as JSON data.
 
     Refused unless `import_path` names exactly that class: one whose own
     `__module__:__qualname__` is the path, since that is the path its processor
@@ -905,7 +907,7 @@ def _describe_the_processor_class_its_imported_module_defines(
         )
     if getattr(resolved, NODE_DECLARATION_DECLARED_STAMP, False) is not True:
         raise ProcessorClassNotDescribable(
-            f"the class `{resolved.__qualname__}` carries no `@node` declaration, so it "
+            f"the class `{resolved.__qualname__}` carries no `@node.process` declaration, so it "
             f"is not a node"
         )
     own_import_path = (
@@ -931,7 +933,7 @@ def _describe_the_processor_class_its_imported_module_defines(
         except AttributeError:
             raise ProcessorClassNotDescribable(
                 f"the class `{resolved.__qualname__}` carries no `{node_declaration_stamp}`, "
-                f"which `@node` sets; a class stamped by hand is not a node"
+                f"which `@node.process` sets; a class stamped by hand is not a node"
             ) from None
     try:
         json.dumps(described_node_type, allow_nan=False)

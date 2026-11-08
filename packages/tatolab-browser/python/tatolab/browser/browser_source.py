@@ -69,7 +69,7 @@ class BrowserSourceConfig:
     ] = 4
 
 
-@node(
+@node.process(
     execution="manual",
     description="Renders a web page offscreen with Chromium and publishes its frames, audio and events",
 )

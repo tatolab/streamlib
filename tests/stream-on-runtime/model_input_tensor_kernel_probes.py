@@ -216,7 +216,7 @@ class ModelInputTensorMatrixProbeConfig(TypedDict, total=False):
     compile_with_the_wrong_mean: bool
 
 
-@node
+@node.process
 class ModelInputTensorMatrixProbe:
     """Applies a kernel per layout x dtype of one fit to the first frame and
     reports each tensor's largest error against torch."""
@@ -283,7 +283,7 @@ class ModelInputTensorMatrixProbe:
         _report(apply_each)
 
 
-@node
+@node.process
 class NonRgbaSourceRefusalProbe:
     """Hands the kernel a `bgra32` pixel buffer and a tensor surface, and
     reports each refusal."""
@@ -334,7 +334,7 @@ SECOND_FIT_CASE: FitCase = {
 }
 
 
-@node
+@node.process
 class PadBottomRightExtentChangeProbe:
     """Applies one `pad_bottom_right` kernel to the frame, then to a smaller
     RGBA pixel buffer written from numpy, then to the frame again — each

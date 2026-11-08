@@ -3,7 +3,7 @@
 
 """A node's config class: how it is declared and the document derived from it.
 
-`@node` reads the config class off `__init__` and refuses every other
+`@node.process` reads the config class off `__init__` and refuses every other
 signature, and the deriver turns that class into the JSON Schema the catalog
 publishes. Constructing the class from a graph node's config mapping is the
 runtime's, and is tested beside it.
@@ -84,7 +84,7 @@ class RightConfig:
 
 
 def test_an_annotated_config_parameter_names_the_config_class():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class Blur:
         def __init__(self, config: BlurConfigDataclass) -> None:
             self.config = config
@@ -93,7 +93,7 @@ def test_an_annotated_config_parameter_names_the_config_class():
 
 
 def test_an_init_taking_nothing_beyond_self_declares_no_config():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class Counter:
         def __init__(self) -> None:
             self.seen = 0
@@ -109,7 +109,7 @@ def test_a_class_defining_no_init_at_all_declares_no_config():
     author never wrote.
     """
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class Bare:
         pass
 
@@ -119,7 +119,7 @@ def test_a_class_defining_no_init_at_all_declares_no_config():
 def test_a_keyword_parameter_is_refused_with_the_fix_named():
     with pytest.raises(TypeError) as refusal:
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, width: int = 1) -> None:
                 self.width = width
@@ -133,7 +133,7 @@ def test_a_keyword_parameter_is_refused_with_the_fix_named():
 def test_several_parameters_are_refused_and_all_of_them_named():
     with pytest.raises(TypeError, match="width, height"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, width: int, height: int) -> None:
                 self.size = (width, height)
@@ -142,7 +142,7 @@ def test_several_parameters_are_refused_and_all_of_them_named():
 def test_an_unannotated_config_parameter_is_refused():
     with pytest.raises(TypeError, match="with no annotation"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, config) -> None:  # noqa: ANN001
                 self.config = config
@@ -154,7 +154,7 @@ def test_a_config_annotated_as_a_parameterized_generic_is_refused():
     """
     with pytest.raises(TypeError, match="is not a class"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, config: "dict[str, Any]") -> None:
                 self.config = config
@@ -163,7 +163,7 @@ def test_a_config_annotated_as_a_parameterized_generic_is_refused():
 def test_keyword_variadic_configuration_is_refused_by_name():
     with pytest.raises(TypeError, match=r"\*\*config"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, **config: Any) -> None:
                 self.config = config
@@ -172,7 +172,7 @@ def test_keyword_variadic_configuration_is_refused_by_name():
 def test_a_positional_only_config_is_refused_because_the_helper_passes_it_by_name():
     with pytest.raises(TypeError, match="positionally only"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, config: BlurConfigDataclass, /) -> None:
                 self.config = config
@@ -181,7 +181,7 @@ def test_a_positional_only_config_is_refused_because_the_helper_passes_it_by_nam
 def test_an_unresolvable_annotation_is_refused_where_the_author_can_see_it():
     with pytest.raises(TypeError, match="cannot be resolved"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(
                 self,
@@ -199,14 +199,14 @@ def schema_of(config_class: "Optional[type]") -> "dict[str, Any]":
     """The document a node taking `config_class` publishes."""
     if config_class is None:
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class SubjectDeclaringNoConfig:
             def __init__(self) -> None:
                 self.seen = 0
 
         return SubjectDeclaringNoConfig.__tatolab_node_config_schema__
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class SubjectTakingAConfigClass:
         def __init__(self, config: config_class) -> None:  # type: ignore[valid-type]
             self.config = config
@@ -399,7 +399,7 @@ def test_a_config_annotated_as_any_is_refused_the_same_on_every_version():
     refuses it."""
     with pytest.raises(TypeError, match="`Any`"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, config: Any) -> None:
                 self.config = config
@@ -512,7 +512,7 @@ def test_a_default_the_wire_cannot_carry_is_dropped_not_rewritten(
 def test_a_variadic_positional_config_is_refused_by_name():
     with pytest.raises(TypeError, match=r"\*config"):
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Blur:
             def __init__(self, *config: Any) -> None:
                 self.config = config

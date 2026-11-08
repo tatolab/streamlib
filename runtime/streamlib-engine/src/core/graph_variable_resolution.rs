@@ -223,6 +223,8 @@ impl GraphVariablesAsDrawn {
                 ProcessorNodeOutput {
                     id: String::new(),
                     processor_type: variable_node.processor_type.clone(),
+                    kind: None,
+                    language: None,
                     name: variable_node_cast,
                     config: Some(variable_node.config.clone()),
                     config_checksum: compute_json_checksum(&variable_node.config),
@@ -988,6 +990,8 @@ mod tests {
         ProcessorNodeOutput {
             id: format!("id-{name}"),
             processor_type: ProcessorClassImportPath::new("rig:Node").unwrap(),
+            kind: None,
+            language: None,
             name: name.to_string(),
             config: Some(serde_json::json!({})),
             config_checksum: 0,

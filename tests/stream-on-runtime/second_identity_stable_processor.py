@@ -12,7 +12,7 @@ real app looks like.
 from tatolab.stream import node
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class SecondIdentityStableProcessor:
     """Does nothing per tick. Identity is the whole subject here."""
 

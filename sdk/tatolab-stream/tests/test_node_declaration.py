@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@node` grammar and its `Input` / `Output` port attributes, exercised without an engine.
+"""The `@node.process` grammar and its `Input` / `Output` port attributes, exercised without an engine.
 
 Everything here is a pure declaration check — no runtime boots — so this is the
 half of the authoring surface that stays honest on a machine with no GPU.
@@ -29,7 +29,7 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
     on top of it — there is no identity, no manifest, no schema to wrangle.
     """
 
-    @node
+    @node.process
     class BrightnessFilter:
         frames_from_upstream = Input(Image, delivery="newest")
 
@@ -60,7 +60,7 @@ def test_a_port_declared_without_a_family_is_refused_at_import():
 def test_the_attribute_name_is_the_port_name():
     """A port is named once — no string repeated between declaration and use."""
 
-    @node
+    @node.process
     class Passthrough:
         frames_from_upstream = Input(Image, delivery="ordered")
 
@@ -92,7 +92,7 @@ def test_a_port_declaration_takes_no_schema():
 
 
 def test_a_declared_port_carries_no_type_key_under_any_spelling():
-    @node
+    @node.process
     class Untyped:
         frames_from_upstream = Input(Image, delivery="newest")
 
@@ -108,7 +108,7 @@ def test_a_declared_port_carries_no_type_key_under_any_spelling():
 
 
 def test_a_declared_borrow_quota_rides_the_port_and_an_undeclared_one_is_absent():
-    @node
+    @node.process
     class HoldsFrames:
         frames = Input(Image, delivery="ordered", borrow_quota=4)
 
@@ -151,7 +151,7 @@ def test_an_input_port_without_a_delivery_is_refused():
 def test_an_output_port_needs_no_delivery_profile():
     """Delivery is the consuming port's policy — an output declaring none is correct."""
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class Source:
         frames_to_downstream = Output(Image)
 
@@ -164,7 +164,7 @@ def test_a_port_is_declared_under_its_cast_name():
     """A port name is an exposed name, so it is cast like one — the author's
     attribute name is never refused for its spelling."""
 
-    @node
+    @node.process
     class CastPorts:
         Video = Input(Image, delivery="newest")
 
@@ -181,7 +181,7 @@ def test_a_port_is_declared_under_its_cast_name():
 def test_two_ports_casting_alike_are_refused_naming_both():
     with pytest.raises(ValueError) as refusal:
 
-        @node
+        @node.process
         class CastClash:
             Video = Input(Image, delivery="newest")
 
@@ -198,8 +198,33 @@ def test_the_package_exports_node():
     assert "node" in tatolab.stream.__all__
 
 
-def test_the_node_decorator_names_its_class_parameter_node_class():
-    assert next(iter(inspect.signature(node).parameters)) == "node_class"
+def test_the_process_decorator_names_its_class_parameter_node_class():
+    assert next(iter(inspect.signature(node.process).parameters)) == "node_class"
+
+
+def test_a_process_node_carries_its_kind():
+    @node.process
+    class BrightnessFilter:
+        frames_from_upstream = Input(Image, delivery="newest")
+
+    assert BrightnessFilter.__tatolab_node_kind__ == "process"
+
+
+@pytest.mark.parametrize("decorated_as", ["bare", "with keyword arguments"])
+def test_bare_node_is_refused_naming_node_process(decorated_as: str):
+    """Every node names its kind, so `@node` alone declares nothing and says what to write."""
+    with pytest.raises(TypeError, match=r"`@node\.process`"):
+        if decorated_as == "bare":
+
+            @node
+            class BrightnessFilter:
+                frames_from_upstream = Input(Image, delivery="newest")
+
+        else:
+
+            @node(execution="manual")
+            class Camera:
+                frames_to_downstream = Output(Image)
 
 
 def test_a_source_must_declare_its_execution_mode():
@@ -211,13 +236,13 @@ def test_a_source_must_declare_its_execution_mode():
     """
     with pytest.raises(ValueError, match="declares no input ports"):
 
-        @node
+        @node.process
         class TestPatternSource:
             frames_to_downstream = Output(Image)
 
 
 def test_a_source_that_declares_a_mode_is_accepted():
-    @node(execution="continuous", interval_ms=33)
+    @node.process(execution="continuous", interval_ms=33)
     class TestPatternSource:
         frames_to_downstream = Output(Image)
 
@@ -228,7 +253,7 @@ def test_a_source_that_declares_a_mode_is_accepted():
 
 
 def test_keyword_arguments_are_the_whole_grammar():
-    @node(execution="manual", scheduling="realtime")
+    @node.process(execution="manual", scheduling="realtime")
     class Camera:
         frames_to_downstream = Output(Image)
 
@@ -255,7 +280,7 @@ def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity: s
     """
     with pytest.raises(TypeError, match="takes no positional argument"):
 
-        @node(identity, execution="manual")  # pyright: ignore[reportArgumentType]
+        @node.process(identity, execution="manual")  # pyright: ignore[reportArgumentType]
         class Camera:
             frames_to_downstream = Output(Image)
 
@@ -263,7 +288,7 @@ def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity: s
 def test_the_refusal_names_where_the_identity_actually_comes_from():
     with pytest.raises(TypeError) as refusal:
 
-        @node("@tatolab/camera/Camera")  # pyright: ignore[reportArgumentType]
+        @node.process("@tatolab/camera/Camera")  # pyright: ignore[reportArgumentType]
         class Camera:
             frames_to_downstream = Output(Image)
 
@@ -280,7 +305,7 @@ def test_a_class_name_that_is_not_pascal_case_is_accepted():
     is read off `__name__` for the display-name default and passed through.
     """
 
-    @node
+    @node.process
     class lowercase_name:
         frames_from_upstream = Input(Image, delivery="newest")
 
@@ -297,7 +322,7 @@ def test_a_class_name_that_is_not_pascal_case_is_accepted():
 def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message):
     with pytest.raises(ValueError, match=expected_message):
 
-        @node(**{keyword: value})
+        @node.process(**{keyword: value})
         class Filter:
             frames_from_upstream = Input(Image, delivery="newest")
 
@@ -305,14 +330,14 @@ def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message
 def test_a_negative_interval_is_refused():
     with pytest.raises(ValueError, match="non-negative int"):
 
-        @node(execution="continuous", interval_ms=-1)
+        @node.process(execution="continuous", interval_ms=-1)
         class TestPatternSource:
             frames_to_downstream = Output(Image)
 
 
 @pytest.mark.parametrize("paced_by_real_time", [True, False])
 def test_a_node_is_stamped_with_whether_it_is_paced_by_real_time(paced_by_real_time: bool):
-    @node(execution="manual", paced_by_real_time=paced_by_real_time)
+    @node.process(execution="manual", paced_by_real_time=paced_by_real_time)
     class CameraSource:
         frames_to_downstream = Output(Image)
 
@@ -324,19 +349,19 @@ def test_a_node_is_stamped_with_whether_it_is_paced_by_real_time(paced_by_real_t
 def test_paced_by_real_time_other_than_a_bool_is_refused(not_a_bool: object):
     with pytest.raises(TypeError, match="invalid paced_by_real_time"):
 
-        @node(execution="manual", paced_by_real_time=not_a_bool)  # type: ignore[arg-type]
+        @node.process(execution="manual", paced_by_real_time=not_a_bool)  # type: ignore[arg-type]
         class CameraSource:
             frames_to_downstream = Output(Image)
 
 
 def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
-    @node
+    @node.process
     class BaseFilter:
         frames_from_upstream = Input(Image, delivery="newest")
 
         frames_to_downstream = Output(Image)
 
-    @node
+    @node.process
     class AudioFilter(BaseFilter):
         frames_from_upstream = Input(Image, delivery="ordered")
 
@@ -358,7 +383,7 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
 
 
 def test_an_audio_input_declares_its_window_contract():
-    @node
+    @node.process
     class WakeWordDetector:
         audio_from_microphone = Input(
             Channels,
@@ -396,7 +421,7 @@ def test_the_device_matching_sentinel_is_refused_at_import(delivery_profile: str
     """
     with pytest.raises(TypeError) as refusal:
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class Speaker:
             audio_from_upstream = Input(
                 Channels,
@@ -428,7 +453,7 @@ def test_the_device_matching_sentinel_is_on_no_public_surface():
 def test_a_port_declaring_no_contract_carries_no_audio_window_key():
     """The contract is opt-in: nothing about a contract-less port moves."""
 
-    @node
+    @node.process
     class Passthrough:
         frames_from_upstream = Input(Image, delivery="newest")
 
@@ -559,7 +584,7 @@ def test_the_contract_takes_no_positional_arguments():
 def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_knobs():
     with pytest.raises(ValueError) as refusal:
 
-        @node
+        @node.process
         class Skipping:
             audio_from_microphone = Input(
                 Channels,
@@ -576,7 +601,7 @@ def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_kn
 def test_an_audio_window_that_is_not_a_contract_is_refused():
     with pytest.raises(TypeError, match="AudioWindowContract"):
 
-        @node
+        @node.process
         class Wrong:
             audio_from_microphone = Input(
                 Channels, delivery="ordered", window={"window_size": 512}  # type: ignore[arg-type]
@@ -610,7 +635,7 @@ def test_a_contract_is_frozen_after_declaration():
 def test_a_node_with_no_description_is_described_by_its_docstring():
     """The text an author already wrote, rather than a second place to write it."""
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class DescribedByItsDocstringAlone:
         """What a node with no description= keyword falls back to."""
 
@@ -623,7 +648,7 @@ def test_a_node_with_no_description_is_described_by_its_docstring():
 def test_an_explicit_description_outranks_the_docstring():
     """The keyword is the deliberate one; the docstring is the fallback."""
 
-    @node(execution="manual", description="The keyword wins")
+    @node.process(execution="manual", description="The keyword wins")
     class DescribedByBothKeywordAndDocstring:
         """The docstring the keyword outranks."""
 
@@ -636,7 +661,7 @@ def test_an_explicit_description_outranks_the_docstring():
 def test_a_node_with_neither_is_described_by_the_empty_string():
     """Never `None`: the descriptor's description is a string."""
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class DescribedByNothingAtAll:
         pass
 

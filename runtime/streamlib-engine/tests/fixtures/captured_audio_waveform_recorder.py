@@ -47,7 +47,7 @@ def waveform_placed_by_start_sample(
     return waveform
 
 
-@node
+@node.process
 class CapturedAudioWaveformRecorder:
     """Accumulates captured blocks, then writes them once as one waveform."""
 

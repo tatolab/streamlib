@@ -35,7 +35,7 @@ def _report(probe_body) -> None:
     log.info(RESULT_MARKER + json.dumps({"pid": os.getpid(), **observation}))
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class NumpyViewProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -57,7 +57,7 @@ class NumpyViewProbe:
             return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class UnlockedExportProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -88,7 +88,7 @@ class UnlockedExportProbe:
             return outcomes
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class LockModeProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -112,7 +112,7 @@ class LockModeProbe:
         return outcomes
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class SharedMemoryProbe:
     """Writes through one handle, reads through a second one resolved by id."""
 
@@ -139,7 +139,7 @@ class SharedMemoryProbe:
                 return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TensorOutlivesTheSurfaceProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -163,7 +163,7 @@ class TensorOutlivesTheSurfaceProbe:
         }
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class PoolCycleProbe:
     """Holds a tensor, then churns the pool past its depth with fresh writes."""
 
@@ -200,7 +200,7 @@ class PoolCycleProbe:
         }
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class DlpackConsumerProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -223,7 +223,7 @@ class DlpackConsumerProbe:
             return observation
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class UnsupportedFormatProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -242,7 +242,7 @@ class UnsupportedFormatProbe:
             return {"outcome": outcome}
 
 
-@node
+@node.process
 class InvertingEffect:
     """What a user writes: read the frame, change the pixels, pass it on.
 
@@ -298,7 +298,7 @@ class ReportingInvertingEffectConfig(TypedDict, total=False):
     skip_edit: bool
 
 
-@node
+@node.process
 class ReportingInvertingEffect:
     """The scaffold's edit, reporting what the frame must read afterwards.
 
@@ -345,7 +345,7 @@ class ReportingInvertingEffect:
         ctx.outputs.write(self.video_to_downstream, frame)
 
 
-@node
+@node.process
 class FrameDigestVerifier:
     """Reads the first frame it is handed, in a process of its own, and
     reports a digest of every pixel."""

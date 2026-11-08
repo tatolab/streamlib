@@ -1947,7 +1947,14 @@ sys.exit(0)
         let import_path =
             crate::core::descriptors::ProcessorClassImportPath::new("my_app.filters:BlurProcessor")
                 .unwrap();
-        let node = ProcessorNode::new(import_path.clone(), "BlurProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            import_path.clone(),
+            None,
+            "BlurProcessor",
+            None,
+            vec![],
+            vec![],
+        );
         let mut host = spawn_host_for_processor_node(
             "my_app.filters:BlurProcessor",
             &ProcessorDescriptor::new(
@@ -1982,7 +1989,14 @@ sys.exit(0)
             import_path.clone(),
             "a test double",
         );
-        let node = ProcessorNode::new(import_path, "PollingSinkProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            import_path,
+            None,
+            "PollingSinkProcessor",
+            None,
+            vec![],
+            vec![],
+        );
 
         for child_execution in [
             ProcessExecution::Continuous { interval_ms: 5 },

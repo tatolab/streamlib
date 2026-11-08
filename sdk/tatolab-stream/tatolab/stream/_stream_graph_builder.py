@@ -187,13 +187,13 @@ def is_stream_function(candidate: object) -> TypeGuard[Callable[..., Any]]:
 
 
 class _NodeClassConstructedWithoutConfig(Protocol):
-    """A `@node` class its interpreter constructs as `cls()`."""
+    """A `@node.process` class its interpreter constructs as `cls()`."""
 
     def __call__(self) -> object: ...
 
 
 class _NodeClassConstructedWithConfig(Protocol):
-    """A `@node` class its interpreter constructs as `cls(config=...)`."""
+    """A `@node.process` class its interpreter constructs as `cls(config=...)`."""
 
     def __call__(self, *, config: Any) -> object: ...
 
@@ -232,11 +232,11 @@ class NodeReference:
         object.__setattr__(self, "name", _cast_name(self.name, "node name"))
 
     def output(self, port_name: str) -> NodeOutputPortReference:
-        """Name one of this node's output ports, cast as `@node` declared it."""
+        """Name one of this node's output ports, cast as `@node.process` declared it."""
         return NodeOutputPortReference(self.name, port_name)
 
     def input(self, port_name: str) -> NodeInputPortReference:
-        """Name one of this node's input ports, cast as `@node` declared it."""
+        """Name one of this node's input ports, cast as `@node.process` declared it."""
         return NodeInputPortReference(self.name, port_name)
 
 
@@ -491,7 +491,7 @@ def _node_class_import_path(node_class: type) -> str:
             f"Move `{qualname}` into an importable module beside the entry file and "
             f"import it from there — one import line:\n\n"
             f"    # {module_suggestion}.py\n"
-            f"    @node(...)\n"
+            f"    @node.process(...)\n"
             f"    class {qualname}: ...\n\n"
             f"    # stream.py\n"
             f"    from {module_suggestion} import {qualname}\n\n"

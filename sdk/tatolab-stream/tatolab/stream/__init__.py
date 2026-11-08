@@ -5,7 +5,7 @@
 
 A stream is a `@stream` function that adds and links nodes on a
 `StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
-declares its execution with `@node` and its ports as `Input` and `Output` class
+declares its execution with `@node.process` and its ports as `Input` and `Output` class
 attributes of one family each, and receives a capability-typed context in every lifecycle hook. The contexts, link
 endpoints, GPU classes and timer a node is handed while it runs are
 `typing.Protocol`s the runtime implements; the clock and the timer's start are

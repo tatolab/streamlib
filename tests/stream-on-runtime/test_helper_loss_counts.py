@@ -64,7 +64,7 @@ BAGS_PER_TICK = 20
 TICKS_PER_OVERSIZED_BAG = 50
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class FastBagSource:
     """Writes far faster than `SlowOrderedSink` reads, and now and then a message no
     helper link can carry."""
@@ -88,7 +88,7 @@ class FastBagSource:
             ctx.outputs.write("oversized_bags", bytes({OVERSIZED_BAG_PADDING_BYTES}))
 
 
-@node
+@node.process
 class SlowOrderedSink:
     """Takes every message in order, far slower than they arrive, and says once
     what its reads were told: a loss on its link, and a message continuing a
@@ -131,7 +131,7 @@ class SlowOrderedSink:
         time.sleep(0.05)
 
 
-@node
+@node.process
 class NewestSink:
     """Drains whatever reaches it."""
 

@@ -19,7 +19,7 @@ class LowerThirdTitleTickerConfig:
     ] = dataclasses.field(default_factory=list)
 
 
-@node(execution="continuous", interval_ms=1000)
+@node.process(execution="continuous", interval_ms=1000)
 class LowerThirdTitleTicker:
     """Sends a numbered title to a `RiveSource`'s `data` input once a second."""
 

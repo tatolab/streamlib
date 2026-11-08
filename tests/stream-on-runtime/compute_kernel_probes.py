@@ -136,7 +136,7 @@ class _ComputeKernelProbeBase:
         raise NotImplementedError
 
 
-@node(
+@node.process(
     execution="manual",
     description="Reads one surface and writes another through a compute kernel",
 )
@@ -158,7 +158,7 @@ class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting the bindings wrong, refused by name",
 )
@@ -220,7 +220,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A texture's pixels reach the CPU through the staged door",
 )
@@ -266,7 +266,7 @@ class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A raise inside the CPU door over a texture propagates",
 )
@@ -301,7 +301,7 @@ class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="An acquired texture takes a write-back without spelling copy usage",
 )
@@ -433,7 +433,7 @@ class _TwoPassProbeBase:
         raise NotImplementedError
 
 
-@node(
+@node.process(
     execution="manual",
     description="A two-pass filter dispatched as one batch",
 )
@@ -465,7 +465,7 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A raise inside a batch scope submits nothing and propagates",
 )
@@ -497,7 +497,7 @@ class BatchExceptionProbe(_TwoPassProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting a batch wrong, refused by name",
 )
@@ -570,7 +570,7 @@ class BatchRefusalProbe(_TwoPassProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting the kernel's source wrong, refused by name",
 )

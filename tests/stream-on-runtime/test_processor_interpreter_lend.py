@@ -144,7 +144,7 @@ def test_an_unstamped_class_is_refused_by_name(
     )
 
     assert "lend_unstamped_nodes:NotANode" in refusal
-    assert "carries no `@node` declaration" in refusal
+    assert "carries no `@node.process` declaration" in refusal
 
 
 def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what_it_is(
@@ -163,7 +163,7 @@ def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what
         from tatolab.stream import Output, Records, node
 
 
-        @node(execution="manual")
+        @node.process(execution="manual")
         class DeclaredNode:
             nothing_to_downstream = Output(Records)
         """,
@@ -201,7 +201,7 @@ def test_a_type_that_describes_registers_without_its_module_entering_this_proces
         from tatolab.stream import Output, Records, node
 
 
-        @node(execution="continuous", interval_ms=50)
+        @node.process(execution="continuous", interval_ms=50)
         class DescribedSource:
             bags_to_downstream = Output(Records)
 
@@ -238,7 +238,7 @@ def test_a_type_described_against_the_lend_imports_the_runtime_the_runtime_unit_
         Path({str(lent_runtime_file_record)!r}).write_text(tatolab.runtime.__file__)
 
 
-        @node(execution="continuous", interval_ms=50)
+        @node.process(execution="continuous", interval_ms=50)
         class DescribedAgainstTheLendSource:
             bags_to_downstream = Output(Records)
 
@@ -276,7 +276,7 @@ def test_a_relative_dir_names_the_project_from_the_callers_directory(
         from tatolab.stream import Output, Records, node
 
 
-        @node(execution="continuous", interval_ms=50)
+        @node.process(execution="continuous", interval_ms=50)
         class RelativelyLoadedSource:
             bags_to_downstream = Output(Records)
 

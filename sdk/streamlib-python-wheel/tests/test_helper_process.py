@@ -225,7 +225,7 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
 
 
 def test_a_port_lookup_casts_its_argument_to_the_declared_name():
-    """`@node` declares each port under its cast name, so every lookup casts
+    """`@node.process` declares each port under its cast name, so every lookup casts
     too: `Video` and `VIDEO` reach the port declared as `video`.
     """
     link_data_access = _engine.open_node_link_data_access_for_helper_process()

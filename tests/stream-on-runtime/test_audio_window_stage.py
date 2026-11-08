@@ -244,7 +244,7 @@ FRAMES_PER_BLOCK = 300
 GAP_BETWEEN_BLOCKS_NS = 1_000_000_000
 
 
-@node(execution="continuous", interval_ms=20)
+@node.process(execution="continuous", interval_ms=20)
 class GappedMonoSource:
     """Each block is short of a 512-sample window, and each one's stamp is a
     discontinuity, so the windowed consumer flushes what the last block left."""
@@ -265,7 +265,7 @@ class GappedMonoSource:
         self.blocks += 1
 
 
-@node
+@node.process
 class WindowedMonoConsumer:
     audio = Input(
         Channels,

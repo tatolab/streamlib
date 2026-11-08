@@ -44,7 +44,7 @@ from tatolab.stream import (
 )
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class ExitsSoonAfterEveryStart:
     """Ends its own process on its tenth callback."""
 
@@ -62,7 +62,7 @@ class ExitsSoonAfterEveryStart:
             os._exit(17)
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class KeepsRunning:
     """Does nothing, for as long as the stream runs."""
 

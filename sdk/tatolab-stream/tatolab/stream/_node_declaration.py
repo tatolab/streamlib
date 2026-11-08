@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@node` grammar — execution mode and ports, declared in code.
+"""The `@node.process` grammar — execution mode and ports, declared in code.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
-a working node. `@node` validates the declaration and stamps it on the class as
+a working node. `@node.process` validates the declaration and stamps it on the class as
 `__tatolab_node_*__` attributes; it registers nothing. The runtime reads exactly
 that set when a stream naming the class loads, so the set is the contract between
 this module and the runtime's reader, and the two move together.
@@ -20,7 +20,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import typing
-from typing import Any, Optional, TypeVar
+from typing import Any, NoReturn, Optional, TypeVar
 
 from .catalog import AudioEntry, BinaryEntry, JsonEntry, TextEntry, VideoEntry
 
@@ -40,9 +40,10 @@ __all__ = [
     "node",
 ]
 
-# The stamps `@node` writes and the runtime reads. The runtime's Rust reader
+# The stamps `@node.process` writes and the runtime reads. The runtime's Rust reader
 # spells them too, and its tests run this decorator against it.
 NODE_DECLARATION_DECLARED_STAMP = "__tatolab_node_declared__"
+NODE_DECLARATION_KIND_STAMP = "__tatolab_node_kind__"
 NODE_DECLARATION_CONFIG_CLASS_STAMP = "__tatolab_node_config_class__"
 NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
@@ -51,6 +52,9 @@ NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority
 NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP = "__tatolab_node_paced_by_real_time__"
 NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
 NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
+
+PROCESS_NODE_KIND = "process"
+"""The kind a class node is: it runs in a process of its own."""
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
@@ -270,11 +274,20 @@ def _catalog_entry_declaration(catalog: object, port_name: str) -> "dict[str, An
 
 
 class NodeDeclarationDecorator:
-    """The type of [`node`]: `@node` itself."""
+    """The type of [`node`], whose attributes declare each node kind."""
 
     __slots__ = ()
 
-    def __call__(
+    def __call__(self, *_arguments: object, **_keyword_arguments: object) -> NoReturn:
+        """Refuse bare `@node`: every node names its kind."""
+        raise TypeError(
+            "bare `@node` declares no kind; every node names its kind. A class with "
+            "`setup()` / `process()` and ports is `@node.process`, bare or with the same "
+            "keyword arguments (`execution`, `interval_ms`, `scheduling`, "
+            "`paced_by_real_time`, `description`)."
+        )
+
+    def process(
         self,
         node_class: Optional[type] = None,
         *,
@@ -284,9 +297,9 @@ class NodeDeclarationDecorator:
         paced_by_real_time: bool = False,
         description: str = "",
     ) -> Any:
-        """Mark a class as a streamlib node.
+        """Mark a class as a process node: one that runs in a process of its own.
 
-        Usable bare (`@node`) or with keyword arguments; its ports are `Input`
+        Usable bare (`@node.process`) or with keyword arguments; its ports are `Input`
         and `Output` class attributes, each of one family. It declares execution,
         interval, scheduling priority and description — never identity: a node is
         named by the import path of the class it is, derived from `__module__` and
@@ -334,10 +347,10 @@ class NodeDeclarationDecorator:
 
         if node_class is not None:
             raise TypeError(
-                f"@node() takes no positional argument; got "
+                f"@node.process() takes no positional argument; got "
                 f"{type(node_class).__name__}. A node is named by the import path "
                 f"of the class it is — `my_app.filters:BlurEffect` — derived from "
-                f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
+                f"`__module__` and `__qualname__` and never authored. Use `@node.process` bare, "
                 f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
                 f"`paced_by_real_time`, "
                 f"`description`)."
@@ -350,7 +363,7 @@ class NodeDeclarationDecorator:
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node class; its `Input` and `Output` attributes are its ports."""
+"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports."""
 
 
 def _declare_node(
@@ -366,6 +379,7 @@ def _declare_node(
     config_class = _config_class_named_by_the_init_annotation(node_class)
 
     setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)
+    setattr(node_class, NODE_DECLARATION_KIND_STAMP, PROCESS_NODE_KIND)
     setattr(node_class, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
     setattr(
         node_class,
@@ -583,7 +597,7 @@ def _resolve_execution(
         if not has_input_ports:
             raise ValueError(
                 f"{node_class.__name__} declares no input ports, so it must declare "
-                f"an execution mode: `@node(execution=\"continuous\", interval_ms=…)` "
+                f"an execution mode: `@node.process(execution=\"continuous\", interval_ms=…)` "
                 f"for a source that produces on its own schedule, or "
                 f"`execution=\"manual\"` for one driven by a callback it owns. Only a "
                 f"node with an input port can default to \"reactive\"."

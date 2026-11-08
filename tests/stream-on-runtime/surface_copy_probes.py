@@ -76,7 +76,7 @@ class FrameLandingProbeConfig(TypedDict, total=False):
     skip_copy: bool
 
 
-@node
+@node.process
 class FrameLandingProbe:
     """Lands the first test-pattern frame in an acquired texture with the
     engine copy, inverts it with a kernel, and reports whether the kernel's
@@ -145,7 +145,7 @@ class FrameLandingProbe:
         _report(land_and_invert)
 
 
-@node
+@node.process
 class CopyRefusalProbe:
     """Asks for each copy the engine must refuse, and reports what it said."""
 
