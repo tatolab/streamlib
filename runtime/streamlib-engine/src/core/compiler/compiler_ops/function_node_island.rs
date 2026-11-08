@@ -16,6 +16,7 @@ use serde_json::Value as JsonValue;
 use crate::core::ProcessorUniqueId;
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
+use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
     LinkUniqueId, OutOfProcessLinkWiringComponent,
@@ -91,8 +92,29 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
                  process, and the app process runs no node code"
             ))
         })?;
+    if reader_link_wiring.far_side_process_execution() == ProcessExecution::Reactive
+        && !is_fed_by_a_node_that_is_not_a_function_node(graph, &reader_id)
+    {
+        return Err(Error::InvalidLink(format!(
+            "`{reader_id}` runs reactively and only function node islands feed it, and an \
+             island has no source to wake it, so it would never run. To fix: declare it \
+             `execution=\"continuous\"` with an `interval_ms`, or link it a source"
+        )));
+    }
     reader_link_wiring.record_a_function_node_island_on_the_setup_command(island)?;
     mark_a_link(graph, link_id, LinkState::Wired)
+}
+
+fn is_fed_by_a_node_that_is_not_a_function_node(
+    graph: &Graph,
+    node_id: &ProcessorUniqueId,
+) -> bool {
+    graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| link.to_port().processor_id() == node_id)
+        .any(|link| !is_a_function_node(graph, link.source().processor_id()))
 }
 
 /// Unwire `link_id`, from a function node into its reader: forget the island
@@ -273,7 +295,6 @@ mod tests {
         FunctionNodeLanguage, PortDescriptor, PortFamily, PortFamilyDeclaration,
         ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
     };
-    use crate::core::execution::ProcessExecution;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::processors::{
         HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves, OutOfProcessLinkWiringEnvelope,
@@ -365,6 +386,16 @@ mod tests {
     }
 
     fn a_helper_reader_before_its_setup(graph: &mut Graph) -> ProcessorUniqueId {
+        a_helper_reader_before_its_setup_driven_in(
+            graph,
+            ProcessExecution::Continuous { interval_ms: 10 },
+        )
+    }
+
+    fn a_helper_reader_before_its_setup_driven_in(
+        graph: &mut Graph,
+        far_side_process_execution: ProcessExecution,
+    ) -> ProcessorUniqueId {
         let reader_id = add_a_node(
             graph,
             crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path()
@@ -378,7 +409,7 @@ mod tests {
             .unwrap()
             .insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(Arc::new(
                 OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
-                    ProcessExecution::Reactive,
+                    far_side_process_execution,
                 ),
             )));
         reader_id
@@ -514,6 +545,20 @@ mod tests {
             reader_setup_command_ports(&graph, &reader)["islands"],
             serde_json::json!([])
         );
+    }
+
+    #[test]
+    fn a_reactive_reader_fed_only_by_islands_is_refused_naming_continuous_execution() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let reader =
+            a_helper_reader_before_its_setup_driven_in(&mut graph, ProcessExecution::Reactive);
+        let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
+        let refusal =
+            wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+                .unwrap_err()
+                .to_string();
+        assert!(refusal.contains("execution=\"continuous\""), "{refusal}");
     }
 
     #[test]

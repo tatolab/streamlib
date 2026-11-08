@@ -156,6 +156,36 @@ def test_an_int_input_and_output_travel_as_f64():
     assert call_the_evaluate_entry(compiled(tally), [2.0, 5.0], [], [])[0] == [7.0]
 
 
+@pytest.mark.parametrize(
+    ("function_node", "inputs", "config", "state", "now_ns"),
+    [
+        (remap, [0.25, -2.0, 6.0], [], [], 0),
+        (lfo, [3.0], [], [0.1, 1_000_000_000.0], 1_100_000_000),
+        (amplify, [1.5], [3.0, 1.0], [], 0),
+        (tally, [4.0, 2.0], [], [], 0),
+    ],
+)
+def test_a_compiled_body_matches_the_python_it_was_compiled_from(
+    function_node: Any, inputs: "list[float]", config: "list[float]", state: "list[float]", now_ns: int
+):
+    outputs, new_state = call_the_evaluate_entry(compiled(function_node), inputs, config, state, now_ns)
+    if function_node is remap:
+        expected: Any = remap(*inputs)
+    elif function_node is lfo:
+        expected, expected_state = lfo(inputs[0], now=now_ns, previous=Phase(state[0], int(state[1])))
+        assert new_state == pytest.approx([expected_state.cycles, expected_state.last_now_ns])
+    elif function_node is amplify:
+        expected = amplify(inputs[0], GainConfig(gain=config[0], inverted=bool(config[1])))
+    else:
+        expected = tally(inputs[0], int(inputs[1]))
+    assert outputs == pytest.approx([float(expected)])
+
+
+def test_a_second_compile_of_a_body_loads_it_from_numbas_cache():
+    compiled(remap)
+    assert compiled(remap).body_loaded_from_numbas_cache
+
+
 def test_a_bool_output_travels_as_zero_or_one():
     is_positive_compiled = compiled(is_positive)
     assert call_the_evaluate_entry(is_positive_compiled, [2.0], [], [])[0] == [1.0]

@@ -48,6 +48,7 @@ class FunctionNodeCompiledToItsEvaluateEntry:
     config_fields: "tuple[str, ...]"
     config_field_defaults: "dict[str, float]"
     initial_state_values: "tuple[float, ...]"
+    body_loaded_from_numbas_cache: bool
     compiled_wrapper_kept_alive: Any
 
 
@@ -282,6 +283,8 @@ def compile_function_node_to_its_evaluate_entry(
         config_fields=tuple(config_value_types),
         config_field_defaults=config_field_defaults,
         initial_state_values=initial_state_values,
+        body_loaded_from_numbas_cache=sum(body_with_its_dataclasses_lowered.stats.cache_hits.values())
+        > 0,
         compiled_wrapper_kept_alive=compiled_wrapper,
     )
 
