@@ -168,6 +168,10 @@ pub struct ProcessorDescriptor {
     /// values travel in; empty for every other node type.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub function_node_state_fields: Vec<String>,
+    /// The palette category an editor files the node type under; absent on a
+    /// type that declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -191,6 +195,7 @@ impl ProcessorDescriptor {
             scheduling: ProcessorScheduling::default(),
             paced_by_real_time: false,
             function_node_state_fields: Vec::new(),
+            category: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
@@ -209,6 +214,12 @@ impl ProcessorDescriptor {
 
     pub fn with_entrypoint(mut self, entrypoint: impl Into<String>) -> Self {
         self.entrypoint = Some(entrypoint.into());
+        self
+    }
+
+    /// Declare the palette category an editor files the node type under.
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
         self
     }
 

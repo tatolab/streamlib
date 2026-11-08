@@ -399,6 +399,10 @@ pub struct ProcessorDescriptorOutput {
     pub language: Option<FunctionNodeLanguageOutput>,
     /// Human-readable description.
     pub description: String,
+    /// The palette category an editor files this node type under; absent on a
+    /// type that declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     /// Repository URL.
     pub repository: String,
     /// Runtime environment.
@@ -699,6 +703,7 @@ impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
             kind,
             language,
             description: desc.description.clone(),
+            category: desc.category.clone(),
             repository: desc.repository.clone(),
             runtime: ProcessorRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),

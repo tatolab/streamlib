@@ -85,6 +85,7 @@ def declare_function_node(
     function: Callable[_FunctionNodeParameters, _FunctionNodeReturn],
     *,
     description: str,
+    category: str,
     declaration_stamps: "dict[str, str]",
 ) -> FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]:
     """Read `function`'s signature into a function node, refusing by name what is not one.
@@ -107,6 +108,7 @@ def declare_function_node(
             else derive_config_class_json_schema(config_class)
         ),
         declaration_stamps["description"]: description or inspect.getdoc(function) or "",
+        declaration_stamps["category"]: category or function.__module__,
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
