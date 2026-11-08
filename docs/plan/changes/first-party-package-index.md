@@ -25,7 +25,7 @@ This settles the OPEN "Packs, a registry, and loading a stream from a source"
 (`ARCHITECTURE.md:93-116`). It removes the cause of #3172, replaces the PyPI half of #3115, and
 reshapes #3216.
 
-## Current state (recon, `main` `f8e9676`)
+## Current state (recon, `main` `8a570a6`)
 
 - **The release uploads every first-party module to PyPI**, one file at a time, because PyPI
   rate-limits new project names: `reusable-distributions.yml:585-698` (`publish-to-pypi`), with
@@ -41,12 +41,12 @@ reshapes #3216.
   Today no first-party module reaches a project through another first-party module.
 - **Every `packages/` name is registered on PyPI** (checked 2026-11-08, `pypi.org/pypi/<name>/json`
   answers 200 for all thirteen); `tatolab-ops`, not yet in `packages/`, is not.
-- **The scaffold** depends on `tatolab-stream`, `tatolab-h264`, `tatolab-testpattern` and `numpy`
-  (`sdk/tatolab-stream/scaffold_template/pyproject.toml:5`), each floor raised to the runtime's
-  version on render (`runtime/streamlib-engine/src/core/runtime/new_project_scaffold.rs:38-49`,
-  `:77-90`). Its `stream.py` is `TestPatternSource` → `HalftoneLensEffect` → `H264Encoder` →
-  `expose`, with `BrightnessMeter` on a fan-out. `gateway-nodes` already drops the encoder and
-  `expose` from it (`docs/plan/changes/gateway-nodes.md:137-139`), not yet built.
+- **The scaffold** depends on `tatolab-stream`, `tatolab-testpattern` and `numpy`
+  (`sdk/tatolab-stream/scaffold_template/pyproject.toml:5`), the first two floors raised to the
+  runtime's version on render (`runtime/streamlib-engine/src/core/runtime/new_project_scaffold.rs:46-56`,
+  `:148-157`). Its one stream asset, `streams/main.graph.json`, is `TestPatternSource` →
+  `HalftoneLensEffect` → `BrightnessMeter`, the effect and meter in the template's `nodes/`; the
+  encoder and `expose` are already gone (`docs/plan/changes/gateway-nodes.md:137`).
 - **The release checks the scaffold locks this run's wheels** by passing them to `uv lock` as
   find-links beside PyPI (`reusable-distributions.yml:243-300`).
 - **Samples have no home**: the scaffold entry sends camera projects to "the docs' sample projects
@@ -110,7 +110,7 @@ reshapes #3216.
 
 ## MODIFIED
 
-- **First-party distribution** (`ARCHITECTURE.md:3648-3657`, `:569-580`, `:511-517`, `:907-918`).
+- **First-party distribution** (`ARCHITECTURE.md:3689-3699`, `:569-580`, `:511-517`, `:907-918`).
   The release publishes `tatolab-stream` to PyPI and every first-party module to Tatolab's index,
   at the one version. A module still depends on `tatolab-stream` by a minimum version and on
   nothing of the runtime's. "Published to PyPI beside `tatolab-stream`" reads "published to
@@ -127,10 +127,10 @@ reshapes #3216.
   against the public index and PyPI at the version it bundles, and stops there when either does
   not yet serve it. With one PyPI project and no new names, PyPI's new-project limit no
   longer bites, so no partial-success path remains.
-- **The release proof** (`ARCHITECTURE.md:3726-3739`, the macOS proof and `main`'s scaffolded-stream
+- **The release proof** (`ARCHITECTURE.md:3768-3781`, the macOS proof and `main`'s scaffolded-stream
   run). The scaffolded stream it runs is the starter, so it checks `TestPatternSource.video` and
   nothing else: no effect, no encoder. `graph` counts a port's writes only once something reads
-  it (`scripts/check_scaffolded_stream_runs_on_the_driver_the_macos_lend_carries.sh:141`), and the
+  it (`scripts/check_scaffolded_stream_runs_on_the_driver_the_macos_lend_carries.sh:119-120`), and the
   starter links nothing, so the proof reads the port through `gateway-nodes`' viewer read path
   for the run, as Tato Studio's viewer does, and checks at least sixty frames arrive (decision 5). It changes in
   the same ticket as the scaffold, so a proof never looks for a node the starter lost.
@@ -140,8 +140,7 @@ reshapes #3216.
   alone. It still fails when the lock takes any version but the one the run built.
 - **The scaffold** (`ARCHITECTURE.md:93-116`). The starter is one stream asset holding one source
   node, `TestPatternSource` from `tatolab-testpattern`, which the person sees in Tato Studio's
-  viewer. `gateway-nodes` keeps removing `H264Encoder` and `expose`; the effect and meter it left
-  are this change's to remove. The template loses `nodes/`, `HalftoneLensEffect`,
+  viewer. The effect and meter are this change's to remove. The template loses `nodes/`, `HalftoneLensEffect`,
   `BrightnessMeter` and `numpy`; its dependencies are `tatolab-stream` from PyPI and
   `tatolab-testpattern` from the index the project names, both floored at the runtime's version. Ruff, pyright
   and the cross-floor check still gate it. The pathway the old scaffold modelled (pixels on the
@@ -171,7 +170,6 @@ reshapes #3216.
 - REMOVED: sdk/tatolab-stream/scaffold_template/nodes
   The halftone lens and the brightness meter with it; they live on in the sample that keeps
   the pathway (decision 3).
-- REMOVED: PYPROJECT_TOML_TATOLAB_H264_REQUIREMENT_PLACEHOLDER
 
 ## Decisions
 
