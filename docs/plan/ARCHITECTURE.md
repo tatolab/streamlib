@@ -992,7 +992,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets; unbuilt: fragments, the node catalog's unchecked mark on a Records port, an Image port's stream facts on its catalog entry; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments; unbuilt: fragments, the node catalog's unchecked mark on a Records port, an Image port's stream facts on its catalog entry; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -1938,7 +1938,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   would open its own (owner, 2026-11-06).
 - **OPEN** — Whether a fragment may hold another fragment, a generator placing a generator,
   without bound, and how a generator that places itself is refused. Any `@graph_generator` may
-  be placed. [stream-interface-and-routing-policy; project-and-assets]
+  be placed. [stream-interface-and-routing-policy; project-and-assets; IN-FLIGHT → graph-groups-and-nested-fragments]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
