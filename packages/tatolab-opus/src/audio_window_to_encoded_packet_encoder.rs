@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The `OpusEncoder` body: one 20 ms audio window in, one Opus media frame
-//! out, and the port's catalog entry — the `OpusHead` hex-encoded in its
-//! `description` — owed whenever an encoder is minted.
+//! out, and the port's Packets stream facts — the `OpusHead` hex-encoded as
+//! its codec configuration — owed whenever an encoder is minted.
 //!
 //! The encoder is minted from the first window's channel count, because the
 //! input port declares no channel count and so follows its source. A window
@@ -15,7 +15,7 @@
 //! A re-mint costs continuity, not decodability: a fresh instance has lost its
 //! prediction state, at the seam where the window stage already flushed its
 //! accumulator and resampler. The new count reaches a decoder through the
-//! port's catalog entry.
+//! port's stream facts.
 
 use crate::audio_window::{AudioSampleDtype, AudioWindowToEncode};
 use crate::hang_legacy_container_media_frame::hang_legacy_container_media_frame_bytes;
@@ -25,8 +25,8 @@ use crate::opus_identification_header::OpusIdentificationHeader;
 use crate::opus_stream_layout::HIGHEST_CHANNEL_COUNT_OPUS_PLACES;
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 
-/// The codec string an Opus catalog entry names.
-pub const OPUS_CATALOG_CODEC_STRING: &str = "opus";
+/// The codec Opus stream facts name, as RFC 6381 spells it.
+pub const OPUS_RFC6381_CODEC_STRING: &str = "opus";
 
 /// The node's class name, which every refusal and notice names itself by.
 pub const OPUS_ENCODER_PROCESSOR_NAME: &str = "OpusEncoder";
@@ -103,13 +103,13 @@ pub struct OpusEncoderConfig {
     pub application: OpusEncoderApplication,
 }
 
-/// The audio catalog entry an encoder port carries for the instance minted.
+/// The Packets stream facts an encoder port carries for the instance minted.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpusEncoderPortAudioEntry {
-    pub number_of_channels: u32,
+pub struct OpusEncoderPortStreamFacts {
+    pub channel_count: u32,
     pub sample_rate: u32,
-    /// The `OpusHead`, hex-encoded, as the entry's `description`.
-    pub hex_encoded_opus_identification_header: String,
+    /// The `OpusHead`, hex-encoded.
+    pub codec_configuration_hex: String,
 }
 
 /// Dispatch one expression over either shape of instance: the two libopus
@@ -200,7 +200,7 @@ pub struct AudioWindowToEncodedPacketEncoder {
     config: OpusEncoderConfig,
     minted: Option<MintedOpusEncoder>,
     /// The entry a mint derived that the port does not carry yet.
-    audio_entry_owed_to_the_port: Option<OpusEncoderPortAudioEntry>,
+    stream_facts_owed_to_the_port: Option<OpusEncoderPortStreamFacts>,
     notices: Vec<OpusCodecNotice>,
     packets_encoded: u64,
     /// The channel count whose layout Opus cannot place, once refused.
@@ -273,12 +273,12 @@ impl AudioWindowToEncodedPacketEncoder {
                 };
                 let minted_and_its_entry = mint_encoder_for_window(&self.config, window, layout)
                     .and_then(|(minted, pre_skip, notice)| {
-                        Ok((minted, audio_entry_for(window.channels, pre_skip)?, notice))
+                        Ok((minted, stream_facts_for(window.channels, pre_skip)?, notice))
                     });
                 match minted_and_its_entry {
-                    Ok((minted, audio_entry, notice)) => {
+                    Ok((minted, stream_facts, notice)) => {
                         self.notices.push(notice);
-                        self.audio_entry_owed_to_the_port = Some(audio_entry);
+                        self.stream_facts_owed_to_the_port = Some(stream_facts);
                         empty_slot.insert(minted)
                     }
                     Err(mint_failure) => {
@@ -299,9 +299,9 @@ impl AudioWindowToEncodedPacketEncoder {
         Ok(Some(media_frame))
     }
 
-    /// The catalog entry the port does not carry yet, owed by the last mint.
-    pub fn take_audio_entry_owed_to_the_port(&mut self) -> Option<OpusEncoderPortAudioEntry> {
-        self.audio_entry_owed_to_the_port.take()
+    /// The stream facts the port does not carry yet, owed by the last mint.
+    pub fn take_stream_facts_owed_to_the_port(&mut self) -> Option<OpusEncoderPortStreamFacts> {
+        self.stream_facts_owed_to_the_port.take()
     }
 
     /// What the encoder did since the last call that an operator reads.
@@ -315,16 +315,16 @@ impl AudioWindowToEncodedPacketEncoder {
     }
 }
 
-/// The catalog entry an encoder of `channels` with this lookahead publishes.
-fn audio_entry_for(channels: u32, pre_skip: u32) -> Result<OpusEncoderPortAudioEntry> {
-    let hex_encoded_opus_identification_header = OpusIdentificationHeader::hex_encoded_for_encoder(
+/// The stream facts an encoder of `channels` with this lookahead publishes.
+fn stream_facts_for(channels: u32, pre_skip: u32) -> Result<OpusEncoderPortStreamFacts> {
+    let codec_configuration_hex = OpusIdentificationHeader::hex_encoded_for_encoder(
         channels, pre_skip,
     )
     .map_err(|refusal| OpusCodecRefusal(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}")))?;
-    Ok(OpusEncoderPortAudioEntry {
-        number_of_channels: channels,
+    Ok(OpusEncoderPortStreamFacts {
+        channel_count: channels,
         sample_rate: OPUS_SAMPLE_RATE_HZ,
-        hex_encoded_opus_identification_header,
+        codec_configuration_hex,
     })
 }
 
@@ -508,12 +508,10 @@ mod tests {
     }
 
     fn opus_identification_header_of(
-        audio_entry: &OpusEncoderPortAudioEntry,
+        stream_facts: &OpusEncoderPortStreamFacts,
     ) -> OpusIdentificationHeader {
-        OpusIdentificationHeader::parse_hex_encoded(
-            &audio_entry.hex_encoded_opus_identification_header,
-        )
-        .expect("the OpusHead reads back")
+        OpusIdentificationHeader::parse_hex_encoded(&stream_facts.codec_configuration_hex)
+            .expect("the OpusHead reads back")
     }
 
     #[test]
@@ -538,7 +536,7 @@ mod tests {
             .to_string();
 
         assert!(refusal.contains("-1000"), "{refusal}");
-        assert!(encoder.take_audio_entry_owed_to_the_port().is_none());
+        assert!(encoder.take_stream_facts_owed_to_the_port().is_none());
         assert_eq!(encoder.packets_encoded(), 0);
         assert!(encoder.minted.is_none());
     }
@@ -551,16 +549,16 @@ mod tests {
                 .expect("encodes")
                 .expect("publishes a media frame");
 
-            let audio_entry = encoder
-                .take_audio_entry_owed_to_the_port()
+            let stream_facts = encoder
+                .take_stream_facts_owed_to_the_port()
                 .expect("the first packet's mint owes the port its entry");
-            assert_eq!(audio_entry.sample_rate, OPUS_SAMPLE_RATE_HZ);
-            assert_eq!(audio_entry.number_of_channels, channels);
+            assert_eq!(stream_facts.sample_rate, OPUS_SAMPLE_RATE_HZ);
+            assert_eq!(stream_facts.channel_count, channels);
             assert_eq!(
-                opus_identification_header_of(&audio_entry).channels,
+                opus_identification_header_of(&stream_facts).channels,
                 channels
             );
-            assert_eq!(encoder.take_audio_entry_owed_to_the_port(), None);
+            assert_eq!(encoder.take_stream_facts_owed_to_the_port(), None);
             let notices = encoder.take_notices();
             assert_eq!(notices.len(), 1, "the mint is said once: {notices:?}");
             assert!(notices[0].message.contains("minted"), "{notices:?}");
@@ -575,8 +573,8 @@ mod tests {
             encode(&mut encoder, &OwnedAudioWindow::of(channels, 0))
                 .expect("encodes")
                 .expect("publishes a media frame");
-            let audio_entry = encoder.take_audio_entry_owed_to_the_port().unwrap();
-            pre_skips.push(opus_identification_header_of(&audio_entry).pre_skip);
+            let stream_facts = encoder.take_stream_facts_owed_to_the_port().unwrap();
+            pre_skips.push(opus_identification_header_of(&stream_facts).pre_skip);
         }
         // `OPUS_GET_LOOKAHEAD` is `Fs/400 + Fs/250` at every application but
         // `lowdelay`, so 48 kHz reports 312 whatever the channel count — the
@@ -602,8 +600,8 @@ mod tests {
             .expect("publishes a media frame");
             entries_owed.push(
                 encoder
-                    .take_audio_entry_owed_to_the_port()
-                    .map(|audio_entry| audio_entry.number_of_channels),
+                    .take_stream_facts_owed_to_the_port()
+                    .map(|stream_facts| stream_facts.channel_count),
             );
         }
 
@@ -675,8 +673,8 @@ mod tests {
         .expect("and publishes");
         assert_eq!(
             encoder
-                .take_audio_entry_owed_to_the_port()
-                .map(|audio_entry| audio_entry.number_of_channels),
+                .take_stream_facts_owed_to_the_port()
+                .map(|stream_facts| stream_facts.channel_count),
             Some(2)
         );
         assert_eq!(encoder.packets_encoded(), 1);

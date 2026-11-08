@@ -5,7 +5,7 @@
 //! implementation of `tatolab-module-sdk`'s table, over the same data plane
 //! the node's Python reaches its ports through.
 //!
-//! Every verb but the catalog entry's runs with no Python attached, from any
+//! Every verb but the stream facts' runs with no Python attached, from any
 //! thread. The engine never calls into a module; a module calls in here, and
 //! the audio capture and playback streams it opens call its callbacks from
 //! their device threads. A virtual camera it opens is a PipeWire node in this
@@ -182,7 +182,7 @@ fn module_host_of_one_node(
                 node_host_release,
                 output_port_open,
                 output_port_write,
-                output_port_set_catalog_entry,
+                output_port_set_stream_facts,
                 input_port_open,
                 input_port_read,
                 input_message_release,
@@ -535,61 +535,65 @@ unsafe extern "C" fn output_port_declare_groups_given_up_before_the_next_write(
     }
 }
 
-unsafe extern "C" fn output_port_set_catalog_entry(
+unsafe extern "C" fn output_port_set_stream_facts(
     node_host: *mut c_void,
     port: ModuleHostTablePortHandle,
-    section: ModuleHostTableUtf8,
-    entry_json: ModuleHostTableUtf8,
+    family: ModuleHostTableUtf8,
+    stream_facts_json: ModuleHostTableUtf8,
     error_message: *mut ModuleHostTableErrorMessage,
 ) -> ModuleHostTableStatus {
     let node_host = unsafe { node_host_of(node_host) };
     // SAFETY: the SDK hands views live for the call.
-    let (section, entry_json) = match unsafe { (section.as_str(), entry_json.as_str()) } {
-        (Ok(section), Ok(entry_json)) => (section, entry_json),
+    let (family, stream_facts_json) = match unsafe { (family.as_str(), stream_facts_json.as_str()) }
+    {
+        (Ok(family), Ok(stream_facts_json)) => (family, stream_facts_json),
         _ => {
-            return unsafe {
-                refuse(
-                    error_message,
-                    "a catalog entry's section and fields are UTF-8",
-                )
-            };
+            return unsafe { refuse(error_message, "stream facts' family and fields are UTF-8") };
         }
     };
-    match set_catalog_entry_through_the_parent(node_host, port, section, entry_json) {
+    match set_stream_facts_through_the_parent(node_host, port, family, stream_facts_json) {
         Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
         Err(refusal) => unsafe { refuse(error_message, &refusal) },
     }
 }
 
-fn set_catalog_entry_through_the_parent(
+fn set_stream_facts_through_the_parent(
     node_host: &ModuleHostOfOneNode,
     port: ModuleHostTablePortHandle,
-    section: &str,
-    entry_json: &str,
+    family: &str,
+    stream_facts_json: &str,
 ) -> Result<(), String> {
     let port_name = lent_port_name_of_a_handle("output", &node_host.lent_output_port_names, port)?;
-    let entry_fields: serde_json::Value = serde_json::from_str(entry_json).map_err(|not_json| {
-        format!(
-            "output port {port_name:?}: a catalog entry's fields are one JSON object: {not_json}"
-        )
-    })?;
-    if !entry_fields.is_object() {
+    let serde_json::Value::Object(mut stream_facts_wire) = serde_json::from_str(stream_facts_json)
+        .map_err(|not_json| {
+            format!(
+                "output port {port_name:?}: stream facts' fields are one JSON object: {not_json}"
+            )
+        })?
+    else {
         return Err(format!(
-            "output port {port_name:?}: a catalog entry's fields are one JSON object, got {entry_json}"
+            "output port {port_name:?}: stream facts' fields are one JSON object, got \
+             {stream_facts_json}"
         ));
-    }
-    let escalate_request_to_parent = node_host.escalate_request_to_parent.as_ref().ok_or_else(
-        || {
-            "a catalog entry lives on the parent's graph, and this node has no route to the parent"
-                .to_string()
-        },
-    )?;
+    };
+    stream_facts_wire.insert("family".to_string(), serde_json::Value::from(family));
+    let stream_facts_wire = serde_json::Value::Object(stream_facts_wire);
+    let escalate_request_to_parent =
+        node_host
+            .escalate_request_to_parent
+            .as_ref()
+            .ok_or_else(|| {
+                "stream facts live on the parent's graph, and this node has no route to the parent"
+                    .to_string()
+            })?;
     Python::attach(|python| -> PyResult<()> {
         let op = PyDict::new(python);
-        op.set_item("op", "set_output_port_catalog_entry")?;
+        op.set_item("op", "set_output_port_stream_facts")?;
         op.set_item("port", port_name)?;
-        op.set_item("section", section)?;
-        op.set_item("entry", json_value_to_python_object(python, &entry_fields)?)?;
+        op.set_item(
+            "stream_facts",
+            json_value_to_python_object(python, &stream_facts_wire)?,
+        )?;
         escalate_request_to_parent.bind(python).call1((op,))?;
         Ok(())
     })

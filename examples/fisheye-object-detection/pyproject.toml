@@ -5,7 +5,6 @@ requires-python = ">=3.12"
 dependencies = [
     "tatolab-stream>=0.54.3",
     "tatolab-camera",
-    "tatolab-h264",
     # The tensor the detector runs on and the slice assignments that draw the
     # boxes. 2.10 is the floor where a frame's Metal DLPack capsule imports,
     # sliced tensors included.
@@ -18,4 +17,3 @@ dependencies = [
 
 [tool.uv.sources]
 tatolab-camera = { path = "../../packages/tatolab-camera", editable = true }
-tatolab-h264 = { path = "../../packages/streamlib-h264", editable = true }

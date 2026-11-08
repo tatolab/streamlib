@@ -40,7 +40,7 @@ const LINK_ID_ARGUMENT_DESCRIPTION: &str =
     "The id of the link to splice into, as `graph` lists it under `links`.";
 const TYPE_ARGUMENT_DESCRIPTION: &str = "The import path of the node class to add — a type the `streamlib://node-catalog` resource lists, or a Python class's `module:QualifiedClassName`.";
 const FROM_NODE_ARGUMENT_DESCRIPTION: &str =
-    "The name of the node whose output this is about, as `graph` lists it.";
+    "The node whose output this is about, by the UUID `graph` lists as its `id`, or by its name.";
 const FROM_PORT_ARGUMENT_DESCRIPTION: &str =
     "The name of that node's output port, as `graph` lists it under `ports.outputs`.";
 const CAMERA_NAME_ARGUMENT_DESCRIPTION: &str =
@@ -269,20 +269,40 @@ fn graph_recipe_step_calling_tool(
     }
 }
 
-/// The node `node_name` names once cast.
-fn node_named<'graph>(
+/// The node whose UUID is `node`, or whose name it is once cast.
+fn node_with_uuid_or_name<'graph>(
     graph: &'graph GraphResponse,
-    node_name: &str,
+    node: &str,
 ) -> Result<&'graph ProcessorNodeOutput, McpError> {
-    let cast = cast_exposed_name_to_url_safe(node_name)
+    let cast = cast_exposed_name_to_url_safe(node)
         .map_err(|names_nothing| McpError::invalid_params(names_nothing.to_string(), None))?;
     graph
         .nodes
         .iter()
-        .find(|node| node.name == cast)
+        .find(|candidate| candidate.id == node || candidate.name == cast)
         .ok_or_else(|| {
             McpError::invalid_params(
-                format!("no node named `{node_name}` is in the graph; `graph` lists the names"),
+                format!(
+                    "no node with UUID or name `{node}` is in the graph; `graph` lists each \
+                     node's `id` and `name`"
+                ),
+                None,
+            )
+        })
+}
+
+/// The node a link end names by its name.
+fn node_named<'graph>(
+    graph: &'graph GraphResponse,
+    node_name: &str,
+) -> Result<&'graph ProcessorNodeOutput, McpError> {
+    graph
+        .nodes
+        .iter()
+        .find(|node| node.name == node_name)
+        .ok_or_else(|| {
+            McpError::internal_error(
+                format!("the graph has a link naming `{node_name}`, which no node of it is named"),
                 None,
             )
         })
@@ -295,14 +315,14 @@ fn input_port_of<'graph>(
     node.ports.inputs.iter().find(|port| port.name == port_name)
 }
 
-/// The node `from_node` names, having checked `from_port` is one of its
-/// outputs.
+/// The node `from_node` names, having checked `from_port` is one of
+/// its outputs.
 fn node_with_output_port_named<'graph>(
     graph: &'graph GraphResponse,
     from_node: &str,
     from_port: &str,
 ) -> Result<&'graph ProcessorNodeOutput, McpError> {
-    let node = node_named(graph, from_node)?;
+    let node = node_with_uuid_or_name(graph, from_node)?;
     if !node.ports.outputs.iter().any(|port| port.name == from_port) {
         let output_port_names: Vec<&str> = node
             .ports
@@ -374,7 +394,7 @@ fn add_node_step(node_type: &str) -> GraphRecipeStep {
         "add_node",
         format!(
             "`type`: `{node_type}`; `config`: an object of the keys its config schema declares, \
-             or omit it when there are none. Keep the `name` it returns."
+             or omit it when there are none. Keep the `node` UUID its `added_nodes` answers."
         ),
     )
 }
@@ -382,7 +402,7 @@ fn add_node_step(node_type: &str) -> GraphRecipeStep {
 fn find_the_added_node_step(port_directions: &str) -> GraphRecipeStep {
     graph_recipe_step_calling_tool(
         "graph",
-        format!("find the node with that `name`; {port_directions} name the ports to wire."),
+        format!("find the node whose `id` is that UUID; {port_directions} name the ports to wire."),
     )
 }
 
@@ -409,6 +429,8 @@ fn insert_node_between_linked_nodes_recipe(
     let target_port = link.target.port.as_str();
     let source_name = source.name.as_str();
     let target_name = target.name.as_str();
+    let source_uuid = source.id.as_str();
+    let target_uuid = target.id.as_str();
 
     let inserted_type_entry = catalog_entry_for(node_catalog, node_type);
     let target_port_takes_one_inbound_link =
@@ -417,19 +439,24 @@ fn insert_node_between_linked_nodes_recipe(
     let connect_source_to_inserted = graph_recipe_step_calling_tool(
         "connect",
         format!(
-            "`from_node`: `{source_name}`, `from_port`: `{source_port}`, `to_node`: the new \
-             node's `name`, `to_port`: its input port."
+            "`source`: `{{\"node\": \"{source_uuid}\", \"port\": \"{source_port}\"}}`, \
+             `target`: the new node's UUID and its input port."
         ),
     );
     let connect_inserted_to_target = graph_recipe_step_calling_tool(
         "connect",
         format!(
-            "`from_node`: the new node's `name`, `from_port`: its output port, `to_node`: \
-             `{target_name}`, `to_port`: `{target_port}`."
+            "`source`: the new node's UUID and its output port, `target`: \
+             `{{\"node\": \"{target_uuid}\", \"port\": \"{target_port}\"}}`."
         ),
     );
-    let disconnect_the_replaced_link =
-        graph_recipe_step_calling_tool("disconnect", format!("`link_id`: `{link_id}`."));
+    let disconnect_the_replaced_link = graph_recipe_step_calling_tool(
+        "disconnect",
+        format!(
+            "`source`: `{{\"node\": \"{source_uuid}\", \"port\": \"{source_port}\"}}`, \
+             `target`: `{{\"node\": \"{target_uuid}\", \"port\": \"{target_port}\"}}`."
+        ),
+    );
     let wiring_steps = if target_port_takes_one_inbound_link {
         [
             disconnect_the_replaced_link,
@@ -451,7 +478,7 @@ fn insert_node_between_linked_nodes_recipe(
     steps.push(graph_recipe_step_calling_tool(
         "graph",
         format!(
-            "confirm the links both `connect` calls returned have `state` `wired`, the new node's \
+            "confirm the links both `connect` calls answered under `connected_links` have `state` `wired`, the new node's \
              `components.state` is `Running`, and link `{link_id}` is gone. A Python node runs in \
              a helper process, so each link onto it reads `pending` until that helper has opened \
              its port — read `graph` again. A link that reads `error` carries the helper's own \
@@ -491,6 +518,7 @@ fn fan_output_to_another_consumer_recipe(
     let from_port = arguments.from_port.as_str();
     let node_type = arguments.node_type.as_str();
     let source_name = source.name.as_str();
+    let source_uuid = source.id.as_str();
     let consumer_type_entry = catalog_entry_for(node_catalog, node_type);
 
     Ok(GraphRecipe {
@@ -505,14 +533,14 @@ fn fan_output_to_another_consumer_recipe(
             graph_recipe_step_calling_tool(
                 "connect",
                 format!(
-                    "`from_node`: `{source_name}`, `from_port`: `{from_port}`, `to_node`: the new \
-                     node's `name`, `to_port`: its input port."
+                    "`source`: `{{\"node\": \"{source_uuid}\", \"port\": \"{from_port}\"}}`, \
+                     `target`: the new node's UUID and its input port."
                 ),
             ),
             graph_recipe_step_calling_tool(
                 "graph",
                 format!(
-                    "confirm the link `connect` returned has `state` `wired`, the new node's \
+                    "confirm the link `connect` answered under `connected_links` has `state` `wired`, the new node's \
                      `components.state` is `Running`, and `{source_name}`'s other links are still \
                      there. A Python node runs in a helper process, so the link reads `pending` \
                      until that helper has opened its port — read `graph` again. A link that \
@@ -563,6 +591,7 @@ fn show_channel_on_virtual_camera_recipe(
         None => "`config`: `{}`, which takes the default camera name".to_string(),
     };
     let source_name = source.name.as_str();
+    let source_uuid = source.id.as_str();
 
     Ok(GraphRecipe {
         introduction_text: format!(
@@ -576,26 +605,27 @@ fn show_channel_on_virtual_camera_recipe(
                 "add_node",
                 format!(
                     "`type`: `{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}`; \
-                     {config_instruction}. Keep the `name` it returns."
+                     {config_instruction}. Keep the `node` UUID its `added_nodes` answers."
                 ),
             ),
             graph_recipe_step_calling_tool(
                 "connect",
                 format!(
-                    "`from_node`: `{source_name}`, `from_port`: `{from_port}`, `to_node`: that \
-                     `name`, `to_port`: `{video_input_port}`."
+                    "`source`: `{{\"node\": \"{source_uuid}\", \"port\": \"{from_port}\"}}`, \
+                     `target`: that UUID and the port `{video_input_port}`."
                 ),
             ),
             graph_recipe_step_calling_tool(
                 "graph",
-                "confirm the link `connect` returned has `state` `wired` and the camera's node's \
+                "confirm the link `connect` answered under `connected_links` has `state` `wired` and the camera's node's \
                  `components.state` is `Running`. `VirtualCameraSink` runs in a helper process, \
                  so its link reads `pending` until that helper answers, and `error` with the \
                  helper's own reason in `error_reason` where it could not open its port.",
             ),
         ],
         closing_note: Some(
-            "The camera goes away with its node: `remove_node` with that `name`.".to_string(),
+            "The camera goes away with its node: `remove_node` with that UUID as `node`."
+                .to_string(),
         ),
     })
 }

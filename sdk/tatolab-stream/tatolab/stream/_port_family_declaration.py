@@ -10,6 +10,7 @@ compares the two ends' families, names, codec and formats before a frame flows.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING, Any, Final, Generic, Optional, TypeVar, Union, overload
 
 if TYPE_CHECKING:
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     from .array_frame import ArrayFrame
     from .image_frame import ImageFrame
     from ._node_declaration import AudioWindowContract
-    from .catalog import CatalogEntry
+    from .stream_facts import ImageStreamFrameRate
 
 _PortFamilyReadType = TypeVar("_PortFamilyReadType", covariant=True)
 
@@ -322,9 +323,10 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
 
     `names=` states the output's names (Array, Channels, Records), as a tuple of
     strings or `from_config("key")`. `codec=` is a Packets output's codec,
-    `rate=` and `dtype=` a Channels output's sample rate and type, `formats=`
-    an Image output's pixel formats and `residency=` where an Array output's
-    tensors live. `catalog=` is the port's catalog entry. `family_from=
+    `rate=` and `dtype=` a Channels output's sample rate and type, `rate=` an
+    Image output's frame rate (an int, an `ImageStreamFrameRate`, or
+    `from_config("key")`), `formats=` an Image output's pixel formats and
+    `residency=` where an Array output's tensors live. `family_from=
     from_config("key")` reads the family from the node's config when
     `connect` resolves it, the positional family standing while the key is
     unset; `codec=from_config("key")` reads a codec the same way.
@@ -337,7 +339,6 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
         "dtype",
         "formats",
         "residency",
-        "catalog",
         "family_from",
     )
 
@@ -347,11 +348,10 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
         *,
         names: "Union[tuple[str, ...], PortNamesFromConfig, None]" = None,
         codec: "Union[str, PortNamesFromConfig, None]" = None,
-        rate: "Union[int, PortNamesFromConfig, None]" = None,
+        rate: "Union[int, ImageStreamFrameRate, PortNamesFromConfig, None]" = None,
         dtype: Optional[str] = None,
         formats: "tuple[str, ...]" = (),
         residency: Optional[str] = None,
-        catalog: "Optional[CatalogEntry]" = None,
         family_from: "Optional[PortNamesFromConfig]" = None,
         description: str = "",
     ) -> None:
@@ -367,10 +367,22 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
         ):
             raise TypeError(f"`codec=` takes a non-empty str or from_config(...), got {codec!r}")
         self.codec = codec
-        if rate is not None and not isinstance(rate, PortNamesFromConfig) and (
+        from .stream_facts import ImageStreamFrameRate
+
+        if isinstance(rate, ImageStreamFrameRate):
+            if self.family is not Image:
+                raise ValueError(
+                    f"`rate=` takes an ImageStreamFrameRate only on an Image output, got {rate!r}"
+                )
+            if rate.numerator <= 0 or rate.denominator <= 0:
+                raise ValueError(f"`rate=` takes a positive frame rate, got {rate!r}")
+        elif rate is not None and not isinstance(rate, PortNamesFromConfig) and (
             isinstance(rate, bool) or not isinstance(rate, int) or rate <= 0
         ):
-            raise ValueError(f"`rate=` takes a positive int or from_config(...), got {rate!r}")
+            raise ValueError(
+                f"`rate=` takes a positive int, an ImageStreamFrameRate or from_config(...), "
+                f"got {rate!r}"
+            )
         self.rate = rate
         if dtype is not None and dtype not in _CHANNELS_SAMPLE_TYPES:
             raise ValueError(
@@ -385,10 +397,9 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
                 f"got {residency!r}"
             )
         self.residency = residency
-        self.catalog = catalog
 
     def _as_port_marker(self) -> "dict[str, Any]":
-        from ._node_declaration import _catalog_entry_declaration
+        from .stream_facts import ImageStreamFrameRate
 
         self._refuse_keys_the_family_does_not_take(
             "output",
@@ -399,7 +410,7 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
                 "codec": self.codec is not None
                 and self.family is not Packets
                 and not (isinstance(self.codec, PortNamesFromConfig) and self.family_from is not None),
-                "rate": self.rate is not None and self.family is not Channels,
+                "rate": self.rate is not None and self.family not in (Channels, Image),
                 "dtype": self.dtype is not None and self.family is not Channels,
                 "formats": bool(self.formats) and self.family is not Image,
                 "residency": self.residency is not None and self.family is not Array,
@@ -416,10 +427,15 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
             family_declaration["codec"] = self.codec
         if self.family_from is not None:
             family_declaration["family_from_config_key"] = self.family_from.config_key
+        rate_key = "frame_rate" if self.family is Image else "rate"
         if isinstance(self.rate, PortNamesFromConfig):
-            family_declaration["rate"] = self.rate._as_declaration()
+            family_declaration[rate_key] = self.rate._as_declaration()
+        elif isinstance(self.rate, ImageStreamFrameRate):
+            family_declaration[rate_key] = {"stated": dataclasses.asdict(self.rate)}
+        elif self.rate is not None and self.family is Image:
+            family_declaration[rate_key] = {"stated": {"numerator": self.rate, "denominator": 1}}
         elif self.rate is not None:
-            family_declaration["rate"] = {"stated": self.rate}
+            family_declaration[rate_key] = {"stated": self.rate}
         if self.dtype is not None:
             family_declaration["dtype"] = self.dtype
         if self.formats:
@@ -431,8 +447,6 @@ class Output(_DeclaredPortAttribute[_PortFamilyReadType]):
             "description": self.description,
             "family": family_declaration,
         }
-        if self.catalog is not None:
-            marker["catalog_entry"] = _catalog_entry_declaration(self.catalog, self.port_name)
         return marker
 
     def __repr__(self) -> str:

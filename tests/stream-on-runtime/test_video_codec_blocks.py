@@ -16,7 +16,7 @@ the padded extent is the other half of the same fact.
 
 The encoded-channel test reads the hardware encoder's output from Python the
 way a moq-dev player does: each message a media frame, a keyframe opening a
-group, and the port's catalog entry naming the codec string the SPS spells.
+group, and the port's stream facts naming the codec string the SPS spells.
 """
 
 from collections.abc import Callable
@@ -216,13 +216,13 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
 @pytest.mark.requires_gpu
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 @pytest.mark.rig_only_capability(reason="Vulkan Video")
-def test_the_encoded_channel_carries_media_frames_under_the_ports_catalog_entry(
+def test_the_encoded_channel_carries_media_frames_under_the_ports_stream_facts(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]", codec
 ):
     """The encoded-domain link, read from Python as a player reads it: every
     message the hardware encoder published is a media frame — the varint
     timestamp, then one Annex-B access unit — a keyframe opens a group, and
-    the port's catalog entry names the codec string and the coded extent.
+    the port's stream facts name the codec string and the coded extent.
 
     The probe enters the stream at a group start, as every reader of an
     encoded stream must — the first message off a link is not necessarily the
@@ -264,21 +264,21 @@ def test_the_encoded_channel_carries_media_frames_under_the_ports_catalog_entry(
         "keyframe interval at the pattern's 30 fps for exactly this reason"
     )
 
-    catalog_entry = encoded_frames[0]["catalog_entry"]
-    assert catalog_entry is not None and catalog_entry["section"] == "video", (
-        f"the encoder's port carries a video entry once it has encoded: {catalog_entry}"
+    stream_facts = encoded_frames[0]["stream_facts"]
+    assert stream_facts is not None and stream_facts["family"] == "packets", (
+        f"the encoder's port carries Packets stream facts once it has encoded: {stream_facts}"
     )
-    assert catalog_entry["entry"]["codec"].startswith(
+    assert stream_facts["rfc6381_codec"].startswith(
         CODEC_STRING_PREFIX_BY_CODEC[codec]
-    ), f"the entry spells the codec string the SPS carries: {catalog_entry}"
+    ), f"the facts spell the codec string the SPS carries: {stream_facts}"
     assert (
-        catalog_entry["entry"]["codedWidth"],
-        catalog_entry["entry"]["codedHeight"],
+        stream_facts["coded_width"],
+        stream_facts["coded_height"],
     ) == CODED_EXTENT_OF_THE_320_BY_180_PATTERN, (
-        "the entry carries the coded extent, before the conformance crop"
+        "the facts carry the coded extent, before the conformance crop"
     )
-    assert "description" not in catalog_entry["entry"], (
-        "an absent description is how a player knows the parameter sets ride inline"
+    assert "codec_configuration_hex" not in stream_facts, (
+        "an absent codec configuration is how a player knows the parameter sets ride inline"
     )
 
 

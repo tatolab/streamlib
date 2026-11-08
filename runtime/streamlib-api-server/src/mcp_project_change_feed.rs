@@ -153,7 +153,7 @@ pub(crate) async fn read_project_transactions_resource(
     ]))
 }
 
-fn project_transaction_on_the_wire(
+pub(crate) fn project_transaction_on_the_wire(
     applied: AppliedProjectTransaction,
 ) -> ProjectTransactionOnTheWire {
     let AppliedProjectTransaction {
@@ -178,5 +178,7 @@ fn project_transaction_on_the_wire(
             .iter()
             .map(operation_json)
             .collect(),
+        undoes: transaction.undoes.map(|undone| undone.to_string()),
+        redoes: transaction.redoes.map(|redone| redone.to_string()),
     }
 }

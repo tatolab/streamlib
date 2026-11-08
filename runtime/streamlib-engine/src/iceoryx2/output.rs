@@ -39,11 +39,11 @@ use super::{
     data_channel_payload_cache_lines_for,
 };
 use crate::core::context::StreamClock;
-use crate::core::descriptors::CatalogEntry;
+use crate::core::descriptors::PortStreamFacts;
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::media_clock::MediaClock;
-use crate::core::output_port_catalog_entries::CatalogEntriesOfOutputPorts;
+use crate::core::output_port_stream_facts::StreamFactsOfOutputPorts;
 
 /// Map the engine's [`ChannelTrustTier`] onto the engine-free
 /// [`ChannelTrustTierLabel`] the [`Error::PayloadExceedsChannelCeiling`] variant
@@ -209,9 +209,9 @@ pub struct OutputWriterInner {
     /// has no channel yet is a drop; a write to any other name is a refusal.
     declared_output_ports: Mutex<HashSet<String>>,
     bag_counts: Arc<BagCountsByOutputPort>,
-    /// The node's output-port catalog entries, reached once the processor is
+    /// The node's output ports' stream facts, reached once the processor is
     /// created for its node.
-    catalog_entries_of_output_ports: std::sync::OnceLock<Arc<CatalogEntriesOfOutputPorts>>,
+    stream_facts_of_output_ports: std::sync::OnceLock<Arc<StreamFactsOfOutputPorts>>,
     /// The clock of the stream this processor runs in, reached once it is
     /// spawned; a write with no stamp is stamped on it.
     stream_clock: std::sync::OnceLock<Arc<StreamClock>>,
@@ -380,7 +380,7 @@ impl OutputWriterInner {
             channels: Mutex::new(HashMap::new()),
             declared_output_ports: Mutex::new(HashSet::new()),
             bag_counts: Arc::new(BagCountsByOutputPort::default()),
-            catalog_entries_of_output_ports: std::sync::OnceLock::new(),
+            stream_facts_of_output_ports: std::sync::OnceLock::new(),
             stream_clock: std::sync::OnceLock::new(),
         }
     }
@@ -399,36 +399,36 @@ impl OutputWriterInner {
         }
     }
 
-    /// Reach the catalog entries of the node this processor was created for —
+    /// Reach the stream facts of the node this processor was created for —
     /// the ones `graph` renders and downstream readers read.
-    pub(crate) fn reach_catalog_entries_of_output_ports(
+    pub(crate) fn reach_stream_facts_of_output_ports(
         &self,
-        catalog_entries_of_output_ports: Arc<CatalogEntriesOfOutputPorts>,
+        stream_facts_of_output_ports: Arc<StreamFactsOfOutputPorts>,
     ) {
         if self
-            .catalog_entries_of_output_ports
-            .set(catalog_entries_of_output_ports)
+            .stream_facts_of_output_ports
+            .set(stream_facts_of_output_ports)
             .is_err()
         {
             tracing::warn!(
-                "an output writer already reaches its node's catalog entries; a second node's are \
+                "an output writer already reaches its node's stream facts; a second node's are \
                  ignored"
             );
         }
     }
 
-    /// Replace `output_port`'s catalog entry, refusing an entry hang does not
-    /// read.
-    pub fn set_catalog_entry(&self, output_port: &str, catalog_entry: CatalogEntry) -> Result<()> {
-        self.catalog_entries_of_output_ports
+    /// Replace `output_port`'s stream facts, refusing facts of another family
+    /// than the port's.
+    pub fn set_stream_facts(&self, output_port: &str, stream_facts: PortStreamFacts) -> Result<()> {
+        self.stream_facts_of_output_ports
             .get()
             .ok_or_else(|| {
                 Error::Link(format!(
-                    "output port '{output_port}' has no node to carry its catalog entry — the \
+                    "output port '{output_port}' has no node to carry its stream facts — the \
                      processor was not created for a node"
                 ))
             })?
-            .replace_entry_of(output_port, catalog_entry)
+            .replace_facts_of(output_port, stream_facts)
     }
 
     /// Name the output ports the processor declared, so a write to one that
@@ -983,16 +983,16 @@ impl OutputWriter {
         }
     }
 
-    /// Replace `port`'s catalog entry — what `graph` renders under the port
-    /// and a downstream reader reads off its inbound link. Refused when hang's
-    /// catalog types do not read it.
-    pub fn set_catalog_entry(
+    /// Replace `port`'s stream facts — what `graph` renders under the port and
+    /// a downstream reader reads off its inbound link. Refused when they are
+    /// another family's than the port's.
+    pub fn set_stream_facts(
         &self,
         port: &str,
-        catalog_entry: impl Into<CatalogEntry>,
+        stream_facts: impl Into<PortStreamFacts>,
     ) -> Result<()> {
         self.wired_inner_for_port(port)?
-            .set_catalog_entry(port, catalog_entry.into())
+            .set_stream_facts(port, stream_facts.into())
     }
 }
 

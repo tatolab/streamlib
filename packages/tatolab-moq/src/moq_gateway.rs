@@ -414,7 +414,10 @@ impl MoqGatewayPasses {
                 if a_sample_was_overwritten && let Some(writer) = &mut declared.writer {
                     writer.give_up_the_group_being_written();
                 }
-                if header.kind == MoqTrackContentSampleKind::UpstreamCatalogEntry as u32 {
+                if header.kind
+                    == MoqTrackContentSampleKind::HangCatalogEntryBuiltFromUpstreamStreamFacts
+                        as u32
+                {
                     let catalog_entry_upstream = if sample.payload().is_empty() {
                         None
                     } else {

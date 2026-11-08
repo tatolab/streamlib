@@ -16,7 +16,7 @@
  * check-module-host-table-surface` holds every field here to that.
  *
  * Every verb is callable from any thread the module owns and never takes
- * Python's GIL, except `ModuleHostTable.output_port_set_catalog_entry`,
+ * Python's GIL, except `ModuleHostTable.output_port_set_stream_facts`,
  * which attaches to the interpreter for its round trip to the parent. The
  * surface verbs minor 2 adds reach the parent over the helper's native escalate
  * channel, with no interpreter on either end, as do the IOSurface import
@@ -634,10 +634,11 @@ typedef struct ModuleHostTable {
      */
     ModuleHostTableStatus (*output_port_write)(void *node_host, ModuleHostTablePortHandle port, ModuleHostTableBytes payload, int64_t timestamp_ns, uint32_t starts_group, ModuleHostTableErrorMessage *error_message);
     /**
-     * State the port's catalog entry: `section` is `video` or `audio`, and
-     * `entry_json` is the entry's fields as one JSON object.
+     * Replace the port's stream facts: `family` is `image` or `packets`, the
+     * port's own, and `stream_facts_json` the facts' fields as one JSON
+     * object, named as `PortStreamFacts` names them.
      */
-    ModuleHostTableStatus (*output_port_set_catalog_entry)(void *node_host, ModuleHostTablePortHandle port, ModuleHostTableUtf8 section, ModuleHostTableUtf8 entry_json, ModuleHostTableErrorMessage *error_message);
+    ModuleHostTableStatus (*output_port_set_stream_facts)(void *node_host, ModuleHostTablePortHandle port, ModuleHostTableUtf8 family, ModuleHostTableUtf8 stream_facts_json, ModuleHostTableErrorMessage *error_message);
     /**
      * Open an input port Python lent to native code, by its declared name.
      */

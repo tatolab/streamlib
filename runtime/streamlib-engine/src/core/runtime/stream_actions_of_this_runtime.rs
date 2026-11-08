@@ -7,13 +7,14 @@
 //! remove and rename a stream; list what the runtime holds; and re-load the recorded streams
 //! at start.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use streamlib_project_repository::{
-    PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile, project_stream_documents,
+    PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile, assets_a_node_config_references,
+    every_asset_uuid_the_project_holds, project_stream_documents,
 };
 use uuid::Uuid;
 
@@ -113,6 +114,8 @@ struct ProjectAsALoadReadsIt {
     project_file: TatolabProjectFile,
     /// Each stream asset's graph document, sorted by path.
     stream_documents: Vec<ProjectStreamDocument>,
+    /// Every asset the project holds, by UUID, which a node's config may reference.
+    asset_uuids_the_project_holds: BTreeSet<Uuid>,
 }
 
 impl ProjectAsALoadReadsIt {
@@ -130,10 +133,14 @@ impl ProjectAsALoadReadsIt {
         let project_file =
             TatolabProjectFile::read_from_project_directory(&project_directory).map_err(refused)?;
         let stream_documents = project_stream_documents(&project_directory).map_err(refused)?;
+        let asset_uuids_the_project_holds =
+            every_asset_uuid_the_project_holds(&project_directory, project_file.project)
+                .map_err(refused)?;
         Ok(Self {
             project_directory,
             project_file,
             stream_documents,
+            asset_uuids_the_project_holds,
         })
     }
 
@@ -152,7 +159,10 @@ impl ProjectAsALoadReadsIt {
         StreamAssetRead {
             stream_location: self.location_of(stream_document),
             stream_name: stream_document.stream_name().to_string(),
-            graph_or_why_none: the_graph_a_stream_document_holds(stream_document),
+            graph_or_why_none: the_graph_a_stream_document_holds(
+                stream_document,
+                &self.asset_uuids_the_project_holds,
+            ),
         }
     }
 }
@@ -169,6 +179,7 @@ struct StreamAssetRead {
 /// stream asset, or it does not load as a graph.
 fn the_graph_a_stream_document_holds(
     stream_document: &ProjectStreamDocument,
+    asset_uuids_the_project_holds: &BTreeSet<Uuid>,
 ) -> std::result::Result<GraphSnapshot, String> {
     let why_it_holds_no_graph =
         |why: String| format!("its graph document `{}` {why}", stream_document.path);
@@ -195,6 +206,18 @@ fn the_graph_a_stream_document_holds(
              without one was written outside the runtime",
             nodes_holding_no_uuid.join(", ")
         )));
+    }
+    for node in &graph.nodes {
+        if let Some(asset) = assets_a_node_config_references(&node.config)
+            .into_iter()
+            .find(|asset| !asset_uuids_the_project_holds.contains(asset))
+        {
+            return Err(why_it_holds_no_graph(format!(
+                "has node `{}` whose config references the asset {asset}, which the project \
+                 does not hold",
+                node.name
+            )));
+        }
     }
     Ok(graph)
 }
@@ -230,7 +253,10 @@ fn the_graph_the_recorded_stream_holds(
                 record.location.stream_asset
             )
         })?;
-    the_graph_a_stream_document_holds(stream_document)
+    let asset_uuids_the_project_holds =
+        every_asset_uuid_the_project_holds(project_directory, project_file.project)
+            .map_err(|refusal| format!("its project's assets do not read: {refusal}"))?;
+    the_graph_a_stream_document_holds(stream_document, &asset_uuids_the_project_holds)
 }
 
 /// What a load of a project did: each stream it loaded and started, or
@@ -3932,6 +3958,85 @@ mod tests {
             "{failed_because}"
         );
         assert!(runner.ids_of_the_loaded_streams().is_empty());
+    }
+
+    fn the_graph_of_a_stream_reading_the_image_asset(
+        stream_name: &str,
+        image: Uuid,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "stream": stream_name,
+            "nodes": [{
+                "name": "overlay",
+                "type": crate::core::test_support::MockSourceReadingAnImageAsset::Processor::processor_class_import_path().as_str(),
+                "config": { "image": { "asset": image } },
+            }],
+            "links": [],
+        })
+    }
+
+    #[test]
+    #[serial]
+    fn a_node_referencing_an_asset_the_project_does_not_hold_fails_its_stream_naming_both() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        let image = Uuid::new_v4();
+        project.write_the_graph_document(the_graph_of_a_stream_reading_the_image_asset(
+            "camera", image,
+        ));
+
+        let run = runner
+            .load_the_project_off_its_queue(project.run_request())
+            .expect("a reference to no asset fails its stream, not the run");
+
+        let (_, failed_because) = the_one_failed_stream_of(&run);
+        assert!(
+            failed_because.contains(&format!(
+                "has node `overlay` whose config references the asset {image}, which the \
+                 project does not hold"
+            )),
+            "{failed_because}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_node_referencing_an_imported_image_asset_loads() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        let image = streamlib_project_repository::ProjectAsset {
+            asset: Uuid::new_v4(),
+            kind: streamlib_project_repository::ProjectAssetKind::Media,
+            path: streamlib_project_repository::ProjectRelativeAssetPath::parse("media/logo.png")
+                .unwrap(),
+            content_sha256: "0".repeat(64),
+            content_byte_len: 0,
+            import_settings: serde_json::Map::new(),
+        };
+        let sidecar = project.path().join(image.path.sidecar_path());
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, image.sidecar_bytes().unwrap()).unwrap();
+        project.write_the_graph_document(the_graph_of_a_stream_reading_the_image_asset(
+            "camera",
+            image.asset,
+        ));
+
+        let run = runner
+            .load_the_project_off_its_queue(project.run_request())
+            .unwrap();
+
+        assert!(
+            matches!(
+                run.streams.as_slice(),
+                [StreamLoadedOrFailedByARun {
+                    state: StreamStateAfterItsRun::Running { .. },
+                    ..
+                }]
+            ),
+            "{run:?}"
+        );
     }
 
     #[test]

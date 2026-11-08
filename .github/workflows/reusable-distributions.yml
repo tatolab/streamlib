@@ -1,24 +1,25 @@
 name: Distributions
 
 # The release channel: release-please cuts a GitHub release, and this publishes
-# `tatolab-stream` and every first-party extension to PyPI at that release's
-# version. A stream's venv takes them from PyPI like any other dependency. The
-# engine wheel is not published: a processor interpreter borrows the runtime
-# from the runtime unit's lend, so no stream's venv installs it.
+# `tatolab-stream` to PyPI and every first-party module to Tatolab's own package
+# index, https://get.tatolab.com/simple/, at that release's version. A project
+# names that index, so a stream's venv resolves `tatolab-*` from it and
+# everything else from PyPI. The engine wheel is not published: a processor
+# interpreter borrows the runtime from the runtime unit's lend, so no stream's
+# venv installs it.
 #
 # The runtime itself ships as the Linux runtime tarball, attached to the GitHub
 # release and served with install.sh from get.tatolab.com.
 #
 # Every distribution carries the repository's one version and releases on its
-# one tag, and the PyPI upload waits for every one of them, for the macOS proof
-# of the runtime unit, for the Linux runtime tarball and for the credentials
-# that publish it, so nothing uploads unless everything built. The Linux runtime
-# publishes after PyPI, because a stream it scaffolds locks the
-# `tatolab-stream` PyPI holds. It still publishes when PyPI refused only a
-# first upload of a new project name, which no scaffold locks; a failed Linux
-# publish is recovered by re-running the original run's failed
-# publish-linux-runtime job, which uploads the tarball that run built again and
-# overwrites a partial upload.
+# one tag, and both uploads wait for every one of them, for the macOS proof of
+# the runtime unit, for the Linux runtime tarball and for the credentials that
+# publish it, so nothing uploads unless everything built. The Linux runtime
+# publishes after both, because a stream it scaffolds locks the `tatolab-stream`
+# PyPI holds and the `tatolab-testpattern` the index holds. A failed publish is
+# recovered by re-running the original run's failed job: PyPI and the index both
+# skip a file they hold byte for byte, and the Linux runtime overwrites a partial
+# upload.
 #
 # Called from release.yml rather than triggered by `on: release`:
 # release-please runs on the default GITHUB_TOKEN, and GitHub does not start
@@ -29,10 +30,11 @@ name: Distributions
 # false; every other run is a dry run unless dispatched with `dry_run` unticked,
 # which is how a release whose distributions were never built or uploaded is
 # published by hand. A partially failed upload is recovered by re-running the
-# original run's failed publish-to-pypi job instead: a new dispatch rebuilds the
-# extension wheels, whose compiled `_native` differs byte for byte from the
-# files PyPI already holds, so their upload fails on a hash mismatch. A dry run
-# builds and checks every distribution and stops short of PyPI.
+# original run's failed job instead: a new dispatch rebuilds the module wheels,
+# whose compiled `_native` differs byte for byte from the files the index
+# already holds, so their upload fails on a hash mismatch. A dry run builds and
+# checks every distribution, writes the index pages for this run's wheels, and
+# uploads nothing.
 on:
   workflow_call:
     inputs:
@@ -141,30 +143,20 @@ jobs:
           cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
           mv /tmp/scaffold-check/python-version /tmp/scaffold-check/.python-version
           mv /tmp/scaffold-check/gitignore /tmp/scaffold-check/.gitignore
-          test -f /tmp/scaffold-check/stream.py
+          test -f /tmp/scaffold-check/streams/main.graph.json
           test -f /tmp/scaffold-check/nodes/halftone_lens_effect.py
           test -f /tmp/scaffold-check/nodes/brightness_meter.py
-          # A node class in the entry file identifies as `__main__:<Type>`
-          # and is a wiring error: the entry runs as `__main__`, and the child
-          # interpreter that runs the node imports the class by name.
-          # An explicit `if`, not `! grep` — `set -e` does not abort on a
-          # command whose status is inverted with `!`, so the negated form
-          # could never have failed this step.
-          if grep -q '@node' /tmp/scaffold-check/stream.py; then
-            echo "::error::the scaffold put a node class in stream.py — it would identify as __main__:<Type>"
-            exit 1
-          fi
           cd /tmp/scaffold-check && /tmp/scaffold-venv/bin/python -c '
           from nodes.brightness_meter import BrightnessMeter
           from nodes.halftone_lens_effect import HalftoneLensEffect
           '
 
-      # Every `pypi-distribution-*` artifact of this run is what publish-to-pypi
-      # uploads.
+      # `release-distribution-tatolab-stream` is what publish-to-pypi uploads;
+      # every other `release-distribution-*` artifact goes to Tatolab's index.
       - name: Keep the distributions for the upload
         uses: actions/upload-artifact@v6
         with:
-          name: pypi-distribution-tatolab-stream
+          name: release-distribution-tatolab-stream
           path: |
             sdk/tatolab-stream/dist/*.whl
             sdk/tatolab-stream/dist/*.tar.gz
@@ -185,7 +177,7 @@ jobs:
       extension_distribution_name: tatolab-webrtc
       extension_import_package_name: tatolab.webrtc
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
 
   build-tatolab-microphone-distribution:
     needs: build-tatolab-stream-distribution
@@ -197,7 +189,7 @@ jobs:
       extension_distribution_name: tatolab-microphone
       extension_import_package_name: tatolab.microphone
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
 
   build-tatolab-speaker-distribution:
     needs: build-tatolab-stream-distribution
@@ -209,7 +201,7 @@ jobs:
       extension_distribution_name: tatolab-speaker
       extension_import_package_name: tatolab.speaker
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
 
   # The codec modules: the scaffold depends on tatolab-h264, and tatolab-h265 is
   # its H.265 twin.
@@ -223,7 +215,7 @@ jobs:
       extension_distribution_name: tatolab-h264
       extension_import_package_name: tatolab.h264
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
       extension_build_needs_the_slang_compiler: true
 
   build-tatolab-h265-distribution:
@@ -236,20 +228,20 @@ jobs:
       extension_distribution_name: tatolab-h265
       extension_import_package_name: tatolab.h265
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
       extension_build_needs_the_slang_compiler: true
 
-  # A user's `uv sync` resolves `tatolab-stream`, `tatolab-h264` and
-  # `tatolab-testpattern` from PyPI,
-  # where every earlier release is a candidate. This run's distributions are not
-  # there yet, so they join PyPI as find-links, and the scaffold must lock the
-  # ones just built — a scaffold that capped a version or named another index
-  # would lock something else.
+  # A user's `uv sync` resolves `tatolab-stream` from PyPI and
+  # `tatolab-testpattern` from the index the scaffold names, where every earlier
+  # release is a candidate. This run's distributions are in neither yet, so the
+  # `tatolab` index is pointed at an index tree built from this run's wheels the
+  # way the release builds the real one, `tatolab-stream` joins PyPI as
+  # find-links, and the scaffold must lock the ones just built — a scaffold that
+  # capped a version or named another index would lock something else.
   lock-the-scaffold-against-this-runs-distributions:
     name: A scaffolded stream locks the distributions this run built
     needs:
       - build-tatolab-stream-distribution
-      - build-tatolab-h264-distribution
       - build-tatolab-testpattern-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -261,30 +253,42 @@ jobs:
         with:
           ref: ${{ inputs.tag_name }}
           persist-credentials: false
-          sparse-checkout: sdk/tatolab-stream
+          sparse-checkout: |
+            sdk/tatolab-stream
+            scripts
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
           version: ${{ env.PINNED_UV_VERSION }}
 
-      - name: Collect the tatolab-stream, tatolab-h264 and tatolab-testpattern this run built
+      - name: The index tree is one uv resolves from
+        run: python3 scripts/test_tatolab_package_index.py -v
+
+      - name: Collect the tatolab-stream and tatolab-testpattern this run built
         uses: actions/download-artifact@v7
         with:
-          pattern: pypi-distribution-tatolab-{stream,h264-*,testpattern}
+          pattern: release-distribution-tatolab-{stream,testpattern}
           path: /tmp/this-runs-distributions
           merge-multiple: true
 
-      - name: The scaffold locks this run's tatolab-stream, tatolab-h264 and tatolab-testpattern
+      - name: The scaffold locks this run's tatolab-stream and tatolab-testpattern
         run: |
           set -euo pipefail
+          mkdir /tmp/this-runs-tatolab-stream
+          mv /tmp/this-runs-distributions/tatolab_stream-* /tmp/this-runs-tatolab-stream/
+          python3 scripts/tatolab_package_index.py add-wheels /tmp/this-runs-index /tmp/this-runs-distributions/*.whl
+          python3 scripts/tatolab_package_index.py write-pages /tmp/this-runs-index
           cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
-          (cd /tmp/scaffold-check && UV_FIND_LINKS=/tmp/this-runs-distributions uv lock)
+          # A command-line index of the same name stands in for the one the
+          # project names.
+          (cd /tmp/scaffold-check && UV_FIND_LINKS=/tmp/this-runs-tatolab-stream \
+            uv lock --index "tatolab=file:///tmp/this-runs-index/simple/")
           built_version="$(python3 -c "
           import tomllib
           print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
           ")"
-          for distribution_name in tatolab-stream tatolab-h264 tatolab-testpattern; do
+          for distribution_name in tatolab-stream tatolab-testpattern; do
             locked_version="$(python3 - "$distribution_name" <<'EOF'
           import sys
           import tomllib
@@ -309,7 +313,7 @@ jobs:
       extension_distribution_name: tatolab-camera
       extension_import_package_name: tatolab.camera
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
 
   # Linux only. build.rs fetches rive-runtime with git and builds it with
   # clang; premake needs libuuid's headers.
@@ -323,7 +327,7 @@ jobs:
       extension_distribution_name: tatolab-rive
       extension_import_package_name: tatolab.rive
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
       extension_build_needs_the_shader_compilers: true
       extension_build_extra_dnf_packages: clang git libuuid-devel
       extension_builds_for_macos: false
@@ -355,7 +359,7 @@ jobs:
       - name: Collect the tatolab-stream this release publishes
         uses: actions/download-artifact@v7
         with:
-          name: pypi-distribution-tatolab-stream
+          name: release-distribution-tatolab-stream
           path: /tmp/tatolab-stream-distribution
 
       # `--no-index` beside this run's `tatolab-stream`, which PyPI does not
@@ -383,7 +387,7 @@ jobs:
       - name: Keep the wheel for the upload
         uses: actions/upload-artifact@v6
         with:
-          name: pypi-distribution-tatolab-compositor
+          name: release-distribution-tatolab-compositor
           path: packages/tatolab-compositor/dist/*.whl
           if-no-files-found: error
 
@@ -439,7 +443,7 @@ jobs:
       - name: Keep the wheel for the upload
         uses: actions/upload-artifact@v6
         with:
-          name: pypi-distribution-tatolab-testpattern
+          name: release-distribution-tatolab-testpattern
           path: packages/tatolab-testpattern/dist/*.whl
           if-no-files-found: error
 
@@ -455,7 +459,7 @@ jobs:
       extension_distribution_name: tatolab-virtualcamera
       extension_import_package_name: tatolab.virtualcamera
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
       extension_builds_for_macos: false
 
   build-tatolab-opus-distribution:
@@ -468,7 +472,7 @@ jobs:
       extension_distribution_name: tatolab-opus
       extension_import_package_name: tatolab.opus
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
 
   build-tatolab-moq-distribution:
     needs: build-tatolab-stream-distribution
@@ -480,7 +484,7 @@ jobs:
       extension_distribution_name: tatolab-moq
       extension_import_package_name: tatolab.moq
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
 
   # The node side of a web page source: its wheel carries no browser, which is
   # the shared browser host the runtime unit ships.
@@ -494,7 +498,7 @@ jobs:
       extension_distribution_name: tatolab-browser
       extension_import_package_name: tatolab.browser
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
+      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
       extension_builds_for_macos: false
 
   # macOS is a supported floor, so a macOS-only regression in the runtime unit
@@ -543,13 +547,13 @@ jobs:
       - name: Collect the manylinux tatolab-h264 wheel this run built
         uses: actions/download-artifact@v7
         with:
-          name: pypi-distribution-tatolab-h264-manylinux
+          name: release-distribution-tatolab-h264-manylinux
           path: ${{ runner.temp }}/first-party-module-distributions
 
       - name: Collect the tatolab-testpattern distribution this run built
         uses: actions/download-artifact@v7
         with:
-          name: pypi-distribution-tatolab-testpattern
+          name: release-distribution-tatolab-testpattern
           path: ${{ runner.temp }}/first-party-module-distributions
 
       - name: The tarball starts a stream on machines with no Vulkan driver
@@ -558,8 +562,8 @@ jobs:
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
           "$RUNNER_TEMP/first-party-module-distributions"
 
-  # Before PyPI takes anything: an upload whose Linux runtime could not then be
-  # published would leave the release half out.
+  # Before PyPI or the index takes anything: an upload whose index and Linux
+  # runtime could not then be published would leave the release half out.
   check-the-linux-runtime-can-be-published:
     name: The Linux runtime's upload credentials reach this repository
     if: ${{ !inputs.dry_run }}
@@ -583,11 +587,9 @@ jobs:
           done
 
   publish-to-pypi:
-    name: Publish to PyPI
+    name: Publish tatolab-stream to PyPI
     # A dry run skips the credentials check, and runs this regardless.
     if: ${{ !cancelled() && !failure() }}
-    outputs:
-      pypi_refused_only_new_project_names: ${{ steps.upload.outputs.pypi_refused_only_new_project_names }}
     needs:
       - build-tatolab-stream-distribution
       - build-tatolab-webrtc-distribution
@@ -620,15 +622,14 @@ jobs:
           # No checkout and nothing to resolve, so nothing to cache.
           enable-cache: false
 
-      - name: Collect every distribution this run built
+      - name: Collect the tatolab-stream this run built
         uses: actions/download-artifact@v7
         with:
-          pattern: pypi-distribution-*
+          name: release-distribution-tatolab-stream
           path: dist
-          merge-multiple: true
 
-      # PyPI never takes a file name twice, so a distribution uploaded at the
-      # wrong version cannot be replaced by the right one.
+      # Neither PyPI nor the index ever takes a file name twice, so a distribution
+      # uploaded at the wrong version cannot be replaced by the right one.
       - name: Every distribution carries the release's version
         if: inputs.tag_name != ''
         env:
@@ -655,58 +656,200 @@ jobs:
           exit 1
 
       # Reads every file's metadata as the upload would, and uploads nothing.
-      - name: Check every distribution without uploading
+      - name: Check tatolab-stream without uploading
         if: inputs.dry_run
         run: uv publish --dry-run --trusted-publishing never dist/*
 
       # `--check-url` skips a file PyPI already holds byte for byte, so re-running
-      # this job in the original run after a partial upload sends only the rest;
-      # a rebuilt distribution differs and fails on a hash mismatch.
-      #
-      # One file at a time, carrying on past a refusal: PyPI rate-limits the
-      # creation of new project names (`429 Too many new projects created`), and
-      # a first release of a new distribution must not hold back every
-      # distribution PyPI already has. The job still fails, naming each refused
-      # file, so a re-run sends what is left.
-      - name: Upload every distribution to PyPI
-        id: upload
+      # this job in the original run after a partial upload sends only the rest.
+      - name: Upload tatolab-stream to PyPI
         if: ${{ !inputs.dry_run }}
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish --trusted-publishing never --check-url https://pypi.org/simple/ dist/*
+
+  # Wheels and their sidecars first and the pages last, so a page never links a
+  # file the bucket does not hold. One run at a time across every release: the
+  # pages are written from what the bucket holds, so a later run's pages always
+  # list an earlier run's wheels.
+  publish-to-the-tatolab-package-index:
+    name: Publish the first-party modules to get.tatolab.com/simple/
+    if: ${{ !cancelled() && !failure() }}
+    needs:
+      - build-tatolab-stream-distribution
+      - build-tatolab-webrtc-distribution
+      - build-tatolab-microphone-distribution
+      - build-tatolab-speaker-distribution
+      - build-tatolab-opus-distribution
+      - build-tatolab-moq-distribution
+      - build-tatolab-browser-distribution
+      - build-tatolab-testpattern-distribution
+      - build-tatolab-virtualcamera-distribution
+      - build-tatolab-h264-distribution
+      - build-tatolab-h265-distribution
+      - build-tatolab-camera-distribution
+      - build-tatolab-rive-distribution
+      - build-tatolab-compositor-distribution
+      - lock-the-scaffold-against-this-runs-distributions
+      - prove-the-runtime-unit-on-macos
+      - build-linux-runtime-tarball
+      - check-the-linux-runtime-tarball-on-machines-with-no-vulkan-driver
+      - check-the-linux-runtime-can-be-published
+    concurrency:
+      group: get-tatolab-com-package-index
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GET_TATOLAB_COM_BUCKET: get-tatolab-com
+      GET_TATOLAB_COM_URL: https://get.tatolab.com
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+          enable-cache: false
+
+      - name: Collect every first-party module wheel this run built
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-distribution-*
+          path: dist
+          merge-multiple: true
+
+      - name: Leave tatolab-stream to PyPI
+        run: rm -f dist/tatolab_stream-*
+
+      # Neither PyPI nor the index ever takes a file name twice, so a distribution
+      # uploaded at the wrong version cannot be replaced by the right one.
+      - name: Every distribution carries the release's version
+        if: inputs.tag_name != ''
+        env:
+          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
         run: |
-          set -o pipefail
-          refused_distribution_files=()
-          pypi_refused_only_new_project_names=true
-          upload_output_path="$RUNNER_TEMP/uv-publish-output"
+          set -euo pipefail
+          release_version="${RELEASE_TAG_NAME#v}"
           for distribution_path in dist/*; do
-            if ! uv publish --trusted-publishing never --check-url https://pypi.org/simple/ "$distribution_path" 2>&1 | tee "$upload_output_path"; then
-              refused_distribution_files+=("$(basename "$distribution_path")")
-              if ! grep -q "Too many new projects created" "$upload_output_path"; then
-                pypi_refused_only_new_project_names=false
-              fi
+            distribution_file_name="$(basename "$distribution_path")"
+            # The version is the second `-`-separated field of a wheel's or an
+            # sdist's file name; the name before it is normalized to underscores.
+            distribution_version="$(echo "${distribution_file_name%.tar.gz}" | cut -d- -f2)"
+            if [ "$distribution_version" != "$release_version" ]; then
+              echo "::error::$distribution_file_name is version $distribution_version, not the $release_version $RELEASE_TAG_NAME releases"
+              exit 1
             fi
           done
-          echo "pypi_refused_only_new_project_names=$pypi_refused_only_new_project_names" >> "$GITHUB_OUTPUT"
-          if [ "${#refused_distribution_files[@]}" -gt 0 ]; then
-            for refused_distribution_file in "${refused_distribution_files[@]}"; do
-              echo "::error::PyPI did not take $refused_distribution_file; re-run this job to send it"
-            done
-            exit 1
-          fi
+          ls -l dist
+
+      - name: An upload names the release it publishes
+        if: ${{ !inputs.dry_run && inputs.tag_name == '' }}
+        run: |
+          echo "::error::an upload to the index publishes a release — name its tag in tag_name"
+          exit 1
+
+      # Sidecars only: the pages are written from them, and the wheels stay in
+      # the bucket.
+      - name: Copy the index's sidecars from the bucket
+        if: ${{ !inputs.dry_run }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: >-
+          aws s3 sync --endpoint-url "https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
+          --exclude '*' --include '*.sha256' --include '*.metadata'
+          "s3://$GET_TATOLAB_COM_BUCKET/packages/" index/packages/
+
+      # A wheel the index holds byte for byte is skipped; one it holds with other
+      # bytes fails the job, as PyPI would.
+      - name: Add this run's wheels and write the pages
+        run: |
+          set -euo pipefail
+          python3 scripts/tatolab_package_index.py add-wheels index dist/*.whl
+          python3 scripts/tatolab_package_index.py write-pages index
+          find index -type f | sort
+
+      # R2 through its S3 API, as publish-linux-runtime uses it. A custom domain
+      # serves an object at its exact key and maps no directory to an
+      # `index.html`, so each page goes up at the key uv requests, `simple/` and
+      # `simple/<name>/`, which `aws s3 cp` cannot write and `put-object` can.
+      - name: Upload the new wheels, then the pages
+        if: ${{ !inputs.dry_run }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          r2_endpoint="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+          put_object() {
+            aws s3api put-object --endpoint-url "$r2_endpoint" --bucket "$GET_TATOLAB_COM_BUCKET" \
+              --body "$1" --key "$2" --content-type "$3" --cache-control "$4" > /dev/null
+          }
+          # Only a wheel this run added is on disk: the sync left the held ones in the bucket.
+          for wheel_path in index/packages/*/*.whl; do
+            [ -e "$wheel_path" ] || continue
+            wheel_key="${wheel_path#index/}"
+            put_object "$wheel_path" "$wheel_key" application/octet-stream "public, max-age=31536000, immutable"
+            put_object "$wheel_path.metadata" "$wheel_key.metadata" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
+            put_object "$wheel_path.sha256" "$wheel_key.sha256" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
+          done
+          for project_page in index/simple/*/index.html; do
+            project_directory="$(basename "$(dirname "$project_page")")"
+            put_object "$project_page" "simple/$project_directory/" "text/html; charset=utf-8" "public, max-age=0, must-revalidate"
+          done
+          put_object index/simple/index.html simple/ "text/html; charset=utf-8" "public, max-age=0, must-revalidate"
+
+      - name: What a publish would upload
+        if: inputs.dry_run
+        run: find index -type f | sort
+
+      # Through the public domain, as a project's `uv sync` reads it: the page at
+      # its directory URL, the metadata it names, and a wheel whose bytes match.
+      - name: get.tatolab.com/simple/ serves this release
+        if: ${{ !inputs.dry_run }}
+        env:
+          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG_NAME#v}"
+          printf 'tatolab-testpattern==%s\n' "$release_version" > /tmp/served-requirement.in
+          uv pip compile --no-cache --no-deps --no-header --python-version 3.12 \
+            --default-index "$GET_TATOLAB_COM_URL/simple/" /tmp/served-requirement.in
+          for wheel_sha256_sidecar in index/packages/tatolab-testpattern/*-"$release_version"-*.whl.sha256; do
+            wheel_key="${wheel_sha256_sidecar#index/}"
+            wheel_key="${wheel_key%.sha256}"
+            served_sha256="$(curl -fsSL "$GET_TATOLAB_COM_URL/$wheel_key" | sha256sum | cut -d ' ' -f 1)"
+            if [ "$served_sha256" != "$(cut -d ' ' -f 1 "$wheel_sha256_sidecar")" ]; then
+              echo "::error::$GET_TATOLAB_COM_URL serves $wheel_key with sha256 $served_sha256, not the one the index lists"
+              exit 1
+            fi
+          done
 
   # Versioned files first and `latest` last, so an install that reads `latest`
   # always finds the tarball it names.
   publish-linux-runtime:
     name: Publish the Linux runtime
+    if: ${{ !cancelled() && !failure() }}
     needs:
       - publish-to-pypi
+      - publish-to-the-tatolab-package-index
       - build-linux-runtime-tarball
-    if: >-
-      ${{ !cancelled()
-      && needs.build-linux-runtime-tarball.result == 'success'
-      && (needs.publish-to-pypi.result == 'success'
-      || (needs.publish-to-pypi.result == 'failure'
-      && needs.publish-to-pypi.outputs.pypi_refused_only_new_project_names == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

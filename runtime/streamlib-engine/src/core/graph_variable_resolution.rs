@@ -213,7 +213,8 @@ impl GraphVariablesAsDrawn {
                 delivery_profile: None,
                 borrow_quota: None,
                 audio_window: None,
-                catalog_entry: None,
+                stream_facts: None,
+                values_checked: None,
                 family: None,
             };
             let is_a_setter = variable_node.processor_type.as_str() == SET_VARIABLE_NODE_TYPE;

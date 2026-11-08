@@ -1,6 +1,6 @@
 # camera-compute-kernel
 
-Camera → a GLSL compute kernel → H.264, watched in a browser. Your webcam in
+Camera → a GLSL compute kernel, seen in Tato Studio's viewer. Your webcam in
 black and white, graded on the GPU by a shader that lives in this project as a
 string.
 
@@ -93,39 +93,31 @@ raises: this node drops its own frame and never waits on a consumer.
 ### And the ordinary parts
 
 `GrayscaleCompute` runs in its own child interpreter with its own GIL, like
-every Python node. `CameraSource` and `H264Encoder` come from the `tatolab-camera`
-and `tatolab-h264` modules, and their per-frame paths are the modules' Rust,
-never Python. The input
+every Python node. `CameraSource` comes from the `tatolab-camera` module, and its per-frame path is
+the module's Rust, never Python. The input
 port declares `newest`, the profile for a stream where a stale frame has no
-value once a fresher one exists. The runtime opens no windows: the stream ends
-in an encoder whose `encoded_video` it exposes, so a browser plays it.
+value once a fresher one exists. The runtime opens no windows: any port of the running
+stream is seen in Tato Studio's viewer.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
-builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
-(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI — the authoring surface — and
+builds `tatolab-camera` from this checkout, as an editable path dependency
+(`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin project,
 so the build needs a Rust toolchain. The runtime itself is not on pip.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs; Ctrl-C unloads it.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
-Then open the stream in a browser — your camera, in black and white:
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main
-```
-
-`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
-ports.
+Then watch `grayscalecompute`'s `grayscale_frame_to_downstream` in Tato Studio's
+viewer — your camera, in black and white.
 
 This stream needs a GPU, and says so rather than pretending: the kernel runs on
 the runtime's own device, so a machine without one fails while the stream is
@@ -153,44 +145,24 @@ Two edits worth making on purpose, because each fails in an instructive way:
 
 ## Observing it
 
-From another terminal:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-A node is named after its class, lowercased — `camerasource`,
-`grayscalecompute`, `h264encoder` — unless `add` passes `name=`. An exposed port
-is the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the
-machine's local relay, so any MoQ client reads it; this repository's
-`tatolab-read-track` writes a track's objects to files:
-
-```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    h264encoder/encoded_video --count 30 --out /tmp/grayscale
-```
-
-Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
-order are an H.264 stream ffmpeg decodes to PNGs — what the kernel wrote.
-
-The kernel's own `grayscale_frame_to_downstream` port is internal to the stream.
-`tatolab expose main grayscalecompute grayscale_frame_to_downstream` makes it a
-track too, but each of its objects is a frame's record, not its picture: a
-`VideoFrame` naming its `surface_id`, `width`, `height`, `timestamp_ns` and the
-camera's `color_info`. The pixels stay in
-engine-owned GPU memory that the surface id names, which means nothing outside
-the runtime — that is why the picture is shared through the encoder.
+The nodes are `camerasource` and `grayscalecompute`.
 
 ## Knobs
 
-Everything is literal config in `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `strength` | `stream_builder.add(GrayscaleCompute, config=…)` | 0.0 leaves the picture alone, 1.0 is full luma. |
-| `max_width` / `max_height` | `camera_config` in `stream.py` (`CameraSourceConfig` in `tatolab.camera`) | Resolution cap; the negotiated format is clamped to fit. |
-| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |
+| `device_id` | `camerasource` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. Absent picks the first device found. |
+| `max_width` / `max_height` | `camerasource` | Resolution cap; the negotiated format is clamped to fit. |
+| `strength` | `grayscalecompute` | 0.0 leaves the picture alone, 1.0 is full luma. |

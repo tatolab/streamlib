@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.68.35](https://github.com/tatolab/streamlib/compare/v0.68.34...v0.68.35) (2026-11-08)
+
+
+### Features
+
+* a stream is a graph asset, loaded from its graph document ([cab43d1](https://github.com/tatolab/streamlib/commit/cab43d1622e435e841bb412a974d23b27e464adc))
+* a stream is a graph asset, loaded from its graph document ([258d5d0](https://github.com/tatolab/streamlib/commit/258d5d0cc669b8350fff1ff777409b951ac768f6)), closes [#3257](https://github.com/tatolab/streamlib/issues/3257)
+* **api-server:** each project's change feed on subscriptions/listen ([aa211ce](https://github.com/tatolab/streamlib/commit/aa211ce01ff1c5bfe138e14f6c1b77407a84cbce))
+* **api-server:** the asset tools over MCP, one writer per project ([6972e3f](https://github.com/tatolab/streamlib/commit/6972e3f12d955f226f960089c231197c4b9f4c2c))
+* asset tools, change feed and smart-HTTP history push for projects ([4dd89f4](https://github.com/tatolab/streamlib/commit/4dd89f45bcaacd69a679f89747462b54e5b1ab2e))
+* **engine:** a graph document carries node UUIDs, pins and studio fields ([44c24de](https://github.com/tatolab/streamlib/commit/44c24de63feb57a40de73b0e17b483188abbf6d0))
+* **engine:** compile the engine's own shaders from Slang at build time ([ea8bb02](https://github.com/tatolab/streamlib/commit/ea8bb02196860f8533f396d5f5d177fe9a89cb78))
+* **engine:** compile the engine's own shaders from Slang at build time ([edd8b91](https://github.com/tatolab/streamlib/commit/edd8b91e67e4b4ea749eeae5a363c3d02a3ddd38)), closes [#3223](https://github.com/tatolab/streamlib/issues/3223)
+* **engine:** function nodes run compiled inside the read of the node they feed ([8c95c2e](https://github.com/tatolab/streamlib/commit/8c95c2e0655e44043cc608118e7ef87a69a3a68b))
+* **engine:** function nodes run compiled inside the read of the node they feed ([3f968dd](https://github.com/tatolab/streamlib/commit/3f968dd03c109d1969b732a78594d42b2ca252b0))
+* **engine:** Python helpers run on the engine's one scheduling loop ([6065455](https://github.com/tatolab/streamlib/commit/606545552f5bb86a642d4c9c71a0a9e9fa54d014))
+* **engine:** Python helpers run on the engine's one scheduling loop ([c91e826](https://github.com/tatolab/streamlib/commit/c91e826c89c9090fa1584cbc3441403e0998d64c))
+* **project-repository:** a project as a versioned repository of assets ([66d3416](https://github.com/tatolab/streamlib/commit/66d3416bb07c99b3b84271bc40c4e45547752010))
+* **project-repository:** a project as a versioned repository of assets ([d15810a](https://github.com/tatolab/streamlib/commit/d15810afe7d7628b6284c7f1e08fc338953c1b7f))
+* **project-repository:** a stream is an asset its graph document names ([80ede53](https://github.com/tatolab/streamlib/commit/80ede53e74747150ba961693d195ec3acf23f59b))
+* **project-repository:** push and fetch a project's history over smart HTTP ([294f360](https://github.com/tatolab/streamlib/commit/294f36017bef98c6e572b3ba48d0b58f063a37d5))
+* **project:** history records the whole project; refuse a node with no UUID; cross-floor check at load ([fe88a64](https://github.com/tatolab/streamlib/commit/fe88a64595f8f28dbe73b7794d679a14e51a7565))
+* **project:** the history records the whole project; a node with no UUID is refused at load; the cross-floor check runs at load ([6b61c5f](https://github.com/tatolab/streamlib/commit/6b61c5f986a1c09bd5f5bd30673b7b2a0a35c392))
+* **rhi:** Slang is the shader compiler for every run-time kernel ([28aaa98](https://github.com/tatolab/streamlib/commit/28aaa9839086e4901cf62319e38217f08807cf17))
+* **rhi:** Slang is the shader compiler for every run-time kernel ([33c404d](https://github.com/tatolab/streamlib/commit/33c404d3447f5b57bfdc1ac18ce31a920ee24ab1))
+* **stream:** every node carries its kind; bare [@node](https://github.com/node) is [@node](https://github.com/node).process ([47908e0](https://github.com/tatolab/streamlib/commit/47908e045355e40b424cb1aa548bcdad4c20cc07))
+* **stream:** every node carries its kind; bare [@node](https://github.com/node) is [@node](https://github.com/node).process ([5206575](https://github.com/tatolab/streamlib/commit/5206575f715874d8680bb7c79aa0e842ff2e00b6))
+
+
+### Bug Fixes
+
+* load a project's other streams when one graph document does not read ([0e5eaee](https://github.com/tatolab/streamlib/commit/0e5eaee1413db592cdd8b1332d23eca457c5b98b))
+* **project-repository:** close the review's follow-up gaps ([ff3c248](https://github.com/tatolab/streamlib/commit/ff3c248ef416263c0fcd1baa01794fadb35b01d2))
+* **project-repository:** compile libgit2's zlib in, so the runtime unit needs no host libz.so.1 ([ab9ea57](https://github.com/tatolab/streamlib/commit/ab9ea57acdbd2d87a3966cd963ef73cf7fc8c2ae))
+* **project-repository:** decide an asset-file alias by device and inode ([7bac6f1](https://github.com/tatolab/streamlib/commit/7bac6f1431e6a024f507150eb081af8d79aa562e))
+* **project-repository:** harden asset paths, the content store and history writes ([db4bf0c](https://github.com/tatolab/streamlib/commit/db4bf0c489536c2da2844a69587c616002239433))
+
 ## [0.68.34](https://github.com/tatolab/streamlib/compare/v0.68.33...v0.68.34) (2026-11-07)
 
 

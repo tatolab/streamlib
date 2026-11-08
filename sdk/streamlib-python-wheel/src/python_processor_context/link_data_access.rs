@@ -28,7 +28,7 @@ pub(crate) struct PythonLinkInputDataReader {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
     pub(super) gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
     /// The bridge's blocking round trip to the parent, which holds the
-    /// catalog entries a read asks after.
+    /// stream facts a read asks after.
     pub(super) escalate_request_to_parent: Option<Py<PyAny>>,
 }
 
@@ -178,31 +178,37 @@ impl PythonLinkInputDataReader {
             .input_port_has_data(python, port_name)
     }
 
-    /// The catalog entry the output port feeding `port_name` carries now, as
-    /// `{"section": ..., "entry": {...}}`, or `None`.
+    /// The stream facts the output port feeding `port_name` carries now, as
+    /// `tatolab.stream.stream_facts`'s types, or `None`.
     ///
     /// A port fed by more than one link names the one to read with
     /// `inbound_link`.
     #[pyo3(signature = (port_name, *, inbound_link = None))]
-    fn inbound_link_catalog_entry<'py>(
+    fn upstream_stream_facts<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
         inbound_link: Option<&str>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let op = PyDict::new(python);
-        op.set_item("op", "read_inbound_link_catalog_entry")?;
+        op.set_item("op", "read_inbound_link_stream_facts")?;
         op.set_item("port", port_name)?;
         if let Some(inbound_link) = inbound_link {
             op.set_item("inbound_link", inbound_link)?;
         }
-        let response = catalog_entry_round_trip_to_parent(
+        let response = stream_facts_round_trip_to_parent(
             python,
             self.escalate_request_to_parent.as_ref(),
             &op,
         )?;
-        let catalog_entry = response.call_method1("get", ("catalog_entry",))?;
-        Ok((!catalog_entry.is_none()).then_some(catalog_entry))
+        let stream_facts_wire = response.call_method1("get", ("stream_facts",))?;
+        if stream_facts_wire.is_none() {
+            return Ok(None);
+        }
+        python
+            .import("tatolab.stream.stream_facts")?
+            .call_method1("stream_facts_from_wire", (stream_facts_wire,))
+            .map(Some)
     }
 }
 
@@ -279,7 +285,7 @@ pub(crate) struct PythonLinkOutputDataWriter {
     /// What names the descriptor of a pooled GPU frame a write carries.
     pub(super) gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
     /// The bridge's blocking round trip to the parent, which holds the
-    /// catalog entries this processor's ports carry.
+    /// stream facts this processor's ports carry.
     pub(super) escalate_request_to_parent: Option<Py<PyAny>>,
 }
 
@@ -380,41 +386,38 @@ impl PythonLinkOutputDataWriter {
         )
     }
 
-    /// Replace the catalog entry `port_name` carries with `entry`, one of
-    /// `tatolab.stream.catalog`'s entries. The parent parses it with hang's
-    /// catalog types and refuses one they do not read.
-    fn set_catalog_entry(
+    /// Replace the stream facts `port_name` carries with `stream_facts`, one of
+    /// `tatolab.stream.stream_facts`'s types. The parent refuses facts of
+    /// another family than the port's.
+    fn set_stream_facts(
         &self,
         python: Python<'_>,
         port_name: &str,
-        entry: &Bound<'_, PyAny>,
+        stream_facts: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let not_a_catalog_entry = |_| {
+        let stream_facts_wire = stream_facts.call_method0("to_wire").map_err(|_| {
             PyTypeError::new_err(format!(
-                "output port {port_name:?}: set_catalog_entry takes one of tatolab.stream.catalog's \
-                 entries, got {}",
-                entry
+                "output port {port_name:?}: set_stream_facts takes ImageStreamFacts or \
+                 PacketsStreamFacts from tatolab.stream.stream_facts, got {}",
+                stream_facts
                     .get_type()
                     .name()
                     .map(|type_name| type_name.to_string())
                     .unwrap_or_default()
             ))
-        };
-        let section = entry.getattr("section").map_err(not_a_catalog_entry)?;
-        let fields = entry.call_method0("to_dict").map_err(not_a_catalog_entry)?;
+        })?;
         let op = PyDict::new(python);
-        op.set_item("op", "set_output_port_catalog_entry")?;
+        op.set_item("op", "set_output_port_stream_facts")?;
         op.set_item("port", port_name)?;
-        op.set_item("section", section)?;
-        op.set_item("entry", fields)?;
-        catalog_entry_round_trip_to_parent(python, self.escalate_request_to_parent.as_ref(), &op)?;
+        op.set_item("stream_facts", stream_facts_wire)?;
+        stream_facts_round_trip_to_parent(python, self.escalate_request_to_parent.as_ref(), &op)?;
         Ok(())
     }
 }
 
-/// One catalog-entry escalate round trip to the parent, whose refusal raises
+/// One stream-facts escalate round trip to the parent, whose refusal raises
 /// as the bridge raises it.
-fn catalog_entry_round_trip_to_parent<'py>(
+fn stream_facts_round_trip_to_parent<'py>(
     python: Python<'py>,
     escalate_request_to_parent: Option<&Py<PyAny>>,
     op: &Bound<'py, PyDict>,
@@ -422,8 +425,8 @@ fn catalog_entry_round_trip_to_parent<'py>(
     escalate_request_to_parent
         .ok_or_else(|| {
             PyRuntimeError::new_err(
-                "a catalog entry lives on the parent's graph, and this context has no route to \
-                 the parent",
+                "stream facts live on the parent's graph, and this context has no route to the \
+                 parent",
             )
         })?
         .bind(python)

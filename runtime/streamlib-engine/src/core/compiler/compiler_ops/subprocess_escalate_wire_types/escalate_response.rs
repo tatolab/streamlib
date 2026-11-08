@@ -114,11 +114,11 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) bytes_per_row: Option<String>,
 
-    /// The current catalog entry of the output port feeding the input port a
-    /// `read_inbound_link_catalog_entry` named. Absent when that port carries
+    /// The current stream facts of the output port feeding the input port a
+    /// `read_inbound_link_stream_facts` named. Absent when that port states
     /// none or nothing feeds the input.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) catalog_entry: Option<streamlib_processor_schema::CatalogEntry>,
+    pub(crate) stream_facts: Option<streamlib_processor_schema::PortStreamFacts>,
 
     /// Element type of the acquired tensor storage buffer. Set on
     /// `acquire_storage_buffer` responses.

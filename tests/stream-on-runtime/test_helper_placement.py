@@ -30,6 +30,7 @@ from helper_placement_streams import (
     function_node_run_as_python_into_python_records_sink,
     function_node_run_as_python_that_crashes_into_python_sink,
     function_node_that_spins_forever_into_python_sink,
+    function_nodes_read_by_two_native_converters_into_python_records_sink,
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
@@ -307,6 +308,48 @@ def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_proce
         f"the island is evaluated at each read on the stream's moving clock, and every read "
         f"returned {values[0]}"
     )
+
+
+def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """Two islands read by native built-ins start one pool, beside the Python class.
+
+    A built-in runs in `tatolabd`, which runs no node code, so neither
+    `ChannelsToRecords` can evaluate the island it reads. The stream's one
+    function node pool evaluates both and publishes each on a channel: the
+    class reads the record the first converter makes of `Remap`'s value, and
+    the stream started exactly two helpers, the pool's and the class's.
+
+    Fail-without-fix: the link into a converter is refused, since the app
+    process runs no node code, and the stream never loads.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        function_nodes_read_by_two_native_converters_into_python_records_sink
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    records_read = tatolabd.await_marker("LEVEL_RECORDS_READ")
+    sink_pid = records_read["sink_pid"]
+    assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    assert len(helper_pids) == 2 and sink_pid in helper_pids, (
+        f"two islands into built-ins and one Python class started {helper_pids}; the class and "
+        f"one pool get a process:\n{tatolabd.recent_stderr()}"
+    )
+    pools = [
+        node for node in graph["nodes"] if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
+    ]
+    assert len(pools) == 1, f"`graph` shows the stream's one pool: {graph['nodes']}"
+    assert len(pools[0]["config"]["carries"]) == 2, pools[0]
+    levels = [record["level"] for record in records_read["records"]]
+    assert all(0.0 <= level <= 1.0 for level in levels), (
+        f"`Remap` maps the LFO onto 0..1, and the class read {levels}"
+    )
+    assert len(set(levels)) > 1, f"the pool evaluates the island on a moving clock: {levels}"
 
 
 def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reader(

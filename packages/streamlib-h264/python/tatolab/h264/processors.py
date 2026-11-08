@@ -68,8 +68,8 @@ class H264Encoder:
     `encoded_video` publishes one media frame per access unit — a QUIC varint
     timestamp in microseconds, then the Annex-B access unit, parameter sets
     inline before each keyframe — and a keyframe opens a group. After the first
-    keyframe the port's catalog entry is a `VideoEntry` naming the codec string
-    the SPS spells and the coded extent. The session mints from the first
+    keyframe the port's stream facts are `PacketsStreamFacts` naming the codec
+    string the SPS spells and the coded extent. The session mints from the first
     frame's dimensions and re-mints when the upstream extent changes; a write
     the channel refuses makes the next frame a keyframe.
 

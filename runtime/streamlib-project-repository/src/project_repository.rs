@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -10,9 +11,9 @@ use uuid::Uuid;
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_asset::{
-    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind,
-    ProjectAssetSidecar, ProjectRelativeAssetPath, project_files_ending_with,
-    project_files_the_history_records,
+    GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind, ProjectAssetSidecar,
+    ProjectRelativeAssetPath, project_files_ending_with, project_files_the_history_records,
+    read_every_asset_sidecar,
 };
 use crate::project_content_store::{ProjectContentStore, content_sha256_of};
 use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
@@ -23,8 +24,10 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::project_stream_documents;
 use crate::project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectAssetOperation, ProjectOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
+use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
 /// A project the runtime opened: the one writer of its files, its content store and its history.
 pub struct ProjectRepository {
@@ -40,6 +43,10 @@ enum PerformedAssetEffect {
     ImportThatPlacedItsFile(ProjectAsset),
     DeleteThatRemovedItsFile(ProjectAsset),
 }
+
+/// A graph document's path and the bytes it held before a transaction wrote it, `None` when
+/// it did not exist.
+type GraphDocumentAsItWasBeforeAWrite = (PathBuf, Option<Vec<u8>>);
 
 impl ProjectRepository {
     /// Create a project named `name` in `project_directory`, made when missing, with its first commit.
@@ -228,20 +235,103 @@ impl ProjectRepository {
         changes: Vec<ProjectAssetChangeRequest>,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
-        if changes.is_empty() {
-            return Err(ProjectRepositoryRefusal::EmptyTransaction);
-        }
         let mut staged_assets = self.every_asset()?;
         let mut operations = Vec::with_capacity(changes.len());
         for change in changes {
             if let Some(operation) = self.operation_for_change(&staged_assets, change)? {
                 apply_operation_to_assets(&mut staged_assets, &operation);
-                operations.push(operation);
+                operations.push(ProjectOperation::Asset(operation));
             }
         }
+        self.apply_project_operations(author, operations, ProjectTransactionLineage::NewEdit)
+    }
+
+    /// The graph document of the stream asset `stream`, as it is on disk now.
+    pub fn stream_graph_document(
+        &self,
+        stream: Uuid,
+    ) -> Result<StreamGraphDocument, ProjectRepositoryRefusal> {
+        self.read_stream_graph_document(&self.every_asset()?, stream)
+            .map(|(_, document)| document)
+    }
+
+    fn read_stream_graph_document(
+        &self,
+        assets: &BTreeMap<Uuid, ProjectAsset>,
+        stream: Uuid,
+    ) -> Result<(ProjectRelativeAssetPath, StreamGraphDocument), ProjectRepositoryRefusal> {
+        let stream_asset = assets
+            .get(&stream)
+            .filter(|asset| asset.kind == ProjectAssetKind::Stream)
+            .ok_or(ProjectRepositoryRefusal::NoSuchStream(stream))?;
+        let bytes = std::fs::read(stream_asset.path.on_disk_under(&self.project_directory))?;
+        let document = StreamGraphDocument::from_bytes(&bytes).map_err(|why| {
+            ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                path: stream_asset.path.to_string(),
+                why,
+            }
+        })?;
+        Ok((stream_asset.path.clone(), document))
+    }
+
+    /// Apply `operations` by `author` as one transaction, whole or not at all, write the
+    /// files they change and commit it.
+    pub fn apply_project_operations(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        operations: Vec<ProjectOperation>,
+        lineage: ProjectTransactionLineage,
+    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+        refuse_an_author_without_a_name(author)?;
         if operations.is_empty() {
             return Err(ProjectRepositoryRefusal::EmptyTransaction);
         }
+        let mut staged_assets = self.every_asset()?;
+        let mut staged_documents: BTreeMap<Uuid, StreamGraphDocument> = BTreeMap::new();
+        for operation in &operations {
+            match operation {
+                ProjectOperation::Asset(asset_operation) => {
+                    if let ProjectAssetOperation::DeleteAsset { asset } = asset_operation {
+                        self.refuse_deleting_an_asset_a_graph_references(
+                            asset,
+                            &staged_assets,
+                            &staged_documents,
+                        )?;
+                    }
+                    apply_operation_to_assets(&mut staged_assets, asset_operation);
+                }
+                ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+                    stream,
+                    graph_operation,
+                }) => {
+                    let staged_document = match staged_documents.entry(*stream) {
+                        Entry::Occupied(staged) => staged.into_mut(),
+                        Entry::Vacant(unstaged) => unstaged
+                            .insert(self.read_stream_graph_document(&staged_assets, *stream)?.1),
+                    };
+                    if let Some(config) = graph_operation.config_it_sets() {
+                        refuse_a_config_referencing_an_asset_the_project_does_not_hold(
+                            &staged_assets,
+                            graph_operation.node(),
+                            config,
+                        )?;
+                    }
+                    staged_document.apply(graph_operation).map_err(|why| {
+                        ProjectRepositoryRefusal::GraphOperationRefused {
+                            path: staged_assets
+                                .get(stream)
+                                .map_or_else(|| stream.to_string(), |asset| asset.path.to_string()),
+                            why,
+                        }
+                    })?;
+                }
+            }
+        }
+        let (undoes, redoes) = match lineage {
+            ProjectTransactionLineage::NewEdit => (None, None),
+            ProjectTransactionLineage::UndoOf(undone) => (Some(undone), None),
+            ProjectTransactionLineage::RedoOf(redone) => (None, Some(redone)),
+        };
         let transaction = ProjectTransaction {
             transaction: Uuid::new_v4(),
             author: author.clone(),
@@ -249,14 +339,19 @@ impl ProjectRepository {
             inverse_operations: operations
                 .iter()
                 .rev()
-                .map(ProjectAssetOperation::inverse)
+                .map(ProjectOperation::inverse)
                 .collect(),
             operations,
+            undoes,
+            redoes,
         };
 
         let mut performed_effects = Vec::with_capacity(transaction.operations.len());
         for operation in &transaction.operations {
-            match self.perform_effect(operation) {
+            let ProjectOperation::Asset(asset_operation) = operation else {
+                continue;
+            };
+            match self.perform_effect(asset_operation) {
                 Ok(performed) => performed_effects.push(performed),
                 Err(refusal) => {
                     self.undo_performed_effects(performed_effects);
@@ -264,6 +359,14 @@ impl ProjectRepository {
                 }
             }
         }
+        let written_documents = match self.write_staged_documents(&staged_assets, &staged_documents)
+        {
+            Ok(written_documents) => written_documents,
+            Err(refusal) => {
+                self.undo_performed_effects(performed_effects);
+                return Err(refusal);
+            }
+        };
         let committed = self
             .tracked_files(&staged_assets)
             .and_then(|tracked_files| {
@@ -276,6 +379,7 @@ impl ProjectRepository {
         let commit = match committed {
             Ok(commit) => commit,
             Err(refusal) => {
+                self.restore_written_documents(written_documents);
                 self.undo_performed_effects(performed_effects);
                 return Err(refusal);
             }
@@ -292,6 +396,166 @@ impl ProjectRepository {
             transaction,
             commit,
         })
+    }
+
+    /// The undo `author`'s latest transaction not yet undone asks for: its inverse.
+    pub fn undo_by(
+        &self,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<ProjectTransactionReversal, ProjectRepositoryRefusal> {
+        let (undoable, _) = self.what_the_author_can_undo_and_redo(author)?;
+        let undone = undoable
+            .last()
+            .ok_or_else(|| ProjectRepositoryRefusal::NothingToUndo {
+                author: author.name.clone(),
+            })?;
+        Ok(ProjectTransactionReversal {
+            operations: undone.inverse_operations.clone(),
+            lineage: ProjectTransactionLineage::UndoOf(undone.transaction),
+        })
+    }
+
+    /// The redo `author`'s latest undo asks for: the operations it undid.
+    pub fn redo_by(
+        &self,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<ProjectTransactionReversal, ProjectRepositoryRefusal> {
+        let (_, redoable) = self.what_the_author_can_undo_and_redo(author)?;
+        let redone = redoable
+            .last()
+            .ok_or_else(|| ProjectRepositoryRefusal::NothingToRedo {
+                author: author.name.clone(),
+            })?;
+        Ok(ProjectTransactionReversal {
+            operations: redone.operations.clone(),
+            lineage: ProjectTransactionLineage::RedoOf(redone.transaction),
+        })
+    }
+
+    /// `author`'s transactions an undo reverses, newest last, and the ones a redo reapplies,
+    /// newest last, replayed from history: an edit clears what could be redone.
+    fn what_the_author_can_undo_and_redo(
+        &self,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<(Vec<ProjectTransaction>, Vec<ProjectTransaction>), ProjectRepositoryRefusal> {
+        let mut undoable: Vec<ProjectTransaction> = Vec::new();
+        let mut redoable: Vec<ProjectTransaction> = Vec::new();
+        let mut transactions = self.applied_transactions_newest_first(usize::MAX)?;
+        transactions.reverse();
+        for AppliedProjectTransaction { transaction, .. } in transactions {
+            if transaction.author != *author {
+                continue;
+            }
+            match transaction.lineage() {
+                ProjectTransactionLineage::NewEdit => {
+                    redoable.clear();
+                    undoable.push(transaction);
+                }
+                ProjectTransactionLineage::UndoOf(undone) => {
+                    if let Some(position) =
+                        undoable.iter().rposition(|held| held.transaction == undone)
+                    {
+                        redoable.push(undoable.remove(position));
+                    }
+                }
+                ProjectTransactionLineage::RedoOf(redone) => {
+                    if let Some(position) =
+                        redoable.iter().rposition(|held| held.transaction == redone)
+                    {
+                        redoable.remove(position);
+                        undoable.push(transaction);
+                    }
+                }
+            }
+        }
+        Ok((undoable, redoable))
+    }
+
+    /// Write each staged graph document at the path its stream asset holds once the
+    /// transaction applies, answering what each held before so a refusal can restore it.
+    fn write_staged_documents(
+        &self,
+        staged_assets: &BTreeMap<Uuid, ProjectAsset>,
+        staged_documents: &BTreeMap<Uuid, StreamGraphDocument>,
+    ) -> Result<Vec<GraphDocumentAsItWasBeforeAWrite>, ProjectRepositoryRefusal> {
+        let mut written_documents = Vec::with_capacity(staged_documents.len());
+        for (stream, staged_document) in staged_documents {
+            let Some(stream_asset) = staged_assets.get(stream) else {
+                continue;
+            };
+            let on_disk = stream_asset.path.on_disk_under(&self.project_directory);
+            let bytes_before = std::fs::read(&on_disk).ok();
+            let written = staged_document
+                .canonical_bytes()
+                .map_err(ProjectRepositoryRefusal::from)
+                .and_then(|bytes| write_file_whole(&on_disk, &bytes));
+            if let Err(refusal) = written {
+                self.restore_written_documents(written_documents);
+                return Err(refusal);
+            }
+            written_documents.push((on_disk, bytes_before));
+        }
+        Ok(written_documents)
+    }
+
+    fn restore_written_documents(&self, written_documents: Vec<GraphDocumentAsItWasBeforeAWrite>) {
+        for (on_disk, bytes_before) in written_documents.into_iter().rev() {
+            let restored = match bytes_before {
+                Some(bytes) => write_file_whole(&on_disk, &bytes),
+                None => std::fs::remove_file(&on_disk).map_err(ProjectRepositoryRefusal::from),
+            };
+            if let Err(refusal) = restored {
+                tracing::error!(
+                    project = %self.project_directory.display(),
+                    document = %on_disk.display(),
+                    %refusal,
+                    "could not restore a graph document a refused transaction wrote"
+                );
+            }
+        }
+    }
+
+    /// Refuse deleting `asset` while a graph document other than its own references it, as
+    /// the transaction has staged that document or as it is on disk.
+    fn refuse_deleting_an_asset_a_graph_references(
+        &self,
+        asset: &ProjectAsset,
+        staged_assets: &BTreeMap<Uuid, ProjectAsset>,
+        staged_documents: &BTreeMap<Uuid, StreamGraphDocument>,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let asset_text = asset.asset.to_string();
+        let mut referencing_documents = Vec::new();
+        for (stream, staged_document) in staged_documents {
+            if *stream == asset.asset {
+                continue;
+            }
+            let document: Value = serde_json::from_slice(&staged_document.canonical_bytes()?)?;
+            if value_references_the_asset(&document, &asset_text) {
+                referencing_documents.push(
+                    staged_assets
+                        .get(stream)
+                        .map_or_else(|| stream.to_string(), |held| held.path.to_string()),
+                );
+            }
+        }
+        let staged_paths: BTreeSet<String> = staged_documents
+            .keys()
+            .filter_map(|stream| staged_assets.get(stream))
+            .map(|held| held.path.to_string())
+            .collect();
+        for referencing in self.graph_documents_referencing(asset.asset, &asset.path)? {
+            if !staged_paths.contains(&referencing) {
+                referencing_documents.push(referencing);
+            }
+        }
+        if referencing_documents.is_empty() {
+            Ok(())
+        } else {
+            Err(ProjectRepositoryRefusal::AssetStillReferenced {
+                asset: asset.asset,
+                referencing_documents,
+            })
+        }
     }
 
     fn operation_for_change(
@@ -375,14 +639,6 @@ impl ProjectRepository {
             ProjectAssetChangeRequest::DeleteAsset { asset } => {
                 let current = staged_asset(asset)?;
                 self.refuse_a_path_through_a_symbolic_link(&current.path)?;
-                let referencing_documents =
-                    self.graph_documents_referencing(asset, &current.path)?;
-                if !referencing_documents.is_empty() {
-                    return Err(ProjectRepositoryRefusal::AssetStillReferenced {
-                        asset,
-                        referencing_documents,
-                    });
-                }
                 if current.kind == ProjectAssetKind::Stream {
                     self.content_store
                         .store_the_file_at(&current.path.on_disk_under(&self.project_directory))?;
@@ -701,7 +957,7 @@ fn transaction_commit_message(
     let summary = transaction
         .operations
         .iter()
-        .map(ProjectAssetOperation::summary)
+        .map(ProjectOperation::summary)
         .collect::<Vec<_>>()
         .join("; ");
     Ok(format!(
@@ -731,6 +987,20 @@ fn apply_operation_to_assets(
                 changed.import_settings = to.clone();
             }
         }
+    }
+}
+
+fn refuse_a_config_referencing_an_asset_the_project_does_not_hold(
+    assets: &BTreeMap<Uuid, ProjectAsset>,
+    node: Uuid,
+    config: &Value,
+) -> Result<(), ProjectRepositoryRefusal> {
+    match assets_a_node_config_references(config)
+        .into_iter()
+        .find(|referenced| !assets.contains_key(referenced))
+    {
+        Some(asset) => Err(ProjectRepositoryRefusal::ConfigReferencesNoAsset { node, asset }),
+        None => Ok(()),
     }
 }
 
@@ -792,40 +1062,6 @@ fn value_references_the_asset(value: &Value, asset_text: &str) -> bool {
             .any(|item| value_references_the_asset(item, asset_text)),
         _ => false,
     }
-}
-
-fn read_every_asset_sidecar(
-    project_directory: &Path,
-) -> Result<BTreeMap<Uuid, ProjectAsset>, ProjectRepositoryRefusal> {
-    let mut assets_by_uuid: BTreeMap<Uuid, ProjectAsset> = BTreeMap::new();
-    for sidecar_path in project_files_ending_with(project_directory, ASSET_SIDECAR_FILE_SUFFIX)? {
-        let on_disk = project_directory.join(&sidecar_path);
-        let unreadable = |why: String| ProjectRepositoryRefusal::AssetSidecarUnreadable {
-            path: on_disk.clone(),
-            why,
-        };
-        let asset_path = ProjectRelativeAssetPath::parse(
-            sidecar_path
-                .strip_suffix(ASSET_SIDECAR_FILE_SUFFIX)
-                .unwrap_or(&sidecar_path),
-        )
-        .map_err(|refusal| unreadable(refusal.to_string()))?;
-        let bytes = std::fs::read(&on_disk)?;
-        let sidecar: ProjectAssetSidecar =
-            serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string()))?;
-        if let Some(earlier) = assets_by_uuid.get(&sidecar.asset) {
-            return Err(ProjectRepositoryRefusal::AssetNamedTwice {
-                asset: sidecar.asset,
-                first: earlier.path.sidecar_path(),
-                second: sidecar_path,
-            });
-        }
-        assets_by_uuid.insert(
-            sidecar.asset,
-            ProjectAsset::from_sidecar(asset_path, sidecar),
-        );
-    }
-    Ok(assets_by_uuid)
 }
 
 fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {

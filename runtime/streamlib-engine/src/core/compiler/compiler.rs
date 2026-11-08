@@ -18,6 +18,10 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     wire_a_call_inside_a_function_node_island,
     wire_a_link_from_a_function_node_island_into_its_reader,
 };
+use crate::core::compiler::compiler_ops::function_node_pool::{
+    carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool,
+    the_links_a_link_is_wired_as,
+};
 use crate::core::compiler::compiler_ops::function_node_promotion::{
     FunctionNodePromotionPlanned, WhatTheCompileCarryingAPromotionRemoves,
     place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own,
@@ -234,6 +238,18 @@ impl Compiler {
             &plan.processors_to_add,
             &plan.processors_to_remove,
         )?;
+        {
+            let mut graph = graph_arc.write();
+            carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+                &mut graph,
+                &mut plan.processors_to_add,
+                &mut plan.links_to_add,
+            )?;
+            plan.links_to_remove = std::mem::take(&mut plan.links_to_remove)
+                .iter()
+                .flat_map(|link_id| the_links_a_link_is_wired_as(&graph, link_id))
+                .collect();
+        }
 
         // Early return if nothing to do
         if plan.is_empty() {

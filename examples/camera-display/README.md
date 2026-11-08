@@ -1,106 +1,76 @@
 # camera-display
 
-Camera → H.264, watched in a browser. The minimal, canonical Tatolab camera
+The camera, seen in Tato Studio's viewer. The minimal, canonical Tatolab camera
 stream.
 
 ## The model this example teaches
 
-**A Tatolab stream is a normal Python project.** One venv, one Python version,
-ordinary PyPI dependencies. There is no manifest, and nothing is downloaded or
-compiled at run time:
+**A Tatolab stream is a graph asset in a project.** The project is this folder:
+`tatolab-project.json` names it, `pyproject.toml` holds its Python
+dependencies, and `streams/main.graph.json` is its one stream, `main`. The
+graph document is the stream's source of truth — nodes by UUID, their config,
+and the links between their ports — and the runtime is its one writer:
 
-```python
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    camera = stream_builder.add(CameraSource, config=camera_config)
-    encoder = stream_builder.add(H264Encoder)
-    stream_builder.connect(camera.output("video"), encoder.input("video"))
-    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)
+```json
+{
+  "nodes": [
+    {"id": "…", "name": "camerasource", "type": "tatolab.camera:CameraSource", "config": {}}
+  ],
+  "links": []
+}
 ```
 
-- `tatolab dev` reads `stream.py` from the current directory and loads its one
-  `@stream` function into this machine's runtime, `tatolabd` — found by
-  convention, never declared.
-- `CameraSource` and `H264Encoder` come from the **`tatolab-camera` and
-  `tatolab-h264` modules**, two dependencies in `pyproject.toml`. Each runs in
-  its own child process, and its per-frame path is the module's Rust, never
-  Python.
-  `add` takes the class itself and a plain dict as its `config`; the keys are
-  the fields of `CameraSourceConfig` in `tatolab.camera`.
-- **The runtime opens no windows.** What a stream shows, it exposes: `expose`
-  makes the encoder's output a track at this machine's local relay, which a
-  browser plays and any other stream or MoQ client reads. `Exposure.PRIVATE`
-  keeps it on this machine; `Exposure.PUBLIC` shares it off the machine too.
+- `tatolab dev` queues a load of the project: the runtime reads every graph
+  document under `streams/` and loads each as its own stream.
+- `CameraSource` comes from the **`tatolab-camera` module**, a dependency in
+  `pyproject.toml`. It runs in its own child process, and its per-frame path is
+  the module's Rust, never Python. Its config keys are the fields of
+  `CameraSourceConfig` in `tatolab.camera`.
+- **The runtime opens no windows.** Any port of a running stream is seen in
+  Tato Studio's viewer; a stream that sends its picture off the machine adds
+  gateway nodes.
 - This stream declares no node of its own. One that did would live in its own
-  module under `nodes/` — never in `stream.py` — because every Python node runs
-  in its own child interpreter that imports the class by name. `tatolab new`
-  scaffolds that shape; see `examples/camera-python-effects` for nodes in anger.
+  module under `nodes/`, because every Python node runs in its own child
+  interpreter that imports the class by name. `tatolab new` scaffolds that
+  shape; see `examples/camera-python-effects` for nodes in anger.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
-builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
-(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
-so the build needs a Rust toolchain. The runtime itself is not on pip.
+The first load makes the project's `.venv` from `pyproject.toml`, which builds
+`tatolab-camera` from this checkout as an editable path dependency
+(`[tool.uv.sources]`); the module is a maturin project, so the build needs a
+Rust toolchain. `tatolab dev` follows the project's log and loads the project
+again on every saved edit; `tatolab run` queues the load and returns.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs; Ctrl-C unloads it.
-
-Then open the stream in a browser:
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main
-```
-
-`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
-ports.
+Then watch `camerasource`'s `video` in Tato Studio's viewer.
 
 ## Observing it
 
-From another terminal:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-A node is named after its class, lowercased — `camerasource`, `h264encoder` —
-unless `add` passes `name=`. An exposed port is the track `<node>/<port>` of the
-broadcast `<machine>/<stream>.hang` at the machine's local relay, so any MoQ
-client reads it; this repository's `tatolab-read-track` writes a track's objects
-to files:
-
-```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    h264encoder/encoded_video --count 30 --out /tmp/camera
-```
-
-Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
-order are an H.264 stream ffmpeg plays.
-
-The camera's own `video` port is internal to the stream. `tatolab expose main
-camerasource video` makes it a track too, but each of its objects is a frame's
-record, not its picture: `surface_id`, `width`, `height`, `timestamp_ns` and
-`color_info`, around 250 bytes whatever the resolution. The pixels stay in
-engine-owned GPU memory that the surface id names, which means nothing outside
-the runtime — that is why the picture is shared through the encoder.
+The camera's `video` port carries a frame's record, not its picture:
+`surface_id`, `width`, `height`, `timestamp_ns` and `color_info`. The pixels
+stay in engine-owned GPU memory that the surface id names.
 
 ## Knobs
 
-Everything is literal config in `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `max_width` / `max_height` | `camera_config` in `stream.py` (`CameraSourceConfig` in `tatolab.camera`) | Resolution cap; the negotiated format is clamped to fit. Default 1920×1080. |
-| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |
+| `device_id` | `camerasource` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. Absent picks the first device found. |
+| `max_width` / `max_height` | `camerasource` | Resolution cap; the negotiated format is clamped to fit. Default 1920×1080. |

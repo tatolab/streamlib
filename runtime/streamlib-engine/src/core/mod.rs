@@ -36,7 +36,7 @@ pub mod hang_legacy_container_media_frame;
 pub mod json_schema;
 pub mod machine_global_unique_name;
 pub mod media_clock;
-pub(crate) mod output_port_catalog_entries;
+pub(crate) mod output_port_stream_facts;
 pub mod prelude;
 pub mod processors;
 pub mod pubsub;

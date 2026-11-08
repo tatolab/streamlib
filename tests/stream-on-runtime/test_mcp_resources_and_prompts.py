@@ -321,7 +321,9 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     ] == ["connect", "connect", "disconnect"], recipe_text
 
     # Dispatch each step as written. An argument the text spells in backticks
-    # is passed verbatim; the rest are what an earlier step answered.
+    # is passed verbatim, a link end as the JSON it spells; the rest are what an
+    # earlier step answered.
+    added_node: "dict[str, str] | None" = None
     added_node_name = None
     added_node_ports: "dict[str, str]" = {}
     returned_link_ids: "list[str]" = []
@@ -333,29 +335,42 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         )
         stream_the_step_names = spelled["stream"]
         if tool_name == "add_node":
-            added_node_name = client.call_tool(
-                "add_node", {"stream": stream_the_step_names, "type": spelled["type"]}
-            )["name"]
+            (added_node,) = client.call_tool(
+                "add_node",
+                {"stream": stream_the_step_names, "type": spelled["type"], "mode": "live"},
+            )["added_nodes"]
+            added_node_name = added_node["name"]
         elif tool_name == "graph":
             graph_after = client.call_tool("graph", {"stream": stream_the_step_names})
             if added_node_name is not None and not added_node_ports:
-                added_node = next(n for n in graph_after["nodes"] if n["name"] == added_node_name)
-                (added_input,) = added_node["ports"]["inputs"]
-                (added_output,) = added_node["ports"]["outputs"]
-                added_node_ports = {"to_port": added_input["name"], "from_port": added_output["name"]}
-        elif tool_name == "connect":
-            arguments = {
-                "stream": stream_the_step_names,
-                "from_node": spelled.get("from_node", added_node_name),
-                "from_port": spelled.get("from_port", added_node_ports["from_port"]),
-                "to_node": spelled.get("to_node", added_node_name),
-                "to_port": spelled.get("to_port", added_node_ports["to_port"]),
+                rendered = next(n for n in graph_after["nodes"] if n["name"] == added_node_name)
+                (added_input,) = rendered["ports"]["inputs"]
+                (added_output,) = rendered["ports"]["outputs"]
+                added_node_ports = {"target": added_input["name"], "source": added_output["name"]}
+        elif tool_name in ("connect", "disconnect"):
+            assert added_node is not None, recipe_text
+            ends = {
+                end: (
+                    json.loads(spelled[end])
+                    if end in spelled
+                    else {"node": added_node["node"], "port": added_node_ports[end]}
+                )
+                for end in ("source", "target")
             }
-            returned_link_ids.append(client.call_tool("connect", arguments)["link_id"])
-        elif tool_name == "disconnect":
-            client.call_tool(
-                "disconnect", {"stream": stream_the_step_names, "link_id": spelled["link_id"]}
-            )
+            client.call_tool(tool_name, {"stream": stream_the_step_names, **ends, "mode": "live"})
+            if tool_name == "connect":
+                graph_now = client.call_tool("graph", {"stream": stream_the_step_names})
+                name_of = {node["id"]: node["name"] for node in graph_now["nodes"]}
+                returned_link_ids.append(
+                    next(
+                        link["id"]
+                        for link in graph_now["links"]
+                        if link["source"]
+                        == {"node": name_of[ends["source"]["node"]], "port": ends["source"]["port"]}
+                        and link["target"]
+                        == {"node": name_of[ends["target"]["node"]], "port": ends["target"]["port"]}
+                    )
+                )
         else:
             pytest.fail(f"the recipe calls `{tool_name}`, which this client was not asked to follow")
 

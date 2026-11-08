@@ -8,7 +8,6 @@ mod process_execution;
 mod thread_priority;
 
 pub mod audio_window_contract;
-pub mod catalog_entry;
 pub mod config_schema_document;
 pub mod descriptors;
 pub mod error;
@@ -16,6 +15,7 @@ pub mod exposed_name_cast;
 pub mod node_kind;
 pub mod node_reference_in_config;
 pub mod port_family;
+pub mod port_stream_facts;
 pub mod processor_class_import_path;
 pub mod processor_class_short_name;
 pub mod processor_schema;
@@ -29,10 +29,6 @@ pub use audio_window_contract::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,
     AudioWindowContract, AudioWindowContractDeclaredValues,
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
-};
-pub use catalog_entry::{
-    AudioEntry, BinaryEntry, CatalogDataTrackMode, CatalogEntry, CatalogEntryIsNotAnAudioEntry,
-    CatalogSection, JsonEntry, TextEntry, VideoEntry,
 };
 pub use config_schema_document::ProcessorConfigJsonSchema;
 pub use error::{SchemaError, SchemaResult};
@@ -49,11 +45,16 @@ pub use node_reference_in_config::{
 };
 pub use port_family::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
-    IMAGE_TEXTURE_FORMAT_WIRE_NAMES, OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration,
-    PortFamilyDeclarationDirection, PortFamilyLinkEndpoint,
+    IMAGE_TEXTURE_FORMAT_WIRE_NAMES, ImageOutputPortFrameRate, OutputPortDeclaredNames, PortFamily,
+    PortFamilyDeclaration, PortFamilyDeclarationDirection, PortFamilyLinkEndpoint,
     output_port_codec_resolved_against_config, output_port_family_resolved_against_config,
-    output_port_names_resolved_against_config, refusal_of_a_link_between_port_families,
-    refusal_of_required_names,
+    output_port_frame_rate_resolved_against_config, output_port_names_resolved_against_config,
+    refusal_of_a_link_between_port_families, refusal_of_required_names,
+};
+pub use port_stream_facts::{
+    ImageStreamContentLightLevel, ImageStreamFacts, ImageStreamFrameRate,
+    ImageStreamMasteringDisplayColourVolume, PacketsStreamFacts, PortStreamFacts,
+    StreamFactsOfAnotherFamily, refuse_stream_facts_of_another_family,
 };
 pub use processor_class_import_path::{BUILT_IN_NODE_CLASS_MODULE, ProcessorClassImportPath};
 pub use processor_class_short_name::ProcessorClassShortName;

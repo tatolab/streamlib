@@ -1,23 +1,23 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Publishing encoded access units on `encoded_video`: the catalog entry a
-//! session's first sync point states, set ahead of the media frame it
-//! describes, and a refused write dropping to the next sync point.
+//! Publishing encoded access units on `encoded_video`: the Packets stream
+//! facts a session's first sync point states, set ahead of the media frame
+//! they describe, and a refused write dropping to the next sync point.
 
 use streamlib_video_bitstream::VideoCodecElementaryStream;
 use streamlib_video_bitstream::annex_b_access_unit::parameter_sets_of_annex_b_access_unit;
 
 use crate::hang_legacy_container_media_frame::write_hang_legacy_container_media_frame;
 
-/// The catalog section a video entry is stated in.
-pub const VIDEO_CATALOG_SECTION: &str = "video";
+/// The family whose stream facts `encoded_video` states.
+pub const ENCODED_VIDEO_STREAM_FACTS_FAMILY: &str = "packets";
 
 /// The output port encoded media frames are written to.
 pub trait EncodedVideoOutputPort {
-    /// State the port's catalog entry in `section`, as one JSON object in
-    /// hang's field names.
-    fn set_catalog_entry(&self, section: &str, entry_json: &str) -> Result<(), String>;
+    /// Replace the port's stream facts of `family` with `stream_facts_json`,
+    /// one JSON object in `PacketsStreamFacts`' field names.
+    fn set_stream_facts(&self, family: &str, stream_facts_json: &str) -> Result<(), String>;
     /// Write one media frame, opening a group when `starts_group`.
     fn write(
         &self,
@@ -37,7 +37,7 @@ pub struct EncodedVideoAccessUnit {
 /// What publishing one frame's access units left the encoder owing.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct EncodedVideoPublicationOutcome {
-    /// A write or the catalog entry was refused, so what the session encodes
+    /// A write or the stream facts were refused, so what the session encodes
     /// next must not reference what was lost.
     pub next_frame_must_be_a_sync_point: bool,
     /// The first refusal, to be logged.
@@ -48,8 +48,8 @@ pub struct EncodedVideoPublicationOutcome {
 #[derive(Debug)]
 pub struct EncodedVideoPublication {
     elementary_stream: VideoCodecElementaryStream,
-    video_entry_on_the_port: Option<String>,
-    video_entry_derived_for_this_session: bool,
+    stream_facts_on_the_port: Option<String>,
+    stream_facts_derived_for_this_session: bool,
     dropping_access_units_until_the_next_sync_point: bool,
     media_frame_scratch: Vec<u8>,
     access_units_dropped_after_a_refusal: u64,
@@ -60,17 +60,17 @@ impl EncodedVideoPublication {
     pub fn new(elementary_stream: VideoCodecElementaryStream) -> Self {
         Self {
             elementary_stream,
-            video_entry_on_the_port: None,
-            video_entry_derived_for_this_session: false,
+            stream_facts_on_the_port: None,
+            stream_facts_derived_for_this_session: false,
             dropping_access_units_until_the_next_sync_point: false,
             media_frame_scratch: Vec::new(),
             access_units_dropped_after_a_refusal: 0,
         }
     }
 
-    /// A new session was minted; its first sync point states the entry again.
+    /// A new session was minted; its first sync point states the facts again.
     pub fn session_minted(&mut self) {
-        self.video_entry_derived_for_this_session = false;
+        self.stream_facts_derived_for_this_session = false;
     }
 
     /// Access units dropped because a write before them was refused.
@@ -87,24 +87,26 @@ impl EncodedVideoPublication {
         timestamp_ns: i64,
         (coded_width, coded_height): (u32, u32),
     ) -> EncodedVideoPublicationOutcome {
-        if let Some(video_entry_json) = self.video_entry_from_the_first_sync_point_of_this_session(
-            access_units,
-            coded_width,
-            coded_height,
-        ) && self.video_entry_on_the_port.as_ref() != Some(&video_entry_json)
+        if let Some(stream_facts_json) = self
+            .stream_facts_from_the_first_sync_point_of_this_session(
+                access_units,
+                coded_width,
+                coded_height,
+            )
+            && self.stream_facts_on_the_port.as_ref() != Some(&stream_facts_json)
         {
             if let Err(refusal) =
-                output_port.set_catalog_entry(VIDEO_CATALOG_SECTION, &video_entry_json)
+                output_port.set_stream_facts(ENCODED_VIDEO_STREAM_FACTS_FAMILY, &stream_facts_json)
             {
-                self.video_entry_derived_for_this_session = false;
+                self.stream_facts_derived_for_this_session = false;
                 self.dropping_access_units_until_the_next_sync_point = true;
                 self.access_units_dropped_after_a_refusal += access_units.len() as u64;
                 return EncodedVideoPublicationOutcome {
                     next_frame_must_be_a_sync_point: true,
-                    refusal: Some(format!("the catalog entry was refused: {refusal}")),
+                    refusal: Some(format!("the stream facts were refused: {refusal}")),
                 };
             }
-            self.video_entry_on_the_port = Some(video_entry_json);
+            self.stream_facts_on_the_port = Some(stream_facts_json);
         }
 
         let mut outcome = EncodedVideoPublicationOutcome::default();
@@ -148,26 +150,26 @@ impl EncodedVideoPublication {
         outcome
     }
 
-    fn video_entry_from_the_first_sync_point_of_this_session(
+    fn stream_facts_from_the_first_sync_point_of_this_session(
         &mut self,
         access_units: &[EncodedVideoAccessUnit],
         coded_width: u32,
         coded_height: u32,
     ) -> Option<String> {
-        if self.video_entry_derived_for_this_session {
+        if self.stream_facts_derived_for_this_session {
             return None;
         }
         let first_sync_point = access_units
             .iter()
             .find(|access_unit| access_unit.is_sync_point)?;
-        self.video_entry_derived_for_this_session = true;
+        self.stream_facts_derived_for_this_session = true;
         let codec = parameter_sets_of_annex_b_access_unit(
             &first_sync_point.annex_b_access_unit_bytes,
             self.elementary_stream,
         )
         .codec_string_of_the_sequence_parameter_set(self.elementary_stream)?;
         Some(format!(
-            "{{\"codec\":\"{codec}\",\"codedWidth\":{coded_width},\"codedHeight\":{coded_height}}}"
+            "{{\"rfc6381_codec\":\"{codec}\",\"coded_width\":{coded_width},\"coded_height\":{coded_height}}}"
         ))
     }
 }
@@ -179,20 +181,20 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingOutputPort {
-        catalog_entries: RefCell<Vec<(String, String)>>,
+        stream_facts_stated: RefCell<Vec<(String, String)>>,
         writes: RefCell<Vec<(Vec<u8>, i64, bool)>>,
         refuse_writes: RefCell<bool>,
-        refuse_catalog_entries: RefCell<bool>,
+        refuse_stream_facts: RefCell<bool>,
     }
 
     impl EncodedVideoOutputPort for RecordingOutputPort {
-        fn set_catalog_entry(&self, section: &str, entry_json: &str) -> Result<(), String> {
-            if *self.refuse_catalog_entries.borrow() {
+        fn set_stream_facts(&self, family: &str, stream_facts_json: &str) -> Result<(), String> {
+            if *self.refuse_stream_facts.borrow() {
                 return Err("refused".to_owned());
             }
-            self.catalog_entries
+            self.stream_facts_stated
                 .borrow_mut()
-                .push((section.to_owned(), entry_json.to_owned()));
+                .push((family.to_owned(), stream_facts_json.to_owned()));
             Ok(())
         }
 
@@ -227,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn the_first_sync_point_states_the_entry_once_before_its_media_frame() {
+    fn the_first_sync_point_states_the_stream_facts_once_before_its_media_frame() {
         let port = RecordingOutputPort::default();
         let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
 
@@ -235,10 +237,11 @@ mod tests {
         publication.publish(&port, &[predicted()], 2_000_000, (1280, 720));
 
         assert_eq!(
-            *port.catalog_entries.borrow(),
+            *port.stream_facts_stated.borrow(),
             [(
-                "video".to_owned(),
-                "{\"codec\":\"avc1.64001f\",\"codedWidth\":1280,\"codedHeight\":720}".to_owned()
+                "packets".to_owned(),
+                "{\"rfc6381_codec\":\"avc1.64001f\",\"coded_width\":1280,\"coded_height\":720}"
+                    .to_owned()
             )]
         );
         let writes = port.writes.borrow();
@@ -249,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn a_re_minted_session_with_a_new_extent_states_a_new_entry() {
+    fn a_re_minted_session_with_a_new_extent_states_new_stream_facts() {
         let port = RecordingOutputPort::default();
         let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
 
@@ -257,7 +260,7 @@ mod tests {
         publication.session_minted();
         publication.publish(&port, &[sync_point()], 0, (640, 368));
 
-        assert_eq!(port.catalog_entries.borrow().len(), 2);
+        assert_eq!(port.stream_facts_stated.borrow().len(), 2);
     }
 
     #[test]
@@ -282,17 +285,17 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_catalog_entry_drops_the_frame_and_is_stated_at_the_next_sync_point() {
+    fn refused_stream_facts_drop_the_frame_and_are_stated_at_the_next_sync_point() {
         let port = RecordingOutputPort::default();
         let mut publication = EncodedVideoPublication::new(VideoCodecElementaryStream::H264);
 
-        *port.refuse_catalog_entries.borrow_mut() = true;
+        *port.refuse_stream_facts.borrow_mut() = true;
         let refused = publication.publish(&port, &[sync_point()], 0, (1280, 720));
-        *port.refuse_catalog_entries.borrow_mut() = false;
+        *port.refuse_stream_facts.borrow_mut() = false;
         publication.publish(&port, &[sync_point()], 1, (1280, 720));
 
         assert!(refused.next_frame_must_be_a_sync_point);
-        assert_eq!(port.catalog_entries.borrow().len(), 1);
+        assert_eq!(port.stream_facts_stated.borrow().len(), 1);
         let stamps: Vec<i64> = port.writes.borrow().iter().map(|write| write.1).collect();
         assert_eq!(stamps, [1]);
     }
@@ -317,10 +320,10 @@ mod tests {
         publication.publish(&port, &[h265_sync_point], 0, (1920, 1088));
 
         assert_eq!(
-            *port.catalog_entries.borrow(),
+            *port.stream_facts_stated.borrow(),
             [(
-                "video".to_owned(),
-                "{\"codec\":\"hvc1.1.6.L93.90\",\"codedWidth\":1920,\"codedHeight\":1088}"
+                "packets".to_owned(),
+                "{\"rfc6381_codec\":\"hvc1.1.6.L93.90\",\"coded_width\":1920,\"coded_height\":1088}"
                     .to_owned()
             )]
         );

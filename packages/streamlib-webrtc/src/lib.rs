@@ -41,8 +41,9 @@ pub mod whip_session;
 use crate::error::WebRtcExtensionError;
 use crate::whep_player::{
     ENCODED_AUDIO_OUTPUT_PORT, ENCODED_VIDEO_OUTPUT_PORT, MessageTheWhepPlayerWrites,
-    WhepPlayerCatalogEntry, WhepPlayerConnectedSession, WhepPlayerLogLevel, WhepPlayerOutputPort,
-    WhepPlayerOutputPorts, WhepPlayerSessionDialer, WhepPlayerStopSignal, play_until_stopped,
+    WhepPlayerConnectedSession, WhepPlayerLogLevel, WhepPlayerOutputPort, WhepPlayerOutputPorts,
+    WhepPlayerPacketsStreamFacts, WhepPlayerSessionDialer, WhepPlayerStopSignal,
+    play_until_stopped,
 };
 use crate::whep_session::WhepPlayingSession;
 use crate::whip_session::{PublishedMediaSet, WhipPublishingSession};
@@ -346,13 +347,13 @@ impl WhepPlayerOutputPorts for WhepPlayerOutputPortsLentByTheModuleHost {
             .map_err(|refusal| refusal.to_string())
     }
 
-    fn set_catalog_entry(
+    fn set_stream_facts(
         &self,
         port: WhepPlayerOutputPort,
-        catalog_entry: &WhepPlayerCatalogEntry,
+        stream_facts: &WhepPlayerPacketsStreamFacts,
     ) -> Result<(), String> {
         self.output_port(port)
-            .set_catalog_entry(catalog_entry.section(), &catalog_entry.entry_json())
+            .set_stream_facts("packets", &stream_facts.stream_facts_json())
             .map_err(|refusal| refusal.to_string())
     }
 

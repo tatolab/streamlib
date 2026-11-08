@@ -15,6 +15,7 @@ The runtime unit is `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else the checkout's
 tests below import `tatolab.runtime` from its lend, on `PYTHONPATH`.
 """
 
+import dataclasses
 import json
 import os
 import re
@@ -42,12 +43,12 @@ from tatolab.webrtc.processors import (
     VideoOrAudio,
     TRACKS_INPUT_PORT,
     _native,
-    published_track_from_catalog_entry,
+    published_track_from_upstream_stream_facts,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
 )
 from helper_process_link_wiring import wire_one_link
-from parent_catalog_entry_stand_in import ParentHoldingCatalogEntries
+from parent_stream_facts_stand_in import ParentHoldingStreamFacts
 from played_media_stand_ins import (
     MEDIA_FRAME_OF_AN_ACCESS_UNIT,
     MEDIA_FRAME_OF_AN_OPUS_PACKET,
@@ -64,7 +65,7 @@ from tatolab.stream import (
     log,
     stream,
 )
-from tatolab.stream.catalog import AudioEntry, CatalogEntry, VideoEntry
+from tatolab.stream.stream_facts import PacketsStreamFacts
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -445,67 +446,53 @@ def test_a_publish_and_play_round_trip_composes_as_published(tmp_path, tatolabd_
     node_names_loaded_by_tatolabd(a_publish_and_play_round_trip, tmp_path, tatolabd_with_no_vulkan_driver)
 
 
-H264_VIDEO_ENTRY = {
-    "section": "video",
-    "entry": {"codec": "avc1.42e01f", "codedWidth": 320, "codedHeight": 192},
-}
-MONO_OPUS_AUDIO_ENTRY = {
-    "section": "audio",
-    "entry": {
-        "codec": "opus",
-        "sampleRate": 48_000,
-        "numberOfChannels": 1,
-        "description": MONO_OPUS_IDENTIFICATION_HEADER_HEX,
-    },
-}
+H264_VIDEO_STREAM_FACTS = PacketsStreamFacts(
+    rfc6381_codec="avc1.42e01f", coded_width=320, coded_height=192
+)
+MONO_OPUS_STREAM_FACTS = PacketsStreamFacts(
+    rfc6381_codec="opus",
+    sample_rate=48_000,
+    channel_count=1,
+    codec_configuration_hex=MONO_OPUS_IDENTIFICATION_HEADER_HEX,
+)
 
 
-def opus_audio_entry_of(channels: int) -> "dict[str, Any]":
-    return {
-        "section": "audio",
-        "entry": {**MONO_OPUS_AUDIO_ENTRY["entry"], "numberOfChannels": channels},
-    }
+def opus_stream_facts_of(channels: int) -> PacketsStreamFacts:
+    return dataclasses.replace(MONO_OPUS_STREAM_FACTS, channel_count=channels)
 
 
 @pytest.mark.parametrize("codec", ["avc1.42e01f", "avc1.640028", "avc3.64001f"])
-def test_an_h264_video_entry_names_a_video_track(codec):
-    entry = {"section": "video", "entry": {"codec": codec}}
-
-    assert published_track_from_catalog_entry(
-        entry, "encoder/encoded_video"
+def test_h264_stream_facts_name_a_video_track(codec):
+    assert published_track_from_upstream_stream_facts(
+        PacketsStreamFacts(rfc6381_codec=codec), "encoder/encoded_video"
     ) == PublishedTrack(kind="video", channels=None)
 
 
-def test_an_opus_audio_entry_names_an_audio_track_with_its_channel_count():
-    assert published_track_from_catalog_entry(
-        opus_audio_entry_of(2), "encoder/encoded_audio"
+def test_opus_stream_facts_name_an_audio_track_with_their_channel_count():
+    assert published_track_from_upstream_stream_facts(
+        opus_stream_facts_of(2), "encoder/encoded_audio"
     ) == PublishedTrack(kind="audio", channels=2)
 
 
 @pytest.mark.parametrize(
-    "catalog_entry",
-    [
-        {"section": "video", "entry": {"codec": "hvc1.1.6.L93.B0"}},
-        {"section": "video", "entry": {"codec": "av01.0.08M.08"}},
-        {"section": "audio", "entry": {"codec": "mp4a.40.2"}},
-        {"section": "audio", "entry": {"codec": "avc1.42e01f"}},
-        {"section": "video", "entry": {"codec": "opus"}},
-        {"section": "binary", "entry": {"mode": "snapshot"}},
-    ],
-    ids=["h265", "av1", "aac", "h264_under_audio", "opus_under_video", "a_data_track"],
+    "rfc6381_codec",
+    ["hvc1.1.6.L93.B0", "av01.0.08M.08", "mp4a.40.2", None],
+    ids=["h265", "av1", "aac", "no_codec"],
 )
-def test_an_entry_naming_media_this_session_does_not_carry_is_refused_naming_it(
-    catalog_entry,
+def test_stream_facts_naming_media_this_session_does_not_carry_are_refused_naming_them(
+    rfc6381_codec,
 ):
     """H.265 included: the offer registers H.264 and Opus, so a stream this
     session never negotiated is a refusal and not a silent wrong track."""
     with pytest.raises(ValueError, match="encoder/output.*does not carry"):
-        published_track_from_catalog_entry(catalog_entry, "encoder/output")
+        published_track_from_upstream_stream_facts(
+            PacketsStreamFacts(rfc6381_codec=rfc6381_codec), "encoder/output"
+        )
 
 
-def test_a_link_whose_upstream_port_states_no_entry_is_refused_naming_it():
-    with pytest.raises(ValueError, match="`numpy/frames` carries no catalog entry"):
-        published_track_from_catalog_entry(None, "numpy/frames")
+def test_a_link_whose_upstream_port_states_no_facts_is_refused_naming_it():
+    with pytest.raises(ValueError, match="`numpy/frames` carries no Packets stream facts"):
+        published_track_from_upstream_stream_facts(None, "numpy/frames")
 
 
 def test_two_links_publishing_one_medium_are_refused_naming_both():
@@ -558,7 +545,7 @@ class PublisherWiredToEncoders:
         config: "dict[str, Any]",
     ) -> None:
         unique = f"whipwired{os.getpid()}_{request.node.name}"
-        self.parent = ParentHoldingCatalogEntries()
+        self.parent = ParentHoldingStreamFacts()
         destination_notify_service_name = f"{unique}_dest/notify"
         tracks_input = _engine.open_node_link_data_access_for_helper_process()
         self.encoder_outputs = _engine.open_node_link_data_access_for_helper_process()
@@ -589,12 +576,12 @@ class PublisherWiredToEncoders:
         self.publisher = construct_processor_instance(WhipPublisher, config, tracks_input)
         self.publisher.setup(self.context)
 
-    def state_catalog_entry(
-        self, encoder_output_port: str, catalog_entry: "dict[str, Any]"
+    def state_stream_facts(
+        self, encoder_output_port: str, stream_facts: PacketsStreamFacts
     ) -> None:
-        self.parent.catalog_entry_by_inbound_link[
+        self.parent.stream_facts_by_inbound_link[
             self.inbound_link_by_encoder_output_port[encoder_output_port]
-        ] = catalog_entry
+        ] = stream_facts.to_wire()
 
     def publish(
         self,
@@ -747,7 +734,7 @@ def test_a_media_frame_reaches_the_session_whole_with_its_envelope_stamp(
     """The varint stays on: the session's Rust strips it, and the envelope's
     stamp — the one a local reader is promised — places it on the RTP clock."""
     wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
-    wired.state_catalog_entry("encoded_video", H264_VIDEO_ENTRY)
+    wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
 
     wired.publish("encoded_video", MEDIA_FRAME_OF_AN_ACCESS_UNIT, timestamp_ns=1_234)
 
@@ -756,11 +743,11 @@ def test_a_media_frame_reaches_the_session_whole_with_its_envelope_stamp(
     assert session.video_media_frames == [(MEDIA_FRAME_OF_AN_ACCESS_UNIT, 1_234)]
 
 
-def test_an_opus_media_frame_offers_the_channel_count_its_entry_names(
+def test_an_opus_media_frame_offers_the_channel_count_its_stream_facts_name(
     request, recording_whip_session
 ):
     wired = PublisherWiredToEncoders(request, ["encoded_audio"], AN_ENDPOINT)
-    wired.state_catalog_entry("encoded_audio", opus_audio_entry_of(2))
+    wired.state_stream_facts("encoded_audio", opus_stream_facts_of(2))
 
     wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
 
@@ -769,14 +756,14 @@ def test_an_opus_media_frame_offers_the_channel_count_its_entry_names(
     assert session.audio_media_frames == [MEDIA_FRAME_OF_AN_OPUS_PACKET]
 
 
-def test_two_links_are_one_video_and_one_audio_track_by_their_entries(
+def test_two_links_are_one_video_and_one_audio_track_by_their_stream_facts(
     request, recording_whip_session
 ):
     wired = PublisherWiredToEncoders(
         request, ["encoded_video", "encoded_audio"], AN_ENDPOINT
     )
-    wired.state_catalog_entry("encoded_video", H264_VIDEO_ENTRY)
-    wired.state_catalog_entry("encoded_audio", MONO_OPUS_AUDIO_ENTRY)
+    wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
+    wired.state_stream_facts("encoded_audio", MONO_OPUS_STREAM_FACTS)
 
     wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
     wired.publish("encoded_video", MEDIA_FRAME_OF_AN_ACCESS_UNIT, timestamp_ns=5)
@@ -787,14 +774,14 @@ def test_two_links_are_one_video_and_one_audio_track_by_their_entries(
     assert session.video_media_frames == [(MEDIA_FRAME_OF_AN_ACCESS_UNIT, 5)]
 
 
-def test_a_link_whose_upstream_states_no_entry_is_refused_before_any_session_opens(
+def test_a_link_whose_upstream_states_no_stream_facts_is_refused_before_any_session_opens(
     request, recording_whip_session
 ):
     """Any port can be wired into `tracks`, and the refusal is the only place
     that wiring mistake is caught."""
     wired = PublisherWiredToEncoders(request, ["frames"], AN_ENDPOINT)
 
-    with pytest.raises(ValueError, match="carries no catalog entry") as refused:
+    with pytest.raises(ValueError, match="carries no Packets stream facts") as refused:
         wired.publish("frames", MEDIA_FRAME_OF_AN_ACCESS_UNIT)
 
     inbound_link = wired.inbound_link_by_encoder_output_port["frames"]
@@ -802,7 +789,7 @@ def test_a_link_whose_upstream_states_no_entry_is_refused_before_any_session_ope
     assert recording_whip_session.constructed[0].offered is None
 
 
-def test_a_multichannel_entry_is_refused_before_any_session_is_opened(request):
+def test_multichannel_stream_facts_are_refused_before_any_session_is_opened(request):
     """The ordering, not just the refusal.
 
     Refusing after the connect would leave a live session at the relay that
@@ -813,7 +800,7 @@ def test_a_multichannel_entry_is_refused_before_any_session_is_opened(request):
     wired = PublisherWiredToEncoders(
         request, ["encoded_audio"], {"url": "https://unresolvable.invalid/whip"}
     )
-    wired.state_catalog_entry("encoded_audio", opus_audio_entry_of(6))
+    wired.state_stream_facts("encoded_audio", opus_stream_facts_of(6))
 
     with pytest.raises(ValueError, match="mono and stereo only"):
         wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
@@ -825,7 +812,7 @@ def test_a_video_link_is_entered_at_its_first_group_start(
     """A delta frame before the first keyframe references pictures the far end
     never had."""
     wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
-    wired.state_catalog_entry("encoded_video", H264_VIDEO_ENTRY)
+    wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
 
     wired.publish("encoded_video", b"\x01delta", timestamp_ns=1, starts_group=False)
     wired.publish("encoded_video", b"\x02keyframe", timestamp_ns=2, starts_group=True)
@@ -836,16 +823,16 @@ def test_a_video_link_is_entered_at_its_first_group_start(
 
 
 class TracksInputReplayingMessages:
-    """`ctx.inputs` for a publisher, handing back scripted messages and one entry."""
+    """`ctx.inputs` for a publisher, handing back scripted messages and one set of stream facts."""
 
     def __init__(
         self,
         inbound_links: "list[str]",
-        catalog_entry: "dict[str, Any]",
+        upstream_stream_facts: PacketsStreamFacts,
         messages: "list[Message[bytes]]",
     ) -> None:
         self.inbound_links = inbound_links
-        self.catalog_entry = catalog_entry
+        self.upstream_stream_facts_handed_back = upstream_stream_facts
         self.messages_still_to_hand_back = list(messages)
 
     def inbound_link_names(self, port_name: str) -> "list[str]":
@@ -858,11 +845,11 @@ class TracksInputReplayingMessages:
             return self.messages_still_to_hand_back.pop(0)
         return None
 
-    def inbound_link_catalog_entry(
+    def upstream_stream_facts(
         self, port_name: str, *, inbound_link: "str | None" = None
-    ) -> "dict[str, Any]":
+    ) -> PacketsStreamFacts:
         del port_name, inbound_link
-        return self.catalog_entry
+        return self.upstream_stream_facts_handed_back
 
 
 class ContextWithTracksInput:
@@ -887,7 +874,7 @@ def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session
     received; the group start reporting a loss is itself sent."""
     inputs = TracksInputReplayingMessages(
         ["encoder/encoded_video"],
-        H264_VIDEO_ENTRY,
+        H264_VIDEO_STREAM_FACTS,
         [
             video_message(b"keyframe", starts_group=True),
             video_message(b"delta after a loss", starts_group=False, lost_since_last_read=2),
@@ -918,7 +905,7 @@ class PlayerWiredToBothDecoders:
 
     def __init__(self, request: pytest.FixtureRequest) -> None:
         unique = f"whepwired{os.getpid()}_{request.node.name}"
-        self.parent = ParentHoldingCatalogEntries()
+        self.parent = ParentHoldingStreamFacts()
         destination_notify_service_name = f"{unique}_dest/notify"
         decoder_inputs = _engine.open_node_link_data_access_for_helper_process()
         player_outputs = _engine.open_node_link_data_access_for_helper_process()

@@ -8,7 +8,7 @@ against this crate alone, and the runtime that starts its node lends the table.
 
 Version 1.0 carries, for the ports a node lends to its native code:
 
-- open, write and catalog-entry on an output port;
+- open, write and state the stream facts of an output port;
 - open, read and wait on input ports;
 - the node's stop flag;
 - log records into the node's log, at the host's levels;

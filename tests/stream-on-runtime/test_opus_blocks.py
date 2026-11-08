@@ -14,7 +14,7 @@ are the test's own facts rather than the machine's.
 
 The encoded-channel test reads libopus's output from Python the way a moq-dev
 player does: each message a media frame opening its own group, and the
-port's catalog entry carrying the `OpusHead` a decoder takes its channel count
+port's stream facts carrying the `OpusHead` a decoder takes its channel count
 and lookahead from.
 """
 
@@ -127,8 +127,8 @@ def test_the_encoded_channel_carries_media_frames_under_an_opus_head(
 ):
     """The encoded-domain link, read from Python as a player reads it: every
     message libopus produced is a media frame — the varint timestamp, then one
-    Opus packet — opening its own group, and the port's catalog entry is an
-    audio entry whose `OpusHead` names the channel count and the lookahead.
+    Opus packet — opening its own group, and the port's stream facts name
+    `opus` with an `OpusHead` naming the channel count and the lookahead.
     """
     tatolabd = start_the_opus_round_trip(start_tatolabd_running_stream)
     tatolabd.await_marker("ENCODED_PACKETS_COMPLETE")
@@ -153,14 +153,14 @@ def test_the_encoded_channel_carries_media_frames_under_an_opus_head(
             "the media frame's varint is the envelope's stamp in microseconds"
         )
         assert packet["byte_count"] > 0, "a packet with no bytes decodes to nothing"
-        assert (packet["catalog_section"], packet["catalog_codec"]) == ("audio", "opus")
-        assert packet["catalog_sample_rate"] == 48_000, (
+        assert packet["stream_facts_codec"] == "opus"
+        assert packet["stream_facts_sample_rate"] == 48_000, (
             "Opus codes at its own clock whatever the source was resampled from"
         )
         assert (
-            packet["catalog_number_of_channels"] == packet["opus_head_channels"] == SOURCE_CHANNELS
+            packet["stream_facts_channel_count"] == packet["opus_head_channels"] == SOURCE_CHANNELS
         ), (
-            "the encoder declares no channel count, so its entry and its OpusHead "
+            "the encoder declares no channel count, so its stream facts and its OpusHead "
             "carry the source's own"
         )
         assert packet["pre_skip"] in PRE_SKIP_SAMPLES_A_CREDIBLE_ENCODER_REPORTS, (

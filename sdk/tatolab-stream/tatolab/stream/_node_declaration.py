@@ -24,8 +24,6 @@ import typing
 from collections.abc import Mapping
 from typing import Any, Callable, NoReturn, Optional, ParamSpec, TypeVar, overload
 
-from .catalog import AudioEntry, BinaryEntry, JsonEntry, TextEntry, VideoEntry
-
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
@@ -274,21 +272,8 @@ def _audio_window_declaration(
 
     return audio_window._as_declaration()
 
+
 NodeClassUnderDeclaration = TypeVar("NodeClassUnderDeclaration", bound=type)
-
-
-_CATALOG_ENTRY_TYPES = (VideoEntry, AudioEntry, TextEntry, JsonEntry, BinaryEntry)
-
-
-def _catalog_entry_declaration(catalog: object, port_name: str) -> "dict[str, Any]":
-    """The marker form of `catalog`: its section and its fields as hang spells them."""
-    if not isinstance(catalog, _CATALOG_ENTRY_TYPES):
-        raise TypeError(
-            f"output port {port_name!r} declares catalog={catalog!r} — a catalog entry is "
-            f"one of tatolab.stream.catalog's "
-            f"{', '.join(entry_type.__name__ for entry_type in _CATALOG_ENTRY_TYPES)}"
-        )
-    return {"section": catalog.section, "entry": catalog.to_dict()}
 
 
 class NodeDeclarationDecorator:
@@ -635,8 +620,6 @@ def _collect_declared_ports(
                 "name": port_name,
                 "description": marker["description"],
             }
-            if "catalog_entry" in marker:
-                declared_output["catalog_entry"] = marker["catalog_entry"]
             if "family" in marker:
                 declared_output["family"] = marker["family"]
             output_ports.append(declared_output)

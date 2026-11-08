@@ -44,6 +44,13 @@ CONTROL_TOOL_NAMES = {
     "remove_node",
     "connect",
     "disconnect",
+    "set_node_config",
+    "set_pin_value",
+    "rename_node",
+    "set_studio_fields",
+    "transact",
+    "undo",
+    "redo",
     "run_project",
     "create_project",
     "describe_stream_action",
@@ -57,6 +64,13 @@ CONTROL_TOOL_NAMES = {
     "set_stream_clock_scale",
     "open_viewer",
     "close_viewer",
+    "list_assets",
+    "describe_asset",
+    "import_asset",
+    "rename_asset",
+    "move_asset",
+    "delete_asset",
+    "set_asset_settings",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"

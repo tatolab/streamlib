@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
+use crate::stream_graph_document::StreamGraphOperation;
 
 /// Who a transaction is by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +41,7 @@ impl ProjectTransactionAuthor {
     }
 
     /// The e-mail a commit carries, which Git requires and which names the author's kind.
+    #[cfg(feature = "history")]
     pub(crate) fn commit_email(&self) -> String {
         let kind = match self.kind {
             ProjectTransactionAuthorKind::Person => "person",
@@ -138,6 +140,7 @@ impl ProjectAssetOperation {
     }
 
     /// The operation as a commit's summary line names it.
+    #[cfg(feature = "history")]
     pub(crate) fn summary(&self) -> String {
         match self {
             Self::ImportAsset { asset } => format!("import_asset {}", asset.path),
@@ -148,8 +151,73 @@ impl ProjectAssetOperation {
     }
 }
 
+/// One change to one stream's graph: the stream by its asset's UUID, and the operation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StreamGraphOperationOnAStream {
+    /// The stream asset whose graph document the operation edits.
+    pub stream: Uuid,
+    /// What it changed.
+    #[serde(flatten)]
+    pub graph_operation: StreamGraphOperation,
+}
+
+/// One change a transaction made to a project: to its assets, or to a stream's graph.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ProjectOperation {
+    /// A change to the project's assets.
+    Asset(ProjectAssetOperation),
+    /// A change to one stream's graph.
+    StreamGraph(StreamGraphOperationOnAStream),
+}
+
+impl ProjectOperation {
+    /// The operation that undoes this one.
+    pub fn inverse(&self) -> Self {
+        match self {
+            Self::Asset(asset_operation) => Self::Asset(asset_operation.inverse()),
+            Self::StreamGraph(StreamGraphOperationOnAStream {
+                stream,
+                graph_operation,
+            }) => Self::StreamGraph(StreamGraphOperationOnAStream {
+                stream: *stream,
+                graph_operation: graph_operation.inverse(),
+            }),
+        }
+    }
+
+    /// The operation as a commit's summary line names it.
+    #[cfg(feature = "history")]
+    pub(crate) fn summary(&self) -> String {
+        match self {
+            Self::Asset(asset_operation) => asset_operation.summary(),
+            Self::StreamGraph(on_a_stream) => on_a_stream.graph_operation.summary(),
+        }
+    }
+}
+
+/// What a transaction is to the ones before it, which undo and redo follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTransactionLineage {
+    /// A new edit, which clears what its author could redo.
+    NewEdit,
+    /// The undo of the transaction this names.
+    UndoOf(Uuid),
+    /// The redo of the transaction this names, itself an edit or a redo.
+    RedoOf(Uuid),
+}
+
+/// The operations an undo or a redo applies, and what it is to the transaction it reverses.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectTransactionReversal {
+    /// What the undo or redo changes, in order.
+    pub operations: Vec<ProjectOperation>,
+    /// The undo or redo it is.
+    pub lineage: ProjectTransactionLineage,
+}
+
 /// A batch of operations applied whole: the unit of undo and of history.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectTransaction {
     /// The transaction's UUID.
     pub transaction: Uuid,
@@ -158,13 +226,30 @@ pub struct ProjectTransaction {
     /// The commit history was at when it applied, `None` for a project's first.
     pub parent_commit: Option<String>,
     /// What it changed, in order.
-    pub operations: Vec<ProjectAssetOperation>,
+    pub operations: Vec<ProjectOperation>,
     /// What undoes it, in order.
-    pub inverse_operations: Vec<ProjectAssetOperation>,
+    pub inverse_operations: Vec<ProjectOperation>,
+    /// The transaction this one undoes, when it is an undo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undoes: Option<Uuid>,
+    /// The transaction this one redoes, when it is a redo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redoes: Option<Uuid>,
+}
+
+impl ProjectTransaction {
+    /// What this transaction is to the ones before it.
+    pub fn lineage(&self) -> ProjectTransactionLineage {
+        match (self.undoes, self.redoes) {
+            (Some(undone), _) => ProjectTransactionLineage::UndoOf(undone),
+            (None, Some(redone)) => ProjectTransactionLineage::RedoOf(redone),
+            (None, None) => ProjectTransactionLineage::NewEdit,
+        }
+    }
 }
 
 /// A transaction the runtime applied and the commit that records it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppliedProjectTransaction {
     /// The transaction.
     pub transaction: ProjectTransaction,

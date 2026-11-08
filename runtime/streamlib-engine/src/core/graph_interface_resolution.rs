@@ -377,7 +377,8 @@ impl GraphInterfaceAsDrawn {
                 delivery_profile: None,
                 borrow_quota: None,
                 audio_window: None,
-                catalog_entry: None,
+                stream_facts: None,
+                values_checked: None,
                 family: Some(PortFamilyDeclaration::of_family(declared.family)),
             };
             let (inputs, outputs) = match declared.direction {

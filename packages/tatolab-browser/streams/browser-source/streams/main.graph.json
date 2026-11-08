@@ -1,0 +1,64 @@
+{
+  "asset": "41f9b86c-d040-4fec-b9a9-819710d0132a",
+  "links": [
+    {
+      "source": {
+        "node": "a3cad400-e92e-4ca4-b63c-59b666280804",
+        "port": "video"
+      },
+      "target": {
+        "node": "852eeac6-1d33-4b0d-8737-20c2a9f6a1d8",
+        "port": "video_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "a3cad400-e92e-4ca4-b63c-59b666280804",
+        "port": "audio"
+      },
+      "target": {
+        "node": "852eeac6-1d33-4b0d-8737-20c2a9f6a1d8",
+        "port": "audio_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "a3cad400-e92e-4ca4-b63c-59b666280804",
+        "port": "events"
+      },
+      "target": {
+        "node": "852eeac6-1d33-4b0d-8737-20c2a9f6a1d8",
+        "port": "events_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "852eeac6-1d33-4b0d-8737-20c2a9f6a1d8",
+        "port": "data_to_browser"
+      },
+      "target": {
+        "node": "a3cad400-e92e-4ca4-b63c-59b666280804",
+        "port": "data"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "frame_rate": 60,
+        "height": 1080,
+        "url": "probe_page.html",
+        "width": 1920
+      },
+      "id": "a3cad400-e92e-4ca4-b63c-59b666280804",
+      "name": "browsersource",
+      "type": "tatolab.browser:BrowserSource"
+    },
+    {
+      "config": {},
+      "id": "852eeac6-1d33-4b0d-8737-20c2a9f6a1d8",
+      "name": "browsersourceoutputprobe",
+      "type": "tatolab.browser:BrowserSourceOutputProbe"
+    }
+  ]
+}

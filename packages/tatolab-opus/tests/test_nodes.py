@@ -16,7 +16,7 @@ from typing import Any
 import numpy
 import pytest
 from helper_process_link_wiring import wire_one_link
-from parent_catalog_entry_stand_in import ParentHoldingCatalogEntries
+from parent_stream_facts_stand_in import ParentHoldingStreamFacts
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.runtime import _engine
 from tatolab.runtime._processor_hosting import construct_processor_instance
@@ -184,7 +184,7 @@ class OpusRoundTripOnWiredLinks:
 
     def __init__(self, request: pytest.FixtureRequest) -> None:
         unique = f"opus{os.getpid()}_{request.node.name}"
-        self.parent = ParentHoldingCatalogEntries()
+        self.parent = ParentHoldingStreamFacts()
         self.log_records: "list[tuple[str, str]]" = []
         log.install_helper_process_sink(
             lambda level, message, attrs: self.log_records.append((level, message))
@@ -255,17 +255,18 @@ def opus_round_trip(request) -> OpusRoundTripOnWiredLinks:
     return OpusRoundTripOnWiredLinks(request)
 
 
-def test_the_encoder_states_its_ports_entry_with_the_opus_head_before_the_first_packet(
+def test_the_encoder_states_its_ports_stream_facts_with_the_opus_head_before_the_first_packet(
     opus_round_trip: OpusRoundTripOnWiredLinks,
 ):
     opus_round_trip.send(a_stereo_tone_window(0))
 
-    [(port, section, entry)] = opus_round_trip.parent.catalog_entries_stated
-    assert (port, section) == ("encoded_audio", "audio")
-    assert entry["codec"] == "opus"
-    assert entry["sampleRate"] == OPUS_SAMPLE_RATE_HZ
-    assert entry["numberOfChannels"] == 2
-    opus_head = bytes.fromhex(entry["description"])
+    [(port, stream_facts)] = opus_round_trip.parent.stream_facts_stated
+    assert port == "encoded_audio"
+    assert stream_facts["family"] == "packets"
+    assert stream_facts["rfc6381_codec"] == "opus"
+    assert stream_facts["sample_rate"] == OPUS_SAMPLE_RATE_HZ
+    assert stream_facts["channel_count"] == 2
+    opus_head = bytes.fromhex(stream_facts["codec_configuration_hex"])
     assert opus_head[:8] == b"OpusHead"
     assert opus_head[9] == 2
     assert int.from_bytes(opus_head[10:12], "little") == LIBOPUS_PRE_SKIP_SAMPLES
@@ -308,7 +309,7 @@ def test_a_window_whose_channel_count_opus_cannot_place_is_refused_by_name_and_t
         opus_round_trip.send(nine_channels)
     opus_round_trip.send(nine_channels)
 
-    assert opus_round_trip.parent.catalog_entries_stated == []
+    assert opus_round_trip.parent.stream_facts_stated == []
     assert opus_round_trip.decoded_blocks() == []
 
 
@@ -324,11 +325,11 @@ def test_a_message_on_the_decoders_link_that_is_no_media_frame_is_refused_by_nam
             0,
             True,
             0,
-            {"section": "audio", "entry": {"codec": "mp4a.40.2", "numberOfChannels": 2}},
+            {"family": "packets", "rfc6381_codec": "mp4a.40.2", "channel_count": 2},
         )
-    with pytest.raises(ValueError, match="`video` entry"):
+    with pytest.raises(ValueError, match="names no codec"):
         decoder._decoder.decode_one_arriving_message(
-            b"\x00\xfc\xff\xfe", 0, True, 0, {"section": "video", "entry": {"codec": "avc1"}}
+            b"\x00\xfc\xff\xfe", 0, True, 0, {"family": "packets", "channel_count": 2}
         )
 
 

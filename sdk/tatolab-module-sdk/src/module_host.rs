@@ -910,26 +910,26 @@ impl ModuleHostOutputPort {
         )
     }
 
-    /// State the port's catalog entry: `section` is `video` or `audio`, and
-    /// `entry_json` the entry's fields as one JSON object, in hang's names.
-    pub fn set_catalog_entry(
+    /// Replace the port's stream facts: `family` is `image` or `packets`, the
+    /// port's own, and `stream_facts_json` the facts' fields as one JSON object.
+    pub fn set_stream_facts(
         &self,
-        section: &str,
-        entry_json: &str,
+        family: &str,
+        stream_facts_json: &str,
     ) -> Result<(), ModuleHostError> {
         let table = &self.module_host.module_host_table;
         let mut error_message = ModuleHostTableErrorMessage::empty();
         // SAFETY: as in `write`.
         let status = unsafe {
-            (table.output_port_set_catalog_entry)(
+            (table.output_port_set_stream_facts)(
                 table.node_host,
                 self.handle,
-                ModuleHostTableUtf8::of(section),
-                ModuleHostTableUtf8::of(entry_json),
+                ModuleHostTableUtf8::of(family),
+                ModuleHostTableUtf8::of(stream_facts_json),
                 &mut error_message,
             )
         };
-        refuse_unless_ok("output_port_set_catalog_entry", status, &error_message)
+        refuse_unless_ok("output_port_set_stream_facts", status, &error_message)
     }
 }
 

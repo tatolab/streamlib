@@ -6,7 +6,8 @@
 //! stream's records by sequence number, and `list_streams`,
 //! `stop_stream`, `start_stream`, `remove_project` and `rename_stream` act by
 //! stream id on an engine recording its streams in a temporary state
-//! directory, and `open_viewer` opens only over `/mcp/stdio`.
+//! directory, `open_viewer` opens only over `/mcp/stdio`, and graph edits are
+//! transactions kept in a stream's graph document that each author's `undo` reverses.
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
@@ -1793,4 +1794,297 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
         engine.engine.ids_of_the_loaded_streams(),
         [studio_stream_id]
     );
+}
+
+// ============================================================================
+// Graph edits are transactions
+// ============================================================================
+
+/// A native sink with one input port, `video`, and nothing to do.
+#[streamlib::sdk::processor(
+    execution = manual,
+    input("video", delivery_profile = "newest", family = Image)
+)]
+pub struct StreamToolsTestSink;
+
+impl ManualProcessor for StreamToolsTestSink::Processor {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn register_the_stream_tools_test_sink_once() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| PROCESSOR_REGISTRY.register::<StreamToolsTestSink::Processor>());
+}
+
+/// The UUID the graph document of [`a_project_whose_main_stream_holds_one_source`] gives its
+/// one node.
+const SOURCE_NODE_UUID: &str = "5a5a5a5a-5a5a-4a5a-8a5a-5a5a5a5a5a5a";
+
+/// A project whose stream `main` holds one [`StreamToolsTestSource`] named `source`, by
+/// [`SOURCE_NODE_UUID`].
+fn a_project_whose_main_stream_holds_one_source() -> ProjectWithGraphDocuments {
+    register_the_stream_tools_test_sink_once();
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"][0]["id"] = json!(SOURCE_NODE_UUID);
+    ProjectWithGraphDocuments::holding(graph)
+}
+
+impl ProjectWithGraphDocuments {
+    /// The graph document of this project's stream `stream_name`, as it is on disk now.
+    fn the_graph_document_of(&self, stream_name: &str) -> Value {
+        serde_json::from_slice(
+            &std::fs::read(
+                self.path()
+                    .join("streams")
+                    .join(format!("{stream_name}.graph.json")),
+            )
+            .expect("the graph document reads"),
+        )
+        .expect("the graph document is JSON")
+    }
+}
+
+impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
+    /// Load `project`'s stream `stream_name` from its graph document on disk as its library
+    /// host would, not started; returns its id.
+    fn a_stream_loaded_from_its_graph_document(
+        &self,
+        project: &ProjectWithGraphDocuments,
+        stream_name: &str,
+    ) -> String {
+        let stream_id = project.stream_id_of(stream_name);
+        self.engine
+            .load_stream_from_graph_snapshot(
+                &GraphSnapshot::from_graph_document(project.the_graph_document_of(stream_name))
+                    .expect("the graph document parses"),
+                OptionsForLoadingOneStream::in_stream_environment(project.stream_environment())
+                    .with_display_name(stream_name)
+                    .at_stream_location(stream_id.clone(), project.location_of(stream_name)),
+            )
+            .expect("the stream loads");
+        stream_id
+    }
+
+    /// The live graph of the loaded stream `stream_id`.
+    fn the_live_graph_of(&self, stream_id: &str) -> Value {
+        self.engine
+            .runtime_operations_of_the_stream_a_call_names(stream_id)
+            .expect("the stream is loaded")
+            .to_json()
+            .expect("the graph renders")
+    }
+}
+
+/// Each node's name in `graph`, sorted, leaving out a node a stream not started holds
+/// pending its deletion at the start.
+fn sorted_node_names_in(graph: &Value) -> Vec<String> {
+    let mut names: Vec<String> = graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["components"]["pending_deletion"] != true)
+        .filter_map(|node| node["name"].as_str().map(str::to_owned))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// Each link in `graph` as `source/port -> target/port`, by node name, leaving out a link
+/// pending its deletion.
+fn links_by_node_name_in(graph: &Value) -> Vec<String> {
+    let name_of = |end: &Value| {
+        let node = end["node"].as_str().unwrap_or_default();
+        graph["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|candidate| candidate["id"] == node)
+            .and_then(|candidate| candidate["name"].as_str())
+            .unwrap_or(node)
+            .to_owned()
+    };
+    graph["links"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|link| link["components"]["pending_deletion"] != true)
+        .map(|link| {
+            format!(
+                "{}/{} -> {}/{}",
+                name_of(&link["source"]),
+                link["source"]["port"].as_str().unwrap_or_default(),
+                name_of(&link["target"]),
+                link["target"]["port"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+fn an_agent_named(name: &str) -> Value {
+    json!({ "kind": "agent", "name": name })
+}
+
+/// Five edits sent as one `transact` are one commit: the graph document keeps them, so a
+/// fresh runtime loading it finds them, and one `undo` reverses all five, on the document and
+/// on the running stream.
+#[tokio::test(flavor = "multi_thread")]
+async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_reverses_them() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+
+    let applied = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({
+                "author": an_agent_named("alice"),
+                "operations": [
+                    { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+                      "name": "monitor", "as": "monitor" },
+                    { "operation": "connect", "stream": stream_id,
+                      "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+                      "target": { "node": "monitor", "port": "video" } },
+                    { "operation": "rename_node", "stream": stream_id,
+                      "node": SOURCE_NODE_UUID, "name": "camera" },
+                    { "operation": "set_studio_fields", "stream": stream_id,
+                      "node": SOURCE_NODE_UUID, "studio": { "position": [120, 40] } },
+                    { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+                      "name": "spare" },
+                ],
+            }),
+        )
+        .await,
+    )
+    .expect("the transaction applies");
+    assert_eq!(applied["mode"], "commit", "{applied}");
+    assert!(applied["transaction"].is_string(), "{applied}");
+    assert!(applied["commit"].is_string(), "{applied}");
+    assert_eq!(applied["operations"].as_array().map(Vec::len), Some(5));
+
+    let kept = project.the_graph_document_of("main");
+    assert_eq!(
+        sorted_node_names_in(&kept),
+        ["camera", "monitor", "spare"],
+        "{kept}"
+    );
+    assert_eq!(
+        links_by_node_name_in(&kept),
+        ["camera/video -> monitor/video"],
+        "{kept}"
+    );
+    let camera = kept["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == SOURCE_NODE_UUID)
+        .expect("the source keeps its UUID");
+    assert_eq!(camera["studio"], json!({ "position": [120, 40] }));
+
+    let restarted = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let reloaded_stream_id = restarted.a_stream_loaded_from_its_graph_document(&project, "main");
+    let reloaded = restarted.the_live_graph_of(&reloaded_stream_id);
+    assert_eq!(
+        sorted_node_names_in(&reloaded),
+        ["camera", "monitor", "spare"]
+    );
+    assert_eq!(
+        links_by_node_name_in(&reloaded),
+        ["camera/video -> monitor/video"]
+    );
+
+    let undone = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await,
+    )
+    .expect("the undo applies");
+    assert_eq!(undone["undoes"], applied["transaction"], "{undone}");
+    let after_the_undo = project.the_graph_document_of("main");
+    assert_eq!(
+        sorted_node_names_in(&after_the_undo),
+        ["source"],
+        "{after_the_undo}"
+    );
+    assert_eq!(links_by_node_name_in(&after_the_undo), Vec::<String>::new());
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(sorted_node_names_in(&live), ["source"], "{live}");
+    assert_eq!(links_by_node_name_in(&live), Vec::<String>::new(), "{live}");
+}
+
+/// Two authors' edits interleave, and each author's `undo` reverses only that author's own;
+/// `redo` brings back what the author's undo reversed.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_authors_undo_reverses_only_their_own_edits() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+            .unwrap_or_else(|refusal| panic!("`{tool_name}` was refused: {refusal}"))
+        }
+    };
+    let add_a_sink_as = |author: &str, name: &str| {
+        json!({
+            "stream": stream_id, "type": sink_type.as_str(), "name": name,
+            "author": an_agent_named(author),
+        })
+    };
+    let undo_by = |author: &str| json!({ "project_directory": project.path(), "author": an_agent_named(author) });
+
+    let alice_first = call("add_node", add_a_sink_as("alice", "alice-first")).await["added_nodes"]
+        [0]["node"]
+        .clone();
+    call("add_node", add_a_sink_as("bob", "bob-first")).await;
+    call(
+        "rename_node",
+        json!({
+            "stream": stream_id, "node": alice_first, "name": "alice-renamed",
+            "author": an_agent_named("alice"),
+        }),
+    )
+    .await;
+
+    call("undo", undo_by("bob")).await;
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["alice-renamed", "source"]
+    );
+    call("undo", undo_by("alice")).await;
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["alice-first", "source"]
+    );
+    call("redo", undo_by("alice")).await;
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["alice-renamed", "source"]
+    );
+    assert_eq!(
+        sorted_node_names_in(&engine.the_live_graph_of(&stream_id)),
+        ["alice-renamed", "source"],
+        "undo and redo apply to the running stream as well"
+    );
+
+    let nothing_left = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "undo",
+            undo_by("bob"),
+        )
+        .await,
+    )
+    .expect_err("bob's one edit is already undone");
+    assert!(nothing_left.contains("bob"), "{nothing_left}");
 }

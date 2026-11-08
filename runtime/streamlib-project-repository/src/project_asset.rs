@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -318,6 +319,73 @@ pub(crate) fn project_files_the_history_records(
     }
     found.sort();
     Ok(found)
+}
+
+/// Every asset the project at `project_directory` holds, by UUID: each sidecar's, and each
+/// stream's its graph document names.
+pub fn every_asset_uuid_the_project_holds(
+    project_directory: &Path,
+    project: Uuid,
+) -> Result<BTreeSet<Uuid>, ProjectRepositoryRefusal> {
+    let mut asset_uuids: BTreeSet<Uuid> = read_every_asset_sidecar(project_directory)?
+        .into_keys()
+        .collect();
+    for stream_document in
+        crate::project_stream_document::project_stream_documents(project_directory)?
+    {
+        asset_uuids.insert(stream_document.stream_asset(project));
+    }
+    Ok(asset_uuids)
+}
+
+/// Where the bytes of the asset `asset` sit in the project's content store: a content-addressed
+/// file a reader opens and never writes. Refused when the project holds no such asset, or when
+/// the store lacks its bytes.
+pub fn the_content_path_of_an_asset(
+    project_directory: &Path,
+    asset: Uuid,
+) -> Result<PathBuf, ProjectRepositoryRefusal> {
+    let held_asset = read_every_asset_sidecar(project_directory)?
+        .remove(&asset)
+        .ok_or(ProjectRepositoryRefusal::NoSuchAsset(asset))?;
+    let content_store =
+        crate::project_content_store::ProjectContentStore::of_project(project_directory)?;
+    content_store.stored_content(&held_asset.content_sha256)?;
+    Ok(content_store.content_path(&held_asset.content_sha256))
+}
+
+pub(crate) fn read_every_asset_sidecar(
+    project_directory: &Path,
+) -> Result<BTreeMap<Uuid, ProjectAsset>, ProjectRepositoryRefusal> {
+    let mut assets_by_uuid: BTreeMap<Uuid, ProjectAsset> = BTreeMap::new();
+    for sidecar_path in project_files_ending_with(project_directory, ASSET_SIDECAR_FILE_SUFFIX)? {
+        let on_disk = project_directory.join(&sidecar_path);
+        let unreadable = |why: String| ProjectRepositoryRefusal::AssetSidecarUnreadable {
+            path: on_disk.clone(),
+            why,
+        };
+        let asset_path = ProjectRelativeAssetPath::parse(
+            sidecar_path
+                .strip_suffix(ASSET_SIDECAR_FILE_SUFFIX)
+                .unwrap_or(&sidecar_path),
+        )
+        .map_err(|refusal| unreadable(refusal.to_string()))?;
+        let bytes = std::fs::read(&on_disk)?;
+        let sidecar: ProjectAssetSidecar =
+            serde_json::from_slice(&bytes).map_err(|error| unreadable(error.to_string()))?;
+        if let Some(earlier) = assets_by_uuid.get(&sidecar.asset) {
+            return Err(ProjectRepositoryRefusal::AssetNamedTwice {
+                asset: sidecar.asset,
+                first: earlier.path.sidecar_path(),
+                second: sidecar_path,
+            });
+        }
+        assets_by_uuid.insert(
+            sidecar.asset,
+            ProjectAsset::from_sidecar(asset_path, sidecar),
+        );
+    }
+    Ok(assets_by_uuid)
 }
 
 #[cfg(test)]

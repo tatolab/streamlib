@@ -45,7 +45,7 @@ Further things it teaches:
 - **`SpeakerSink` matches its own device.** The mixer publishes 48 kHz mono; the
   speaker's input declares `match_device`, so the same stage converts the mix to
   whatever the machine's playback device actually opened at. Nothing in
-  `stream.py` names a device format.
+  the graph document names a device format.
 - **A message's payload is bytes.** Each voice and the mixer build an
   `AudioBlock` and write `block.to_bytes()`, so a missing field or a sample
   buffer of the wrong length is refused where it is written, not downstream.
@@ -62,31 +62,30 @@ Further things it teaches:
   grids carry sub-window offsets that discarding cannot remove, so a tighter one
   thrashes forever instead of converging.
 
-The nodes live in `nodes/`, one module each, never in `stream.py`: each of the
+The nodes live in `nodes/`, one module each: each of the
 four Python nodes — three `ToneSource`s and the `ChordMixer` — runs in its own
 child interpreter with its own GIL, which imports the class by name.
 `SpeakerSink` comes from the `tatolab-speaker` module.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-You should hear a steady C major chord. Ctrl-C unloads the stream.
+You should hear a steady C major chord.
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI — the authoring surface — and
 `numpy`, which the nodes use, and builds `tatolab-speaker` from this checkout,
 as an editable path dependency (`[tool.uv.sources]` in `pyproject.toml`); the
 module is a maturin project, so the build needs a Rust toolchain. The runtime
 itself is not on pip.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
 **No audio hardware?** It still runs. Where no audio backend exists,
 `SpeakerSink` discards what it receives — so the graph, the contract and the
@@ -94,39 +93,19 @@ mixing are all exercised in a headless container, silently.
 
 ## Observing it
 
-From another terminal, while it runs:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
 `graph` renders each windowed port's contract beside its delivery profile, and
 the speaker's `match_device` port renders the values its device settled on.
-The voices are named `c4voice`, `e4voice` and `g4voice` by `add`'s `name=`; the
-mixer and the speaker take their class names, lowercased — `chordmixer`,
-`speakersink`.
-
-This stream exposes nothing, so every port is internal to it. To read the mix
-itself, expose the mixer's output and read it as a track: an exposed port is
-the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the
-machine's local relay. `http://127.0.0.1:4446/` lists this machine's name.
-
-```bash
-tatolab expose main chordmixer mixed_chord_to_downstream
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    chordmixer/mixed_chord_to_downstream --count 5 --out /tmp/mix
-```
-
-Each file is one block as the mixer wrote it, a msgpack record, indexed with
-its timestamp in `objects.jsonl`. Unlike a video frame's record, which carries
-a surface id rather than the picture, an audio block carries its payload:
-`samples` is the block's interleaved little-endian bytes, with `sample_rate`,
-`channels`, `sample_count`, `dtype` and `first_sample_timestamp_ns` beside
-them. `tatolab.stream.msgpack.unpack` reads one, and `AudioBlock.from_bytes`
-casts it. `tatolab expose --remove main chordmixer mixed_chord_to_downstream`
-makes the port internal again.
+The nodes are `c4voice`, `e4voice`, `g4voice`, `chordmixer` and `speakersink`.
+The mix itself is the mixer's `mixed_chord_to_downstream`, which Tato Studio's
+viewer plays.
 
 ### A handful of dropped windows at startup is expected
 
@@ -146,16 +125,16 @@ lockstep.
 
 ## Knobs
 
-Everything is literal config in `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `C4_FREQUENCY_HZ` / `E4_FREQUENCY_HZ` / `G4_FREQUENCY_HZ` | top of `stream.py` | Each voice's pitch. |
-| `VOICE_AMPLITUDE` | top of `stream.py` | Each voice's peak; three at 0.3 sum below full scale. |
-| `frequency_hz`, `sample_rate`, `channels`, `block_size`, `amplitude` | `ToneSource`'s config | What one voice publishes. |
-| `voice_gain` | `ChordMixer`'s config | Gain applied to the sum of the voices, which is then clipped to ±1. |
-| `SPEAKER_DEVICE_ID` | top of `stream.py` | Playback device, as the audio backend names it. `None` picks the backend's default; a named device that cannot be opened raises rather than landing on another one. |
+| `frequency_hz`, `amplitude` | `c4voice`, `e4voice`, `g4voice` | Each voice's pitch and peak; three at 0.3 sum below full scale. |
+| `sample_rate`, `channels`, `block_size` | `c4voice`, `e4voice`, `g4voice` | What one voice publishes. |
+| `voice_gain` | `chordmixer` | Gain applied to the sum of the voices, which is then clipped to ±1. |
+| `device_id` | `speakersink` | Playback device, as the audio backend names it. Absent picks the backend's default; a named device that cannot be opened raises rather than landing on another one. |
 
 Give the three voices the same rate and block size and the contract converts
 nothing — the mixer's code does not change, which is the point.

@@ -21,6 +21,7 @@ from helper_placement_processors import (
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
     ReportsTheCountsItReadInOrderSink,
     ReportsTheFunctionNodeValuesItReadSink,
+    ReportsTheLevelRecordsItReadSink,
     ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
     ReportsTheRecordsItReadSink,
@@ -122,6 +123,30 @@ def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
     sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
     stream_builder.connect(lfo.output("result"), remap.input("x"))
     stream_builder.connect(remap.output("result"), sink.input("brightness"))
+
+
+@stream
+def function_nodes_read_by_two_native_converters_into_python_records_sink(
+    stream_builder: StreamBuilder,
+) -> None:
+    """`Lfo` into `Remap` into a native `ChannelsToRecords` into a Python class, and `Lfo` into a second converter.
+
+    Neither converter runs in a helper, so neither can evaluate the island it
+    reads: both islands go to the stream's one function node pool.
+    """
+    lfo = stream_builder.add(Lfo)
+    remap = stream_builder.add(Remap)
+    first_converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["level"]}, name="first-converter"
+    )
+    second_converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["level"]}, name="second-converter"
+    )
+    sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
+    stream_builder.connect(lfo.output("result"), remap.input("x"))
+    stream_builder.connect(remap.output("result"), first_converter.input("channels"))
+    stream_builder.connect(lfo.output("result"), second_converter.input("channels"))
+    stream_builder.connect(first_converter.output("records"), sink.input("level_records"))
 
 
 @stream

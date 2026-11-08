@@ -332,19 +332,15 @@ class AudioConsumer:
         }
     }
 
-    /// The catalog entry a Rust author declares on an output port, spelled for
+    /// The frame rate a Rust author declares on an Image output, spelled for
     /// the same port the Python class below declares.
     #[streamlib::sdk::processor(
         execution = manual,
-        output(
-            "encoded_video",
-            catalog = VideoEntry { codec: "avc1.64001f", coded_width: 1280, coded_height: 720 },
-            family = Packets,
-        ),
+        output("video", family = Image, frame_rate = from_config("frames_per_second")),
     )]
-    struct RustDeclaredEncodedVideoSource;
+    struct RustDeclaredFrameRateSource;
 
-    impl streamlib::sdk::processors::ManualProcessor for RustDeclaredEncodedVideoSource::Processor {
+    impl streamlib::sdk::processors::ManualProcessor for RustDeclaredFrameRateSource::Processor {
         fn start(
             &mut self,
             _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
@@ -353,46 +349,49 @@ class AudioConsumer:
         }
     }
 
-    /// One catalog entry, two authoring languages, one descriptor field.
+    /// One frame rate, two authoring languages, one family declaration.
     #[test]
-    fn a_python_declared_catalog_entry_and_a_rust_declared_one_are_the_same_entry() {
+    fn a_python_declared_frame_rate_and_a_rust_declared_one_are_the_same_declaration() {
         let python_outputs = read_python_declaration(
             "@node.process(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   encoded_video = Output(Packets,\n\
-             \x20       catalog=VideoEntry(codec='avc1.64001f', codedWidth=1280, codedHeight=720))\n",
+             \x20   video = Output(Image, rate=from_config('frames_per_second'))\n",
         )
         .expect("the declaration reads")
         .descriptor
         .outputs;
 
         let rust_descriptor =
-            <RustDeclaredEncodedVideoSource::Processor as streamlib::sdk::processors::GeneratedProcessor>::descriptor()
+            <RustDeclaredFrameRateSource::Processor as streamlib::sdk::processors::GeneratedProcessor>::descriptor()
                 .expect("the macro emits a descriptor");
 
         assert_eq!(
-            python_outputs[0].catalog_entry, rust_descriptor.outputs[0].catalog_entry,
-            "the two authoring surfaces must produce one entry"
+            python_outputs[0].family, rust_descriptor.outputs[0].family,
+            "the two authoring surfaces must produce one declaration"
         );
         assert_eq!(
-            serde_json::to_value(&python_outputs[0].catalog_entry).unwrap(),
-            serde_json::json!({
-                "section": "video",
-                "entry": {"codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720},
-            })
+            python_outputs[0].family.frame_rate.clone(),
+            Some(
+                streamlib::sdk::descriptors::ImageOutputPortFrameRate::FromConfig {
+                    config_key: "frames_per_second".to_string(),
+                }
+            )
         );
     }
 
-    /// A Python entry hang does not read is refused when the class is
-    /// described, naming the port.
+    /// A frame rate on an output whose family carries none is refused when the
+    /// class is described, naming the port.
     #[test]
-    fn a_python_declared_catalog_entry_hang_does_not_read_is_refused_naming_the_port() {
+    fn a_python_declared_frame_rate_on_a_packets_output_is_refused_naming_the_port() {
         let refusal = python_declaration_refusal(
             "@node.process(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   encoded_video = Output(Packets, catalog=VideoEntry(codec='avc1.zz'))\n",
+             \x20   encoded_video = Output(Packets, rate=30)\n",
         );
-        assert!(refusal.contains("encoded_video"), "got {refusal}");
+        assert!(
+            refusal.contains("encoded_video") || refusal.contains("rate"),
+            "got {refusal}"
+        );
     }
 
     /// The headline: one contract, two authoring languages, one schema.

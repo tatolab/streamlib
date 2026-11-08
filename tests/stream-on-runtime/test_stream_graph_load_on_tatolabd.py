@@ -41,7 +41,6 @@ from node_module_whose_describe_holds_the_load import (
     NodeModuleWhoseDescribeHoldsTheLoad,
 )
 from runtime_load_streams import (
-    CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF,
     config_nesting_containers_deep,
     named_pattern_into_a_named_sink,
     open_config_sink_with_the_deepest_config_the_builder_compiles,
@@ -84,8 +83,11 @@ DESCRIBED_NODE_TYPE = f"{DESCRIBED_NODE_MODULE}:LoadedFrameRelay"
 
 # The graph document's parser refuses JSON nested past the depth it reads.
 GRAPH_DOCUMENT_NESTED_PAST_THE_MAXIMUM = "recursion limit exceeded"
-#: How the runtime names a graph document it cannot read a graph from.
-A_GRAPH_DOCUMENT_THAT_DOES_NOT_LOAD = "does not load"
+#: How the runtime names a graph document that is not JSON.
+A_GRAPH_DOCUMENT_THAT_DOES_NOT_PARSE = "does not parse"
+#: The deepest config a graph document's parser reads: 127 containers from the document's
+#: root, less the document, its `nodes` list and the node enclosing the config.
+CONTAINERS_A_GRAPH_DOCUMENTS_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 124
 
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
@@ -185,11 +187,11 @@ def test_the_deepest_config_the_builder_compiles_loads(
     assert loaded_with(run_outcome) == 1
 
 
-def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_load(
+def test_a_config_one_container_deeper_than_a_graph_document_reads_is_refused_by_load(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    """The graph document's parser reads the deepest config the builder
-    compiles and no deeper, so one container past it, written by hand, is refused."""
+    """A graph document's parser reads a config deeper than the deepest the builder
+    compiles, and one container past its own limit, written by hand, is refused."""
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
         {
             "stream": "deep",
@@ -198,7 +200,7 @@ def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_l
                     "name": "openconfigsink",
                     "type": OPEN_CONFIG_SINK_TYPE,
                     "config": config_nesting_containers_deep(
-                        CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF + 1
+                        CONTAINERS_A_GRAPH_DOCUMENTS_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF + 1
                     ),
                 }
             ],
@@ -223,7 +225,7 @@ def test_nan_and_infinity_in_a_compiled_config_are_refused_as_not_json(
     )
 
     refusal = refused_naming(run_outcome)
-    assert A_GRAPH_DOCUMENT_THAT_DOES_NOT_LOAD in refusal
+    assert A_GRAPH_DOCUMENT_THAT_DOES_NOT_PARSE in refusal
     assert "expected value" in refusal
 
 
@@ -244,7 +246,7 @@ def test_a_lone_surrogate_escape_in_a_compiled_config_is_refused_naming_it(
     )
 
     refusal = refused_naming(run_outcome)
-    assert A_GRAPH_DOCUMENT_THAT_DOES_NOT_LOAD in refusal
+    assert A_GRAPH_DOCUMENT_THAT_DOES_NOT_PARSE in refusal
     assert "lone leading surrogate" in refusal
 
 

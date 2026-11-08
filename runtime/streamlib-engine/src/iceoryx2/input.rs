@@ -53,10 +53,10 @@ use super::{
     ChannelDataServiceSubscriber, DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
     MessageGroupBoundary,
 };
-use crate::core::descriptors::CatalogEntry;
+use crate::core::descriptors::PortStreamFacts;
 use crate::core::error::{Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
-use crate::core::output_port_catalog_entries::UpstreamCatalogEntriesByInboundLink;
+use crate::core::output_port_stream_facts::UpstreamStreamFactsByInboundLink;
 use streamlib_ipc_types::BagsAGapInTheNumberingSaysWereLost;
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
@@ -458,10 +458,10 @@ pub struct InputMailboxesInner {
     dropped_bag_counts: Arc<DroppedBagCountsByInboundLink>,
     discarded_sample_counts: Arc<DiscardedSampleCountsByInboundLink>,
     device_matched_audio_window_contracts: Arc<DeviceMatchedAudioWindowContractsByInputPort>,
-    /// The upstream catalog entries the node's inbound links reach, reached
+    /// The upstream stream facts the node's inbound links reach, reached
     /// once the processor is created for its node.
-    upstream_catalog_entries_by_inbound_link:
-        std::sync::OnceLock<Arc<UpstreamCatalogEntriesByInboundLink>>,
+    upstream_stream_facts_by_inbound_link:
+        std::sync::OnceLock<Arc<UpstreamStreamFactsByInboundLink>>,
     input_ports_fed_by_function_node_islands:
         parking_lot::RwLock<HashMap<String, Arc<InputPortFedByAFunctionNodeIsland>>>,
 }
@@ -478,7 +478,7 @@ impl InputMailboxesInner {
             device_matched_audio_window_contracts: Arc::new(
                 DeviceMatchedAudioWindowContractsByInputPort::default(),
             ),
-            upstream_catalog_entries_by_inbound_link: std::sync::OnceLock::new(),
+            upstream_stream_facts_by_inbound_link: std::sync::OnceLock::new(),
             input_ports_fed_by_function_node_islands: parking_lot::RwLock::default(),
         }
     }
@@ -523,32 +523,32 @@ impl InputMailboxesInner {
             .cloned()
     }
 
-    /// Reach the upstream catalog entries of the node this processor was
+    /// Reach the upstream stream facts of the node this processor was
     /// created for.
-    pub(crate) fn reach_upstream_catalog_entries_by_inbound_link(
+    pub(crate) fn reach_upstream_stream_facts_by_inbound_link(
         &self,
-        upstream_catalog_entries_by_inbound_link: Arc<UpstreamCatalogEntriesByInboundLink>,
+        upstream_stream_facts_by_inbound_link: Arc<UpstreamStreamFactsByInboundLink>,
     ) {
         if self
-            .upstream_catalog_entries_by_inbound_link
-            .set(upstream_catalog_entries_by_inbound_link)
+            .upstream_stream_facts_by_inbound_link
+            .set(upstream_stream_facts_by_inbound_link)
             .is_err()
         {
             tracing::warn!(
-                "input mailboxes already reach their node's upstream catalog entries; a second \
+                "input mailboxes already reach their node's upstream stream facts; a second \
                  node's are ignored"
             );
         }
     }
 
-    /// The current catalog entry of the output port feeding `port` over
+    /// The current stream facts of the output port feeding `port` over
     /// `inbound_link`, or over its one link when `None`.
-    pub fn inbound_link_catalog_entry(
+    pub fn upstream_stream_facts(
         &self,
         port: &str,
         inbound_link: Option<&InboundLinkName>,
-    ) -> Result<Option<CatalogEntry>> {
-        self.upstream_catalog_entries_by_inbound_link
+    ) -> Result<Option<PortStreamFacts>> {
+        self.upstream_stream_facts_by_inbound_link
             .get()
             .ok_or_else(|| {
                 Error::Link(format!(
@@ -556,7 +556,7 @@ impl InputMailboxesInner {
                      processor was not created for a node"
                 ))
             })?
-            .catalog_entry_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str))
+            .stream_facts_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str))
     }
 
     /// Check if a port has already been configured.
@@ -1689,18 +1689,18 @@ impl InputMailboxes {
         }
     }
 
-    /// The current catalog entry of the output port feeding `port`, or `None`
-    /// when nothing feeds it or that port carries none.
+    /// The current stream facts of the output port feeding `port`, or `None`
+    /// when nothing feeds it or that port states none.
     ///
     /// A port fed by more than one link names the one to read with
     /// `inbound_link`; left `None`, such a port is refused naming its links.
-    pub fn inbound_link_catalog_entry(
+    pub fn upstream_stream_facts(
         &self,
         port: &str,
         inbound_link: Option<&InboundLinkName>,
-    ) -> Result<Option<CatalogEntry>> {
+    ) -> Result<Option<PortStreamFacts>> {
         match self.host_inner() {
-            Some(inner) => inner.inbound_link_catalog_entry(port, inbound_link),
+            Some(inner) => inner.upstream_stream_facts(port, inbound_link),
             None => Err(Error::Link(format!(
                 "InputMailboxes not wired (port='{port}'): host has not yet installed iceoryx2 \
                  resources on this processor instance"

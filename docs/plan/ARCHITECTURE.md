@@ -992,7 +992,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets; unbuilt: subgraphs, the node catalog's unchecked mark on a Records port, an Image port's stream facts on its catalog entry; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts; unbuilt: fragments; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -1294,8 +1294,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   encoded bytes with a pts, the keyframe flag as `starts_group` and the codec string the port
   declares; **Records** — a small open keyed map of bounded size, which the runtime encodes, so
   a writer hands it a plain dict and msgpack never appears in user code. A sixth family is
-  admitted only for a distinct memory layout, never for a new domain. A `@stream` subgraph is
-  a container, never a family, and latest-value control is a transport detail of Channels or
+  admitted only for a distinct memory layout, never for a new domain. A fragment is a
+  container, never a family, and latest-value control is a transport detail of Channels or
   Records under `newest`. Built-ins never publish Records for data another family fits, and
   the node catalog marks a Records port unchecked. Owner, 2026-11-03. [strict-port-families — SHIPPED
   #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
@@ -1539,8 +1539,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and `step_ns` and `step_index`, set only while the clock steps); a write without
   `timestamp_ns` is stamped with stream time, and an explicit `timestamp_ns` is kept as
   written. `monotonic_now_ns()` and `start_monotonic_timer` stay the machine's clock, so a node
-  measures latency outside a real-time stream with two `monotonic_now_ns()` readings. A nested
-  `@stream` may carry its own clock once subgraphs land; until then a stream has one. Rendering
+  measures latency outside a real-time stream with two `monotonic_now_ns()` readings. A stream has one
+  clock; a fragment is part of its stream and carries none. Rendering
   to a file also needs a file source and an MP4 file sink. Owner, 2026-11-03; barrier above 1×,
   free at or under, owner, 2026-11-04. [stream-clocks — SHIPPED #3158, #3166, #3167, #3169,
   #3171, #3175]
@@ -1570,6 +1570,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   steps from its start opens its first step once every node runs. A manual node, which runs its
   own callbacks, fails at its start in a stream whose clock steps, and a rescale above 1× is
   refused naming one. Owner, 2026-11-03. [stream-clocks — SHIPPED #3167, #3169, #3175]
+  Limits as built: a stepped stream with helper-placed nodes advances at most a few hundred
+  steps a second, since each step waits on the board event, a helper's progress write and two
+  agreeing readings; every bag a helper reads costs two small writes to its loss-count board, in
+  every stream; and the stream clock board admits 256 helper readers, so a stream with more
+  helper-placed nodes fails at a helper's `setup`, naming the board, rather than at load.
 - **DECIDED** — A node that paces itself on real time declares it — `paced_by_real_time=True` on
   `@node.process`, `paced_by_real_time` in `#[processor]` — and the node catalog shows it. Such a node
   loads in any stream: it paces on the machine clock, its writes carry stream time, and it
@@ -1916,13 +1921,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   graph and a subgraph alike declare each port they offer with a `GraphInput` or `GraphOutput`
   node, named and of one family, the way DaVinci Resolve's Fusion page and Effect House do; there
   is no `expose` verb. Tato Studio shows a graph's Outputs as what it displays, at every level.
-  `stream_builder.add` takes a `@stream` function as it takes a node class: its extra parameters
-  are promoted config, so binding them is partial application; its Input and Output nodes are its
-  ports, the only ones reachable from the graph that adds it; and it flattens at compile, its
-  nodes named under the reference's name (`overlay/comp`). The same function still runs alone as
-  a stream. An Output never leaves the machine on its own: sending one is a gateway node's job
+  A subgraph is a fragment, a `@graph_generator` function's stored output (§Product): its extra
+  parameters are promoted config; its Input and Output nodes are its ports, the only ones
+  reachable from the graph that places it; and it flattens at compile, its nodes named under the
+  reference's name (`overlay/comp`). The same generator may instead fill a stream whole. An Output never leaves the machine on its own: sending one is a gateway node's job
   (§Networking). Owner, 2026-11-03 and 2026-11-06. [stream-interface-and-routing-policy;
-  gateway-nodes]
+  gateway-nodes; amended by project-and-assets: a subgraph is a fragment]
   Rejected: `expose` as the way a graph declares its ports — an implicit edge on a node's port in
   place of a node the designer draws (owner, 2026-11-06).
 - **DECIDED** — Variables, as Unreal Blueprints have them: a `SetVariable` node names a value and
@@ -1938,8 +1942,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   edge; gateway-nodes]
   Rejected: a connection carried as a Records value — a live session is not data, and each reader
   would open its own (owner, 2026-11-06).
-- **OPEN** — Whether a subgraph may nest without bound or recursion is refused, and whether
-  every installed `@stream` is addable or only marked ones. [stream-interface-and-routing-policy]
+- **OPEN** — Whether a fragment may hold another fragment, a generator placing a generator,
+  without bound, and how a generator that places itself is refused. Any `@graph_generator` may
+  be placed. [stream-interface-and-routing-policy; project-and-assets; IN-FLIGHT → graph-groups-and-nested-fragments]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
@@ -2424,7 +2429,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -3246,7 +3251,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes, typed-stream-facts; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3888,7 +3893,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension

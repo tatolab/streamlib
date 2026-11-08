@@ -145,9 +145,9 @@ from it. _Avoid_: "channel name", "mesh address", "service name", "remote link" 
 at every level, whether it runs alone or as a **subgraph**; Tato Studio shows a graph's Outputs.
 _Avoid_: "API", "public ports", "expose" (retired 2026-11-06).
 
-**Subgraph** _(user)_: a `@stream` function added to another stream with `stream_builder.add`,
+**Subgraph** _(user)_: a **fragment** placed in a stream, its Input and Output nodes its ports,
 its extra parameters promoted config, flattened at compile under the reference's name. _Avoid_:
-"component", "COMP", "macro".
+"component", "COMP", "macro", "nested stream".
 
 **Viewer** _(user)_: a Tato Studio view of any port of any node on the machine, by its family —
 a thumbnail for Image, statistics or points for Array, a waveform for Channels, keyframes for
