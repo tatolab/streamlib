@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.68.38](https://github.com/tatolab/streamlib/compare/v0.68.37...v0.68.38) (2026-11-08)
+
+
+### Features
+
+* a [@graph](https://github.com/graph)_generator's output is stored as a fragment, flattened at load ([b970bc2](https://github.com/tatolab/streamlib/commit/b970bc2ed9ec61b02161ba7a231aa889527b1ce9))
+
+
+### Bug Fixes
+
+* refuse two fragments of one name, keep a fragment node read-only live ([d5cd156](https://github.com/tatolab/streamlib/commit/d5cd156e2058310a1a5b844937974c2d7d46cf50))
+
 ## [0.68.37](https://github.com/tatolab/streamlib/compare/v0.68.36...v0.68.37) (2026-11-08)
 
 
