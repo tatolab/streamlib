@@ -6,7 +6,8 @@ use streamlib_project_repository::{
     ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectOperation, ProjectRepository,
     ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
     ProjectTransactionLineage, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphOperation, StreamGraphOperationOnAStream,
+    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphOperation,
+    StreamGraphOperationOnAStream, fragment_with_each_node_uuid_kept_by_its_name,
 };
 use uuid::Uuid;
 
@@ -416,4 +417,163 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
         .unwrap()
         .node(overlay.id)
         .unwrap();
+}
+
+fn a_look_fragment_whose_inner_grade_reads(
+    lut: Uuid,
+    previous_run: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    fragment_with_each_node_uuid_kept_by_its_name(
+        &json!({
+            "nodes": [
+                { "name": "blur", "type": "nodes.blur:Node", "config": {} },
+                {
+                    "name": "inner",
+                    "type": "looks.inner:inner",
+                    "config": {},
+                    "fragment": {
+                        "nodes": [{
+                            "name": "grade",
+                            "type": "nodes.grade:Node",
+                            "config": { "lut": { "asset": lut } }
+                        }],
+                        "links": []
+                    }
+                }
+            ],
+            "links": []
+        }),
+        previous_run,
+        &mut Uuid::new_v4,
+    )
+    .unwrap()
+}
+
+fn a_look_fragment_node(fragment: serde_json::Value) -> StreamGraphDocumentNode {
+    StreamGraphDocumentNode {
+        node_type: "looks.look:look".to_owned(),
+        fragment: Some(Box::new(fragment)),
+        ..a_node("look", json!({}))
+    }
+}
+
+fn an_imported_asset(
+    project: &mut ProjectHoldingOneStream,
+    author: &ProjectTransactionAuthor,
+) -> Uuid {
+    let source_directory = tempfile::tempdir().unwrap();
+    let source = source_directory.path().join("grade.cube");
+    std::fs::write(&source, b"not really a lut").unwrap();
+    let imported = project
+        .repository
+        .apply_asset_changes(
+            author,
+            vec![ProjectAssetChangeRequest::ImportAsset {
+                source: ProjectAssetImportSource::FileOnThisMachine(source),
+                asset_path: "media/grade.cube".to_owned(),
+                kind: None,
+                import_settings: Map::new(),
+            }],
+        )
+        .unwrap();
+    let ProjectOperation::Asset(streamlib_project_repository::ProjectAssetOperation::ImportAsset {
+        asset,
+    }) = &imported.transaction.operations[0]
+    else {
+        panic!("expected an import");
+    };
+    asset.asset
+}
+
+#[test]
+fn a_fragment_placed_or_refreshed_with_an_inner_node_naming_an_absent_asset_is_refused() {
+    let mut project = ProjectHoldingOneStream::new();
+    let agent = an_author(ProjectTransactionAuthorKind::Agent, "rig agent");
+    let absent_lut = Uuid::new_v4();
+    let refusal = project
+        .apply(
+            &agent,
+            vec![project.on_the_stream(add(&a_look_fragment_node(
+                a_look_fragment_whose_inner_grade_reads(absent_lut, None),
+            )))],
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            refusal,
+            ProjectRepositoryRefusal::ConfigReferencesNoAsset { asset, .. } if asset == absent_lut
+        ),
+        "{refusal}"
+    );
+
+    let held_lut = an_imported_asset(&mut project, &agent);
+    let first_run = a_look_fragment_whose_inner_grade_reads(held_lut, None);
+    let look = a_look_fragment_node(first_run.clone());
+    project
+        .apply(&agent, vec![project.on_the_stream(add(&look))])
+        .unwrap();
+    let before = project.document_bytes();
+    let refusal = project
+        .apply(
+            &agent,
+            vec![
+                project.on_the_stream(StreamGraphOperation::RefreshFragment {
+                    node: look.id,
+                    from: StreamGraphFragmentPlacement {
+                        generator: look.node_type.clone(),
+                        config: json!({}),
+                        fragment: first_run.clone(),
+                    },
+                    to: StreamGraphFragmentPlacement {
+                        generator: look.node_type.clone(),
+                        config: json!({}),
+                        fragment: a_look_fragment_whose_inner_grade_reads(
+                            absent_lut,
+                            Some(&first_run),
+                        ),
+                    },
+                }),
+            ],
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            refusal,
+            ProjectRepositoryRefusal::ConfigReferencesNoAsset { asset, .. } if asset == absent_lut
+        ),
+        "{refusal}"
+    );
+    assert_eq!(project.document_bytes(), before);
+}
+
+#[test]
+fn an_asset_only_a_fragments_inner_node_references_is_held_against_deletion() {
+    let mut project = ProjectHoldingOneStream::new();
+    let agent = an_author(ProjectTransactionAuthorKind::Agent, "rig agent");
+    let lut = an_imported_asset(&mut project, &agent);
+    project
+        .apply(
+            &agent,
+            vec![project.on_the_stream(add(&a_look_fragment_node(
+                a_look_fragment_whose_inner_grade_reads(lut, None),
+            )))],
+        )
+        .unwrap();
+
+    let refusal = project
+        .repository
+        .apply_asset_changes(
+            &agent,
+            vec![ProjectAssetChangeRequest::DeleteAsset { asset: lut }],
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            &refusal,
+            ProjectRepositoryRefusal::AssetStillReferenced { asset, referencing_documents }
+                if *asset == lut && referencing_documents == &["streams/main.graph.json"]
+        ),
+        "{refusal}"
+    );
+    project.repository.asset(lut).unwrap();
 }
