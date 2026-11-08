@@ -845,6 +845,7 @@ jobs:
   # always finds the tarball it names.
   publish-linux-runtime:
     name: Publish the Linux runtime
+    if: ${{ !cancelled() && !failure() }}
     needs:
       - publish-to-pypi
       - publish-to-the-tatolab-package-index
