@@ -116,10 +116,12 @@ impl NodeTypesOneStreamResolves {
                     how_its_nodes_run,
                 },
             );
-        tracing::info!(
-            processor_class_import_path = node_type.as_str(),
-            "node type described in the stream's processor interpreter registered"
-        );
+        if !is_the_function_node_pool_type(&node_type) {
+            tracing::info!(
+                processor_class_import_path = node_type.as_str(),
+                "node type described in the stream's processor interpreter registered"
+            );
+        }
         Ok(())
     }
 
