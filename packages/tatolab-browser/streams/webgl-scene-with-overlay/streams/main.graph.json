@@ -72,7 +72,7 @@
       },
       "id": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
       "name": "scene-page",
-      "type": "tatolab.browser:BrowserSource"
+      "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
       "config": {
@@ -84,7 +84,7 @@
       },
       "id": "43275df6-0ede-4889-9e87-22932a299a39",
       "name": "overlay-page",
-      "type": "tatolab.browser:BrowserSource"
+      "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
       "config": {
@@ -100,13 +100,13 @@
       },
       "id": "2c51e17f-efa1-4ee5-a615-1dd217babd4f",
       "name": "alphaovercompositor",
-      "type": "tatolab.compositor:AlphaOverCompositor"
+      "type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor"
     },
     {
       "config": {},
       "id": "b67873bd-ee1e-4573-bef8-0af1c4ec4fe4",
       "name": "browsersourceoutputprobe",
-      "type": "tatolab.browser:BrowserSourceOutputProbe"
+      "type": "tatolab.browser.browser_source_output_probe:BrowserSourceOutputProbe"
     }
   ]
 }

@@ -37,7 +37,7 @@
       "config": {},
       "id": "d011f6e5-a692-4745-b718-990fe6d365d2",
       "name": "camerasource",
-      "type": "tatolab.camera:CameraSource"
+      "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
       "config": {},
