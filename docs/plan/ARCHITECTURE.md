@@ -1619,7 +1619,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   In-process hosting of a Python class node does not exist — not as a default, a
   fallback, an optimisation, or an engine choice. Shaders and compiled function nodes run
   without a process; a Python function node that does not compile runs inside its Python
-  reader, in a pool only in phase 4, and in its own process after a crash or a stall.
+  reader. An island no reader can evaluate — one a built-in reads, or one running a node as
+  Python that a native half reads — runs in the stream's one function node pool, placed
+  before the stream runs. A function node runs in its own process after a crash, a stall,
+  or three calls running that overrun the pool's frame interval.
   Isolation, not latency, is the optimised axis: no processor may ever block, stall, or
   degrade another, which holds between class nodes. Same user
   code, one venv per stream — each stream's interpreters start from its own project's venv
@@ -1631,7 +1634,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; lightweight-node-kinds — SHIPPED
-  #3278, #3280, #3282, #3297; amended by lightweight-node-kinds: a shader runs without a
+  #3278, #3280, #3282, #3297, #3305, #3310; amended by lightweight-node-kinds: a shader runs without a
   process, and an uncompiled Python function node runs in a pool]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
