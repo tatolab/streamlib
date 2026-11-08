@@ -250,10 +250,14 @@ class ReportsTheFunctionNodeValuesItReadSink:
     def __init__(self) -> None:
         self.values_read: "list[float]" = []
         self.sample_rates_read: "set[int]" = set()
+        self.reported_its_start = False
 
     brightness = Input(Channels, delivery="newest")
 
     def process(self, ctx) -> None:
+        if not self.reported_its_start:
+            self.reported_its_start = True
+            report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
         if len(self.values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
             return
         block = ctx.inputs.read(self.brightness)

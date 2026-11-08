@@ -247,13 +247,7 @@ struct HelperProcessLossCountBoardWriteHandles {
     inbound_link_slots: Vec<Mutex<InboundLinkLossCountBoardSlotBeingWritten>>,
     output_ports: Vec<(String, Mutex<OutputPortBagCountBoardEntryBeingWritten>)>,
     step_progress: Mutex<HelperProcessStepProgressBoardEntryBeingWritten>,
-    function_node_call_breadcrumb: Mutex<
-        EntryHandleMut<
-            ipc_threadsafe::Service,
-            HelperProcessLossCountBoardKey,
-            HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
-        >,
-    >,
+    function_node_call_breadcrumb: Mutex<FunctionNodeCallsUnderWayInThisHelper>,
     _writer: Writer<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
@@ -313,7 +307,13 @@ impl HelperProcessLossCountBoardWriter {
             .map_err(unwritable_entry)?;
         let function_node_call_breadcrumb = writer
             .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB)
-            .map(Mutex::new)
+            .map(|breadcrumb_entry| {
+                Mutex::new(FunctionNodeCallsUnderWayInThisHelper {
+                    breadcrumb_entry,
+                    calls_under_way: Vec::new(),
+                    next_call_number: 0,
+                })
+            })
             .map_err(unwritable_entry)?;
         Ok(Self {
             service_name,
@@ -421,29 +421,46 @@ impl HelperProcessLossCountBoardWriter {
 
     /// Note a call to the function node the parent numbered
     /// `function_node_breadcrumb_number` started at `call_started_at_monotonic_ns`,
-    /// which is never zero; it stays noted until
-    /// [`Self::note_the_function_node_call_returned`].
+    /// which is never zero; it stays under way until the call it answers is
+    /// handed to [`Self::note_the_function_node_call_returned`].
+    ///
+    /// The board names the oldest call under way, so a call on another thread
+    /// never hides one that stalled before it.
     pub fn note_a_function_node_call_started(
         &self,
         function_node_breadcrumb_number: u32,
         call_started_at_monotonic_ns: u64,
-    ) {
-        self.board_write_handles
+    ) -> FunctionNodeCallUnderWayInThisHelper {
+        let mut calls = self
+            .board_write_handles
             .function_node_call_breadcrumb
-            .lock()
-            .update_with_copy(HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+            .lock();
+        let call = FunctionNodeCallUnderWayInThisHelper {
+            call_number: calls.next_call_number,
+        };
+        calls.next_call_number = calls.next_call_number.wrapping_add(1);
+        calls.calls_under_way.push((
+            call,
+            HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
                 call_started_at_monotonic_ns: call_started_at_monotonic_ns.max(1),
                 function_node_breadcrumb_number,
                 reserved: 0,
-            });
+            },
+        ));
+        calls.write_the_oldest_call_under_way();
+        call
     }
 
-    /// Note the function-node call under way returned.
-    pub fn note_the_function_node_call_returned(&self) {
-        self.board_write_handles
+    /// Note `call` returned.
+    pub fn note_the_function_node_call_returned(&self, call: FunctionNodeCallUnderWayInThisHelper) {
+        let mut calls = self
+            .board_write_handles
             .function_node_call_breadcrumb
-            .lock()
-            .update_with_copy(HelperProcessFunctionNodeCallBreadcrumbBoardEntry::default());
+            .lock();
+        calls
+            .calls_under_way
+            .retain(|(call_under_way, _)| *call_under_way != call);
+        calls.write_the_oldest_call_under_way();
     }
 
     fn write_on_the_step_progress_entry(
@@ -563,6 +580,40 @@ impl OutputPortBagCountBoardMirror {
         entry_being_written
             .entry
             .update_with_copy(entry_being_written.last_written);
+    }
+}
+
+/// One function-node call a helper noted on its board, until it returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunctionNodeCallUnderWayInThisHelper {
+    call_number: u64,
+}
+
+/// Every function-node call a helper has under way, and the board entry naming
+/// the oldest.
+struct FunctionNodeCallsUnderWayInThisHelper {
+    breadcrumb_entry: EntryHandleMut<
+        ipc_threadsafe::Service,
+        HelperProcessLossCountBoardKey,
+        HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+    >,
+    calls_under_way: Vec<(
+        FunctionNodeCallUnderWayInThisHelper,
+        HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+    )>,
+    next_call_number: u64,
+}
+
+impl FunctionNodeCallsUnderWayInThisHelper {
+    fn write_the_oldest_call_under_way(&mut self) {
+        let oldest_call_under_way = self
+            .calls_under_way
+            .iter()
+            .map(|(_, breadcrumb)| *breadcrumb)
+            .min_by_key(|breadcrumb| breadcrumb.call_started_at_monotonic_ns)
+            .unwrap_or_default();
+        self.breadcrumb_entry
+            .update_with_copy(oldest_call_under_way);
     }
 }
 
@@ -1328,9 +1379,9 @@ mod tests {
         };
         assert_eq!(breadcrumb_under_way(), None);
 
-        writer.note_a_function_node_call_started(2, 1_000);
+        let call = writer.note_a_function_node_call_started(2, 1_000);
         assert_eq!(breadcrumb_under_way(), Some(2));
-        writer.note_the_function_node_call_returned();
+        writer.note_the_function_node_call_returned(call);
         assert_eq!(
             breadcrumb_under_way(),
             None,
@@ -1345,6 +1396,38 @@ mod tests {
             Some(5),
             "the parent reads the call a helper died in off the board it holds"
         );
+    }
+
+    /// Two calls under way at once each keep their own breadcrumb: the board
+    /// names the older until it returns, and the younger returning first
+    /// neither clears nor replaces it.
+    #[test]
+    fn concurrent_function_node_calls_each_keep_their_breadcrumb_and_the_board_names_the_oldest() {
+        let counts = HelperPlacedProcessorLossCounts::default();
+        let (board, writer, _helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+        counts.hold_the_board_of_this_spawn(board);
+        let breadcrumb_under_way = || {
+            counts
+                .function_node_call_breadcrumb_its_helper_wrote()
+                .and_then(|entry| entry.function_node_whose_call_is_under_way())
+        };
+
+        let older_call = writer.note_a_function_node_call_started(1, 1_000);
+        let younger_call = writer.note_a_function_node_call_started(2, 2_000);
+        assert_eq!(breadcrumb_under_way(), Some(1));
+        writer.note_the_function_node_call_returned(younger_call);
+        assert_eq!(
+            breadcrumb_under_way(),
+            Some(1),
+            "a younger call returning leaves the older one under way on the board"
+        );
+
+        let youngest_call = writer.note_a_function_node_call_started(3, 3_000);
+        writer.note_the_function_node_call_returned(older_call);
+        assert_eq!(breadcrumb_under_way(), Some(3));
+        writer.note_the_function_node_call_returned(youngest_call);
+        assert_eq!(breadcrumb_under_way(), None);
     }
 
     #[test]

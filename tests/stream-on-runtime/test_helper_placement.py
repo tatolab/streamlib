@@ -314,11 +314,15 @@ def test_a_function_node_call_that_never_returns_ends_its_reader_naming_the_node
     held for ever, with nothing logged.
     """
     tatolabd = start_tatolabd_running_stream(function_node_that_spins_forever_into_python_sink)
+    first_helper_pid = tatolabd.await_marker("FUNCTION_NODE_SINK_STARTED")["pid"]
     stall_line = tatolabd.await_stderr_containing("stalled: its call had run for")
-    tatolabd.await_stderr_containing("a new one starts in")
+    restarted_helper_pid = tatolabd.await_marker("FUNCTION_NODE_SINK_STARTED", occurrence=2)["pid"]
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
+    assert restarted_helper_pid != first_helper_pid, (
+        f"the stalled helper is replaced by a new process:\n{tatolabd.recent_stderr()}"
+    )
     assert "function node `spinner" in stall_line, (
         f"the stall must name the node whose call never returned: {stall_line}"
     )

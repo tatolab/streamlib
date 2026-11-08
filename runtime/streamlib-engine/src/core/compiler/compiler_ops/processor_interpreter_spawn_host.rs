@@ -1412,6 +1412,13 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
                 );
                 let watchdog_budget = self.function_node_call_watchdog_budget();
                 (call_has_run_for > watchdog_budget).then_some((call_has_run_for, watchdog_budget))
+            })
+            .filter(|_| {
+                // Read again after the budget was judged: a call that returned
+                // in between is not the stall the first read timed.
+                self.link_wiring
+                    .function_node_call_its_far_side_has_under_way()
+                    == function_node_call_under_way
             });
         if !the_helper_died && stalled_function_node_call.is_none() {
             return;
@@ -2003,6 +2010,12 @@ sys.exit(0)
     }
 
     fn spawn_host_for_test() -> ProcessorInterpreterSpawnHostProcessor {
+        spawn_host_for_test_driven_in(ProcessExecution::Reactive)
+    }
+
+    fn spawn_host_for_test_driven_in(
+        child_process_execution: ProcessExecution,
+    ) -> ProcessorInterpreterSpawnHostProcessor {
         let import_path =
             crate::core::descriptors::ProcessorClassImportPath::new("my_app.filters:BlurProcessor")
                 .unwrap();
@@ -2021,7 +2034,7 @@ sys.exit(0)
                 import_path,
                 "a test double",
             ),
-            ExecutionConfig::new(ProcessExecution::Reactive),
+            ExecutionConfig::new(child_process_execution),
             &node,
             &stream_environment_for_test(),
             Path::new(LEND_DIRECTORY_FOR_TEST),
@@ -2549,7 +2562,17 @@ sys.exit(0)
         Arc<crate::iceoryx2::HelperProcessLossCountBoardWriter>,
         crate::iceoryx2::Iceoryx2Node,
     ) {
-        let host = spawn_host_for_test();
+        a_spawn_host_driven_in_whose_helper_calls_function_node_lfo_1(ProcessExecution::Reactive)
+    }
+
+    fn a_spawn_host_driven_in_whose_helper_calls_function_node_lfo_1(
+        child_process_execution: ProcessExecution,
+    ) -> (
+        ProcessorInterpreterSpawnHostProcessor,
+        Arc<crate::iceoryx2::HelperProcessLossCountBoardWriter>,
+        crate::iceoryx2::Iceoryx2Node,
+    ) {
+        let host = spawn_host_for_test_driven_in(child_process_execution);
         let (board, board_writer, helper_node) =
             crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
         host.link_wiring
@@ -2599,6 +2622,42 @@ sys.exit(0)
             .expect("the stall is kept for the restart, as a crash would be");
         assert!(why.starts_with("function node `lfo-1` stalled"), "{why}");
         assert!(why.contains("past the 250 ms"), "{why}");
+    }
+
+    /// A continuous reader's budget is three of its frame intervals once they
+    /// pass the floor: a call is left running past the floor and inside them,
+    /// and ended past them.
+    #[test]
+    fn a_continuous_readers_watchdog_budget_is_three_of_its_frame_intervals() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_driven_in_whose_helper_calls_function_node_lfo_1(
+                ProcessExecution::Continuous { interval_ms: 200 },
+            );
+        host.child = Some(a_stand_in_helper_in_its_own_process_group("sleep 30"));
+        let started_ago = |ago: Duration| {
+            (MediaClock::now().as_nanos() as u64).saturating_sub(ago.as_nanos() as u64)
+        };
+
+        let inside_the_budget = board_writer
+            .note_a_function_node_call_started(0, started_ago(Duration::from_millis(400)));
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+        assert!(
+            host.child.is_some(),
+            "a call 400 ms in is inside a 600 ms budget"
+        );
+        assert_eq!(host.why_the_out_of_process_helper_died_on_its_own(), None);
+        board_writer.note_the_function_node_call_returned(inside_the_budget);
+
+        board_writer.note_a_function_node_call_started(0, started_ago(Duration::from_millis(900)));
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+        assert!(
+            host.child.is_none(),
+            "a call 900 ms in is past a 600 ms budget"
+        );
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the stall is kept for the restart");
+        assert!(why.contains("past the 600 ms"), "{why}");
     }
 
     /// A call still inside its budget leaves the helper running.

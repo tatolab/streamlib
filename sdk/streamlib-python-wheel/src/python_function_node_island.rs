@@ -86,15 +86,20 @@ impl FunctionNodeIslandEvaluation {
                     WhereAFunctionNodeInputTakesItsValue::FromItsPin(pin_value) => pin_value,
                 };
             }
-            if let Some(board_writer) = &self.call_breadcrumb_board_writer {
-                board_writer.note_a_function_node_call_started(
-                    function_node.breadcrumb_number,
-                    monotonic_clock_now_ns(),
-                );
-            }
+            let call_under_way = self
+                .call_breadcrumb_board_writer
+                .as_ref()
+                .map(|board_writer| {
+                    board_writer.note_a_function_node_call_started(
+                        function_node.breadcrumb_number,
+                        monotonic_clock_now_ns(),
+                    )
+                });
             let called = function_node.call_its_evaluate_entry_at(now_ns);
-            if let Some(board_writer) = &self.call_breadcrumb_board_writer {
-                board_writer.note_the_function_node_call_returned();
+            if let (Some(board_writer), Some(call_under_way)) =
+                (&self.call_breadcrumb_board_writer, call_under_way)
+            {
+                board_writer.note_the_function_node_call_returned(call_under_way);
             }
             called?;
         }
