@@ -6,8 +6,31 @@ use std::path::{Path, PathBuf};
 
 use git2::{FileMode, ObjectType, Oid, Repository, Signature, Sort};
 
+use crate::project_history_smart_http_transport::with_the_bearer_token_on_this_thread;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::ProjectTransactionAuthor;
+
+const MAIN_BRANCH_REFSPEC: &str = "refs/heads/main:refs/heads/main";
+
+/// A Git smart-HTTP remote a project's history is pushed to and fetched from, such as a
+/// Cloudflare Artifacts repo: `https://<account>.artifacts.cloudflare.net/git/<namespace>/<repo>.git`.
+#[derive(Clone)]
+pub struct ProjectHistoryRemote {
+    /// The remote's URL, carrying no credentials.
+    pub url: String,
+    /// The token sent as `Authorization: Bearer`; an Artifacts repo takes one scoped to it.
+    pub bearer_token: Option<String>,
+}
+
+impl std::fmt::Debug for ProjectHistoryRemote {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProjectHistoryRemote")
+            .field("url", &self.url)
+            .field("bearer_token", &self.bearer_token.as_ref().map(|_| "set"))
+            .finish()
+    }
+}
 
 /// Where a project's history sits, relative to the project: a bare Git repository the runtime alone writes.
 pub const PROJECT_HISTORY_DIRECTORY: &str = ".tatolab/history.git";
@@ -98,6 +121,50 @@ impl ProjectHistoryRepository {
             &parents,
         )?;
         Ok(commit_oid.to_string())
+    }
+
+    /// Push `main` to `remote`, which must take it as a fast-forward.
+    pub fn push_main_to(
+        &self,
+        remote: &ProjectHistoryRemote,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let mut refused_reference_updates = Vec::new();
+        let pushed = with_the_bearer_token_on_this_thread(remote.bearer_token.as_deref(), || {
+            let mut anonymous_remote = self.repository.remote_anonymous(&remote.url)?;
+            let mut callbacks = git2::RemoteCallbacks::new();
+            callbacks.push_update_reference(|reference, refused_because| {
+                if let Some(refused_because) = refused_because {
+                    refused_reference_updates.push(format!("{reference}: {refused_because}"));
+                }
+                Ok(())
+            });
+            let mut push_options = git2::PushOptions::new();
+            push_options.remote_callbacks(callbacks);
+            anonymous_remote.push(&[MAIN_BRANCH_REFSPEC], Some(&mut push_options))
+        });
+        pushed?;
+        if !refused_reference_updates.is_empty() {
+            return Err(ProjectRepositoryRefusal::HistoryRemoteRefused {
+                url: remote.url.clone(),
+                why: refused_reference_updates.join("; "),
+            });
+        }
+        tracing::info!(remote = %remote.url, "pushed the project's history");
+        Ok(())
+    }
+
+    /// Fetch `remote`'s `main` into this history's `main` as a fast-forward, answering the
+    /// commit `main` then holds.
+    pub fn fetch_main_from(
+        &self,
+        remote: &ProjectHistoryRemote,
+    ) -> Result<Option<String>, ProjectRepositoryRefusal> {
+        with_the_bearer_token_on_this_thread(remote.bearer_token.as_deref(), || {
+            let mut anonymous_remote = self.repository.remote_anonymous(&remote.url)?;
+            anonymous_remote.fetch(&[MAIN_BRANCH_REFSPEC], None, None)
+        })?;
+        tracing::info!(remote = %remote.url, "fetched the project's history");
+        self.head_commit()
     }
 
     /// Every commit on `main`, newest first.

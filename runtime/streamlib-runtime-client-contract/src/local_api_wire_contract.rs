@@ -560,6 +560,89 @@ impl std::fmt::Display for ListedRelayConnectionState {
     }
 }
 
+/// One asset of a project as the asset tools report it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectAssetOnTheWire {
+    /// The asset's UUID, which the runtime made at import and which a rename or move keeps.
+    pub asset: String,
+    /// `stream`, `media`, `scene` or `data`.
+    pub kind: String,
+    /// Its path in the project, `/`-separated, relative to the project directory.
+    pub path: String,
+    /// The SHA-256 its bytes are kept under in the project's content store, in lowercase hex.
+    pub content_sha256: String,
+    /// The size of its bytes.
+    pub content_byte_len: u64,
+    /// The settings its import took.
+    pub import_settings: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The `list_assets` tool's result: the project's assets, ordered by path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListAssetsToolResult {
+    /// The project directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The project's UUID, from its `tatolab-project.json`.
+    pub project: String,
+    /// The project's name.
+    pub project_name: String,
+    /// The assets, narrowed to one kind when the call named one.
+    pub assets: Vec<ProjectAssetOnTheWire>,
+    /// The project's change feed: the resource a client reads for its newest transactions and
+    /// names in `subscriptions/listen` to be told of each new one.
+    pub transactions_resource_uri: String,
+}
+
+/// One transaction a project's change feed holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectTransactionOnTheWire {
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+    /// The commit history stood at when it applied, absent for a project's first.
+    pub parent_commit: Option<String>,
+    /// `person`, `agent` or `runtime`.
+    pub author_kind: String,
+    /// The author's name as history shows it.
+    pub author_name: String,
+    /// What it changed, in order, each tagged by its `operation`.
+    pub operations: Vec<serde_json::Value>,
+    /// What undoes it, in order.
+    pub inverse_operations: Vec<serde_json::Value>,
+}
+
+/// What a project's transactions resource holds: its newest transactions, newest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectTransactionsResourceContents {
+    /// The project's UUID.
+    pub project: String,
+    /// The project directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// Its newest transactions, newest first.
+    pub transactions: Vec<ProjectTransactionOnTheWire>,
+}
+
+/// The `describe_asset` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DescribeAssetToolResult {
+    /// The asset.
+    pub asset: ProjectAssetOnTheWire,
+    /// Whether the project's content store holds its bytes.
+    pub content_held: bool,
+}
+
+/// The result of an asset tool that changed one asset and committed the change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetTransactionToolResult {
+    /// The asset as the transaction left it; a deleted asset as it was.
+    pub asset: ProjectAssetOnTheWire,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,5 +907,37 @@ mod tests {
             );
         }
         assert!(serde_json::from_str::<ExposePortLevel>(r#""Public""#).is_err());
+    }
+
+    /// Asset results carry the UUID, kind, path and content hash under the names clients read.
+    #[test]
+    fn an_asset_transaction_result_spells_its_fields_as_the_wire_carries_them() {
+        let result = AssetTransactionToolResult {
+            asset: ProjectAssetOnTheWire {
+                asset: "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11".to_owned(),
+                kind: "media".to_owned(),
+                path: "media/intro.mp4".to_owned(),
+                content_sha256: "ab".repeat(32),
+                content_byte_len: 12,
+                import_settings: serde_json::Map::new(),
+            },
+            transaction: "0b6f4e1d-3c55-4b0e-8d1e-6e2f0f9b7c21".to_owned(),
+            commit: "c".repeat(40),
+        };
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            serde_json::json!({
+                "asset": {
+                    "asset": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
+                    "kind": "media",
+                    "path": "media/intro.mp4",
+                    "content_sha256": "ab".repeat(32),
+                    "content_byte_len": 12,
+                    "import_settings": {},
+                },
+                "transaction": "0b6f4e1d-3c55-4b0e-8d1e-6e2f0f9b7c21",
+                "commit": "c".repeat(40),
+            })
+        );
     }
 }
