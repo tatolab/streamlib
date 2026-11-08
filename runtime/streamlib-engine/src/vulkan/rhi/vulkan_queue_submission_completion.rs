@@ -96,7 +96,9 @@ impl HostVulkanQueueSubmissionCompletionTimelines {
     }
 
     /// `vkQueueSubmit2` with a signal of `submission_queue`'s completion
-    /// timeline appended to the last submit's signal list.
+    /// timeline appended to the last submit's signal list, answering the
+    /// snapshot that names this submission alone; an empty `submits` signals
+    /// nothing and answers a snapshot naming no submission.
     ///
     /// # Safety
     /// The caller holds `submission_queue`'s submission mutex for the whole
@@ -107,10 +109,10 @@ impl HostVulkanQueueSubmissionCompletionTimelines {
         queue: vk::Queue,
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
-    ) -> Result<()> {
+    ) -> Result<HostVulkanQueueSubmissionsSnapshot> {
         let Some(last_submit) = submits.last() else {
             return unsafe { self.device.queue_submit2(queue, submits, fence) }
-                .map(|_| ())
+                .map(|_| HostVulkanQueueSubmissionsSnapshot::default())
                 .map_err(|e| Error::GpuError(format!("queue_submit2 failed: {e}")));
         };
         let completion_timeline = &self.timeline_per_queue[submission_queue.index()];
@@ -178,7 +180,11 @@ impl HostVulkanQueueSubmissionCompletionTimelines {
         completion_timeline
             .latest_submitted_value
             .store(next_submitted_value, Ordering::Release);
-        Ok(())
+        let mut latest_submitted_value_per_queue = [0; HostVulkanSubmissionQueue::COUNT];
+        latest_submitted_value_per_queue[submission_queue.index()] = next_submitted_value;
+        Ok(HostVulkanQueueSubmissionsSnapshot {
+            latest_submitted_value_per_queue,
+        })
     }
 
     /// The latest successful submission on every queue.
