@@ -30,6 +30,7 @@ from ._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     cast_exposed_name_to_url_safe,
 )
+from ._function_node_declaration import FunctionNode
 from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
 from ._port_family_declaration import PortFamily
 
@@ -278,6 +279,15 @@ class StreamBuilder:
     @overload
     def add(
         self,
+        node_class: FunctionNode[..., Any],
+        *,
+        name: str | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> NodeReference: ...
+
+    @overload
+    def add(
+        self,
         node_class: _NodeClassConstructedWithoutConfig
         | _NodeClassConstructedWithConfig,
         *,
@@ -301,8 +311,8 @@ class StreamBuilder:
         name: str | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> NodeReference:
-        """Record a node of `node_class` under `name` (cast) or its class's short name, cast."""
-        if not isinstance(node_class, type):
+        """Record a node of `node_class`, a node class or a `@node.function`, under `name` (cast) or its short name, cast."""
+        if not isinstance(node_class, (type, FunctionNode)):
             raise TypeError(_not_a_node_refusal(node_class))
         node_type = _node_type_of(node_class)
         node_names_the_config_references: list[str] = []
@@ -380,7 +390,7 @@ class StreamBuilder:
             )
         return cast
 
-    def _name_a_defaulted_node_takes(self, node_class: type) -> str:
+    def _name_a_defaulted_node_takes(self, node_class: type | FunctionNode[..., Any]) -> str:
         cast = cast_exposed_name_to_url_safe(node_class.__name__)
         if cast not in self._recorded_nodes_by_name:
             return cast
@@ -451,12 +461,13 @@ def _cast_name(name: str, what_the_name_names: str) -> str:
 
 def _not_a_node_refusal(node_class: object) -> str:
     return (
-        f"{node_class!r} is not a node: decorate the class with @tatolab.stream.node, and "
-        f"pass the class itself rather than an instance of it"
+        f"{node_class!r} is not a node: decorate the class with `@node.process` or the "
+        f"function with `@node.function`, and pass it itself rather than an instance of "
+        f"it or a call of it"
     )
 
 
-def _node_type_of(node_class: type) -> str:
+def _node_type_of(node_class: type | FunctionNode[..., Any]) -> str:
     if hasattr(node_class, NODE_DECLARATION_DECLARED_STAMP):
         return _node_class_import_path(node_class)
     built_in_node_type = getattr(node_class, _BUILT_IN_NODE_TYPE_ATTRIBUTE, None)
@@ -465,7 +476,7 @@ def _node_type_of(node_class: type) -> str:
     raise TypeError(_not_a_node_refusal(node_class))
 
 
-def _node_class_import_path(node_class: type) -> str:
+def _node_class_import_path(node_class: type | FunctionNode[..., Any]) -> str:
     module = node_class.__module__
     qualname = node_class.__qualname__
     # Before the entry-file check: a class inside a function is unimportable

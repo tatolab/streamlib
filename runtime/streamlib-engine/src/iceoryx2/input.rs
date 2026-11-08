@@ -35,6 +35,9 @@ use super::audio_window::{
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::channel_name::InboundLinkName;
+use super::function_node_island_input_port::{
+    FunctionNodeIslandEvaluatedAtEachRead, InputPortFedByAFunctionNodeIsland,
+};
 use super::helper_process_loss_count_board::InboundLinkLossCountBoardSlotMirror;
 use super::input_port_borrow_quota::DEFAULT_INPUT_PORT_BORROW_QUOTA;
 use super::input_port_message_payload::{
@@ -459,6 +462,8 @@ pub struct InputMailboxesInner {
     /// once the processor is created for its node.
     upstream_catalog_entries_by_inbound_link:
         std::sync::OnceLock<Arc<UpstreamCatalogEntriesByInboundLink>>,
+    input_ports_fed_by_function_node_islands:
+        parking_lot::RwLock<HashMap<String, Arc<InputPortFedByAFunctionNodeIsland>>>,
 }
 
 impl InputMailboxesInner {
@@ -474,7 +479,33 @@ impl InputMailboxesInner {
                 DeviceMatchedAudioWindowContractsByInputPort::default(),
             ),
             upstream_catalog_entries_by_inbound_link: std::sync::OnceLock::new(),
+            input_ports_fed_by_function_node_islands: parking_lot::RwLock::default(),
         }
+    }
+
+    /// Feed `port` from `island`, evaluated at each read of the port in place
+    /// of a mailbox.
+    pub fn feed_an_input_port_from_a_function_node_island(
+        &self,
+        port: &str,
+        island: Arc<dyn FunctionNodeIslandEvaluatedAtEachRead>,
+    ) {
+        self.input_ports_fed_by_function_node_islands
+            .write()
+            .insert(
+                port.to_string(),
+                Arc::new(InputPortFedByAFunctionNodeIsland::evaluated_by(island)),
+            );
+    }
+
+    fn function_node_island_feeding(
+        &self,
+        port: &str,
+    ) -> Option<Arc<InputPortFedByAFunctionNodeIsland>> {
+        self.input_ports_fed_by_function_node_islands
+            .read()
+            .get(port)
+            .cloned()
     }
 
     /// Reach the upstream catalog entries of the node this processor was
@@ -516,6 +547,10 @@ impl InputMailboxesInner {
     /// Check if a port has already been configured.
     pub fn has_port(&self, port: &str) -> bool {
         self.ports.lock().contains_key(port)
+            || self
+                .input_ports_fed_by_function_node_islands
+                .read()
+                .contains_key(port)
     }
 
     /// Add a mailbox for the given port with the specified buffer
@@ -1296,6 +1331,9 @@ impl InputMailboxesInner {
     /// The next message on `port`, its payload untouched, or `None` when the
     /// mailbox is empty.
     pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
+        if let Some(island_port) = self.function_node_island_feeding(port) {
+            return island_port.read_the_island_output().map(Some);
+        }
         Ok(self
             .next_bag_for_the_reader(port)?
             .map(|bag_for_the_reader| bag_for_the_reader.message))
@@ -1321,6 +1359,13 @@ impl InputMailboxesInner {
         &self,
         port: &str,
     ) -> Result<Option<(MessageReadFromInputPort, InboundLinkName)>> {
+        if self.function_node_island_feeding(port).is_some() {
+            return Err(Error::Link(format!(
+                "input port '{port}' is fed by a function node island, evaluated at each read \
+                 rather than delivered over a link, so there is no link to name. Read it with \
+                 `read_raw`, which names no link"
+            )));
+        }
         let Some(mut message_body_for_the_reader) = self.next_bag_for_the_reader(port)? else {
             return Ok(None);
         };
@@ -1392,6 +1437,9 @@ impl InputMailboxesInner {
     /// arrived bag: the contract promises `process()` exact-size blocks, so a
     /// reactive processor that woke and found nothing would contradict it.
     pub fn has_data(&self, port: &str) -> bool {
+        if self.function_node_island_feeding(port).is_some() {
+            return true;
+        }
         self.receive_pending();
         let Some(readiness) = self.readiness_of_one_port(port) else {
             return false;

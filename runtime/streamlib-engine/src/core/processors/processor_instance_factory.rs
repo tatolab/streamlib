@@ -887,7 +887,7 @@ mod tests {
         let refusal = node_types_one_stream_resolves
             .register_a_type_described_in_this_streams_processor_interpreter(
                 descriptor,
-                constructor,
+                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(constructor),
             )
             .expect_err("a describe's registration must refuse it");
         assert!(is_the_expected_refusal(&refusal), "got {refusal:?}");

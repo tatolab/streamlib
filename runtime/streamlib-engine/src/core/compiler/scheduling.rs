@@ -105,7 +105,7 @@ mod tests {
         node_types
             .register_a_type_described_in_this_streams_processor_interpreter(
                 descriptor,
-                Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|_node| Err(Error::NotSupported("never constructed".into())))),
             )
             .expect("fixture descriptor registers cleanly");
 

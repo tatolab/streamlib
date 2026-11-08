@@ -3,6 +3,7 @@
 
 """The `@stream` functions `test_helper_placement.py` runs from the suite project."""
 
+from tatolab.ops import Lfo, Remap
 from tatolab.stream import ChannelsToRecords, StreamBuilder, stream
 
 from helper_placement_processors import (
@@ -10,6 +11,7 @@ from helper_placement_processors import (
     ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
+    ReportsTheFunctionNodeValuesItReadSink,
     ReportsTheRawMessagePayloadItReadSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
@@ -98,3 +100,13 @@ def one_probe_forking_a_worker_that_outlives_it(stream_builder: StreamBuilder) -
 def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> None:
     """A processor still inside `setup()` when shutdown arrives."""
     stream_builder.add(SleepsThroughItsOwnSetupProbe)
+
+
+@stream
+def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Lfo` into `Remap` into a Python class reading the value they evaluate to."""
+    lfo = stream_builder.add(Lfo)
+    remap = stream_builder.add(Remap)
+    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
+    stream_builder.connect(lfo.output("result"), remap.input("x"))
+    stream_builder.connect(remap.output("result"), sink.input("brightness"))

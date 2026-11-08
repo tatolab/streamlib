@@ -163,7 +163,7 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy numba pydantic typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Type-check the wheel's Python surface
@@ -570,7 +570,7 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy numba pydantic typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/target/tatolab-runtime/wheel/*.whl
           .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
@@ -942,7 +942,7 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy numba pydantic typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/target/tatolab-runtime/wheel/*.whl
           .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"

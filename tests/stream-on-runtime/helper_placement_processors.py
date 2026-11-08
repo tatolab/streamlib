@@ -14,7 +14,9 @@ import json
 import os
 import time
 
-from tatolab.stream import Input, Output, Packets, Records, log, node
+import numpy
+
+from tatolab.stream import Channels, Input, Output, Packets, Records, log, node
 
 #: A payload no msgpack decoder reads: `0xc1` is the one type byte msgpack never
 #: uses, then every byte value once, so an encode or decode anywhere between
@@ -234,3 +236,37 @@ class SleepsThroughItsOwnSetupProbe:
     def teardown(self, ctx) -> None:
         report("INTERRUPTED_SETUP_TORE_DOWN")
 
+
+
+#: How many reads of the function node island a sink makes before it reports them.
+FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING = 20
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheFunctionNodeValuesItReadSink:
+    """Reads the value a function node island feeds `brightness`, and reports
+    the values of its first reads with its own pid."""
+
+    def __init__(self) -> None:
+        self.values_read: "list[float]" = []
+        self.sample_rates_read: "set[int]" = set()
+
+    brightness = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        if len(self.values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+            return
+        block = ctx.inputs.read(self.brightness)
+        if block is None:
+            return
+        self.sample_rates_read.add(block.sample_rate)
+        self.values_read.append(float(numpy.from_dlpack(block)[0][0]))
+        if len(self.values_read) == FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
+            report(
+                "FUNCTION_NODE_VALUES_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "values": self.values_read,
+                    "sample_rates": sorted(self.sample_rates_read),
+                },
+            )

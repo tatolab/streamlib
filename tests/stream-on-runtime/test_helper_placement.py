@@ -24,6 +24,7 @@ from helper_placement_processors import (
 from helper_placement_streams import (
     dies_abruptly_beside_a_survivor_pair,
     first_labelled_source_into_sink,
+    lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
     one_probe_sleeping_through_its_own_setup,
@@ -258,6 +259,41 @@ def test_a_native_builtin_stays_in_the_app_process(
         f"{tatolabd.recent_stderr()}"
     )
     assert sink_pid != tatolabd.pid, f"the Python sink ran in tatolabd's own process ({tatolabd.pid})"
+
+
+def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_process_of_their_own(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`Lfo -> Remap -> <Python class>` starts exactly one helper, the class's.
+
+    The two function nodes are compiled into the class's helper and evaluated
+    at each of its reads: the class reads a value the island computed, one f64
+    sample at no regular rate, that moves with the stream's time and stays in
+    `Remap`'s 0..1, and no process was started for either function node.
+    """
+    tatolabd = start_tatolabd_running_stream(lfo_into_remap_into_python_sink)
+    values_read = tatolabd.await_marker("FUNCTION_NODE_VALUES_READ")
+    sink_pid = values_read["sink_pid"]
+    assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    assert helper_pids == [sink_pid], (
+        f"a stream of two function nodes and one Python class started {helper_pids}; only "
+        f"the class gets a process:\n{tatolabd.recent_stderr()}"
+    )
+    assert values_read["sample_rates"] == [0], (
+        f"a control value on a wire states no regular rate; read {values_read['sample_rates']}"
+    )
+    values = values_read["values"]
+    assert all(0.0 <= value <= 1.0 for value in values), (
+        f"`Remap` maps the LFO's -1..1 onto 0..1, and the class read {values}"
+    )
+    assert len(set(values)) > 1, (
+        f"the island is evaluated at each read on the stream's moving clock, and every read "
+        f"returned {values[0]}"
+    )
 
 
 def test_no_helper_survives_the_app(start_tatolabd_running_stream: StartTatolabdRunningStream):

@@ -39,6 +39,21 @@ pub const MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME: &CStr = c"tatolab.runtime.modul
 /// A verb's outcome; negative is a refusal whose message the verb wrote.
 pub type ModuleHostTableStatus = i32;
 
+/// A function node's evaluate entry, called inside its reader's read: it reads
+/// its input and config values, reads and rewrites its state values, and writes
+/// its output values at stream time `now_ns`.
+///
+/// Every value is an f64 in its node's signature order: an int as its value, a
+/// bool as 0 or 1. Answers [`MODULE_HOST_TABLE_STATUS_OK`], or a refusal that
+/// leaves the outputs and the state unwritten.
+pub type ModuleHostTableFunctionNodeEvaluateEntry = unsafe extern "C" fn(
+    input_values: *const f64,
+    config_values: *const f64,
+    state_values: *mut f64,
+    output_values: *mut f64,
+    now_ns: i64,
+) -> ModuleHostTableStatus;
+
 /// The verb did what it was asked.
 pub const MODULE_HOST_TABLE_STATUS_OK: ModuleHostTableStatus = 0;
 /// A read found the port's mailbox empty.

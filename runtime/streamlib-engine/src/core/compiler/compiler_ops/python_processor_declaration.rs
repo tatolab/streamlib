@@ -10,10 +10,10 @@
 
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, CatalogEntry, PortDescriptor, PortFamilyDeclaration,
-    PortFamilyDeclarationDirection, ProcessorClassImportPath, ProcessorClassShortName,
-    ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
-    refuse_audio_window_beside_a_skipping_delivery_profile,
+    AudioWindowContractDeclaredValues, CatalogEntry, FunctionNodeLanguage, NodeKind,
+    PortDescriptor, PortFamilyDeclaration, PortFamilyDeclarationDirection,
+    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
+    ProcessorScheduling, refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::core::processors::refuse_catalog_entries_hang_does_not_read;
@@ -23,6 +23,7 @@ const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
 const DESCRIBED_DESCRIPTION_KEY: &str = "description";
 const DESCRIBED_KIND_KEY: &str = "kind";
+const DESCRIBED_LANGUAGE_KEY: &str = "language";
 const DESCRIBED_EXECUTION_KEY: &str = "execution";
 const DESCRIBED_SCHEDULING_PRIORITY_KEY: &str = "scheduling_priority";
 const DESCRIBED_PACED_BY_REAL_TIME_KEY: &str = "paced_by_real_time";
@@ -30,14 +31,23 @@ const DESCRIBED_CONFIG_SCHEMA_KEY: &str = "config_schema";
 const DESCRIBED_INPUT_PORTS_KEY: &str = "input_ports";
 const DESCRIBED_OUTPUT_PORTS_KEY: &str = "output_ports";
 
-/// Everything the engine needs to register and instantiate one Python
-/// processor class.
+/// Everything the engine needs to register one Python node type and run its
+/// nodes.
 pub struct PythonProcessorDeclaration {
-    /// The class's descriptor, registered under its import path.
+    /// The type's descriptor, registered under its import path.
     pub descriptor: ProcessorDescriptor,
-    /// The execution the class declared, which its processor interpreter
-    /// drives its own loop in.
-    pub execution_config: ExecutionConfig,
+    /// How a node of the type runs, by its kind.
+    pub how_a_python_node_of_the_type_runs: HowAPythonNodeOfTheTypeRuns,
+}
+
+/// How a node of a described Python type runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HowAPythonNodeOfTheTypeRuns {
+    /// A `@node.process` class, in its own processor interpreter, driven on
+    /// the execution it declared.
+    InItsOwnProcessorInterpreter(ExecutionConfig),
+    /// A `@node.function`, inside the read of each node it feeds.
+    InsideTheReadOfEachNodeItFeeds,
 }
 
 impl PythonProcessorDeclaration {
@@ -60,9 +70,6 @@ impl PythonProcessorDeclaration {
             DESCRIBED_SHORT_NAME_KEY,
         )?)
         .map_err(|blank| blank.to_string())?;
-        refuse_a_described_kind_other_than_process(described_node_type)?;
-        let execution_config = read_execution_config(described_node_type)?;
-
         let mut descriptor = ProcessorDescriptor::new(
             class_short_name,
             requested_import_path.clone(),
@@ -70,13 +77,31 @@ impl PythonProcessorDeclaration {
         )
         .with_runtime(ProcessorRuntime::Python)
         .with_entrypoint(requested_import_path.as_str())
-        .with_scheduling(ProcessorScheduling {
-            priority: read_thread_priority(described_node_type)?,
-        })
         .with_config_schema(read_config_schema_document(described_node_type)?);
-        if read_paced_by_real_time(described_node_type)? {
-            descriptor = descriptor.paced_by_real_time();
-        }
+        let how_a_python_node_of_the_type_runs =
+            match read_described_node_kind(described_node_type)? {
+                NodeKind::Process => {
+                    descriptor = descriptor.with_scheduling(ProcessorScheduling {
+                        priority: read_thread_priority(described_node_type)?,
+                    });
+                    if read_paced_by_real_time(described_node_type)? {
+                        descriptor = descriptor.paced_by_real_time();
+                    }
+                    HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(
+                        read_execution_config(described_node_type)?,
+                    )
+                }
+                function_kind @ NodeKind::Function { .. } => {
+                    descriptor.node_kind = function_kind;
+                    HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
+                }
+                NodeKind::Shader => {
+                    return Err(format!(
+                        "{DESCRIBED_KIND_KEY} is \"shader\", which a processor interpreter never \
+                     describes: a shader is Slang the engine compiles"
+                    ));
+                }
+            };
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
@@ -85,21 +110,31 @@ impl PythonProcessorDeclaration {
 
         Ok(Self {
             descriptor,
-            execution_config,
+            how_a_python_node_of_the_type_runs,
         })
     }
 }
 
-/// A processor interpreter runs a class in its own process, so every type it
-/// describes is a `process` node, which the descriptor carries by default.
-fn refuse_a_described_kind_other_than_process(
+/// The kind a described node type declares: `process`, or `function` beside
+/// its `language`, which a processor interpreter describes only as `python`.
+fn read_described_node_kind(
     described_node_type: &serde_json::Value,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<NodeKind, String> {
     match read_string(described_node_type, DESCRIBED_KIND_KEY)?.as_str() {
-        "process" => Ok(()),
+        "process" => Ok(NodeKind::Process),
+        "function" => match read_string(described_node_type, DESCRIBED_LANGUAGE_KEY)?.as_str() {
+            "python" => Ok(NodeKind::Function {
+                language: FunctionNodeLanguage::Python,
+            }),
+            other => Err(format!(
+                "{DESCRIBED_LANGUAGE_KEY} is {other:?}, but a function node a processor \
+                 interpreter describes is `python`"
+            )),
+        },
+        "shader" => Ok(NodeKind::Shader),
         other => Err(format!(
-            "{DESCRIBED_KIND_KEY} is {other:?}, but a processor interpreter runs `process` \
-             nodes, the classes `@tatolab.stream.node.process` declares"
+            "{DESCRIBED_KIND_KEY} is {other:?}, which names no node kind: a class is \
+             `@node.process` and a function `@node.function`"
         )),
     }
 }
@@ -571,6 +606,17 @@ mod tests {
         assert_eq!(engine_texture_formats, image_formats);
     }
 
+    fn declaration_execution_config(declaration: &PythonProcessorDeclaration) -> ExecutionConfig {
+        match declaration.how_a_python_node_of_the_type_runs {
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
+                execution_config
+            }
+            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
+                panic!("a process node runs in its own processor interpreter")
+            }
+        }
+    }
+
     fn requested(import_path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(import_path).expect("the test path names a class")
     }
@@ -642,19 +688,42 @@ mod tests {
     }
 
     #[test]
-    fn a_described_process_reads_as_a_process_node_and_any_other_kind_is_refused() {
+    fn a_described_process_reads_as_a_process_node_and_a_function_as_a_python_function_node() {
         let mut described = described_node_type_with_input_ports(serde_json::json!([]));
-        assert_eq!(
-            read(&described).expect("reads").descriptor.node_kind,
-            crate::core::descriptors::NodeKind::Process
-        );
+        let process = read(&described).expect("reads");
+        assert_eq!(process.descriptor.node_kind, NodeKind::Process);
+        assert!(matches!(
+            process.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(_)
+        ));
 
         described["kind"] = serde_json::json!("function");
-        let refusal = refusal_of(&described);
-        assert!(
-            refusal.contains("\"function\"") && refusal.contains("process"),
-            "{refusal}"
+        described["language"] = serde_json::json!("python");
+        let function = read(&described).expect("reads");
+        assert_eq!(
+            function.descriptor.node_kind,
+            NodeKind::Function {
+                language: FunctionNodeLanguage::Python
+            }
         );
+        assert_eq!(
+            function.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
+        );
+    }
+
+    #[test]
+    fn a_kind_a_processor_interpreter_never_describes_is_refused_naming_it() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("rust");
+        assert!(refusal_of(&described).contains("\"rust\""));
+
+        described["kind"] = serde_json::json!("shader");
+        assert!(refusal_of(&described).contains("Slang"));
+
+        described["kind"] = serde_json::json!("sorcery");
+        assert!(refusal_of(&described).contains("\"sorcery\""));
 
         described.as_object_mut().expect("an object").remove("kind");
         assert!(refusal_of(&described).contains("kind"));
@@ -827,8 +896,11 @@ mod tests {
         );
         assert_eq!(descriptor.outputs[0].name, "levels");
         assert_eq!(
-            declaration.execution_config.execution,
-            ProcessExecution::Continuous { interval_ms: 20 }
+            declaration.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(ExecutionConfig {
+                execution: ProcessExecution::Continuous { interval_ms: 20 },
+                ..declaration_execution_config(&declaration)
+            })
         );
     }
 

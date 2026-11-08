@@ -10,6 +10,12 @@ use crate::core::compiler::compilation_plan::CompilationPlan;
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
+use crate::core::compiler::compiler_ops::function_node_island::{
+    HowALinkIsWired, how_a_link_is_wired, the_function_nodes_among,
+    unwire_a_link_from_a_function_node_island_into_its_reader,
+    wire_a_call_inside_a_function_node_island,
+    wire_a_link_from_a_function_node_island_into_its_reader,
+};
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
@@ -21,9 +27,9 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
     LinkUniqueId, OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle,
-    ProcessorUniqueId,
+    ProcessorUniqueId, StateComponent,
 };
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -239,10 +245,18 @@ impl Compiler {
         // 3. Phase 1: PREPARE - Attach infrastructure components
         // =====================================================================
         let mut barrier_handles: Vec<(ProcessorUniqueId, ProcessorReadyBarrierHandle)> = vec![];
+        let function_nodes_run_inside_their_readers =
+            the_function_nodes_among(&graph_arc.read(), &plan.processors_to_add);
+        let processors_to_build: Vec<ProcessorUniqueId> = plan
+            .processors_to_add
+            .iter()
+            .filter(|proc_id| !function_nodes_run_inside_their_readers.contains(*proc_id))
+            .cloned()
+            .collect();
 
-        if !plan.processors_to_add.is_empty() {
+        if !processors_to_build.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Prepare);
-            for proc_id in &plan.processors_to_add {
+            for proc_id in &processors_to_build {
                 let mut graph = graph_arc.write();
                 let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
                     Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
@@ -277,9 +291,9 @@ impl Compiler {
         // =====================================================================
         // 4. Phase 2: SPAWN - Spawn processor threads
         // =====================================================================
-        if !plan.processors_to_add.is_empty() {
+        if !processors_to_build.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Spawn);
-            for proc_id in &plan.processors_to_add {
+            for proc_id in &processors_to_build {
                 tracing::info!("[{}] Spawning {}", CompilePhase::Spawn, proc_id);
                 super::compiler_ops::spawn_processor(Arc::clone(&graph_arc), runtime_ctx, proc_id)?;
             }
@@ -308,6 +322,22 @@ impl Compiler {
                 the_stream_the_compile_belongs_to,
             )?;
             tracing::debug!("[{}] Completed", CompilePhase::Wire);
+        }
+
+        // A function node has no thread whose setup would settle its state: it
+        // runs once it is wired into the read of each node it feeds.
+        {
+            let graph = graph_arc.read();
+            for function_node_id in &function_nodes_run_inside_their_readers {
+                if let Some(state) = graph
+                    .traversal()
+                    .v(function_node_id)
+                    .first()
+                    .and_then(|node| node.get::<StateComponent>())
+                {
+                    state.transition_to_only_from(ProcessorState::Pending, ProcessorState::Running);
+                }
+            }
         }
 
         // =====================================================================
@@ -386,8 +416,31 @@ fn wire_every_link_a_plan_adds(
                 to_port: to_port.clone(),
             },
         );
-        tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
-        super::compiler_ops::open_iceoryx2_service(&mut graph_arc.write(), link_id, iceoryx2_node)?;
+        let how_the_link_is_wired = how_a_link_is_wired(&graph_arc.read(), link_id)?;
+        match how_the_link_is_wired {
+            HowALinkIsWired::ThroughAChannel => {
+                tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
+                super::compiler_ops::open_iceoryx2_service(
+                    &mut graph_arc.write(),
+                    link_id,
+                    iceoryx2_node,
+                )?;
+            }
+            HowALinkIsWired::AsACallInsideAFunctionNodeIsland => {
+                wire_a_call_inside_a_function_node_island(&mut graph_arc.write(), link_id)?;
+            }
+            HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead => {
+                tracing::info!(
+                    "[{}] Carrying the function node island of {} to its reader",
+                    CompilePhase::Wire,
+                    link_id
+                );
+                wire_a_link_from_a_function_node_island_into_its_reader(
+                    &mut graph_arc.write(),
+                    link_id,
+                )?;
+            }
+        }
 
         the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
             RuntimeEvent::CompilerDidWireLink {
@@ -429,9 +482,18 @@ pub(super) fn unwire_and_remove_a_link(
             },
         );
 
-        tracing::info!("[CLOSE SERVICE] {}", link_id);
-        if let Err(e) = super::compiler_ops::close_iceoryx2_service(&mut graph, link_id) {
-            tracing::warn!("Failed to close service {}: {}", link_id, e);
+        let unwired = match how_a_link_is_wired(&graph, link_id) {
+            Ok(HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead) => {
+                unwire_a_link_from_a_function_node_island_into_its_reader(&mut graph, link_id)
+            }
+            Ok(HowALinkIsWired::AsACallInsideAFunctionNodeIsland) => Ok(()),
+            Ok(HowALinkIsWired::ThroughAChannel) | Err(_) => {
+                tracing::info!("[CLOSE SERVICE] {}", link_id);
+                super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
+            }
+        };
+        if let Err(e) = unwired {
+            tracing::warn!("Failed to unwire {}: {}", link_id, e);
         }
 
         the_stream_the_compile_belongs_to.publish_on_this_streams_topic(

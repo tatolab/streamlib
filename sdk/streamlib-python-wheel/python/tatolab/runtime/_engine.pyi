@@ -30,6 +30,7 @@ __all__ = [
     "capture_this_helper_processes_engine_log_records",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
+    "feed_an_input_port_from_a_function_node_island",
     "limited_access_view_of_runtime_context_for_helper_process",
     "note_execution_mode_from_parent_on_runtime_context",
     "note_pause_state_from_parent_on_runtime_context",
@@ -38,6 +39,23 @@ __all__ = [
     "open_runtime_context_full_access_for_helper_process",
     "run_the_scheduling_loop_of_this_helper",
 ]
+
+def feed_an_input_port_from_a_function_node_island(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    input_port: str,
+    function_nodes: list[
+        tuple[str, int, list[tuple[tuple[int, int] | None, float]], list[float], list[float], int]
+    ],
+    island_output: tuple[int, int],
+) -> None:
+    """Feed `input_port` from an island of compiled function nodes, evaluated at each read.
+
+    Each node, after the nodes it reads, is its id, its evaluate entry's address,
+    where each input takes its value (an earlier node's output, or `None` and its
+    pin value), its config values, its initial state values and its output count.
+    `island_output` names the node and output the port reads.
+    """
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
     """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.
