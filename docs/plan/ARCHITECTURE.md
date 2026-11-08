@@ -1570,6 +1570,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   steps from its start opens its first step once every node runs. A manual node, which runs its
   own callbacks, fails at its start in a stream whose clock steps, and a rescale above 1× is
   refused naming one. Owner, 2026-11-03. [stream-clocks — SHIPPED #3167, #3169, #3175]
+  Limits as built: a stepped stream with helper-placed nodes advances at most a few hundred
+  steps a second, since each step waits on the board event, a helper's progress write and two
+  agreeing readings; every bag a helper reads costs two small writes to its loss-count board, in
+  every stream; and the stream clock board admits 256 helper readers, so a stream with more
+  helper-placed nodes fails at a helper's `setup`, naming the board, rather than at load.
 - **DECIDED** — A node that paces itself on real time declares it — `paced_by_real_time=True` on
   `@node.process`, `paced_by_real_time` in `#[processor]` — and the node catalog shows it. Such a node
   loads in any stream: it paces on the machine clock, its writes carry stream time, and it
