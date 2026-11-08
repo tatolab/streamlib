@@ -797,12 +797,12 @@ mod tests {
     }
 
     #[test]
-    fn a_record_holds_its_id_location_and_display_name_under_schema_4() {
+    fn a_record_holds_its_id_location_and_display_name_under_the_current_schema() {
         let record = a_record_of("camera-app", "preview");
 
         let written = serde_json::to_value(&record).unwrap();
 
-        assert_eq!(written["schema_version"], 4);
+        assert_eq!(written["schema_version"], STREAM_RECORD_SCHEMA_VERSION);
         assert_eq!(written["pending_stream_actions"], serde_json::json!([]));
         assert_eq!(written["stream_id"], record.location.stream_id());
         assert_eq!(
@@ -862,7 +862,7 @@ mod tests {
         records.write(&camera).unwrap();
         std::fs::write(directory.join("b-malformed.json"), b"{ not json").unwrap();
         let mut later_schema = serde_json::to_value(a_record_of("c-later", "main")).unwrap();
-        later_schema["schema_version"] = serde_json::json!(5);
+        later_schema["schema_version"] = serde_json::json!(STREAM_RECORD_SCHEMA_VERSION + 1);
         later_schema["crashed_at"] = serde_json::json!("2026-10-10T00:00:00Z");
         std::fs::write(
             directory.join("c-later.json"),
@@ -881,11 +881,18 @@ mod tests {
         assert!(malformed.reason.contains("not JSON"), "{malformed}");
         let later = every_record[2].as_ref().unwrap_err();
         assert_eq!(later.path, directory.join("c-later.json"));
-        assert!(later.reason.contains("schema version 5"), "{later}");
+        assert!(
+            later.reason.contains(&format!(
+                "schema version {}",
+                STREAM_RECORD_SCHEMA_VERSION + 1
+            )),
+            "{later}"
+        );
     }
 
     #[test]
-    fn a_schema_3_record_reads_as_holding_no_pending_action_and_is_rewritten_under_schema_4() {
+    fn a_schema_3_record_reads_as_holding_no_pending_action_and_is_rewritten_under_the_current_schema()
+     {
         let state_directory = tempfile::tempdir().unwrap();
         let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
         let record = a_record_of("camera-app", "preview");
@@ -914,7 +921,7 @@ mod tests {
             &std::fs::read(records.record_path_of(&record.stream_id).unwrap()).unwrap(),
         )
         .unwrap();
-        assert_eq!(rewritten["schema_version"], 4);
+        assert_eq!(rewritten["schema_version"], STREAM_RECORD_SCHEMA_VERSION);
         assert_eq!(rewritten["display_name"], "Desk");
     }
 

@@ -1236,7 +1236,7 @@ mod graph_response_top_level_key_rendering_tests {
             serde_json::to_value(Graph::new().to_graph_response(MACHINE_NAME.to_string())).unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["nodes", "links", "exposed", "machine"]);
+        assert_eq!(keys, ["nodes", "links", "machine"]);
 
         let schema = serde_json::to_value(schemars::schema_for!(GraphResponse)).unwrap();
         let mut declared: Vec<&String> = schema["properties"]
@@ -1247,15 +1247,7 @@ mod graph_response_top_level_key_rendering_tests {
         declared.sort();
         assert_eq!(
             declared,
-            [
-                "clock",
-                "exposed",
-                "links",
-                "machine",
-                "nodes",
-                "references",
-                "stream"
-            ]
+            ["clock", "links", "machine", "nodes", "references", "stream"]
         );
     }
 

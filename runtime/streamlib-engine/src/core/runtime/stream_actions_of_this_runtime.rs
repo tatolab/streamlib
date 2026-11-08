@@ -5531,7 +5531,10 @@ mod tests {
             .unwrap();
 
         let (stream, failed_because) = the_one_failed_stream_of(&run);
-        assert!(failed_because.contains("absent-port"), "{failed_because}");
+        assert!(
+            failed_because.contains("AbsentNodeType"),
+            "{failed_because}"
+        );
         assert_eq!(stream.stream_id, project.stream_id_of("studio"));
         assert!(!hosted.has_ended());
         assert!(!recorded.has_ended());
