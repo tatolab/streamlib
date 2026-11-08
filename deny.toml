@@ -160,6 +160,11 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
+name = "streamlib-project-repository"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
 name = "streamlib-runtime-client-contract"
 expression = "BUSL-1.1"
 license-files = []

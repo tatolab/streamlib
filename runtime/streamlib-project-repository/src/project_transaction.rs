@@ -1,0 +1,173 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use uuid::Uuid;
+
+use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
+
+/// Who a transaction is by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectTransactionAuthorKind {
+    /// A person, through the studio or the CLI.
+    Person,
+    /// An agent, over MCP.
+    Agent,
+    /// The runtime itself.
+    Runtime,
+}
+
+/// The author a transaction names, which undo and history follow.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTransactionAuthor {
+    /// What kind of author it is.
+    pub kind: ProjectTransactionAuthorKind,
+    /// The author's name as history shows it.
+    pub name: String,
+}
+
+impl ProjectTransactionAuthor {
+    /// The runtime as an author, for the commits it makes on its own.
+    pub fn the_runtime() -> Self {
+        Self {
+            kind: ProjectTransactionAuthorKind::Runtime,
+            name: "tatolab runtime".to_owned(),
+        }
+    }
+
+    /// The e-mail a commit carries, which Git requires and which names the author's kind.
+    pub(crate) fn commit_email(&self) -> String {
+        let kind = match self.kind {
+            ProjectTransactionAuthorKind::Person => "person",
+            ProjectTransactionAuthorKind::Agent => "agent",
+            ProjectTransactionAuthorKind::Runtime => "runtime",
+        };
+        format!("{kind}@tatolab.invalid")
+    }
+}
+
+/// Where an import's bytes come from; they reach the content store before the transaction, never inside it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAssetImportSource {
+    /// A file on this machine, by absolute path.
+    FileOnThisMachine(PathBuf),
+    /// Bytes an upload already put in the content store, by their SHA-256.
+    StoredContent(String),
+}
+
+/// One change a caller asks of a project's assets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "change", rename_all = "snake_case")]
+pub enum ProjectAssetChangeRequest {
+    /// Track new bytes as an asset at `asset_path`, of `kind` or the kind its extension implies.
+    ImportAsset {
+        source: ProjectAssetImportSource,
+        asset_path: String,
+        kind: Option<ProjectAssetKind>,
+        #[serde(default)]
+        import_settings: Map<String, Value>,
+    },
+    /// Give an asset another file name in its folder.
+    RenameAsset { asset: Uuid, file_name: String },
+    /// Put an asset in another folder of the project, `""` being its root.
+    MoveAsset { asset: Uuid, into_directory: String },
+    /// Stop tracking an asset; its bytes stay in the content store.
+    DeleteAsset { asset: Uuid },
+    /// Replace an asset's import settings.
+    SetAssetSettings {
+        asset: Uuid,
+        import_settings: Map<String, Value>,
+    },
+}
+
+/// One change a transaction made, recorded with everything its inverse needs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ProjectAssetOperation {
+    /// The asset began to be tracked.
+    ImportAsset { asset: ProjectAsset },
+    /// The asset's path changed.
+    RelocateAsset {
+        asset: Uuid,
+        from: ProjectRelativeAssetPath,
+        to: ProjectRelativeAssetPath,
+    },
+    /// The asset stopped being tracked.
+    DeleteAsset { asset: ProjectAsset },
+    /// The asset's import settings changed, the asset then at `path`.
+    SetAssetSettings {
+        asset: Uuid,
+        path: ProjectRelativeAssetPath,
+        from: Map<String, Value>,
+        to: Map<String, Value>,
+    },
+}
+
+impl ProjectAssetOperation {
+    /// The operation that undoes this one.
+    pub fn inverse(&self) -> Self {
+        match self {
+            Self::ImportAsset { asset } => Self::DeleteAsset {
+                asset: asset.clone(),
+            },
+            Self::DeleteAsset { asset } => Self::ImportAsset {
+                asset: asset.clone(),
+            },
+            Self::RelocateAsset { asset, from, to } => Self::RelocateAsset {
+                asset: *asset,
+                from: to.clone(),
+                to: from.clone(),
+            },
+            Self::SetAssetSettings {
+                asset,
+                path,
+                from,
+                to,
+            } => Self::SetAssetSettings {
+                asset: *asset,
+                path: path.clone(),
+                from: to.clone(),
+                to: from.clone(),
+            },
+        }
+    }
+
+    /// The operation as a commit's summary line names it.
+    pub(crate) fn summary(&self) -> String {
+        match self {
+            Self::ImportAsset { asset } => format!("import_asset {}", asset.path),
+            Self::DeleteAsset { asset } => format!("delete_asset {}", asset.path),
+            Self::RelocateAsset { from, to, .. } => format!("relocate_asset {from} -> {to}"),
+            Self::SetAssetSettings { asset, .. } => format!("set_asset_settings {asset}"),
+        }
+    }
+}
+
+/// A batch of operations applied whole: the unit of undo and of history.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectTransaction {
+    /// The transaction's UUID.
+    pub transaction: Uuid,
+    /// Who made it.
+    pub author: ProjectTransactionAuthor,
+    /// The commit history was at when it applied, `None` for a project's first.
+    pub parent_commit: Option<String>,
+    /// What it changed, in order.
+    pub operations: Vec<ProjectAssetOperation>,
+    /// What undoes it, in order.
+    pub inverse_operations: Vec<ProjectAssetOperation>,
+}
+
+/// A transaction the runtime applied and the commit that records it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppliedProjectTransaction {
+    /// The transaction.
+    pub transaction: ProjectTransaction,
+    /// The commit on `main` that records it.
+    pub commit: String,
+}

@@ -1,0 +1,30 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-project-repository"
+description = "A StreamLib project as a versioned repository of assets: its project file, asset sidecars with UUIDs, its content store, transactions and its own Git history"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_project_repository"
+path = "src/lib.rs"
+
+[dependencies]
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
