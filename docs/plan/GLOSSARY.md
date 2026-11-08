@@ -184,17 +184,18 @@ one-runtime-per-machine: the pivot's word is **runtime process**; this one names
 tree until the rename re-spells it._
 
 **Message** _(crosses)_: one thing a link carries — an **envelope** the engine owns (stamp,
-length, the group flag) and a **payload**, bytes the engine passes through unread; at a
-relay, one object. _Avoid_: "bag" (retired 2026-10-16 — it named the msgpack map that was the whole
+length, the group flag), a payload descriptor of its port's **family**, and a **payload**; at
+a relay, one object. _Avoid_: "bag" (retired 2026-10-16 — it named the msgpack map that was the whole
 payload), "frame" for anything but a video frame.
 
-**Payload**: a message's bytes, in whatever encoding the writer chose and its port's catalog
-entry names — msgpack through the stream package's helper, a codec's media frame, the
-author's own. _Avoid_: "bag", "body". _Amended by strict-port-families: a payload is laid out
-by its port's family, and only Records is encoded, by the runtime._
+**Payload**: a message's bytes, laid out by its port's family: empty for an Image frame, the
+planar samples of a Channels block, a codec's unit for Packets, a Records dict the runtime
+encodes, an Array's attribute table and CPU data, or a by-name write's bytes as written.
+_Avoid_: "bag", "body".
 
-**Cast object**: the typed object `read(port, into=T)` constructs from a payload through
-`T.from_bytes` — the consumer's view of a message. A cast type that claims its surface is
+**Cast object**: the typed object a read returns — the family's type through a port
+attribute, or what `read(port, into=T)` constructs through `T.from_bytes` — the consumer's
+view of a message. A cast type that claims its surface is
 also the tensor-protocol producer for that frame. _Avoid_: "typed bag", "frame object" (a
 cast type need not be a frame).
 
@@ -274,9 +275,9 @@ pivot's extension point, for example to hand it a relay's address and credential
 runtime runs complete without one, and how it plugs in is OPEN. _Avoid_: "connector",
 "sidecar", "agent".
 
-**Port**: a processor's named attachment point for a link. Declares name, description,
-and — on an input — delivery profile; never a type. _Avoid_: "channel" for the port
-itself. _Amended by strict-port-families: a port also declares its **family**._
+**Port**: a processor's named attachment point for a link, declared as a class attribute
+(`Input(…)` or `Output(…)`). Declares name, **family**, description, and — on an input —
+delivery profile. _Avoid_: "channel" for the port itself.
 
 **Family** _(crosses)_: which of five engine-owned layouts a port carries — **Image**, **Array**,
 **Channels**, **Packets** or **Records** — compared by equality at `connect`. Names inside a
@@ -337,11 +338,11 @@ runtime opens none, and a port is seen in a **viewer**.
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source
 text), "pipeline" (the Vulkan-internal object it builds).
 
-**AudioBlock**: the audio message and its cast — a timestamped run of interleaved samples
-riding the link inline (first-sample timestamp, rate, channels, dtype; the sample
-count is per channel), CPU-resident, never surface-backed. _Avoid_: "AudioFrame"
-(the dead schema-era type; in device APIs a frame is one sample across channels),
-"audio chunk".
+**ChannelsBlock**: what a Channels read returns — a run of planar `[channel][sample]` samples
+borrowed in its sample (`start_sample`, rate, channel and per-channel sample counts, `f32` or
+`f64`), its stamp the first sample's instant, CPU-resident, never surface-backed. _Avoid_:
+"AudioBlock" (the msgpack cast it replaced), "AudioFrame" (in device APIs a frame is one
+sample across channels), "audio chunk".
 
 **Window contract**: an audio input port's declared rate / channels / dtype / window /
 hop — window and hop in samples at the declared rate — the engine resamples, mixes
@@ -349,7 +350,7 @@ down, and frames to it natively, so `process()` receives exact-size blocks.
 _Avoid_: "windower" as an object name (it is a port declaration, not a graph node).
 
 **Conditioning**: the engine-internal AEC / noise-suppression / AGC chain between an
-audio device and its published `AudioBlock`, declared on the built-ins and bypassable.
+audio device and its published Channels block, declared on the built-ins and bypassable.
 _Avoid_: "effects" (production vocabulary; conditioning serves perception).
 
 **Audio plugin**: a third-party CLAP / VST3 / LV2 binary a future out-of-process

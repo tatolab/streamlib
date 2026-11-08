@@ -16,8 +16,8 @@ because nothing above waits on it.
 
 ## 1. Finish the data types
 
-Change: [`changes/strict-port-families.md`](changes/strict-port-families.md). Milestone:
-Strict port families.
+Change: [`changes/archive/2026-11-08-strict-port-families.md`](changes/archive/2026-11-08-strict-port-families.md),
+shipped and folded into `ARCHITECTURE.md`. Milestone: Strict port families.
 
 Every port has one of five families (Image, Packets, Records, Channels, Array), and `connect`
 refuses a mismatch before a frame flows.
@@ -27,8 +27,7 @@ refuses a mismatch before a frame flows.
   #3199 (the engine tree; `VideoFrame` becomes `ImageFrame`, `AudioBlock` becomes
   `ChannelsBlock`), #3200 (every module in `packages/`, PR #3238), #3201 (the decorator ports
   and `MsgpackCast` deleted, PR #3241), and the macro's refusal of a family-less Rust port with
-  a port's family required end to end.
-- Remaining: `/ship-change` folds the change into the plan.
+  a port's family required end to end (PR #3273).
 
 ## 2. Graph foundations: variables and reference edges
 
