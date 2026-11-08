@@ -60,16 +60,19 @@ reshapes #3216.
 
 ## ADDED
 
-- **Tatolab's package index.** A static PEP 503 simple index on `get-tatolab-com`:
-  `simple/index.html` lists every project, `simple/<normalized name>/index.html` lists every wheel
-  of that project with its `#sha256=` fragment, `data-requires-python` and
+- **Tatolab's package index.** A static PEP 503 simple index on `get-tatolab-com`. R2's custom
+  domain serves an object at its exact key and maps no directory to an `index.html`, so each page
+  is written at the key uv requests, with `Content-Type: text/html`: `simple/` lists every
+  project, `simple/<normalized name>/` lists every wheel of that project with its `#sha256=` fragment, `data-requires-python` and
   `data-core-metadata="sha256=<hash>"` (PEP 714's spelling of PEP 658), and each wheel lives at
   `packages/<normalized name>/<wheel file name>` with its `.metadata` file beside it, so uv
   resolves without downloading a wheel. A wheel is written once and never overwritten: a release
   that would write a file the bucket already holds with different bytes fails. The release
   regenerates the index pages from what the bucket holds, after the wheels and before `latest`,
   in one GitHub Actions concurrency group that queues runs with `cancel-in-progress` off, so two releases never
-  write the pages at once and a later run's pages always list an earlier run's wheels.
+  write the pages at once and a later run's pages always list an earlier run's wheels. Before the
+  job succeeds it resolves this run's `tatolab-testpattern` from `https://get.tatolab.com/simple/`
+  itself, so the public path, not only the bucket, is proven.
 - **The index a project names.** Every project that uses a first-party module names the index in
   its `pyproject.toml`, in the standard uv form, so `uv sync` resolves it with no Tatolab
   machinery:
@@ -89,7 +92,10 @@ reshapes #3216.
   `packages/`; every other name our index does not serve (`numpy`,
   `tatolab-stream`, a third party's module) answers 404 there and resolves from PyPI. A per-package
   `explicit = true` pin is not used: uv applies `[tool.uv.sources]` only to a project's own
-  dependencies, so a first-party module reached through a third party's would miss it.
+  dependencies, so a first-party module reached through a third party's would miss it. Every
+  first-party requirement the runtime writes is floored at the runtime's version, and a PyPI
+  placeholder is version `0.0.x`, so a placeholder never satisfies one: resolution fails naming
+  the module instead of syncing an environment without it.
 - **Samples in the runtime unit.** The unit carries sample projects at its own version: the Linux
   tarball under `samples/<name>/`, the macOS helper bundle under `Contents/Resources/samples/<name>/`.
   A sample is a project directory as a created project is, naming the index. The local API lists them (`list_samples`: name, title, summary per sample) and
@@ -116,11 +122,16 @@ reshapes #3216.
   wheels to the bucket and regenerates the pages. The Linux runtime publishes after both succeed,
   because its scaffold locks against both, and tatolab-app's release, which builds the macOS and
   Linux apps from the tag, starts only once this repository's release has published both, as it
-  should wait for PyPI today. With one PyPI project and no new names, PyPI's new-project limit no
+  should wait for PyPI today. Whatever starts it, the app's release first locks the starter
+  against the public index and PyPI at the version it bundles, and stops there when either does
+  not yet serve it. With one PyPI project and no new names, PyPI's new-project limit no
   longer bites, so no partial-success path remains.
 - **The release proof** (`ARCHITECTURE.md:3726-3739`, the macOS proof and `main`'s scaffolded-stream
-  run). The scaffolded stream it runs is the starter, so it checks `TestPatternSource.video`
-  writing at least sixty frames in `graph` and nothing else: no effect, no encoder. It changes in
+  run). The scaffolded stream it runs is the starter, so it checks `TestPatternSource.video` and
+  nothing else: no effect, no encoder. `graph` counts a port's writes only once something reads
+  it (`scripts/check_scaffolded_stream_runs_on_the_driver_the_macos_lend_carries.sh:141`), and the
+  starter links nothing, so the proof reads the port through `gateway-nodes`' viewer read path
+  for the run, as Tato Studio's viewer does, and checks at least sixty frames arrive (decision 5). It changes in
   the same ticket as the scaffold, so a proof never looks for a node the starter lost.
 - **The scaffold lock check** (`reusable-distributions.yml:243-300`) points the `tatolab` index at
   a local index built from this run's wheels (uv's command-line `--index tatolab=<file url>`
@@ -141,7 +152,10 @@ reshapes #3216.
 - **The catalog** (#3216, read by tatolab-app's Get more, tatolab-app#133). A `package` entry
   gains `index_url`: `https://get.tatolab.com/simple/` for a first-party module, `null` for one on
   PyPI. Import adds the requirement and, when `index_url` is set and the project does not yet
-  name it, the `[[tool.uv.index]]` table. Version 1 lists packages only; Get more's Samples
+  name it, the `[[tool.uv.index]]` table. A third party's index is added after `tatolab` with
+  `explicit = true` and a `[tool.uv.sources]` pin for the module imported, so it serves only that
+  module and never a `tatolab-*` name; a project whose owner orders another index first by hand
+  has chosen it. Version 1 lists packages only; Get more's Samples
   scope reads `list_samples` from the runtime, so the samples shown always match the runtime that
   will create them. `sample` entries return with remote samples.
 - **The packs OPEN** (`ARCHITECTURE.md:879-897`). Settled: the registry for first-party modules is
@@ -180,8 +194,11 @@ reshapes #3216.
    `examples/` ships as a sample; held pre-pivot ones do not. One of them carries the old
    scaffold's pathway, the halftone lens and the brightness meter.
 4. **Assumed unless overruled: the address.** `https://get.tatolab.com/simple/`, the index named
-   `tatolab` in every project. A custom domain in front of R2 already serves the bucket; no
-   Worker is needed for a static index.
+   `tatolab` in every project. A custom domain in front of R2 already serves the bucket, and pages
+   written at their directory keys need no Worker.
+5. **Assumed unless overruled: the proof's reader.** The scaffold ticket lands after
+   `gateway-nodes`' viewer read path, which the proof uses to read the starter's one port. Landing
+   first would need a second reader in the proof alone, which nothing else wants.
 
 ## What this does not change
 
