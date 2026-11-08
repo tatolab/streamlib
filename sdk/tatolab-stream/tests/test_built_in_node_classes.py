@@ -27,7 +27,7 @@ GENERATED_BUILT_IN_NODE_CLASSES = [
 
 
 def test_the_generated_module_holds_every_built_in():
-    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 7
+    assert len(GENERATED_BUILT_IN_NODE_CLASSES) == 6
 
 
 @pytest.mark.parametrize(
@@ -50,28 +50,25 @@ def test_the_built_in_class_cannot_be_instantiated(built_in_node_class):
 
 
 def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
-    with pytest.raises(TypeError, match=r"stream_builder\.add\(RelayTrackSource, config="):
-        tatolab.stream.RelayTrackSource()  # pyright: ignore[reportCallIssue]
+    with pytest.raises(TypeError, match=r"stream_builder\.add\(ChannelsToRecords, config="):
+        tatolab.stream.ChannelsToRecords()  # pyright: ignore[reportCallIssue]
 
 
 @stream
-def a_relay_track(stream_builder: tatolab.stream.StreamBuilder) -> None:
+def a_channels_to_records_conversion(stream_builder: tatolab.stream.StreamBuilder) -> None:
     stream_builder.add(
-        _built_in_nodes.RelayTrackSource,
-        config={"broadcast": "desk/pattern.hang", "track": "pattern/video"},
+        _built_in_nodes.ChannelsToRecords,
+        config={"channel_names": ["level"]},
     )
 
 
 def test_a_stream_of_built_ins_compiles_with_no_runtime_installed():
-    graph = compile_stream_to_graph(a_relay_track)
+    graph = compile_stream_to_graph(a_channels_to_records_conversion)
 
     assert [(node["name"], node["type"]) for node in graph["nodes"]] == [
-        ("relaytracksource", "tatolab.stream:RelayTrackSource"),
+        ("channelstorecords", "tatolab.stream:ChannelsToRecords"),
     ]
-    assert graph["nodes"][0]["config"] == {
-        "broadcast": "desk/pattern.hang",
-        "track": "pattern/video",
-    }
+    assert graph["nodes"][0]["config"] == {"channel_names": ["level"]}
 
 
 @stream

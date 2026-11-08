@@ -26,8 +26,6 @@ __all__ = [
     "ImageToArrayConfig",
     "RecordsToChannels",
     "RecordsToChannelsConfig",
-    "RelayTrackSource",
-    "RelayTrackSourceConfig",
 ]
 
 
@@ -233,79 +231,3 @@ class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:RecordsToChannels"
-
-
-class _RelayTrackSourceConfigRequiredKeys(TypedDict):
-    """The keys `RelayTrackSource`'s config cannot leave out."""
-
-    broadcast: str
-    """The broadcast's path at the relay, exactly as its publisher wrote it. A stream's
-    is `<machine>/<stream id>.hang`.
-    """
-
-    track: str
-    """The track of `broadcast` to read, exactly as its publisher named it. An exposed
-    port's is `<node>/<port>`.
-    """
-
-
-class RelayTrackSourceConfig(_RelayTrackSourceConfigRequiredKeys, total=False):
-    """`RelayTrackSource`'s config: the keys `stream_builder.add` takes."""
-
-    max_age: int
-    """How far newer content on the track may run past a missing group, in whole
-    milliseconds of the track's own timestamps, before the group is given up; the
-    history asked of the relay, clamped to what the track keeps. A transport budget,
-    never a playout delay.
-
-    Default: `100`.
-    """
-
-    relay_url: str
-    """The relay to subscribe at. The default is this machine's local relay on loopback,
-    which serves every private and public port of the machine.
-
-    Default: `"http://127.0.0.1:4443"`.
-    """
-
-
-class RelayTrackSource(BuiltInNode[RelayTrackSourceConfig]):
-    """Reads one track at a MoQ relay into the graph — how a stream reads another
-    stream's exposed port, on this machine through the local relay's loopback listener
-    or on another machine through any relay that serves it, and how it reads a track any
-    other MoQ publisher wrote. The track is named by `broadcast` and `track`, each
-    exactly as its publisher wrote it: a stream's exposed port is the track
-    `<node>/<port>` of the broadcast `<machine>/<stream id>.hang`.
-
-    `track` carries each object's payload bytes as the relay delivered them, the first
-    object of each group starting a group, and its catalog entry is the track's own from
-    the broadcast's catalog. What a payload means is the publisher's: an Image port's
-    frames live in surfaces on the machine that wrote them, so its track carries no
-    pixels here.
-
-    Groups reach `track` in sequence order, whatever order the relay delivers them in. A
-    missing group is waited for until newer content on the track runs `max_age`
-    milliseconds past it, measured in the track's own timestamps and never on a clock,
-    until its stream is reset, or until the track ends; then it is given up and the next
-    group read. The read joins at the live edge.
-
-    The relay's object carries the writer's stamp, on the writer's clock. Every stamp in
-    a graph is on its stream's clock, so `track` is stamped with the object's own
-    timestamp — the hang container's for a media track, the object's otherwise — plus
-    one offset taken at the first object and lowered for an object that would run more
-    than 100 ms ahead of its arrival, as the stack's own player lowers its reference
-    past its buffer, such as the group in progress a joining reader is handed in one
-    burst; it is taken again when the track steps back or falls a second behind, so the
-    track's own spacing survives jittered arrival. An object carrying no timestamp is
-    stamped at arrival.
-
-    A relay that refuses, or a track not yet published or withdrawn, is retried with
-    backoff and never ends the stream.
-
-    Outputs:
-        `track`: Each object of the track, as the relay delivered it.
-
-    Config: `RelayTrackSourceConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:RelayTrackSource"

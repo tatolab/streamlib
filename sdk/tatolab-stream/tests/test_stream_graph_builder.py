@@ -45,11 +45,8 @@ STREAM_GRAPH_BUILDER_SOURCE = (
     Path(tatolab.stream.__file__).resolve().parent / "_stream_graph_builder.py"
 )
 
-RELAY_TRACK_SOURCE_TYPE = "tatolab.stream:RelayTrackSource"
-RIG_RELAY_TRACK: tatolab.stream.RelayTrackSourceConfig = {
-    "broadcast": "desk/rig.hang",
-    "track": "pattern/video",
-}
+CHANNELS_TO_RECORDS_TYPE = "tatolab.stream:ChannelsToRecords"
+RIG_CHANNELS_TO_RECORDS: tatolab.stream.ChannelsToRecordsConfig = {"channel_names": ["level"]}
 RIG_MONITOR_TYPE = "stream_graph_builder_nodes:RigMonitor"
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"
 BRIGHTNESS_READER_TYPE = "stream_graph_builder_nodes:BrightnessReader"
@@ -117,7 +114,7 @@ def every_kind_of_node(stream_builder: StreamBuilder) -> None:
 @stream
 def camera_rig(stream_builder: StreamBuilder) -> None:
     """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
-    source = stream_builder.add(tatolab.stream.RelayTrackSource, config=RIG_RELAY_TRACK)
+    source = stream_builder.add(tatolab.stream.ChannelsToRecords, config=RIG_CHANNELS_TO_RECORDS)
     inverter = stream_builder.add(FrameInverter)
     first_reader = stream_builder.add(BrightnessReader)
     backup_reader = stream_builder.add(BrightnessReader, name="Backup Meter")
@@ -137,13 +134,11 @@ def camera_rig(stream_builder: StreamBuilder) -> None:
         second_inverter.input("video_from_upstream"),
     )
     stream_builder.connect(second_inverter.output("video_to_downstream"), monitor.input("Video"))
-    stream_builder.expose(inverter.output("video_to_downstream"))
-    stream_builder.expose(second_inverter.output("VIDEO_TO_DOWNSTREAM"))
 
 
 @stream
 def a_native_marker(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.RelayTrackSource, config=RIG_RELAY_TRACK)
+    stream_builder.add(tatolab.stream.ChannelsToRecords, config=RIG_CHANNELS_TO_RECORDS)
 
 
 @stream
@@ -177,7 +172,6 @@ def hand_built_references(stream_builder: StreamBuilder) -> None:
         NodeOutputPortReference("FrameInverter", "VIDEO_TO_DOWNSTREAM"),
         NodeInputPortReference("BrightnessReader", "VIDEO_FROM_UPSTREAM"),
     )
-    stream_builder.expose(NodeOutputPortReference("FrameInverter", "Video_To_Downstream"))
 
 
 def not_decorated(stream_builder: StreamBuilder) -> None:
@@ -374,7 +368,11 @@ def test_a_node_class_is_its_module_and_qualname_and_a_marker_its_type() -> None
 
 def test_a_native_marker_is_the_type_its_class_carries() -> None:
     assert compile_stream_to_graph(a_native_marker)["nodes"] == [
-        {"name": "relaytracksource", "type": RELAY_TRACK_SOURCE_TYPE, "config": RIG_RELAY_TRACK},
+        {
+            "name": "channelstorecords",
+            "type": CHANNELS_TO_RECORDS_TYPE,
+            "config": RIG_CHANNELS_TO_RECORDS,
+        },
     ]
 
 
@@ -731,7 +729,7 @@ def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:
     assert "NodeInputPortReference" in message
 
 
-def test_connect_refuses_a_port_address_as_its_source_naming_relay_track_source() -> None:
+def test_connect_refuses_a_port_address_as_its_source_naming_the_track_receive() -> None:
     stream_builder = StreamBuilder("rig")
     reader = stream_builder.add(BrightnessReader)
 
@@ -746,7 +744,7 @@ def test_connect_refuses_a_port_address_as_its_source_naming_relay_track_source(
     assert "`stream_builder.add(...).output(port_name)`" in message
     assert (
         "A link's ends are both in this stream; read another stream's port, on this machine "
-        "or another, through a `RelayTrackSource` node this stream adds."
+        "or another, through a `tatolab.moq` `MoqTrackReceive` node this stream adds."
     ) in message
     assert stream_builder._compiled_graph()["links"] == []
 
@@ -793,40 +791,6 @@ def test_connect_refuses_a_node_this_stream_does_not_hold_naming_the_ones_it_doe
     assert "`framedarkener`" in message
     assert "`rig`" in message
     assert "brightnessreader, frameinverter" in message
-
-
-def test_expose_refuses_what_is_not_a_local_output_naming_the_fix() -> None:
-    stream_builder = StreamBuilder("rig")
-    inverter = stream_builder.add(FrameInverter)
-
-    for not_a_local_output in (
-        inverter.input("video_from_upstream"),
-        inverter,
-    ):
-        with pytest.raises(TypeError, match=r"`stream_builder\.add\(\.\.\.\)\.output\(port_name\)`"):
-            stream_builder.expose(not_a_local_output)  # pyright: ignore[reportArgumentType]
-
-
-def test_expose_refuses_a_node_this_stream_does_not_hold() -> None:
-    stream_builder = StreamBuilder("rig")
-    stream_builder.add(FrameInverter)
-
-    with pytest.raises(ValueError, match="`framedarkener`"):
-        stream_builder.expose(NodeOutputPortReference("framedarkener", "video_to_downstream"))
-
-
-def test_exposing_one_output_twice_is_refused_at_the_second_naming_it() -> None:
-    stream_builder = StreamBuilder("rig")
-    inverter = stream_builder.add(FrameInverter)
-    stream_builder.expose(inverter.output("video_to_downstream"))
-
-    with pytest.raises(ValueError) as refusal:
-        stream_builder.expose(inverter.output("VIDEO_TO_DOWNSTREAM"))
-
-    message = str(refusal.value)
-    assert "`video_to_downstream`" in message
-    assert "`frameinverter`" in message
-    assert "already exposes" in message
 
 
 def test_a_node_reference_casts_the_port_names_it_names() -> None:
@@ -893,21 +857,7 @@ def test_a_hand_built_reference_reaches_the_graph_cast() -> None:
                 "target": {"node": "brightnessreader", "port": "video_from_upstream"},
             },
         ],
-        "exposed": [
-            {"node": "frameinverter", "port": "video_to_downstream", "level": "private"}
-        ],
     }
-
-
-def test_exposing_a_hand_built_output_then_its_minted_twin_is_refused_at_the_second() -> (
-    None
-):
-    stream_builder = StreamBuilder("rig")
-    inverter = stream_builder.add(FrameInverter)
-    stream_builder.expose(NodeOutputPortReference("FrameInverter", "Video To Downstream"))
-
-    with pytest.raises(ValueError, match="already exposes"):
-        stream_builder.expose(inverter.output("video to downstream"))
 
 
 def test_references_are_immutable_values() -> None:
@@ -926,9 +876,9 @@ def test_a_stream_compiles_to_its_graph() -> None:
         "stream": "camera_rig",
         "nodes": [
             {
-                "name": "relaytracksource",
-                "type": RELAY_TRACK_SOURCE_TYPE,
-                "config": RIG_RELAY_TRACK,
+                "name": "channelstorecords",
+                "type": CHANNELS_TO_RECORDS_TYPE,
+                "config": RIG_CHANNELS_TO_RECORDS,
             },
             {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
             {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "config": {}},
@@ -942,7 +892,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
         ],
         "links": [
             {
-                "source": {"node": "relaytracksource", "port": "track"},
+                "source": {"node": "channelstorecords", "port": "track"},
                 "target": {"node": "frameinverter", "port": "video_from_upstream"},
             },
             {
@@ -954,7 +904,7 @@ def test_a_stream_compiles_to_its_graph() -> None:
                 "target": {"node": "backup-meter", "port": "video_from_upstream"},
             },
             {
-                "source": {"node": "relaytracksource", "port": "track"},
+                "source": {"node": "channelstorecords", "port": "track"},
                 "target": {"node": "frameinverter-2", "port": "video_from_upstream"},
             },
             {
@@ -962,21 +912,16 @@ def test_a_stream_compiles_to_its_graph() -> None:
                 "target": {"node": "rigmonitor", "port": "video"},
             },
         ],
-        "exposed": [
-            {"node": "frameinverter", "port": "video_to_downstream", "level": "private"},
-            {"node": "frameinverter-2", "port": "video_to_downstream", "level": "private"},
-        ],
     }
     assert json.loads(json.dumps(graph)) == graph
 
 
-def test_a_compiled_graph_has_exactly_the_four_keys() -> None:
+def test_a_compiled_graph_has_exactly_the_three_keys() -> None:
     graph = compile_stream_to_graph(every_kind_of_node)
 
-    assert list(graph) == ["stream", "nodes", "links", "exposed"]
+    assert list(graph) == ["stream", "nodes", "links"]
     assert graph["stream"] == "every_kind_of_node"
     assert graph["links"] == []
-    assert graph["exposed"] == []
 
 
 def test_a_stream_that_adds_nothing_compiles_to_an_empty_graph() -> None:
@@ -984,7 +929,6 @@ def test_a_stream_that_adds_nothing_compiles_to_an_empty_graph() -> None:
         "stream": "adds_nothing",
         "nodes": [],
         "links": [],
-        "exposed": [],
     }
 
 

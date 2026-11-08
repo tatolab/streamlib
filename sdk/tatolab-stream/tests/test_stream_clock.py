@@ -63,7 +63,7 @@ def test_a_stream_naming_no_clock_carries_no_clock_key() -> None:
 def test_a_scaled_clock_compiles_to_the_clock_key_beside_the_stream() -> None:
     graph = compile_stream_to_graph(in_slow_motion)
 
-    assert list(graph) == ["stream", "clock", "nodes", "links", "exposed"]
+    assert list(graph) == ["stream", "clock", "nodes", "links"]
     assert graph["clock"] == {
         "mode": "scaled",
         "scale": 0.5,

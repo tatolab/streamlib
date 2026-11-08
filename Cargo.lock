@@ -5293,10 +5293,6 @@ dependencies = [
 name = "streamlib-media-builtins"
 version = "0.68.34"
 dependencies = [
- "hang",
- "moq-json",
- "moq-net",
- "moq-tokio",
  "rmp-serde",
  "rmpv",
  "serde",
@@ -5304,11 +5300,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "streamlib",
- "streamlib-relay-track-reader",
  "tempfile",
- "tokio",
  "tracing",
- "url",
 ]
 
 [[package]]

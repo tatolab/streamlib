@@ -24,24 +24,8 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 /// and only the breaking change retiring a shape a golden holds drops its line.
 const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
-        "0023-every-key-and-every-media-module.json",
-        "3c3dbaea4ddaa217f01ae01d6929e883ecfade8891e6883388c76aa7249a01fe",
-    ),
-    (
-        "0024-every-key-with-exposure-levels-and-every-media-module.json",
-        "ea8271687210c2a1bac338d35b0b004ac78183695180d18eb55e8b92e582635b",
-    ),
-    (
-        "0025-every-key-with-a-relay-track-source-by-broadcast-and-track-and-every-media-module.json",
-        "0e8a327f3da21ee2561f24076ae74b504915b04dc780049fe567d456159e1043",
-    ),
-    (
-        "0026-every-key-with-a-relay-track-source-reading-with-a-max-age-and-every-media-module.json",
-        "23cca9c1db2f6809e0a9e3cb494f338dcdbe7512604754363bca16e8de64e6d5",
-    ),
-    (
-        "0027-every-key-with-every-port-family-converter-and-every-media-module.json",
-        "7d68f6381d4e3e5c910aff90d722cc6a5962dbf0a47d353510599709931d0aa5",
+        "0028-every-key-with-a-moq-track-receive-and-every-media-module.json",
+        "006559c184c763842a7d259089e9326c5ba1d051309a48badd4bcb68c12ee4b2",
     ),
 ];
 
@@ -81,7 +65,7 @@ fn node_types_in(graph_document: &serde_json::Value) -> Vec<ProcessorClassImport
 }
 
 /// `graph_document` without the nodes named in `node_names`, and every link
-/// and exposure that names one of them.
+/// that names one of them.
 fn without_the_nodes(
     graph_document: &serde_json::Value,
     node_names: &BTreeSet<String>,
@@ -101,7 +85,6 @@ fn without_the_nodes(
     retain_in("links", &|link| {
         !is_removed(&link["source"]["node"]) && !is_removed(&link["target"]["node"])
     });
-    retain_in("exposed", &|exposure| !is_removed(&exposure["node"]));
     remaining
 }
 
@@ -184,6 +167,7 @@ fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
             "tatolab.h265:H265Decoder",
             "tatolab.testpattern:TestPatternSource",
             "tatolab.virtualcamera:VirtualCameraSink",
+            "tatolab.moq:MoqTrackReceive",
         ] {
             assert!(
                 node_types

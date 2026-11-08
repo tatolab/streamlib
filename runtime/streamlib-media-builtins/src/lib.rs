@@ -3,7 +3,7 @@
 
 //! First-party media built-ins: native pre-built blocks statically linked
 //! into the wheel and instantiated from Python by configuration
-//! (`stream_builder.add(RelayTrackSource)`), whose per-frame paths never enter the
+//! (`stream_builder.add(ChannelsToArray)`), whose per-frame paths never enter the
 //! interpreter.
 //!
 //! Written against the SDK's handle-shaped primitives only — pixel-buffer
@@ -14,8 +14,6 @@ pub mod h273_color_vui_translation;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub mod port_family_conversion;
-pub(crate) mod processor_thread_join;
-pub mod relay_track_source;
 pub mod video_frame;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
@@ -24,7 +22,6 @@ pub use port_family_conversion::{
     ChannelsToRecords, ChannelsToRecordsConfig, ImageToArray, RecordsToChannels,
     RecordsToChannelsConfig,
 };
-pub use relay_track_source::{RelayTrackSource, RelayTrackSourceConfig};
 pub use video_frame::VideoFrame;
 
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
@@ -64,6 +61,11 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
         "tatolab.virtualcamera:VirtualCameraSink",
         "tatolab-virtualcamera",
     ),
+    (
+        "RelayTrackSource",
+        "tatolab.moq:MoqTrackReceive",
+        "tatolab-moq",
+    ),
 ];
 
 /// Register every media built-in on the process-wide registry, and record each
@@ -71,7 +73,6 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
 /// module to install. In-process static registration (the api-server
 /// precedent) — no dlopen, and idempotent, so hosts may call it more than once.
 pub fn register_media_builtin_processor_types() {
-    PROCESSOR_REGISTRY.register::<relay_track_source::RelayTrackSource::Processor>();
     PROCESSOR_REGISTRY.register::<port_family_conversion::ChannelsToArray::Processor>();
     PROCESSOR_REGISTRY.register::<port_family_conversion::ArrayToChannels::Processor>();
     PROCESSOR_REGISTRY.register::<port_family_conversion::ChannelsToRecords::Processor>();
@@ -136,8 +137,9 @@ mod built_in_node_type_tests {
         let built_ins = every_built_in_registered_on_this_floor();
 
         assert!(
-            built_ins
-                .contains(&relay_track_source::RelayTrackSource::processor_class_import_path())
+            built_ins.contains(
+                &port_family_conversion::ChannelsToArray::processor_class_import_path()
+            )
         );
         let rust_module_paths: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
             .registered_processor_class_import_paths()
@@ -208,6 +210,11 @@ mod built_in_node_type_tests {
                 "VirtualCameraSink",
                 "tatolab.virtualcamera:VirtualCameraSink",
                 "tatolab-virtualcamera",
+            ),
+            (
+                "RelayTrackSource",
+                "tatolab.moq:MoqTrackReceive",
+                "tatolab-moq",
             ),
         ] {
             let former_node_type = ProcessorClassImportPath::of_built_in_node(former_class_name);
