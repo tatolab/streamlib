@@ -334,8 +334,9 @@ class StreamBuilder:
             raise TypeError(
                 f"connect's source must name an output port of a node this stream "
                 f"added: `stream_builder.add(...).output(port_name)`. A link's ends are "
-                f"both in this stream; read another stream's port, on this machine or "
-                f"another, through a `tatolab.moq` `MoqTrackReceive` node this stream adds. Got {source!r}."
+                f"both in this stream; read another stream's track at a relay, on this "
+                f"machine or another, through a `MoqTrackReceive` node this stream adds. "
+                f"Got {source!r}."
             )
         if not isinstance(destination, NodeInputPortReference):
             raise TypeError(

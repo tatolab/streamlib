@@ -82,21 +82,21 @@ class ReportsUpstreamProcessSink:
 
 
 @node
-class ReportsItsOwnProcessTrackSink:
+class ReportsItsOwnProcessRecordsSink:
     """Announces its own process at setup, downstream of a native built-in.
 
-    The track comes from `RelayTrackSource`, which is native and therefore
+    The records come from `ChannelsToRecords`, which is native and therefore
     has no process of its own — so this sink's pid, set against `tatolabd`'s,
     is what discriminates the two sides of the boundary.
     """
 
-    track_from_upstream = Input(Packets, delivery="ordered")
+    records_from_upstream = Input(Records, delivery="newest")
 
     def setup(self, ctx) -> None:
-        report("TRACK_SINK_PID", {"pid": os.getpid()})
+        report("RECORDS_SINK_PID", {"pid": os.getpid()})
 
     def process(self, ctx) -> None:
-        ctx.inputs.read("track_from_upstream")
+        ctx.inputs.read("records_from_upstream")
 
 
 @node(execution="continuous", interval_ms=10)

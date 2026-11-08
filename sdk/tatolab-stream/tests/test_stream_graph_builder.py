@@ -743,8 +743,8 @@ def test_connect_refuses_a_port_address_as_its_source_naming_the_track_receive()
     assert message.startswith("connect's source must name an output port of a node this stream")
     assert "`stream_builder.add(...).output(port_name)`" in message
     assert (
-        "A link's ends are both in this stream; read another stream's port, on this machine "
-        "or another, through a `tatolab.moq` `MoqTrackReceive` node this stream adds."
+        "A link's ends are both in this stream; read another stream's track at a relay, on "
+        "this machine or another, through a `MoqTrackReceive` node this stream adds."
     ) in message
     assert stream_builder._compiled_graph()["links"] == []
 

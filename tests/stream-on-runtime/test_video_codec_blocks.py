@@ -24,8 +24,8 @@ from collections.abc import Callable
 import pytest
 
 from block_wiring_streams import (
-    h264_round_trip_exposing_the_decoded_port,
-    h265_round_trip_exposing_the_decoded_port,
+    h264_round_trip,
+    h265_round_trip,
 )
 from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from tatolab.h264 import H264Decoder, H264Encoder
@@ -82,7 +82,7 @@ CODEC_STRING_PREFIX_BY_CODEC = {"h264": "avc1.64", "h265": "hvc1.1."}
 
 CODEC_ROUND_TRIPS = {
     "h264": {
-        "stream": h264_round_trip_exposing_the_decoded_port,
+        "stream": h264_round_trip,
         "probed_stream": an_h264_round_trip_with_probes,
         "marker_classes": (H264Encoder, H264Decoder),
         "rendered_types": {
@@ -91,7 +91,7 @@ CODEC_ROUND_TRIPS = {
         },
     },
     "h265": {
-        "stream": h265_round_trip_exposing_the_decoded_port,
+        "stream": h265_round_trip,
         "probed_stream": an_h265_round_trip_with_probes,
         "marker_classes": (H265Encoder, H265Decoder),
         "rendered_types": {
@@ -123,10 +123,9 @@ def test_node_name_defaults_to_the_type_name(
 def test_the_round_trip_wires_without_an_adapter(
     run_stream_on_tatolabd_with_no_vulkan_driver: "Callable[..., StreamRunWithNoVulkanDriverOutcome]", codec
 ):
-    """Pattern into encoder, encoder into decoder, the decoded port exposed — the
-    port names compose as published, which is what makes three `stream_builder.add`
-    calls, two `stream_builder.connect` calls and one `stream_builder.expose` the
-    whole of a codec round trip. The builder checks no port name, so the proof is
+    """Pattern into encoder, encoder into decoder — the port names compose as
+    published, which is what makes three `stream_builder.add` calls and two
+    `stream_builder.connect` calls the whole of a codec round trip. The builder checks no port name, so the proof is
     the engine's load."""
     outcome = run_stream_on_tatolabd_with_no_vulkan_driver(CODEC_ROUND_TRIPS[codec]["stream"])
     assert outcome.loaded and outcome.loaded_node_count == 3, outcome.tatolab_run_stderr_text
