@@ -315,6 +315,7 @@ fn a_native_thread_reads_an_input_a_compiled_island_feeds_while_python_holds_the
                 Vec::new(),
                 Vec::new(),
                 1,
+                Vec::new(),
             )],
             (0, 0),
         )
