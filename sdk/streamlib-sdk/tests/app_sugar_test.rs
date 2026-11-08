@@ -266,7 +266,7 @@ fn add_local_hello_world_materializes_a_real_node() {
 
     let node_id = node.processor_id();
     app.stream()
-        .remove_processor(&node_id)
+        .remove_processor(node_id)
         .unwrap_or_else(|why| panic!("the add_local id {node_id} must name a real node: {why}"));
 }
 
