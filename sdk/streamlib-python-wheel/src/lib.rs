@@ -19,6 +19,8 @@ mod python_gpu_surface_pixel_exchange;
 #[cfg(target_os = "macos")]
 mod python_helper_process_parent_death_watch;
 mod python_helper_process_pixel_exchange;
+#[cfg(unix)]
+mod python_helper_scheduling_loop;
 mod python_helper_stream_clock;
 mod python_logging;
 #[cfg(target_os = "macos")]
@@ -83,8 +85,9 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
     module.add_class::<python_helper_stream_clock::PythonStreamClockReading>()?;
+    #[cfg(unix)]
     module.add_function(wrap_pyfunction!(
-        python_helper_stream_clock::machine_nanoseconds_until_this_helpers_stream_clock_reaches,
+        python_helper_scheduling_loop::run_the_scheduling_loop_of_this_helper,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

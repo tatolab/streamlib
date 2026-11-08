@@ -15,6 +15,7 @@ use streamlib::sdk::context::{
     StreamClockReading, machine_time_ns_a_published_clock_reaches,
     stream_clock_reading_of_a_published_clock, stream_time_ns_on_a_published_clock,
 };
+use streamlib::sdk::execution::processor_scheduling_loop::ClockAProcessorSchedulingLoopPacesOn;
 use streamlib::sdk::iceoryx2::StreamClockBoardReader;
 
 use crate::python_logging::monotonic_clock_now_ns;
@@ -52,10 +53,7 @@ pub(crate) fn helper_stream_time_ns_of_a_machine_instant(machine_instant_ns: i64
 
 /// Machine nanoseconds until this helper's stream clock reaches stream time
 /// `stream_deadline_ns`, as the clock runs now; zero or less once it has.
-#[pyfunction]
-pub(crate) fn machine_nanoseconds_until_this_helpers_stream_clock_reaches(
-    stream_deadline_ns: i64,
-) -> i64 {
+fn machine_nanoseconds_until_this_helpers_stream_clock_reaches(stream_deadline_ns: i64) -> i64 {
     let machine_now_ns = monotonic_clock_now_ns() as i64;
     let machine_time_ns_reaching_the_deadline = match STREAM_CLOCK_BOARD_THIS_HELPER_READS.get() {
         Some(board) => machine_time_ns_a_published_clock_reaches(
@@ -66,6 +64,29 @@ pub(crate) fn machine_nanoseconds_until_this_helpers_stream_clock_reaches(
         None => stream_deadline_ns,
     };
     machine_time_ns_reaching_the_deadline.saturating_sub(machine_now_ns)
+}
+
+/// This helper's stream clock, as its scheduling loop paces on it.
+pub(crate) struct HelperProcessStreamClock;
+
+impl ClockAProcessorSchedulingLoopPacesOn for HelperProcessStreamClock {
+    fn now_ns(&self) -> i64 {
+        helper_stream_clock_now_ns()
+    }
+
+    fn machine_ns_until(&self, deadline_ns: i64) -> i64 {
+        machine_nanoseconds_until_this_helpers_stream_clock_reaches(deadline_ns)
+    }
+
+    fn runs_behind_the_step_barrier(&self) -> bool {
+        helper_stream_clock_reading().step_ns.is_some()
+    }
+}
+
+/// The step this helper's stream clock has open; `None` when it runs free of
+/// the step barrier.
+pub(crate) fn helper_stream_clock_open_step_index() -> Option<u64> {
+    helper_stream_clock_reading().step_index
 }
 
 /// Which clock this helper's stream runs on and where it stands.
