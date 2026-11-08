@@ -1,0 +1,29 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# `tatolab-module-sdk`'s procedural macros: `#[function_node]`, which exports a
+# Rust function's evaluate entry and declaration, and `#[derive(FunctionNodeRecord)]`.
+# Released with the SDK at its version; a module reaches them through the SDK's
+# `function-node` feature.
+
+[package]
+name = "tatolab-module-sdk-macros"
+version = "1.12.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "The #[function_node] macro a Tatolab module writes a Rust function node with"
+keywords = ["tatolab", "streaming", "module", "macros"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
+
+[lints]
+workspace = true

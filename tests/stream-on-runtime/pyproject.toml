@@ -31,6 +31,8 @@ dependencies = [
     "tatolab-testpattern",
     # The function nodes the helper placement fixtures wire into a class's read.
     "tatolab-ops",
+    # The Rust function nodes the helper placement fixtures wire beside them.
+    "rust-function-node-fixture",
     # The virtual camera the camera tests present.
     "tatolab-virtualcamera",
     "pytest>=7.0",
@@ -71,6 +73,7 @@ tatolab-opus = { path = "../../packages/tatolab-opus" }
 tatolab-moq = { path = "../../packages/tatolab-moq" }
 tatolab-testpattern = { path = "../../packages/tatolab-testpattern" }
 tatolab-ops = { path = "../../packages/tatolab-ops" }
+rust-function-node-fixture = { path = "../../packages/test-fixtures/rust-function-node-module" }
 tatolab-virtualcamera = { path = "../../packages/tatolab-virtualcamera" }
 
 [tool.pytest.ini_options]

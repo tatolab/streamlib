@@ -99,7 +99,7 @@ class _FunctionNodeRunAsItsHelpersProcessor:
             config_values=config_values_of_one_function_node(
                 compiled, self._node_id, _config_as_a_mapping(compiled, config)
             ),
-            initial_state_values=compiled.initial_state_values_for_one_node(self._node_id),
+            initial_state_values=list(compiled.initial_state_values),
             output_count=len(compiled.output_ports),
         )
 

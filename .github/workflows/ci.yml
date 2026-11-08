@@ -358,9 +358,9 @@ jobs:
           -p streamlib-error
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p streamlib-vulkan-video
-          -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk
+          -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk -p tatolab-module-sdk-macros
           -p tatolab-read-track -p streamlib-relay-track-reader
-          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,streamlib-owned-device-video-codec-nodes/hardware-tests,tatolab-module-sdk/pyo3
+          --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,streamlib-owned-device-video-codec-nodes/hardware-tests,tatolab-module-sdk/pyo3,tatolab-module-sdk/function-node
           --lib --bins --tests
 
       - name: Save the compile-fail tests' build
@@ -736,7 +736,7 @@ jobs:
           cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           cargo test --locked -p streamlib-consumer-rhi --lib
           cargo test --locked -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes
-          cargo test --locked -p tatolab-module-sdk --features pyo3
+          cargo test --locked -p tatolab-module-sdk --features pyo3,function-node
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
           # The runtime directory is fixed under /tmp on macOS, so the CLI's
           # tests need the feature to isolate each test's machine.

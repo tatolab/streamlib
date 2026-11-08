@@ -27,6 +27,8 @@ from typing import Any, final
 from tatolab.stream import _node_context_protocols as _stream_protocols
 
 __all__ = [
+    "MODULE_HOST_TABLE_ABI_MAJOR",
+    "MODULE_HOST_TABLE_ABI_MINOR",
     "FunctionNodeEvaluatedAsItsHelpersProcessor",
     "capture_this_helper_processes_engine_log_records",
     "drain_the_engine_log_records_this_helper_captured",
@@ -40,6 +42,12 @@ __all__ = [
     "open_runtime_context_full_access_for_helper_process",
     "run_the_scheduling_loop_of_this_helper",
 ]
+
+MODULE_HOST_TABLE_ABI_MAJOR: int
+"""The module host table major this runtime serves; a module's native code built for another is refused."""
+
+MODULE_HOST_TABLE_ABI_MINOR: int
+"""The module host table minor this runtime serves; a module's native code built for a newer one is refused."""
 
 @final
 class FunctionNodeEvaluatedAsItsHelpersProcessor:

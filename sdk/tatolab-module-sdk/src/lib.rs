@@ -13,7 +13,13 @@
 //! hands the capsule to its native half, which reads it with
 //! [`ModuleHost::from_python_module_host_table_capsule`] (feature `pyo3`) or
 //! [`ModuleHost::from_module_host_table_pointer`].
+//!
+//! A `#[function_node]` function (feature `function-node`) is a function node
+//! written in Rust: [`function_node`] carries its grammar.
 
+pub mod function_node;
+#[cfg(feature = "pyo3")]
+mod function_node_python_declaration;
 pub mod module_host;
 pub mod module_host_audio_capture;
 pub mod module_host_audio_playback;

@@ -24,10 +24,13 @@ default = ["tracing"]
 tracing = ["dep:tracing"]
 # Reads the table out of the capsule a node's context hands its Python half.
 pyo3 = ["dep:pyo3"]
+# `#[function_node]` and `#[derive(FunctionNodeRecord)]`, which write a function node in Rust.
+function-node = ["dep:tatolab-module-sdk-macros"]
 
 [dependencies]
 tracing = { version = "0.1.44", optional = true }
 pyo3 = { version = "0.29.0", optional = true, default-features = false, features = ["macros"] }
+tatolab-module-sdk-macros = { path = "../tatolab-module-sdk-macros", version = "1.12.0", optional = true }
 
 [dev-dependencies]
 pyo3 = { version = "0.29.0", features = ["auto-initialize"] }

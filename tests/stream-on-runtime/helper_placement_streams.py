@@ -3,7 +3,9 @@
 
 """The `@stream` functions `test_helper_placement.py` runs from the suite project."""
 
-from tatolab.ops import Lfo, Remap
+from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCalls
+from rust_function_node_fixture import ScaleAndOffset
+from tatolab.ops import Clamp, Lfo, Remap
 from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, stream
 
 from helper_placement_processors import (
@@ -160,3 +162,22 @@ def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
         lfo = stream_builder.add(Lfo, name=f"{run}_lfo")
         sink = stream_builder.add(ReportsTheLfoValueOfEachStepSink, name=f"{run}_sink")
         stream_builder.connect(lfo.output("result"), sink.input("wave"))
+
+
+@stream
+def rust_function_nodes_in_islands_beside_tatolab_ops(stream_builder: StreamBuilder) -> None:
+    """`Lfo` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`
+    into `Remap`, each island read by its own Python class."""
+    lfo = stream_builder.add(Lfo)
+    scale_and_offset = stream_builder.add(ScaleAndOffset)
+    clamp = stream_builder.add(Clamp)
+    values_sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
+    stream_builder.connect(lfo.output("result"), scale_and_offset.input("x"))
+    stream_builder.connect(scale_and_offset.output("result"), clamp.input("x"))
+    stream_builder.connect(clamp.output("result"), values_sink.input("brightness"))
+
+    counter = stream_builder.add(RustCountsItsOwnCalls, name="rust_counter")
+    remap = stream_builder.add(Remap)
+    counts_sink = stream_builder.add(ReportsTheCountsItReadInOrderSink)
+    stream_builder.connect(counter.output("result"), remap.input("x"))
+    stream_builder.connect(remap.output("result"), counts_sink.input("count"))

@@ -36,6 +36,7 @@ from helper_placement_streams import (
     only_labelled_source_into_sink,
     raw_message_payload_source_into_sink,
     reaped_labelled_source_into_sink,
+    rust_function_nodes_in_islands_beside_tatolab_ops,
     stateful_counter_into_python_sink_that_dies_once,
     stateful_counter_read_by_two_python_sinks,
     two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock,
@@ -449,6 +450,63 @@ def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its
     assert counter["components"]["function_node_state"]["calls"] >= max(
         first_reader["counts"][-1], second_reader["counts"][-1]
     ), counter["components"]
+
+
+def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_tatolab_ops(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A fixture module's Rust function nodes join islands beside `tatolab-ops`'
+    and are evaluated inside each reader's read, with no process of their own.
+
+    `Lfo -> ScaleAndOffset (Rust) -> Clamp` maps the LFO's -1..1 onto 0..1, and
+    `CountsItsOwnCalls (Rust) -> Remap` hands its ordered reader each count once,
+    as `(count + 1) / 2`. Only the two Python classes get a helper, and the
+    catalog and `graph` show each Rust node as `function` / `rust`.
+    """
+    tatolabd = start_tatolabd_running_stream(rust_function_nodes_in_islands_beside_tatolab_ops)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    values_read = tatolabd.await_marker("FUNCTION_NODE_VALUES_READ")
+    counts_read = tatolabd.await_marker("COUNTS_READ_IN_ORDER")
+    local_api = tatolabd.local_api_client()
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    registry = local_api.registry(stream_id)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    assert sorted(helper_pids) == sorted([values_read["sink_pid"], counts_read["pid"]]), (
+        f"a stream of five function nodes and two Python classes started {helper_pids}; "
+        f"only the classes get a process:\n{tatolabd.recent_stderr()}"
+    )
+    values = values_read["values"]
+    assert values[0] == pytest.approx(0.5), (
+        f"the LFO starts at 0, which `ScaleAndOffset` maps to 0.5, and the class first read "
+        f"{values[0]}"
+    )
+    assert all(0.0 <= value <= 1.0 for value in values), values
+    assert len(set(values)) > 1, f"the island moves with the stream's clock: {values}"
+    counts = [2.0 * value - 1.0 for value in counts_read["counts"]]
+    assert counts == [float(count) for count in range(1, len(counts) + 1)], (
+        f"the Rust counter counts each read once from its first, and its reader read {counts}"
+    )
+
+    rust_node_types = {
+        "rust_function_node_fixture:ScaleAndOffset",
+        "rust_function_node_fixture:CountsItsOwnCalls",
+    }
+    for graph_node in graph["nodes"]:
+        if graph_node["type"] in rust_node_types:
+            assert (graph_node.get("kind"), graph_node.get("language")) == ("function", "rust"), (
+                graph_node
+            )
+    catalog_entries = {entry["type"]: entry for entry in registry["nodes"]}
+    for rust_node_type in rust_node_types:
+        entry = catalog_entries[rust_node_type]
+        assert (entry["kind"], entry.get("language")) == ("function", "rust"), entry
+    rust_counter = next(node for node in graph["nodes"] if node["name"] == "rust_counter")
+    assert rust_counter["components"]["function_node_state"]["calls"] >= counts[-1], (
+        rust_counter["components"]
+    )
 
 
 def test_a_stateful_function_node_replays_the_same_values_on_a_stepped_clock(

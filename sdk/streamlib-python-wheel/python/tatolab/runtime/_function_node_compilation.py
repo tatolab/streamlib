@@ -26,8 +26,16 @@ from tatolab.stream._function_node_declaration import (
     FunctionNode,
 )
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
+from tatolab.stream._rust_function_node_declaration import (
+    RustFunctionNode,
+    RustFunctionNodeDeclaration,
+)
 
-from tatolab.runtime._engine import feed_an_input_port_from_a_function_node_island
+from tatolab.runtime._engine import (
+    MODULE_HOST_TABLE_ABI_MAJOR,
+    MODULE_HOST_TABLE_ABI_MINOR,
+    feed_an_input_port_from_a_function_node_island,
+)
 
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
@@ -54,21 +62,11 @@ class FunctionNodeCompiledToItsEvaluateEntry:
     config_fields: "tuple[str, ...]"
     config_field_defaults: "dict[str, float]"
     config_field_default_factories: "dict[str, Callable[[], Any]]"
-    state_record_class: Optional[type]
     state_fields: "tuple[str, ...]"
+    initial_state_values: "tuple[float, ...]"
     is_stateful: bool
     body_loaded_from_numbas_cache: bool
     compiled_wrapper_kept_alive: Any
-
-    def initial_state_values_for_one_node(self, node_id: str) -> "list[float]":
-        """The state a new node of this type starts from: one record of its defaults, as f64s."""
-        if self.state_record_class is None:
-            return []
-        initial_state = self.state_record_class()
-        return [
-            _exactly_as_f64(getattr(initial_state, field), f"function node `{node_id}`'s state `{field}`")
-            for field in self.state_fields
-        ]
 
 
 def feed_each_input_port_from_its_function_node_island(
@@ -114,7 +112,7 @@ def feed_each_input_port_from_its_function_node_island(
                         output_ports_by_node_id,
                     ),
                     config_values_of_one_function_node(compiled, node_id, island_node.get("config")),
-                    compiled.initial_state_values_for_one_node(node_id),
+                    list(compiled.initial_state_values),
                     len(compiled.output_ports),
                 )
             )
@@ -231,7 +229,12 @@ def config_values_of_one_function_node(
 def compile_function_node_to_its_evaluate_entry(
     function_node: Any, import_path: str
 ) -> FunctionNodeCompiledToItsEvaluateEntry:
-    """Compile `function_node`'s body with Numba to its evaluate entry, refusing by name what does not compile."""
+    """Compile `function_node`'s body with Numba to its evaluate entry, refusing by name what does not compile.
+
+    A Rust function node exports its entry already; it is read, never compiled.
+    """
+    if isinstance(function_node, RustFunctionNode):
+        return _the_evaluate_entry_a_rust_function_node_exports(function_node, import_path)
     if not isinstance(function_node, FunctionNode):
         raise FunctionNodeDoesNotCompile(
             f"{import_path} names {function_node!r}, which is not a `@node.function` function"
@@ -350,12 +353,73 @@ def compile_function_node_to_its_evaluate_entry(
         config_fields=tuple(config_value_types),
         config_field_defaults=config_field_defaults,
         config_field_default_factories=config_field_default_factories,
-        state_record_class=state_record_class,
         state_fields=tuple(state_value_types),
+        initial_state_values=_initial_state_values(import_path, state_record_class, state_value_types),
         is_stateful=state_record_class is not None,
         body_loaded_from_numbas_cache=sum(body_with_its_dataclasses_lowered.stats.cache_hits.values())
         > 0,
         compiled_wrapper_kept_alive=compiled_wrapper,
+    )
+
+
+def _the_evaluate_entry_a_rust_function_node_exports(
+    function_node: RustFunctionNode, import_path: str
+) -> FunctionNodeCompiledToItsEvaluateEntry:
+    declaration = function_node.rust_function_node_declaration
+    _refuse_a_rust_function_node_built_for_another_module_host_table(declaration, import_path)
+    return FunctionNodeCompiledToItsEvaluateEntry(
+        evaluate_entry_address=declaration.evaluate_entry_address,
+        input_ports=tuple(input_pin.port for input_pin in declaration.input_pins),
+        pin_defaults_by_input_port={
+            input_pin.port: input_pin.pin_default
+            for input_pin in declaration.input_pins
+            if input_pin.pin_default is not None
+        },
+        output_ports=tuple(output_port.name for output_port in declaration.output_ports),
+        config_fields=tuple(config_field.name for config_field in declaration.config_fields),
+        config_field_defaults={
+            config_field.name: config_field.default or 0.0 for config_field in declaration.config_fields
+        },
+        config_field_default_factories={},
+        state_fields=tuple(state_field.name for state_field in declaration.state_fields),
+        initial_state_values=tuple(state_field.default or 0.0 for state_field in declaration.state_fields),
+        is_stateful=declaration.state_parameter is not None,
+        body_loaded_from_numbas_cache=False,
+        compiled_wrapper_kept_alive=function_node,
+    )
+
+
+def _refuse_a_rust_function_node_built_for_another_module_host_table(
+    declaration: RustFunctionNodeDeclaration, import_path: str
+) -> None:
+    built_for = (
+        f"{declaration.module_host_table_abi_major}.{declaration.module_host_table_abi_minor}"
+    )
+    runtime_serves = f"{MODULE_HOST_TABLE_ABI_MAJOR}.{MODULE_HOST_TABLE_ABI_MINOR}"
+    if declaration.module_host_table_abi_major != MODULE_HOST_TABLE_ABI_MAJOR:
+        raise FunctionNodeDoesNotCompile(
+            f"{import_path} is a Rust function node built against module host table {built_for}, "
+            f"and this runtime serves {runtime_serves}, another major. To fix: rebuild its "
+            f"module against a `tatolab-module-sdk` {MODULE_HOST_TABLE_ABI_MAJOR}.x."
+        )
+    if declaration.module_host_table_abi_minor > MODULE_HOST_TABLE_ABI_MINOR:
+        raise FunctionNodeDoesNotCompile(
+            f"{import_path} is a Rust function node built against module host table {built_for}, "
+            f"newer than the {runtime_serves} this runtime serves. To fix: update the runtime, or "
+            f"build its module against an older `tatolab-module-sdk`."
+        )
+
+
+def _initial_state_values(
+    import_path: str, state_record_class: Optional[type], state_value_types: "dict[str, str]"
+) -> "tuple[float, ...]":
+    """The state a new node of this type starts from: one record of its defaults, as f64s."""
+    if state_record_class is None:
+        return ()
+    initial_state = state_record_class()
+    return tuple(
+        _exactly_as_f64(getattr(initial_state, field), f"{import_path}'s state `{field}` default")
+        for field in state_value_types
     )
 
 

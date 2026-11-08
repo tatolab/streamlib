@@ -78,6 +78,7 @@ from ._function_node_declaration import FunctionNode as FunctionNode
 from ._function_node_declaration import State as State
 from ._function_node_declaration import Stateful as Stateful
 from ._function_node_declaration import Time as Time
+from ._rust_function_node_declaration import RustFunctionNode as RustFunctionNode
 from ._port_family_declaration import Array as Array
 from ._port_family_declaration import Channels as Channels
 from ._port_family_declaration import Image as Image
@@ -202,6 +203,7 @@ __all__ = [
     "NodeReferenceToNodeType",
     "ExposedNameCastsToNothingError",
     "FunctionNode",
+    "RustFunctionNode",
     "cast_exposed_name_to_url_safe",
     "SoleReferrerNodeReferenceToNodeType",
     "State",

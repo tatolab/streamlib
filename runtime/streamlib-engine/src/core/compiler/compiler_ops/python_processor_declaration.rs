@@ -147,7 +147,8 @@ fn read_function_node_state_fields(
 }
 
 /// The kind a described node type declares: `process`, or `function` beside
-/// its `language`, which a processor interpreter describes only as `python`.
+/// its `language`: `python` for a `@node.function`, `rust` for a module's
+/// `#[function_node]`.
 fn read_described_node_kind(
     described_node_type: &serde_json::Value,
 ) -> std::result::Result<NodeKind, String> {
@@ -157,9 +158,12 @@ fn read_described_node_kind(
             "python" => Ok(NodeKind::Function {
                 language: FunctionNodeLanguage::Python,
             }),
+            "rust" => Ok(NodeKind::Function {
+                language: FunctionNodeLanguage::Rust,
+            }),
             other => Err(format!(
                 "{DESCRIBED_LANGUAGE_KEY} is {other:?}, but a function node a processor \
-                 interpreter describes is `python`"
+                 interpreter describes is `python` or `rust`"
             )),
         },
         "shader" => Ok(NodeKind::Shader),
@@ -769,11 +773,30 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_a_processor_interpreter_never_describes_is_refused_naming_it() {
+    fn a_described_rust_function_node_reads_as_a_function_node_run_inside_its_readers() {
         let mut described = described_node_type_with_input_ports(serde_json::json!([]));
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("rust");
-        assert!(refusal_of(&described).contains("\"rust\""));
+        described["state_fields"] = serde_json::json!(["total"]);
+        let function = read(&described).expect("reads");
+        assert_eq!(
+            function.descriptor.node_kind,
+            NodeKind::Function {
+                language: FunctionNodeLanguage::Rust
+            }
+        );
+        assert_eq!(
+            function.how_a_python_node_of_the_type_runs,
+            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
+        );
+    }
+
+    #[test]
+    fn a_kind_a_processor_interpreter_never_describes_is_refused_naming_it() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("cobol");
+        assert!(refusal_of(&described).contains("\"cobol\""));
 
         described["kind"] = serde_json::json!("shader");
         assert!(refusal_of(&described).contains("Slang"));

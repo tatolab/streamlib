@@ -1244,6 +1244,17 @@ wheels = [
 ]
 
 [[package]]
+name = "rust-function-node-fixture"
+version = "0.0.0"
+source = { directory = "../../packages/test-fixtures/rust-function-node-module" }
+dependencies = [
+    { name = "tatolab-stream" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tatolab-stream", specifier = ">=0.68.34" }]
+
+[[package]]
 name = "setuptools"
 version = "84.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1288,6 +1299,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "rust-function-node-fixture" },
     { name = "tatolab-camera" },
     { name = "tatolab-compositor" },
     { name = "tatolab-h264" },
@@ -1315,6 +1327,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=7.0" },
     { name = "ruff", specifier = "==0.16.9" },
+    { name = "rust-function-node-fixture", directory = "../../packages/test-fixtures/rust-function-node-module" },
     { name = "tatolab-camera", directory = "../../packages/tatolab-camera" },
     { name = "tatolab-compositor", editable = "../../packages/tatolab-compositor" },
     { name = "tatolab-h264", directory = "../../packages/streamlib-h264" },
