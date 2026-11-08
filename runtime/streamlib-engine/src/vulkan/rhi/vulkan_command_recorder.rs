@@ -233,17 +233,33 @@ impl RhiCommandRecorderInner {
 
         unsafe {
             if self.submission_in_flight {
-                // A caller that waited on the submission's completion timeline
-                // finds the fence signalled, and pays no second stall here.
+                // Once the submission's completion timeline value is reached its
+                // work has retired, and the fence signal that may trail it is no
+                // stall on GPU work, so that wait goes uncounted.
                 let already_signaled = self
                     .device
                     .get_fence_status(self.completion_fence)
                     .is_ok_and(|status| status == vk::SuccessCode::SUCCESS);
                 if !already_signaled {
-                    self.vulkan_device.wait_for_fences_blocking_counted(
-                        &[self.completion_fence],
-                        format_args!("RhiCommandRecorder '{}' at begin()", self.label),
-                    )?;
+                    let completion_timeline_reached = self
+                        .vulkan_device
+                        .every_queue_submission_in_snapshot_has_completed(&self.latest_submission)
+                        .unwrap_or(false);
+                    if completion_timeline_reached {
+                        self.device
+                            .wait_for_fences(&[self.completion_fence], true, u64::MAX)
+                            .map_err(|e| {
+                                Error::GpuError(format!(
+                                    "RhiCommandRecorder '{}': wait_for_fences at begin(): {e}",
+                                    self.label
+                                ))
+                            })?;
+                    } else {
+                        self.vulkan_device.wait_for_fences_blocking_counted(
+                            &[self.completion_fence],
+                            format_args!("RhiCommandRecorder '{}' at begin()", self.label),
+                        )?;
+                    }
                 }
                 self.device
                     .reset_fences(&[self.completion_fence])
