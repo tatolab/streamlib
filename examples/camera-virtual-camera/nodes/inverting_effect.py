@@ -14,10 +14,13 @@ its own.
 
 import numpy
 from tatolab.stream import (
+    Image,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     node,
 )
 
@@ -26,15 +29,12 @@ INVERTED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 INVERTED_FRAME_TEXTURE_USAGE = ["texture_binding"]
 
 
-@node
+@node.process
 class InvertingEffect:
     """Reads each camera frame on the CPU and publishes its colour-inverted twin."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> VideoFrame: ...
-
-    @node.output()
-    def video_to_downstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="newest")
+    video_to_downstream = Output(Image)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.inverted_frame_texture_ring = NodeOutputTextureRing(
@@ -42,7 +42,7 @@ class InvertingEffect:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        camera_frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        camera_frame = ctx.inputs.read(self.video_from_upstream)
         if camera_frame is None:
             return
 
@@ -64,17 +64,10 @@ class InvertingEffect:
             inverted_texture.unlock()
 
         # The capture stamp is what consumers order by, and a `VirtualCameraSink`
-        # sets the device's colorimetry from `color_info`, so the two cameras
-        # present the same picture under the same time and colour.
-        inverted_frame = VideoFrame(
-            surface_id=inverted_texture.surface_id,
-            width=camera_frame.width,
-            height=camera_frame.height,
-            timestamp_ns=camera_frame.timestamp_ns,
-            color_info=camera_frame.color_info,
-        )
+        # sets the device's colorimetry from the frame's colour, so the two
+        # cameras present the same picture under the same time and colour.
         ctx.outputs.write(
-            "video_to_downstream",
-            inverted_frame.to_bytes(),
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(inverted_texture, camera_frame.colour),
             timestamp_ns=camera_frame.timestamp_ns,
         )
