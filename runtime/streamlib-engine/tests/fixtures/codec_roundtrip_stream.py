@@ -1,30 +1,29 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The codec round trip as a deployment builds it: two streams on one machine.
+"""The codec round trip as a deployment builds it: two streams through one relay.
 
-The sender encodes the test pattern and exposes the encoder's port; the
-receiver reads that port's track at the machine's local relay and decodes it.
-Nothing reads either from inside the runtime: `e2e_fixture_psnr_test_pattern.sh` reads the
-sender's encoded track with `tatolab-read-track`, decodes it with ffmpeg and
-scores the pictures, and reads the receiver's decoded-frame count off `graph`,
-which counts a port's writes once something reads it — the receiver exposes
-its decoded port for that.
+The sender encodes the test pattern and sends the encoder's port to the
+fixture's relay through its own `MoqGateway` → `MoqTrack` → `MoqTrackSend`;
+the receiver reads that track there with `MoqTrackReceive` and decodes it into
+a sink, which gives the decoder's port a reader so `graph` counts what it
+writes. `e2e_fixture_psnr_test_pattern.sh` reads the sender's track with
+`tatolab-read-track`, decodes it with ffmpeg and scores the pictures, and reads
+the receiver's decoded-frame count off `graph`.
 
 `e2e_fixture_psnr_test_pattern.sh` loads each as a project of its own with
 `tatolab run --dir` into a `tatolabd` it starts with the streams' settings in
 its environment, which the compile inherits: `STREAMLIB_FIXTURE_VIDEO_CODEC`
-picks the codec (`h264` by default), and
-`STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID` names the sender's stream
-id, which the receiver's broadcast is built from.
+picks the codec (`h264` by default), and `STREAMLIB_FIXTURE_RELAY_URL` names
+the relay the fixture started.
 """
 
-import json
 import os
-import urllib.request
 
+from decoded_video_frame_sink import DecodedVideoFrameSink
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.h265 import H265Decoder, H265Encoder
+from tatolab.moq import MoqGateway, MoqTrack, MoqTrackReceive, MoqTrackSend
 from tatolab.stream import StreamBuilder, stream
 from tatolab.testpattern import TestPatternSource
 
@@ -37,74 +36,86 @@ _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
 # measured over a GOP structure this file names.
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
-#: The sender's exposed port, as a track of its broadcast.
-SENDER_ENCODED_TRACK = "encoder/encoded_video"
+#: The broadcast the sender's gateway publishes; the relay serves it as `<this>.hang`.
+SENDER_BROADCAST = "codec-roundtrip-sender"
 
-#: The machine's loopback HTTP, whose listing names the machine.
-LOOPBACK_HTTP_LISTING_URL = "http://127.0.0.1:4446/"
+#: The receiver gateway's own broadcast, which carries no track.
+RECEIVER_BROADCAST = "codec-roundtrip-receiver"
+
+#: The sender's encoded track in its broadcast.
+SENDER_ENCODED_TRACK = "encoded_video"
+
+#: How far the receiver lets newer content run past a missing group before giving it up.
+RECEIVER_MAX_AGE_MILLISECONDS = 500
 
 
-def _codec_markers() -> tuple[type, type]:
+def _codec() -> str:
     codec = os.environ.get("STREAMLIB_FIXTURE_VIDEO_CODEC") or "h264"
     if codec not in _ENCODER_AND_DECODER_MARKERS_BY_CODEC:
         raise ValueError(
             f"STREAMLIB_FIXTURE_VIDEO_CODEC={codec!r} names no codec this round trip "
             f"carries; it carries {', '.join(sorted(_ENCODER_AND_DECODER_MARKERS_BY_CODEC))}"
         )
-    return _ENCODER_AND_DECODER_MARKERS_BY_CODEC[codec]
+    return codec
 
 
-def _senders_stream_id() -> str:
-    sender_stream_id = os.environ.get(
-        "STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID"
-    )
-    if not sender_stream_id:
+def _fixture_relay_url() -> str:
+    relay_url = os.environ.get("STREAMLIB_FIXTURE_RELAY_URL")
+    if not relay_url:
         raise ValueError(
-            "STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID is unset, so the receiver "
-            "cannot name the sender's broadcast"
+            "STREAMLIB_FIXTURE_RELAY_URL is unset, so the round trip names no relay to send through"
         )
-    return sender_stream_id
-
-
-def _this_machines_name() -> str:
-    """This machine's name, read off the runtime's loopback listing."""
-    with urllib.request.urlopen(LOOPBACK_HTTP_LISTING_URL, timeout=5) as listing:
-        return json.load(listing)["machine"]
+    return relay_url
 
 
 @stream
-def test_pattern_through_the_encoder_exposing_its_encoded_port(
-    stream_builder: StreamBuilder,
-) -> None:
-    encoder_marker, _ = _codec_markers()
+def test_pattern_through_the_encoder_sent_to_the_relay(stream_builder: StreamBuilder) -> None:
+    encoder_marker, _ = _ENCODER_AND_DECODER_MARKERS_BY_CODEC[_codec()]
 
-    test_pattern = stream_builder.add(
-        TestPatternSource, name="test_pattern"
-    )
+    test_pattern = stream_builder.add(TestPatternSource, name="test_pattern")
     encoder = stream_builder.add(
         encoder_marker,
         name="encoder",
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
     )
+    gateway = stream_builder.add(
+        MoqGateway,
+        name="gateway",
+        config={"kind": "moq-relay", "relay_url": _fixture_relay_url(), "broadcast": SENDER_BROADCAST},
+    )
+    encoded_track = stream_builder.add(
+        MoqTrack, name="encoded_track", config={"gateway": gateway, "track": SENDER_ENCODED_TRACK}
+    )
+    send = stream_builder.add(MoqTrackSend, name="send", config={"track": encoded_track})
 
     stream_builder.connect(test_pattern.output("video"), encoder.input("video"))
-    stream_builder.expose(encoder.output("encoded_video"))
+    stream_builder.connect(encoder.output("encoded_video"), send.input("content"))
 
 
 @stream
 def the_senders_encoded_track_through_the_decoder(stream_builder: StreamBuilder) -> None:
-    _, decoder_marker = _codec_markers()
+    codec = _codec()
+    _, decoder_marker = _ENCODER_AND_DECODER_MARKERS_BY_CODEC[codec]
 
-    relay_track = stream_builder.add(
-        tatolab.stream.RelayTrackSource,
+    gateway = stream_builder.add(
+        MoqGateway,
+        name="gateway",
+        config={"kind": "moq-relay", "relay_url": _fixture_relay_url(), "broadcast": RECEIVER_BROADCAST},
+    )
+    receive = stream_builder.add(
+        MoqTrackReceive,
         name="sender",
         config={
-            "broadcast": f"{_this_machines_name()}/{_senders_stream_id()}.hang",
+            "gateway": gateway,
+            "broadcast": f"{SENDER_BROADCAST}.hang",
             "track": SENDER_ENCODED_TRACK,
+            "family": "packets",
+            "codec": codec,
+            "max_age": RECEIVER_MAX_AGE_MILLISECONDS,
         },
     )
     decoder = stream_builder.add(decoder_marker, name="decoder")
+    sink = stream_builder.add(DecodedVideoFrameSink, name="sink")
 
-    stream_builder.connect(relay_track.output("track"), decoder.input("encoded_video"))
-    # Exposed so the decoded port has a reader, and `graph` counts what it writes.
-    stream_builder.expose(decoder.output("video"))
+    stream_builder.connect(receive.output("content"), decoder.input("encoded_video"))
+    stream_builder.connect(decoder.output("video"), sink.input("video_from_upstream"))

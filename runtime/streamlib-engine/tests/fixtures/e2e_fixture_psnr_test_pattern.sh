@@ -6,9 +6,10 @@
 #
 # Guards the encode colour path against the matrix mis-interpretation
 # regressions that produce the green/magenta tint symptom class, the codec
-# round trip built as a deployment builds it: two streams on one runtime. The
-# sender (TestPatternSource → encoder) exposes the encoder's port; the receiver
-# reads that track at the local relay and decodes it.
+# round trip built as a deployment builds it: two streams on one runtime and a
+# relay the rig starts. The sender (TestPatternSource → encoder → MoqTrackSend)
+# sends the encoder's port to the relay; the receiver reads that track there
+# with MoqTrackReceive and decodes it.
 #
 # The source needs no camera: TestPatternSource renders each frame from its
 # index alone, so every run encodes the same pictures. The lock is each SMPTE
@@ -24,8 +25,8 @@
 # samples under a VUI that signals TV range, so saturated bars sit at the ends of
 # the coded range and a range swap clips straight back to them.
 #
-# Frames are read the way any user reads a port: `tatolab-read-track` reads the
-# sender's encoded track at the local relay's loopback listener, the rig's
+# Frames are read the way any user reads a track: `tatolab-read-track` reads the
+# sender's encoded track at the rig's relay, the rig's
 # ffmpeg decodes the dump to PNGs, and `cargo xtask psnr bar-colors` measures
 # and injects. The receiver's own decode is proven by the count of frames its
 # decoder wrote, read off `graph`; the engine decoder's pixels are its unit
@@ -85,7 +86,9 @@ TOLERANCE="${TOLERANCE:-0.05}"
 BASELINE_CAPTURE="${BASELINE_CAPTURE:-}"
 INJECT_BUG="${INJECT_BUG:-}"
 
-SENDER_ENCODED_TRACK="encoder/encoded_video"
+# The broadcast and track `codec_roundtrip_stream.py` sends to.
+SENDER_BROADCAST="codec-roundtrip-sender.hang"
+SENDER_ENCODED_TRACK="encoded_video"
 
 # ── Prerequisites ────────────────────────────────────────────────────
 need() { command -v "$1" >/dev/null || { echo "[test-pattern-color] missing: $1" >&2; exit 77; }; }
@@ -122,6 +125,7 @@ mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 ENCODED_TRACK_DIR="$OUTPUT_DIR/encoded_track"
 MEASURED_DIR="$OUTPUT_DIR/measured"
+RELAY_LOG_FILE="$OUTPUT_DIR/relay.log"
 # The runtime's output — the engine's log mirror, every stream's records among
 # it — with each `tatolab run`'s beside it.
 LOG_FILE="$OUTPUT_DIR/runtime.log"
@@ -131,6 +135,7 @@ RECEIVER_RUN_LOG_FILE="$OUTPUT_DIR/receiver_run.log"
 stop_the_streams_and_the_runtime() {
     remove_the_fixture_projects
     stop_the_fixture_runtime
+    stop_the_fixture_relay
 }
 trap stop_the_streams_and_the_runtime EXIT
 
@@ -139,8 +144,9 @@ echo "[test-pattern-color] Codec:             $CODEC"
 
 # ── Build ────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
-echo "[test-pattern-color] Building tatolab-read-track + xtask (release)..."
+echo "[test-pattern-color] Building tatolab-read-track, moq-relay and xtask (release)..."
 require_tatolab_read_track
+require_the_fixture_relay
 if ! cargo build --release --locked -p xtask > "$OUTPUT_DIR/build.log" 2>&1; then
     echo "[test-pattern-color] FAIL: xtask build failed" >&2
     tail -40 "$OUTPUT_DIR/build.log" >&2
@@ -148,12 +154,18 @@ if ! cargo build --release --locked -p xtask > "$OUTPUT_DIR/build.log" 2>&1; the
 fi
 
 # ── Run ──────────────────────────────────────────────────────────────
+if ! start_the_fixture_relay "$RELAY_LOG_FILE" "$OUTPUT_DIR/relay"; then
+    echo "[test-pattern-color] FAIL: the fixture could not start its relay" >&2
+    exit 1
+fi
+echo "[test-pattern-color] Relay:             $FIXTURE_RELAY_URL"
+
 # Each stream is a project of its own, so the sender runs before the receiver
 # subscribes to its broadcast.
 SENDER_PROJECT_DIR="$OUTPUT_DIR/codec-roundtrip-sender"
 RECEIVER_PROJECT_DIR="$OUTPUT_DIR/codec-roundtrip-receiver"
 write_a_one_stream_fixture_project "$SENDER_PROJECT_DIR" "$SCRIPT_DIR/codec_roundtrip_stream.py" \
-    test_pattern_through_the_encoder_exposing_its_encoded_port codec_roundtrip_sender \
+    test_pattern_through_the_encoder_sent_to_the_relay codec_roundtrip_sender \
     "$FIXTURE_VENV_DIRECTORY"
 write_a_one_stream_fixture_project "$RECEIVER_PROJECT_DIR" "$SCRIPT_DIR/codec_roundtrip_stream.py" \
     the_senders_encoded_track_through_the_decoder codec_roundtrip_receiver \
@@ -161,12 +173,12 @@ write_a_one_stream_fixture_project "$RECEIVER_PROJECT_DIR" "$SCRIPT_DIR/codec_ro
 SENDER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$SENDER_PROJECT_DIR" codec_roundtrip_sender)"
 RECEIVER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$RECEIVER_PROJECT_DIR" codec_roundtrip_receiver)"
 
-# A stream takes no argv, so the codec and the sender's stream id travel in the
-# runtime's environment, which each stream's compile and its processor
-# interpreters inherit.
+# A stream takes no argv, so the codec and the relay travel in the runtime's
+# environment, which each stream's compile and its processor interpreters
+# inherit.
 export RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}"
 if ! STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
-        STREAMLIB_FIXTURE_CODEC_ROUNDTRIP_SENDER_STREAM_ID="$SENDER_STREAM_ID" \
+        STREAMLIB_FIXTURE_RELAY_URL="$FIXTURE_RELAY_URL" \
         start_the_fixture_runtime "$LOG_FILE" "$OUTPUT_DIR/runtime_state"; then
     echo "[test-pattern-color] FAIL: the fixture could not start its runtime" >&2
     exit 1
@@ -186,15 +198,9 @@ run_the_fixture_project() {
 run_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_STREAM_ID" "$SENDER_RUN_LOG_FILE"
 run_the_fixture_project "$RECEIVER_PROJECT_DIR" "$RECEIVER_STREAM_ID" "$RECEIVER_RUN_LOG_FILE"
 
-MACHINE_NAME="$(the_machine_name_the_loopback_listing_names)" || {
-    echo "[test-pattern-color] FAIL: the runtime's loopback listing at $LOOPBACK_HTTP_LISTING_URL" \
-        "did not name the machine" >&2
-    exit 1
-}
-SENDER_BROADCAST="$MACHINE_NAME/$SENDER_STREAM_ID.hang"
 echo "[test-pattern-color] Reading:           $SENDER_ENCODED_TRACK of $SENDER_BROADCAST"
 
-if ! read_the_track_at_the_local_relay "$SENDER_BROADCAST" "$SENDER_ENCODED_TRACK" \
+if ! read_the_track_at_the_fixture_relay "$SENDER_BROADCAST" "$SENDER_ENCODED_TRACK" \
         "$OBJECT_COUNT" "$ENCODED_TRACK_DIR" 2> "$OUTPUT_DIR/read_track.log"; then
     echo "[test-pattern-color] FAIL: the sender's encoded track did not read" >&2
     cat "$OUTPUT_DIR/read_track.log" >&2
@@ -278,7 +284,7 @@ if [ "$BASELINE_CAPTURE" = "1" ]; then
         --baseline-note "Captured with: BASELINE_CAPTURE=1 e2e_fixture_psnr_test_pattern.sh <out> <codec>"
         --baseline-note "Codec: $CODEC"
         --baseline-note "Source: TestPatternSource at its default 1280x720."
-        --baseline-note "Measured from the sender's encoded track read at the local relay with tatolab-read-track and decoded by ffmpeg to RGB PNGs."
+        --baseline-note "Measured from the sender's encoded track read at the rig's relay with tatolab-read-track and decoded by ffmpeg to RGB PNGs."
     )
 fi
 
