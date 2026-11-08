@@ -1002,8 +1002,9 @@ pub struct HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
     /// The number the parent gave the called function node on the helper's
     /// setup command; read only while a call is under way.
     pub function_node_breadcrumb_number: u32,
-    /// Always zero; keeps the entry a multiple of 8 bytes.
-    pub reserved: u32,
+    /// How many function-node calls the helper has under way, this oldest one
+    /// among them; zero between calls.
+    pub function_node_calls_under_way: u32,
 }
 
 impl HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
@@ -1400,7 +1401,10 @@ mod tests {
             8
         );
         assert_eq!(
-            std::mem::offset_of!(HelperProcessFunctionNodeCallBreadcrumbBoardEntry, reserved),
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+                function_node_calls_under_way
+            ),
             12
         );
         assert_eq!(
@@ -1417,7 +1421,7 @@ mod tests {
         let between_calls = HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
             call_started_at_monotonic_ns: 0,
             function_node_breadcrumb_number: 3,
-            reserved: 0,
+            function_node_calls_under_way: 0,
         };
         assert_eq!(between_calls.function_node_whose_call_is_under_way(), None);
         let during_a_call = HelperProcessFunctionNodeCallBreadcrumbBoardEntry {

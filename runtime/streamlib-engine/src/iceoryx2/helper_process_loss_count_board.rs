@@ -444,7 +444,7 @@ impl HelperProcessLossCountBoardWriter {
             HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
                 call_started_at_monotonic_ns: call_started_at_monotonic_ns.max(1),
                 function_node_breadcrumb_number,
-                reserved: 0,
+                function_node_calls_under_way: 0,
             },
         ));
         calls.write_the_oldest_call_under_way();
@@ -606,11 +606,16 @@ struct FunctionNodeCallsUnderWayInThisHelper {
 
 impl FunctionNodeCallsUnderWayInThisHelper {
     fn write_the_oldest_call_under_way(&mut self) {
+        let function_node_calls_under_way = self.calls_under_way.len() as u32;
         let oldest_call_under_way = self
             .calls_under_way
             .iter()
             .map(|(_, breadcrumb)| *breadcrumb)
             .min_by_key(|breadcrumb| breadcrumb.call_started_at_monotonic_ns)
+            .map(|oldest| HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+                function_node_calls_under_way,
+                ..oldest
+            })
             .unwrap_or_default();
         self.breadcrumb_entry
             .update_with_copy(oldest_call_under_way);
@@ -1413,9 +1418,20 @@ mod tests {
                 .and_then(|entry| entry.function_node_whose_call_is_under_way())
         };
 
+        let calls_under_way = || {
+            counts
+                .function_node_call_breadcrumb_its_helper_wrote()
+                .map(|entry| entry.function_node_calls_under_way)
+        };
+
         let older_call = writer.note_a_function_node_call_started(1, 1_000);
         let younger_call = writer.note_a_function_node_call_started(2, 2_000);
         assert_eq!(breadcrumb_under_way(), Some(1));
+        assert_eq!(
+            calls_under_way(),
+            Some(2),
+            "the board says the oldest call is not the only one, so a death blames neither"
+        );
         writer.note_the_function_node_call_returned(younger_call);
         assert_eq!(
             breadcrumb_under_way(),
@@ -1426,8 +1442,10 @@ mod tests {
         let youngest_call = writer.note_a_function_node_call_started(3, 3_000);
         writer.note_the_function_node_call_returned(older_call);
         assert_eq!(breadcrumb_under_way(), Some(3));
+        assert_eq!(calls_under_way(), Some(1));
         writer.note_the_function_node_call_returned(youngest_call);
         assert_eq!(breadcrumb_under_way(), None);
+        assert_eq!(calls_under_way(), Some(0));
     }
 
     #[test]

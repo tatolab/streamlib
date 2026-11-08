@@ -1416,9 +1416,14 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
             .filter(|_| {
                 // Read again after the budget was judged: a call that returned
                 // in between is not the stall the first read timed.
-                self.link_wiring
-                    .function_node_call_its_far_side_has_under_way()
-                    == function_node_call_under_way
+                let read_again = self
+                    .link_wiring
+                    .function_node_call_its_far_side_has_under_way();
+                read_again
+                    .zip(function_node_call_under_way.as_ref())
+                    .is_some_and(|(read_again, first_read)| {
+                        read_again.is_the_same_call_as(first_read)
+                    })
             });
         if !the_helper_died && stalled_function_node_call.is_none() {
             return;
@@ -1432,9 +1437,18 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
                     call_has_run_for.as_millis(),
                     watchdog_budget.as_millis(),
                 ),
+                (Some(call_under_way), None)
+                    if call_under_way.function_node_calls_under_way <= 1 =>
+                {
+                    format!(
+                        "function node `{}` crashed its helper process during its call. ",
+                        call_under_way.function_node_name,
+                    )
+                }
                 (Some(call_under_way), None) => format!(
-                    "function node `{}` crashed its helper process during its call. ",
-                    call_under_way.function_node_name,
+                    "its helper process died with {} function-node calls under way, the oldest \
+                     to `{}`, so which crashed it is not known. ",
+                    call_under_way.function_node_calls_under_way, call_under_way.function_node_name,
                 ),
                 (None, _) => String::new(),
             };
@@ -2700,6 +2714,37 @@ sys.exit(0)
             "{why}"
         );
         assert!(why.contains("exit status: 134"), "{why}");
+    }
+
+    /// A helper that died with two calls under way blames neither: the board
+    /// names the older, which need not be the one that crashed.
+    #[test]
+    fn a_helper_that_died_with_two_function_node_calls_under_way_blames_neither() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_whose_helper_calls_function_node_lfo_1();
+        let child = a_stand_in_helper_in_its_own_process_group("exit 134");
+        let helper_process_id = child.id();
+        host.child = Some(child);
+        let now = MediaClock::now().as_nanos() as u64;
+        board_writer.note_a_function_node_call_started(0, now);
+        board_writer.note_a_function_node_call_started(0, now + 1);
+        assert!(
+            a_helper_process_becomes_collectable_within(helper_process_id, Duration::from_secs(5)),
+            "the stand-in helper never exited"
+        );
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the death is kept for the restart");
+        assert!(
+            why.starts_with(
+                "its helper process died with 2 function-node calls under way, the oldest to \
+                 `lfo-1`, so which crashed it is not known"
+            ),
+            "{why}"
+        );
     }
 
     /// A descendant still holding the pipe cannot stall the refusal: the wait

@@ -201,6 +201,16 @@ pub(crate) struct FunctionNodeCallUnderWayInTheFarSide {
     /// The node's name in the graph, which a person reading a log knows it by.
     pub(crate) function_node_name: String,
     pub(crate) call_started_at_monotonic_ns: u64,
+    /// How many calls the far side had under way, this oldest one among them.
+    pub(crate) function_node_calls_under_way: u32,
+}
+
+impl FunctionNodeCallUnderWayInTheFarSide {
+    /// Whether `other` is this same call, by its node and its start.
+    pub(crate) fn is_the_same_call_as(&self, other: &Self) -> bool {
+        self.function_node_id == other.function_node_id
+            && self.call_started_at_monotonic_ns == other.call_started_at_monotonic_ns
+    }
 }
 
 /// One out-of-process processor's link wiring, shared between the host of its
@@ -452,6 +462,7 @@ impl OutOfProcessLinkWiringEnvelope {
             function_node_id,
             function_node_name,
             call_started_at_monotonic_ns: breadcrumb.call_started_at_monotonic_ns,
+            function_node_calls_under_way: breadcrumb.function_node_calls_under_way,
         })
     }
 
