@@ -61,9 +61,15 @@ fi
 OUTPUT_DIR="$(mktemp -d -t streamlib-opus-roundtrip-XXXXXX)"
 CAPTURED_WAVEFORM="$OUTPUT_DIR/decoded.wav"
 PROJECT_DIR="$OUTPUT_DIR/opus-roundtrip"
-write_a_one_stream_fixture_project "$PROJECT_DIR" "$HERE/opus_roundtrip_stream.py" \
-    known_signal_through_opus_and_back opus_roundtrip_fixture "$FIXTURE_VENV_DIRECTORY"
-STREAM_ID="$(stream_id_of_the_fixture_project_stream "$PROJECT_DIR" opus_roundtrip_fixture)"
+# The generator refuses a record window the graph can never fill, so the
+# capture settings are in its environment as well as the runtime's.
+if ! STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
+    STREAMLIB_CAPTURED_WAVEFORM_SECONDS="$RECORD_SECONDS" \
+        write_a_one_stream_fixture_project "$PROJECT_DIR" "$HERE/opus_roundtrip_stream.py" \
+            known_signal_through_opus_and_back opus_roundtrip_fixture "$FIXTURE_VENV_DIRECTORY"; then
+    echo "ERROR: the Opus round-trip graph could not be built" >&2
+    exit 1
+fi
 # The runtime's output — the engine's log mirror, the stream's records among
 # it — with `tatolab run`'s beside it.
 NODE_LOG="$OUTPUT_DIR/node.log"
@@ -93,17 +99,19 @@ if ! STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
     echo "ERROR: the fixture could not start its runtime" >&2
     exit 1
 fi
-echo "loading the Opus round-trip stream as $STREAM_ID" >&2
-# Addressed by its stream id, so another stream declaring an OpusDecoder of its
-# own is never the one measured. Polled rather than slept: the stream compiles
-# and the engine brings up a GPU context and an iceoryx2 node, and a fixed
+echo "loading the Opus round-trip stream" >&2
+# Addressed by the stream id the runtime gives it, so another stream declaring
+# an OpusDecoder of its own is never the one measured. Polled rather than
+# slept: the engine brings up a GPU context and an iceoryx2 node, and a fixed
 # sleep is either flaky or slow.
-if ! start_the_fixture_project "$PROJECT_DIR" "$STREAM_ID" "$STREAM_RUN_LOG"; then
+if ! start_the_fixture_project "$PROJECT_DIR" "$STREAM_RUN_LOG"; then
     echo "ERROR: the round-trip stream never ran — it never answered over the local API socket with every node Running" >&2
     tail -40 "$STREAM_RUN_LOG" >&2
     tail -40 "$NODE_LOG" >&2
     exit 1
 fi
+STREAM_ID="$FIXTURE_PROJECT_STREAM_ID"
+echo "the Opus round-trip stream runs as $STREAM_ID" >&2
 
 # A bag either block refused, by name rather than left to show up as silence —
 # silence is also what a stalled graph looks like and the two need different

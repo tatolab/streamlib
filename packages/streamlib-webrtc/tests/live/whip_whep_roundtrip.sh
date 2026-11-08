@@ -40,22 +40,22 @@
 # range swap clips straight back to them.
 #
 # The streams (`whip_whep_roundtrip_stream.py`) are loaded each as a project of
-# its own with `tatolab run --dir`, compiled in this package's own `.venv`,
-# which each project's `.venv` links to — `tatolab-stream` and a current
+# its own with `tatolab run --dir`, each graph built in this package's own
+# `.venv`, which each project's `.venv` links to — `tatolab-stream` and a current
 # `maturin develop` of this wheel, and no engine — on a `tatolabd` this script
 # starts and stops itself. The runtime unit, its `tatolab` verbs and the
 # runtime's start and stop are the engine fixtures' `fixture_runtime_unit.sh`,
 # so the same rules hold: the runtime takes the machine's lock and serves this
 # user's local API socket, so the run is refused while another runtime holds
-# the machine; and the streams' settings go in the runtime's environment, which
-# their compiles and their processor interpreters inherit, never `tatolab
-# run`'s.
+# the machine; and the streams' settings go in the environment each graph is
+# built in, never argv.
 #
 # CREDENTIALS. Cloudflare Stream carries the stream key as a path segment, so
 # each URL is itself a credential. Both are read from the environment, passed to
-# the streams through the runtime's environment (never argv, which `/proc`
-# publishes), and never printed, logged, or written into the output directory —
-# which the run checks, since the runtime's log is kept there. `tatolab graph`
+# the graph generators through it (never argv, which `/proc` publishes), written
+# only into the owner-only graph documents under the runtime's state home, which
+# the run removes, and never printed, logged, or written into the output
+# directory — which the run checks, since the runtime's log is kept there. `tatolab graph`
 # renders every processor's config, so this script reads the graph in a pipe and
 # never persists it.
 #
@@ -277,9 +277,7 @@ fi
 start_the_fixture_relay "$OUTPUT_DIR/relay.log" "$RUNTIME_STATE_HOME/relay" \
     || fail "could not start the relay the receiver sends its player's track to"
 say "Relay:             $FIXTURE_RELAY_URL"
-if ! STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$AUDIO_CAPTURE_DEVICE" \
-    STREAMLIB_FIXTURE_RELAY_URL="$FIXTURE_RELAY_URL" \
-    RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
+if ! RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         start_the_fixture_runtime "$LOG_FILE" "$RUNTIME_STATE_HOME"; then
     fail "could not start the runtime the streams run on"
 fi
@@ -288,27 +286,34 @@ fi
 # the output directory never walks the venv each `.venv` links to.
 SENDER_PROJECT_DIR="$RUNTIME_STATE_HOME/whip-whep-roundtrip-sender"
 RECEIVER_PROJECT_DIR="$RUNTIME_STATE_HOME/whip-whep-roundtrip-receiver"
-write_a_one_stream_fixture_project "$SENDER_PROJECT_DIR" "$SCRIPT_DIR/whip_whep_roundtrip_stream.py" \
-    test_pattern_and_microphone_published_over_whip whip_whep_roundtrip_sender \
-    "$PACKAGE_DIR/.venv"
-write_a_one_stream_fixture_project "$RECEIVER_PROJECT_DIR" "$SCRIPT_DIR/whip_whep_roundtrip_stream.py" \
-    the_same_input_played_back_over_whep_through_the_decoders whip_whep_roundtrip_receiver \
-    "$PACKAGE_DIR/.venv"
-SENDER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$SENDER_PROJECT_DIR" whip_whep_roundtrip_sender)"
-RECEIVER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$RECEIVER_PROJECT_DIR" whip_whep_roundtrip_receiver)"
+write_the_whip_whep_project() {
+    local project_directory="$1" graph_function="$2" stream_name="$3"
+    STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$AUDIO_CAPTURE_DEVICE" \
+        STREAMLIB_FIXTURE_RELAY_URL="$FIXTURE_RELAY_URL" \
+        write_a_one_stream_fixture_project "$project_directory" \
+            "$SCRIPT_DIR/whip_whep_roundtrip_stream.py" "$graph_function" "$stream_name" \
+            "$PACKAGE_DIR/.venv" \
+        || fail "the graph of $stream_name could not be built"
+}
+write_the_whip_whep_project "$SENDER_PROJECT_DIR" \
+    test_pattern_and_microphone_published_over_whip whip_whep_roundtrip_sender
+write_the_whip_whep_project "$RECEIVER_PROJECT_DIR" \
+    the_same_input_played_back_over_whep_through_the_decoders whip_whep_roundtrip_receiver
 
 run_the_fixture_project() {
-    local project_directory="$1" stream_id="$2" run_log_file="$3"
-    start_the_fixture_project "$project_directory" "$stream_id" "$run_log_file" || {
+    local project_directory="$1" run_log_file="$2"
+    start_the_fixture_project "$project_directory" "$run_log_file" || {
         tail -40 "$run_log_file" >&2
         tail -40 "$LOG_FILE" >&2
-        fail "the stream $stream_id never ran — it never answered over the local API socket with every node Running"
+        fail "the stream of $(basename "$project_directory") never ran — it never answered over the local API socket with every node Running"
     }
-    say "Running:           $stream_id"
+    say "Running:           $FIXTURE_PROJECT_STREAM_ID"
 }
 say "Publishing over WHIP and playing back over WHEP..."
-run_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_STREAM_ID" "$SENDER_RUN_LOG_FILE"
-run_the_fixture_project "$RECEIVER_PROJECT_DIR" "$RECEIVER_STREAM_ID" "$RECEIVER_RUN_LOG_FILE"
+run_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_RUN_LOG_FILE"
+SENDER_STREAM_ID="$FIXTURE_PROJECT_STREAM_ID"
+run_the_fixture_project "$RECEIVER_PROJECT_DIR" "$RECEIVER_RUN_LOG_FILE"
+RECEIVER_STREAM_ID="$FIXTURE_PROJECT_STREAM_ID"
 
 # A graph that does not answer yet is a frame not decoded yet; the floor is
 # what fails.
