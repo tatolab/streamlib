@@ -992,7 +992,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets; unbuilt: subgraphs, the node catalog's unchecked mark on a Records port, an Image port's stream facts on its catalog entry; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets; unbuilt: subgraphs, the node catalog's unchecked mark on a Records port; OPEN: resources across streams, where an Image port's stream facts live)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -1385,14 +1385,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Image read is a fixed layout with no decode. A Channels body carries `start_sample`, the
   rate, the channel and per-channel sample counts and the sample type, its payload the planar
   samples; a Packets body carries the codec name; a Records body is zero, its payload the
-  runtime's msgpack encoding; an Array body carries the attribute table's row count. Stream
-  facts an Image frame does not carry — frame rate, content light level, mastering display —
-  belong on the port's catalog entry, updated through `set_catalog_entry`. Per-frame dynamic
+  runtime's msgpack encoding; an Array body carries the attribute table's row count. Where
+  the stream facts an Image frame does not carry live — frame rate, content light level,
+  mastering display — is OPEN (below). Per-frame dynamic
   HDR (HDR10+, Dolby Vision) is a later descriptor kind, whose metadata rides the sample's
   payload bytes. Owner, 2026-11-06. [strict-port-families — SHIPPED
   #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
   Rejected: per-frame metadata as an encoded record in the payload — every Image read decodes
   (owner, 2026-11-06).
+- **OPEN** — Where a stream's facts live that its messages do not carry: an Image port's
+  frame rate, content light level and mastering display. The owner wants them typed on the
+  family and visible on the node, with no caps and no hang entry in the engine — hang is
+  spoken only inside `tatolab-moq` (owner, 2026-11-08). Settled by the plan change that takes
+  hang out of the engine (#3284).
 - **DECIDED** — `connect` resolves the output's family against its node's config, then
   compares the families, then names, then codec, then formats, and refuses on the first
   mismatch with an error naming both endpoints, both families, and what to place between them
