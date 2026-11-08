@@ -82,6 +82,10 @@ Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (
 
 - Landed: #3256 (PRs #3261 and #3263) and #3257 (PRs #3275 and #3285). #3258 is in progress.
 
+[`changes/graph-groups-and-nested-fragments.md`](changes/graph-groups-and-nested-fragments.md)
+rides this step: a generator placing a generator joins #3259, and labelled groups in the graph
+document follow #3258.
+
 ## 6. New capability: lightweight nodes, then shaders
 
 Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) and
@@ -107,3 +111,9 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
 Step 6 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
 transaction ticket, #3258, so live edits and pin values are built once, as transactions. Nothing in steps
 1 to 5 waits on this step.
+
+## 7. Loop zones and hand-editable containers
+
+Design not yet written. Input: *Loops for function nodes: options* (2026-11-08), whose option the owner has yet to pick. A
+zone's body is a fragment run N times, and a zone drawn by hand needs a container a person edits,
+which is also Unreal's Collapse Nodes. Waits on step 5's #3259.

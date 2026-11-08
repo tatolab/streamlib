@@ -170,15 +170,21 @@ def graph_nodes_holding_a_uuid_each(graph: "dict[str, Any]", asset: str) -> "dic
     }
 
 
+def refuse_a_constant_json_does_not_carry(constant: str) -> Any:
+    """Refuse `NaN`, `Infinity` and `-Infinity`, which Python's JSON reads and JSON does not."""
+    raise ValueError(f"{constant} is not JSON")
+
+
 def graph_document_text_holding_an_asset(graph: "dict[str, Any] | str", asset: str) -> str:
-    """`graph` as a graph document's text holding `asset` and a UUID for each node: a dict as
-    JSON, text that parses as a JSON object holding no `asset` likewise, and any other text
-    verbatim, so the runtime reads it as it was handed."""
+    """`graph` as a graph document's text holding `asset`: a dict, or text that parses as a JSON
+    object holding no `asset`, as JSON with a UUID for each node; text that is a JSON object
+    but for a constant JSON does not carry, verbatim but for the `asset` key opened into it;
+    any other text verbatim, so the runtime reads it as it was handed."""
     if isinstance(graph, str):
         try:
-            parsed = json.loads(graph)
+            parsed = json.loads(graph, parse_constant=refuse_a_constant_json_does_not_carry)
         except (ValueError, RecursionError):
-            return graph
+            return graph_text_with_the_asset_opened_into_it(graph, asset)
         if not isinstance(parsed, dict) or GRAPH_DOCUMENT_ASSET_KEY in parsed:
             return graph
         graph = parsed
@@ -186,6 +192,20 @@ def graph_document_text_holding_an_asset(graph: "dict[str, Any] | str", asset: s
         {GRAPH_DOCUMENT_ASSET_KEY: asset, **graph_nodes_holding_a_uuid_each(graph, asset)},
         allow_nan=False,
     )
+
+
+def graph_text_with_the_asset_opened_into_it(graph_text: str, asset: str) -> str:
+    """`graph_text` with the `asset` key opened into it when Python's JSON reads it as an
+    object holding none, else verbatim."""
+    try:
+        parsed = json.loads(graph_text)
+    except (ValueError, RecursionError):
+        return graph_text
+    if not isinstance(parsed, dict) or GRAPH_DOCUMENT_ASSET_KEY in parsed:
+        return graph_text
+    opened = graph_text.lstrip()[1:]
+    separator = "" if opened.lstrip().startswith("}") else ", "
+    return "{" + json.dumps(GRAPH_DOCUMENT_ASSET_KEY) + ": " + json.dumps(asset) + separator + opened
 
 
 def write_a_graph_document(
