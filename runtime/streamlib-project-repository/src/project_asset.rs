@@ -250,6 +250,40 @@ impl ProjectAsset {
     }
 }
 
+/// Every file under `project_directory` whose name ends with `suffix`, relative and sorted, past
+/// hidden folders and the ones a scan skips.
+pub(crate) fn project_files_ending_with(
+    project_directory: &Path,
+    suffix: &str,
+) -> Result<Vec<String>, ProjectRepositoryRefusal> {
+    let mut found = Vec::new();
+    let mut directories_to_read = vec![(project_directory.to_path_buf(), String::new())];
+    while let Some((directory, relative_directory)) = directories_to_read.pop() {
+        for entry in std::fs::read_dir(&directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let relative = if relative_directory.is_empty() {
+                name.clone()
+            } else {
+                format!("{relative_directory}/{name}")
+            };
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                if !DIRECTORIES_A_PROJECT_SCAN_SKIPS.contains(&name.as_str()) {
+                    directories_to_read.push((entry.path(), relative));
+                }
+            } else if file_type.is_file() && name.ends_with(suffix) {
+                found.push(relative);
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

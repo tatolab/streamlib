@@ -201,7 +201,8 @@ impl LocalApiMcpServerHandler {
                 project_directory,
                 move |project_repository| {
                     let mut assets: Vec<ProjectAssetOnTheWire> = project_repository
-                        .assets()
+                        .assets()?
+                        .iter()
                         .filter(|asset| kind.is_none_or(|kind| asset.kind == kind))
                         .map(project_asset_on_the_wire)
                         .collect();
@@ -243,7 +244,7 @@ impl LocalApiMcpServerHandler {
                             .content_store()
                             .content_path(&described_asset.content_sha256)
                             .is_file(),
-                        asset: project_asset_on_the_wire(described_asset),
+                        asset: project_asset_on_the_wire(&described_asset),
                     })
                 },
             )
@@ -436,7 +437,7 @@ impl LocalApiMcpServerHandler {
                         | Some(ProjectAssetOperation::DeleteAsset { asset }) => asset.clone(),
                         Some(ProjectAssetOperation::RelocateAsset { asset, .. })
                         | Some(ProjectAssetOperation::SetAssetSettings { asset, .. }) => {
-                            project_repository.asset(*asset)?.clone()
+                            project_repository.asset(*asset)?
                         }
                         None => return Err(ProjectRepositoryRefusal::EmptyTransaction),
                     };

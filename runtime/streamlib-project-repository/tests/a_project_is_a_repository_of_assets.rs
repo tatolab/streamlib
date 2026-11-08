@@ -182,6 +182,8 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
     assert_eq!(
         reopened
             .assets()
+            .unwrap()
+            .into_iter()
             .map(|asset| asset.asset)
             .collect::<Vec<_>>(),
         {
@@ -273,7 +275,7 @@ fn stock_git_clones_the_history_and_finds_sidecars_but_never_the_content() {
         fixture
             .project_directory
             .join(PROJECT_CONTENT_STORE_DIRECTORY)
-            .join(&repository.assets().next().unwrap().content_sha256)
+            .join(&repository.assets().unwrap()[0].content_sha256)
             .exists()
     );
 }
@@ -302,7 +304,7 @@ fn a_transaction_with_one_refused_change_changes_nothing_and_commits_nothing() {
         "{refusal}"
     );
     assert_eq!(repository.history().head_commit().unwrap(), head_before);
-    assert_eq!(repository.assets().count(), 0);
+    assert_eq!(repository.assets().unwrap().len(), 0);
     assert!(!fixture.project_directory.join("media/intro.mp4").exists());
     assert!(
         !fixture
@@ -712,9 +714,157 @@ fn an_in_place_import_of_a_file_that_is_another_assets_file_is_refused() {
         Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset { .. })
     ));
     let reopened = ProjectRepository::open(&fixture.project_directory).unwrap();
-    assert_eq!(reopened.assets().count(), 1);
+    assert_eq!(reopened.assets().unwrap().len(), 1);
     assert_eq!(
         reopened.asset(holder).unwrap().path.to_string(),
         "images/logo.png"
+    );
+}
+
+fn write_stream_document(project_directory: &Path, path: &str, document: &serde_json::Value) {
+    let on_disk = project_directory.join(path);
+    std::fs::create_dir_all(on_disk.parent().unwrap()).unwrap();
+    std::fs::write(on_disk, serde_json::to_vec_pretty(document).unwrap()).unwrap();
+}
+
+#[test]
+fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one_file() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let stream_asset = Uuid::new_v4();
+    write_stream_document(
+        &fixture.project_directory,
+        "streams/arm-control.graph.json",
+        &json!({"asset": stream_asset.to_string(), "nodes": [], "links": []}),
+    );
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    assert!(
+        repository
+            .history()
+            .files_at_head()
+            .unwrap()
+            .contains_key("streams/arm-control.graph.json")
+    );
+
+    let listed = repository.asset(stream_asset).unwrap();
+    assert_eq!(listed.kind, ProjectAssetKind::Stream);
+    assert_eq!(listed.path.as_str(), "streams/arm-control.graph.json");
+
+    assert!(matches!(
+        repository.apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::RenameAsset {
+                asset: stream_asset,
+                file_name: "arm-control.json".to_owned(),
+            }],
+        ),
+        Err(ProjectRepositoryRefusal::AssetPathRefused { .. })
+    ));
+    assert!(matches!(
+        repository.apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::SetAssetSettings {
+                asset: stream_asset,
+                import_settings: Map::new(),
+            }],
+        ),
+        Err(ProjectRepositoryRefusal::StreamAssetHasNoImportSettings(refused)) if refused == stream_asset
+    ));
+
+    repository
+        .apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::MoveAsset {
+                asset: stream_asset,
+                into_directory: "streams/cell".to_owned(),
+            }],
+        )
+        .unwrap();
+    let moved = repository.asset(stream_asset).unwrap();
+    assert_eq!(moved.path.as_str(), "streams/cell/arm-control.graph.json");
+    let files_at_head = repository.history().files_at_head().unwrap();
+    assert!(files_at_head.contains_key("streams/cell/arm-control.graph.json"));
+    assert!(!files_at_head.contains_key("streams/arm-control.graph.json"));
+    assert!(!files_at_head.keys().any(|path| path.ends_with(".graph.json.asset.json")));
+
+    write_stream_document(
+        &fixture.project_directory,
+        "streams/reader.graph.json",
+        &json!({
+            "asset": Uuid::new_v4().to_string(),
+            "nodes": [{"name": "player", "config": {"stream": {"asset": stream_asset.to_string()}}}],
+        }),
+    );
+    match repository.apply_asset_changes(
+        &agent(),
+        vec![ProjectAssetChangeRequest::DeleteAsset {
+            asset: stream_asset,
+        }],
+    ) {
+        Err(ProjectRepositoryRefusal::AssetStillReferenced {
+            referencing_documents,
+            ..
+        }) => assert_eq!(referencing_documents, ["streams/reader.graph.json"]),
+        other => panic!("expected the referenced stream to be kept, got {other:?}"),
+    }
+    std::fs::remove_file(
+        fixture
+            .project_directory
+            .join("streams/reader.graph.json"),
+    )
+    .unwrap();
+
+    let deleted = repository
+        .apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::DeleteAsset {
+                asset: stream_asset,
+            }],
+        )
+        .unwrap();
+    assert!(
+        !fixture
+            .project_directory
+            .join("streams/cell/arm-control.graph.json")
+            .exists()
+    );
+    assert!(matches!(
+        repository.asset(stream_asset),
+        Err(ProjectRepositoryRefusal::NoSuchAsset(_))
+    ));
+    match &deleted.transaction.inverse_operations[..] {
+        [ProjectAssetOperation::ImportAsset { asset }] => {
+            assert!(
+                repository
+                    .content_store()
+                    .stored_content(&asset.content_sha256)
+                    .is_ok(),
+                "the deleted document's bytes stay in the store so its delete can be undone"
+            );
+        }
+        other => panic!("expected the delete's inverse to be one import, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_stream_document_whose_asset_cannot_be_read_is_still_one_stream_asset() {
+    let fixture = ProjectBesideItsImportSources::new();
+    write_stream_document(
+        &fixture.project_directory,
+        "streams/main.graph.json",
+        &json!({"nodes": []}),
+    );
+    let repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let assets = repository.assets().unwrap();
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].kind, ProjectAssetKind::Stream);
+    assert_eq!(
+        ProjectRepository::open(&fixture.project_directory)
+            .unwrap()
+            .assets()
+            .unwrap()[0]
+            .asset,
+        assets[0].asset
     );
 }

@@ -141,6 +141,11 @@ impl ProjectContentStore {
     }
 }
 
+/// The SHA-256 of `bytes`, lowercase hex, as the store names content.
+pub(crate) fn content_sha256_of(bytes: &[u8]) -> String {
+    lowercase_hex(&Sha256::digest(bytes))
+}
+
 fn lowercase_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
