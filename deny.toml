@@ -170,26 +170,6 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
-name = "streamlib-relay-adapter-local"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
-name = "streamlib-relay-adapter-cloudflare"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
-name = "streamlib-relay-adapter-moqpro"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
-name = "streamlib-relay-adapter-sdk"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
 name = "streamlib-surface-adapter"
 expression = "BUSL-1.1"
 license-files = []

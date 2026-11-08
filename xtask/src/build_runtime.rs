@@ -7,10 +7,9 @@
 //! the lend — the directory holding `tatolab/runtime/` that a processor
 //! interpreter puts first on `PYTHONPATH`. The wheel is kept beside the lend
 //! because CI hands that same file to the jobs that install the engine. Then
-//! builds `tatolabd` and `tatolab` and places them in `bin/` with the local
-//! relay `stage-local-relay` builds and the pinned uv, beside `lib/`, the
-//! install prefix's own shape, in which `tatolabd` finds the lend, the relay
-//! and uv from its own directory, and stages the preview page beside the lend.
+//! builds `tatolabd` and `tatolab` and places them in `bin/` with the pinned
+//! uv, beside `lib/`, the install prefix's own shape, in which `tatolabd` finds
+//! the lend and uv from its own directory.
 //!
 //! The unit's layout below its root is `streamlib-consumer-rhi`'s
 //! `runtime_unit_layout`, included by path because xtask does not link the
@@ -19,9 +18,7 @@
 
 use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
 use crate::stage_browser_host::stage_the_browser_host;
-use crate::stage_local_relay::{LOCAL_RELAY_EXECUTABLE_FILE_NAME, stage_the_local_relay};
 use crate::stage_runtime_unit_uv::stage_the_runtime_unit_uv;
-use crate::stage_watch_page::stage_the_watch_page;
 use anyhow::{Context, Result};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
@@ -30,7 +27,6 @@ pub(crate) use runtime_unit_layout::browser_host_directory_beside_the_lend;
 use runtime_unit_layout::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND,
     RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME, lend_directory_in_the_runtime_unit,
-    watch_page_directory_beside_the_lend,
 };
 #[cfg(test)]
 pub(crate) use runtime_unit_layout::{
@@ -61,20 +57,6 @@ pub fn runtime_unit_root_in_the_workspace(workspace_root: &Path) -> PathBuf {
 /// The lend of the runtime unit in `workspace_root`.
 pub fn runtime_unit_lend_directory_in_the_workspace(workspace_root: &Path) -> PathBuf {
     lend_directory_in_the_runtime_unit(&runtime_unit_root_in_the_workspace(workspace_root))
-}
-
-/// Where the runtime unit in `workspace_root` stages its preview page, beside
-/// its lend.
-pub fn runtime_unit_watch_page_directory_in_the_workspace(
-    workspace_root: &Path,
-) -> Result<PathBuf> {
-    let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
-    watch_page_directory_beside_the_lend(&lend_directory).with_context(|| {
-        format!(
-            "the lend at {} has no directory beside it",
-            lend_directory.display()
-        )
-    })
 }
 
 /// Where the runtime unit in `workspace_root` keeps its executables.
@@ -236,7 +218,6 @@ pub fn run(
         lend_directory.display()
     );
 
-    stage_the_watch_page(workspace_root)?;
     stage_the_browser_host(workspace_root)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
@@ -248,16 +229,12 @@ pub fn run(
         &runtime_unit_engine_build_nonce,
     )?;
     built_binaries.push(BuiltRuntimeUnitBinary {
-        binary_target_name: LOCAL_RELAY_EXECUTABLE_FILE_NAME.to_string(),
-        built_executable: stage_the_local_relay(workspace_root)?,
-    });
-    built_binaries.push(BuiltRuntimeUnitBinary {
         binary_target_name: RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME.to_string(),
         built_executable: stage_the_runtime_unit_uv(workspace_root)?,
     });
     replace_runtime_unit_binaries_in(&bin_directory, &built_binaries)?;
     tracing::info!(
-        "build-runtime: tatolabd, tatolab, the local relay and uv placed in {}",
+        "build-runtime: tatolabd, tatolab and uv placed in {}",
         bin_directory.display()
     );
     if machine_directories == RuntimeUnitMachineDirectories::UnderATestRoot {

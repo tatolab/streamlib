@@ -3,7 +3,7 @@
 
 //! The one directory a runtime keeps what means nothing once its processes are
 //! gone: the iceoryx2 domain, the surface-sharing socket, the local API socket
-//! and its relay instances' files.
+//! and the shared native services' sockets.
 
 // A test build resolves under its machine root; the real resolvers stay compiled for their tests.
 #![cfg_attr(feature = "machine-directories-under-a-test-root", allow(dead_code))]
@@ -146,11 +146,6 @@ impl StreamlibRuntimeDirectory {
     /// The Unix socket the machine's runtime serves its local API on, at a fixed path.
     pub fn local_api_socket_path(&self) -> PathBuf {
         self.path.join("local-api.sock")
-    }
-
-    /// The directory each relay instance the runtime joined keeps its own directory in.
-    pub fn relays_directory(&self) -> PathBuf {
-        self.path.join("relays")
     }
 
     /// The directory each shared native service keeps its socket and pidfile in.

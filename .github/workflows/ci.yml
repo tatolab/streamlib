@@ -322,17 +322,6 @@ jobs:
           echo "VK_ADD_DRIVER_FILES=$bundled_vulkan_driver_directory/lvp_icd.x86_64.json" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$bundled_vulkan_driver_directory" >> "$GITHUB_ENV"
 
-      - name: Cache the local relay build
-        uses: actions/cache@v5
-        with:
-          path: target/local-relay
-          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
-
-      # `moq-relay` from its pinned crate, for the tests that start a local
-      # relay; a restored install root builds nothing.
-      - name: Stage the local relay
-        run: cargo xtask stage-local-relay
-
       # The compile-fail test builds the engine a second time, in trybuild's
       # own target directory; it runs on `main` and in the merge queue.
       - name: Unit, integration and hardware tests
@@ -346,8 +335,6 @@ jobs:
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p streamlib-vulkan-video
           -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk
-          -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local
-          -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           -p tatolab-read-track -p streamlib-relay-track-reader
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,streamlib-owned-device-video-codec-nodes/hardware-tests,tatolab-module-sdk/pyo3
           --lib --bins --tests
@@ -514,21 +501,6 @@ jobs:
           path: target/linux_bundled_vulkan_driver_cache
           key: linux-bundled-vulkan-driver-${{ hashFiles('scripts/stage_linux_bundled_vulkan_driver.sh', 'scripts/manylinux_2_28_image.sh', 'scripts/stage_macos_bundled_vulkan_driver.sh') }}
 
-      - name: Cache the local relay build
-        if: steps.restore.outputs.cache-hit != 'true'
-        uses: actions/cache@v5
-        with:
-          path: target/local-relay
-          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
-
-      # `build-runtime` bundles the preview page with the bun its `package.json`
-      # pins, and refuses any other.
-      - name: Install the bun the preview page pins
-        if: steps.restore.outputs.cache-hit != 'true'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: runtime/tatolab-watch/package.json
-
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second
       # replaces the first in place, so each is packed before the next build.
@@ -690,19 +662,6 @@ jobs:
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::disallowed_macros -D warnings
 
-      - name: Cache the local relay build
-        if: github.event_name != 'pull_request'
-        uses: actions/cache@v5
-        with:
-          path: target/local-relay
-          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
-
-      # `moq-relay` from its pinned crate, for the tests that start a local
-      # relay; a restored install root builds nothing.
-      - name: Stage the local relay
-        if: github.event_name != 'pull_request'
-        run: cargo xtask stage-local-relay
-
       - name: Run unit tests
         if: github.event_name != 'pull_request'
         run: |
@@ -723,8 +682,6 @@ jobs:
           cargo test --locked -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes
           cargo test --locked -p tatolab-module-sdk --features pyo3
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
-          cargo test --locked -p streamlib-relay-adapter-sdk -p streamlib-relay-adapter-local \
-            -p streamlib-relay-adapter-cloudflare -p streamlib-relay-adapter-moqpro
           # The runtime directory is fixed under /tmp on macOS, so the CLI's
           # tests need the feature to isolate each test's machine.
           cargo test --locked -p tatolab-cli \
@@ -890,21 +847,6 @@ jobs:
             packages/tatolab-opus -> target
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
-
-      - name: Cache the local relay build
-        if: steps.restore.outputs.cache-hit != 'true'
-        uses: actions/cache@v5
-        with:
-          path: target/local-relay
-          key: local-relay-${{ runner.os }}-${{ hashFiles('xtask/src/stage_local_relay.rs', 'rust-toolchain.toml') }}
-
-      # `build-runtime` bundles the preview page with the bun its `package.json`
-      # pins, and refuses any other.
-      - name: Install the bun the preview page pins
-        if: steps.restore.outputs.cache-hit != 'true'
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: runtime/tatolab-watch/package.json
 
       # Both forms, in debug: as users run it, and with the machine directories
       # under a test root, which the integration suite requires. The second

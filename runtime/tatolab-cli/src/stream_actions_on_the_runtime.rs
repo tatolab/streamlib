@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The streams the machine's runtime holds, managed one call at a time: `new`, `run`, `stop`,
-//! `start`, `rm`, `cancel`, `rename`, `streams` and `expose`, each the local API tool of the same purpose, and the
+//! `start`, `rm`, `cancel`, `rename`, `streams` and `clock`, each the local API tool of the same purpose, and the
 //! lines or table each prints. A verb naming one stream resolves its stream argument to an id
 //! through `list_streams` first. `run` and `dev` share the project load request.
 
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CancelStreamActionToolResult, CreateProjectToolResult, ExposePortLevel, ExposePortToolResult,
+    CancelStreamActionToolResult, CreateProjectToolResult,
     ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, RemoveProjectToolResult,
     RenameStreamToolResult, RunProjectToolResult, SetStreamClockScaleToolResult,
     StartStreamToolResult, StopStreamToolResult, StreamActionStateOnTheWire,
@@ -22,7 +22,7 @@ use crate::local_api_mcp_tool_client::ONE_SHOT_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
 use crate::stream_argument_resolution_through_the_listing::stream_id_the_stream_argument_names_on_the_running_runtime;
 use crate::verb_output_table::rendered_padded_table;
-use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard_output};
+use crate::verb_standard_output::write_verb_standard_output;
 
 /// A local API tool that runs, stops or reads the streams the runtime holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,8 +43,6 @@ pub(crate) enum StreamActionTool {
     RenameStream,
     /// Lists the streams the runtime holds.
     ListStreams,
-    /// Sets one output port's exposure level.
-    ExposePort,
     /// Runs a started stream's scaled clock at a new scale.
     SetStreamClockScale,
 }
@@ -61,7 +59,6 @@ impl StreamActionTool {
             StreamActionTool::CancelStreamAction => "cancel_stream_action",
             StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
-            StreamActionTool::ExposePort => "expose_port",
             StreamActionTool::SetStreamClockScale => "set_stream_clock_scale",
         }
     }
@@ -558,83 +555,6 @@ fn rendered_stream_clock_scale_line(rescaled: &SetStreamClockScaleToolResult) ->
     )
 }
 
-/// `expose_port`'s arguments for `stream`'s `node`/`port` at `requested_level`.
-fn expose_port_tool_arguments(
-    stream: &str,
-    node: &str,
-    port: &str,
-    requested_level: ExposePortLevel,
-) -> serde_json::Map<String, serde_json::Value> {
-    let mut expose_port_arguments = stream_tool_arguments(stream);
-    expose_port_arguments.insert("node".to_owned(), node.into());
-    expose_port_arguments.insert("port".to_owned(), port.into());
-    expose_port_arguments.insert("level".to_owned(), requested_level.wire_spelling().into());
-    expose_port_arguments
-}
-
-/// `tatolab expose [STREAM] NODE PORT [--public | --remove]`, its positionals as given:
-/// `private`, `public` or `internal`.
-pub(crate) fn expose_port(
-    stream_then_node_then_port: &[String],
-    requested_level: ExposePortLevel,
-) -> Result<u8, TatolabCommandFailure> {
-    let (stream_argument, node, port) = match stream_then_node_then_port {
-        [node, port] => (None, node, port),
-        [stream, node, port] => (Some(stream.as_str()), node, port),
-        _ => {
-            return Err(TatolabCommandFailure::refused(
-                "expose takes [STREAM] NODE PORT".to_owned(),
-            ));
-        }
-    };
-    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
-    let expose_port_result: ExposePortToolResult = call_one_stream_action_tool(
-        StreamActionTool::ExposePort,
-        expose_port_tool_arguments(&stream, node, port, requested_level),
-    )?;
-    if let Some(not_recorded_warning) = exposure_not_recorded_warning_line(&expose_port_result) {
-        write_verb_standard_error(&not_recorded_warning);
-    }
-    write_verb_standard_output(&rendered_exposed_port_line(&expose_port_result))
-}
-
-fn rendered_exposed_port_line(expose_port_result: &ExposePortToolResult) -> String {
-    let ExposePortToolResult {
-        stream,
-        node,
-        port,
-        level,
-        recorded,
-        not_recorded_because,
-    } = expose_port_result;
-    let what_holds_it = match (recorded, not_recorded_because) {
-        (true, _) => "recorded; it holds across restarts",
-        (false, None) => "live only: a stream its host loaded is never recorded",
-        (false, Some(_)) => "live only: not recorded",
-    };
-    format!("{stream}/{node}/{port} is {level} ({what_holds_it})\n")
-}
-
-/// The warning a stream's level raised live but not recorded earns: a restart of the
-/// runtime puts back the level it had. A restriction that cannot be recorded is refused, and
-/// exits non-zero as every refusal does.
-fn exposure_not_recorded_warning_line(expose_port_result: &ExposePortToolResult) -> Option<String> {
-    let ExposePortToolResult {
-        stream,
-        node,
-        port,
-        not_recorded_because,
-        ..
-    } = expose_port_result;
-    not_recorded_because.as_ref().map(|not_recorded_because| {
-        format!(
-            "warning: {stream}/{node}/{port} changed live but was not recorded as the owner's \
-             ruling, so a restart of the runtime puts back the level it had: \
-             {not_recorded_because}\n"
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -790,73 +710,6 @@ mod tests {
              \n\
              desk-0a1b2c making_the_venv\n\
              hall-3d4e5f queued\n"
-        );
-    }
-
-    #[test]
-    fn expose_sends_the_level_each_flag_names() {
-        for (requested_level, wire_level) in [
-            (ExposePortLevel::Private, "private"),
-            (ExposePortLevel::Public, "public"),
-            (ExposePortLevel::Internal, "internal"),
-        ] {
-            assert_eq!(
-                serde_json::Value::Object(expose_port_tool_arguments(
-                    "camera",
-                    "effect",
-                    "video",
-                    requested_level
-                )),
-                json!({"stream": "camera", "node": "effect", "port": "video", "level": wire_level})
-            );
-        }
-    }
-
-    #[test]
-    fn the_expose_line_says_whether_the_ruling_was_recorded() {
-        let exposed = |recorded| ExposePortToolResult {
-            stream: "camera".to_owned(),
-            node: "effect".to_owned(),
-            port: "video".to_owned(),
-            level: ExposePortLevel::Public,
-            recorded,
-            not_recorded_because: None,
-        };
-
-        assert_eq!(
-            rendered_exposed_port_line(&exposed(true)),
-            "camera/effect/video is public (recorded; it holds across restarts)\n"
-        );
-        assert_eq!(
-            rendered_exposed_port_line(&exposed(false)),
-            "camera/effect/video is public (live only: a stream its host loaded is never recorded)\n"
-        );
-        assert_eq!(exposure_not_recorded_warning_line(&exposed(true)), None);
-    }
-
-    #[test]
-    fn an_exposure_the_runtime_could_not_record_warns_naming_why() {
-        let expose_port_result: ExposePortToolResult = serde_json::from_value(json!({
-            "stream": "camera",
-            "node": "effect",
-            "port": "video",
-            "level": "internal",
-            "recorded": false,
-            "not_recorded_because": "the record /state/streams/camera.json cannot be written",
-        }))
-        .unwrap();
-
-        assert_eq!(
-            rendered_exposed_port_line(&expose_port_result),
-            "camera/effect/video is internal (live only: not recorded)\n"
-        );
-        assert_eq!(
-            exposure_not_recorded_warning_line(&expose_port_result).as_deref(),
-            Some(
-                "warning: camera/effect/video changed live but was not recorded as the owner's \
-                 ruling, so a restart of the runtime puts back the level it had: the record \
-                 /state/streams/camera.json cannot be written\n"
-            )
         );
     }
 

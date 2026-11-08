@@ -49,11 +49,6 @@
 //! `unlicensed`.
 
 use crate::extension_build_script_fetched_notices::render_the_appendix_of_sources_the_build_script_fetches;
-use crate::stage_local_relay::{
-    LOCAL_RELAY_CRATE_FEATURES, LOCAL_RELAY_CRATE_NAME, LOCAL_RELAY_EXECUTABLE_FILE_NAME,
-    PINNED_LOCAL_RELAY_CRATE_VERSION, stage_the_local_relay,
-};
-use crate::watch_page_third_party_notices::render_the_watch_pages_closure;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -81,9 +76,7 @@ deliberately.
 const ENGINE_WORKSPACE_SCOPE_AND_REGENERATION_PROSE: &str = r"Scope is the whole workspace's dependency closure across every target, which is
 a superset of what any one artifact links — the wheel ships this file entire
 rather than a per-artifact subset, because over-attribution costs a longer file
-and under-attribution is a term unmet. The local relay the runtime unit carries,
-`moq-relay`, is no workspace member, so its own closure follows in a section of
-its own, and so does the preview page's, whose packages are npm's.
+and under-attribution is a term unmet.
 
 **Generated — do not edit.** Regenerate with `cargo xtask
 generate-third-party-notices`; the licence policy that decides what may appear
@@ -693,13 +686,6 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
         CargoAboutFeatureSelection::EveryFeature,
     )?);
 
-    if *target == NoticesGenerationTarget::EngineWorkspace {
-        notices.push('\n');
-        notices.push_str(&render_the_local_relays_closure(workspace_root)?);
-        notices.push('\n');
-        notices.push_str(&render_the_watch_pages_closure(workspace_root)?);
-    }
-
     let mut projects_carried = target.projects_whose_notices_it_carries();
     if matches!(target, NoticesGenerationTarget::ExtensionPackage { .. }) {
         for project in
@@ -774,17 +760,12 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
 enum CargoAboutFeatureSelection {
     /// Every feature, the graph `deny.toml` validates.
     EveryFeature,
-    /// No default features, and these, the graph a crate is built with.
-    DefaultFeaturesOffWith(&'static str),
 }
 
 impl CargoAboutFeatureSelection {
     fn cargo_about_arguments(self) -> Vec<&'static str> {
         match self {
             Self::EveryFeature => vec!["--all-features"],
-            Self::DefaultFeaturesOffWith(features) => {
-                vec!["--no-default-features", "--features", features]
-            }
         }
     }
 }
@@ -847,65 +828,6 @@ fn run_cargo_about_generate(
     }
 
     String::from_utf8(output.stdout).context("`cargo about generate` emitted non-UTF-8")
-}
-
-/// The local relay's own closure, rendered from its crate's own manifest and
-/// lockfile with the features the runtime unit builds it with, under a heading
-/// of its own.
-fn render_the_local_relays_closure(workspace_root: &Path) -> Result<String> {
-    stage_the_local_relay(workspace_root)?;
-    let relay_crate_root = local_relay_crate_source_in_the_registry()?;
-    let rendered = run_cargo_about_generate(
-        workspace_root,
-        &relay_crate_root.join("Cargo.toml"),
-        CargoAboutFeatureSelection::DefaultFeaturesOffWith(LOCAL_RELAY_CRATE_FEATURES),
-    )?;
-    Ok(format!(
-        "## The local relay\n\nThe runtime unit's `bin/{LOCAL_RELAY_EXECUTABLE_FILE_NAME}` is \
-         `{LOCAL_RELAY_CRATE_NAME}` {PINNED_LOCAL_RELAY_CRATE_VERSION}, built from its own \
-         lockfile with the features `{LOCAL_RELAY_CRATE_FEATURES}`. Its closure:\n\n{}",
-        markdown_with_every_heading_one_level_deeper(&rendered)
-    ))
-}
-
-/// The pinned relay crate's source as `cargo install` unpacked it under
-/// `$CARGO_HOME/registry/src/`.
-fn local_relay_crate_source_in_the_registry() -> Result<PathBuf> {
-    let cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
-        .context("neither CARGO_HOME nor HOME is set, so the registry cannot be found")?;
-    let registry_sources = cargo_home.join("registry").join("src");
-    let crate_directory_name =
-        format!("{LOCAL_RELAY_CRATE_NAME}-{PINNED_LOCAL_RELAY_CRATE_VERSION}");
-    std::fs::read_dir(&registry_sources)
-        .with_context(|| format!("reading {}", registry_sources.display()))?
-        .filter_map(|registry| registry.ok())
-        .map(|registry| registry.path().join(&crate_directory_name))
-        .find(|crate_root| crate_root.join("Cargo.toml").is_file())
-        .with_context(|| {
-            format!(
-                "no {crate_directory_name} under {}; `cargo xtask stage-local-relay` unpacks it",
-                registry_sources.display()
-            )
-        })
-}
-
-/// `markdown` with each heading outside a fenced block one level deeper, so a
-/// rendered closure nests under a heading of its own.
-fn markdown_with_every_heading_one_level_deeper(markdown: &str) -> String {
-    let mut inside_a_fence = false;
-    let mut deepened = String::with_capacity(markdown.len());
-    for line in markdown.split_inclusive('\n') {
-        if line.starts_with("```") {
-            inside_a_fence = !inside_a_fence;
-        }
-        if !inside_a_fence && line.starts_with('#') {
-            deepened.push('#');
-        }
-        deepened.push_str(line);
-    }
-    deepened
 }
 
 /// Find the registry checkout of every vendoring crate `projects` read a
@@ -1976,28 +1898,6 @@ mod tests {
         );
 
         assert_every_path_resolves_to_readable_text(&paths);
-    }
-
-    #[test]
-    fn a_rendered_closure_nests_one_level_deeper_leaving_fenced_licence_text_alone() {
-        let rendered =
-            "## Overview\n\n- MIT\n\n### MIT License\n\n````text\n# not a heading\n````\n";
-        assert_eq!(
-            markdown_with_every_heading_one_level_deeper(rendered),
-            "### Overview\n\n- MIT\n\n#### MIT License\n\n````text\n# not a heading\n````\n"
-        );
-    }
-
-    #[test]
-    fn the_committed_engine_notices_carry_the_local_relays_closure() {
-        let committed =
-            fs::read_to_string(workspace_root().join(THIRD_PARTY_NOTICES_FILE_NAME)).expect("read");
-        assert!(
-            committed.contains(&format!(
-                "`{LOCAL_RELAY_CRATE_NAME}` {PINNED_LOCAL_RELAY_CRATE_VERSION}"
-            )),
-            "the committed notices do not name the pinned local relay"
-        );
     }
 
     /// The preamble is the one part of a generated notices file a human

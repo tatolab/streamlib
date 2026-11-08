@@ -41,9 +41,8 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.34" }
 # shapes it serves.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.34" }
 
-# `trace` for every request's span; `fs` serves the preview page's files on the loopback listener.
-tower-http = { version = "0.6", features = ["trace", "fs"] }
-# Hands one `/watch` request to the preview page's file service.
+# `trace` for every request's span.
+tower-http = { version = "0.6", features = ["trace"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 

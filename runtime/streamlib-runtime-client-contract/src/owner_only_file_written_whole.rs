@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! A file only its owner reads, replaced whole or not at all: the stream
-//! records, `relays.json` and the relay secrets' fallback file.
+//! records.
 
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
