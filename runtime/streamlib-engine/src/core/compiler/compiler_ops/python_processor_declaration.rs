@@ -606,17 +606,6 @@ mod tests {
         assert_eq!(engine_texture_formats, image_formats);
     }
 
-    fn declaration_execution_config(declaration: &PythonProcessorDeclaration) -> ExecutionConfig {
-        match declaration.how_a_python_node_of_the_type_runs {
-            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
-                execution_config
-            }
-            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
-                panic!("a process node runs in its own processor interpreter")
-            }
-        }
-    }
-
     fn requested(import_path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(import_path).expect("the test path names a class")
     }
@@ -905,7 +894,6 @@ mod tests {
             declaration.how_a_python_node_of_the_type_runs,
             HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(ExecutionConfig {
                 execution: ProcessExecution::Continuous { interval_ms: 20 },
-                ..declaration_execution_config(&declaration)
             })
         );
     }

@@ -817,9 +817,9 @@ mod tests {
 
         let refusal = the_refusal_of_a_commit(
             &graph,
-            &[lfo.clone()],
+            std::slice::from_ref(&lfo),
             &[],
-            &[into_the_remap.clone()],
+            std::slice::from_ref(&into_the_remap),
             &[],
             &[],
         )
@@ -846,12 +846,19 @@ mod tests {
         let reader = a_helper_reader_before_its_setup(&mut graph);
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
 
-        let refusal =
-            the_refusal_of_a_commit(&graph, &[], &[], &[], &[into_the_reader.clone()], &[])
-                .expect("refused");
+        let refusal = the_refusal_of_a_commit(
+            &graph,
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&into_the_reader),
+            &[],
+        )
+        .expect("refused");
         assert!(refusal.contains("is not re-islanded"), "{refusal}");
         let refusal =
-            the_refusal_of_a_commit(&graph, &[], &[lfo.clone()], &[], &[], &[]).expect("refused");
+            the_refusal_of_a_commit(&graph, &[], std::slice::from_ref(&lfo), &[], &[], &[])
+                .expect("refused");
         assert!(refusal.contains("removing function node"), "{refusal}");
         assert!(
             the_refusal_of_a_commit(&graph, &[], &[lfo, reader], &[], &[into_the_reader], &[])
