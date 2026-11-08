@@ -1,6 +1,6 @@
 # camera-halftone
 
-Camera → a GLSL compute kernel, seen in Tato Studio's viewer. Your webcam
+Camera → a Slang compute kernel, seen in Tato Studio's viewer. Your webcam
 printed as newsprint: one ink dot per cell, each dot as big as that cell is
 bright. The pixels never leave the GPU.
 
@@ -12,10 +12,10 @@ one dot there whose size is that brightness. Light regions get fat dots that
 touch their neighbours, dark ones get specks, and the eye averages the two back
 into a picture.
 
-```glsl
-ivec2 cell = at / dial.cell_size;
-ivec2 centre = min(cell * dial.cell_size + dial.cell_size / 2, extent - 1);
-vec4 ink = texelFetch(camera_frame, centre, 0);
+```hlsl
+int2 cell = at / dial.cell_size;
+int2 centre = min(cell * dial.cell_size + dial.cell_size / 2, extent - 1);
+float4 ink = camera_frame.Load(int3(centre, 0));
 ```
 
 What scales with brightness is the dot's **area**, not its radius — a cell
@@ -63,7 +63,7 @@ names stand in for them here.
   interpreter with its own GIL, which imports the class by name. Its config is
   the `HalftoneComputeConfig` dataclass its `__init__` names; the graph document holds
   a dict and the child builds the dataclass from it.
-- The input port declares `delivery_profile="newest"`, the profile for a
+- The input port is `Input(Image, delivery="newest")`, the profile for a
   stream where a stale frame has no value once a fresher one exists.
 - **The runtime opens no windows.** Any port of the running stream, the
   kernel's output among them, is seen in Tato Studio's viewer.
@@ -76,7 +76,7 @@ Python — the object is the handle:
 
 ```python
 self.halftone_kernel = ctx.gpu_full_access.create_compute_kernel(
-    source=HALFTONE_COMPUTE_GLSL,
+    source=HALFTONE_COMPUTE_SLANG,
     push_constant_size=HALFTONE_DIAL_SIZE,
     bindings={"camera_frame": "sampled_texture", "halftone_frame": "storage_image"},
 )
@@ -93,21 +93,22 @@ self.halftone_kernel.dispatch(
 )
 ```
 
-- **The GLSL is a string, and there is no toolchain.** The engine compiles
+- **The Slang is a string, and there is no toolchain.** The runtime compiles
   `source=` when the node sets up, on the machine that runs the stream. There
-  is no `glslc` to install, no `.spv` to build and no build step between
+  is no `slangc` to install, no `.spv` to build and no build step between
   editing the shader and saving.
 - **Bindings are passed at dispatch, by name, and never persist.** The names
   are the shader's own, read off it by reflection; the `bindings=` mapping at
   construction merely *asserts* that reflection, so renaming `camera_frame` in
-  the GLSL and forgetting the Python is refused at `setup()` rather than
+  the Slang and forgetting the Python is refused at `setup()` rather than
   producing a wrong picture. Every dispatch supplies every binding, and an
   unknown or omitted name raises before any GPU work is submitted.
 - **Dispatch is synchronous.** It returns when the work has retired and the
   writes are visible. This effect is one pass, so it needs no
   `kernel_dispatch_batch()` scope.
 - **The kernel's output is an engine-owned texture named by surface id.** The
-  record this node writes carries that id, an extent and the camera's
+  node writes it with `ImageFrameToWrite.of_texture(texture, frame.colour)`, so
+  the frame downstream carries that id, an extent, the camera's colour and its
   timestamp. Pixels never ride a link.
 
 ### The three dials, and how they reach the shader
@@ -115,12 +116,13 @@ self.halftone_kernel.dispatch(
 The cell size, the ink boost and the background are all runtime values in one
 push-constant block:
 
-```glsl
-layout(push_constant) uniform HalftoneDial {
+```hlsl
+struct HalftoneDial {
     int cell_size;
     float dot_boost;
     float background_level;
-} dial;
+};
+[[vk::push_constant]] ConstantBuffer<HalftoneDial> dial;
 ```
 
 ```python
@@ -128,14 +130,14 @@ HALFTONE_DIAL_FORMAT = "<iff"
 ```
 
 That pairing is a **layout contract**, not a convenience. `struct.pack` writes
-exactly the bytes the block expects: three 4-byte scalars, which std430 packs
+exactly the bytes the block expects: three 4-byte scalars, which a push-constant block packs
 at offsets 0, 4 and 8 with no padding between them, little-endian. Nothing
 checks it — `push_constants=` takes bytes and the shader reads bytes — so a
 `float` where the block declares an `int` produces a picture rather than an
 error. Spell the format string against the block, and change the two together.
 
-Padding is the part that bites once a block grows: a `vec2` aligns to 8 bytes
-and a `vec3` or `vec4` to 16, so inserting one where the scalars are shifts
+Padding is the part that bites once a block grows: a `float2` aligns to 8 bytes
+and a `float3` or `float4` to 16, so inserting one where the scalars are shifts
 every field after it. Three scalars is the case with nothing to get wrong,
 which is why it is worth seeing before the case that has.
 
@@ -156,7 +158,7 @@ ctx.gpu_limited_access.copy_surface_to_surface(
 )
 ```
 
-`frame` — the object `ctx.inputs.read(port, into=VideoFrame)` handed back —
+`frame` — the object `ctx.inputs.read(self.camera_frame_from_upstream)` handed back, an `ImageFrame`, —
 holds a claim on the camera's surface, and that claim is what keeps the
 camera's pixels still for the length of the copy. The engine picks the copy a
 buffer-to-texture pair needs, converts nothing, and returns once the kernel's
@@ -176,10 +178,10 @@ contract:
 | Ring | Depth | Why |
 | --- | --- | --- |
 | the landing texture | 1 | `dispatch` returns with the GPU work retired, and nothing outside this node ever names this texture |
-| the kernel's output | 2 (the standard) | the encoder reads it in its own time, downstream |
+| the kernel's output | 2 (the standard) | the viewer, or any node downstream, reads it in its own time |
 
-A slot a consumer still holds is skipped, never rewritten, so the encoder never
-reads newer pixels under an older frame's id. A frame nobody claimed stays
+A slot a consumer still holds is skipped, never rewritten, so a reader never
+sees newer pixels under an older frame's id. A frame nobody claimed stays
 resolvable for `depth` publishes, then its id is refused as recycled. When
 every slot the pool may grow to is held, the ring raises and this node drops its
 own frame — it never waits on a consumer.
@@ -210,7 +212,7 @@ Linux and on macOS alike.
 
 ## Editing it
 
-The shader is `HALFTONE_COMPUTE_GLSL` in `nodes/halftone_compute.py`. Save it
+The shader is `HALFTONE_COMPUTE_SLANG` in `nodes/halftone_compute.py`. Save it
 while `tatolab dev` runs and the stream loads again with the new text compiled.
 
 Four edits worth making, in rising order of how much they teach:
@@ -229,13 +231,13 @@ Four edits worth making, in rising order of how much they teach:
   a dot's radius changes by a fraction of a texel per frame, and a hard edge can
   only move a whole texel at a time.
 - **Screen the dots monochrome.** Replace `ink.rgb` in `dot_colour` with
-  `vec3(luma)` and the picture becomes true black-and-white newsprint rather
+  `float3(luma)` and the picture becomes true black-and-white newsprint rather
   than a colour screen.
 
 Two edits that fail on purpose, because each failure is the contract stating
 itself:
 
-- Rename a binding in the GLSL but not in the Python. The refusal lands at
+- Rename a binding in the Slang but not in the Python. The refusal lands at
   `setup()`, before a single frame, and names the shader's own bindings.
 - Bind the camera's own surface id — `frame.surface_id` in place of
   `camera_frame_landing_texture` — and skip the landing copy. The dispatch

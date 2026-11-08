@@ -6,17 +6,18 @@
 import dataclasses
 from typing import Literal
 
-from tatolab.stream import MsgpackCast
-
 LowerThirdVariant = Literal["live", "guest", "breaking"]
 """The page's template styles; each is a CSS class in `templates/lower_third.html`."""
 
 LOWER_THIRD_VARIANTS: tuple[LowerThirdVariant, ...] = ("live", "guest", "breaking")
 
+LOWER_THIRD_RECORD_NAMES: tuple[str, ...] = ("variant", "title", "subtitle")
+"""The keys the page reads from its `tatolab:data` event's `detail`."""
+
 
 @dataclasses.dataclass(frozen=True)
-class LowerThirdTemplate(MsgpackCast):
-    """One lower third: the msgpack map the page reads from its `tatolab:data` event's `detail`."""
+class LowerThirdTemplate:
+    """One lower third: the record the page reads from its `tatolab:data` event's `detail`."""
 
     variant: LowerThirdVariant
     title: str
@@ -27,6 +28,10 @@ class LowerThirdTemplate(MsgpackCast):
             raise ValueError(
                 f"variant {self.variant!r} is not one of the page's templates {LOWER_THIRD_VARIANTS}"
             )
+
+    def as_record(self) -> dict[str, str]:
+        """The Records message this lower third is sent to the page as."""
+        return {name: getattr(self, name) for name in LOWER_THIRD_RECORD_NAMES}
 
 
 DEMO_RUNDOWN: tuple[LowerThirdTemplate, ...] = (

@@ -25,30 +25,34 @@ CHORD_MIX_WINDOW = AudioWindowContract(
 )
 
 
-@node.input(delivery_profile="ordered", audio_window=CHORD_MIX_WINDOW)
-def root_voice_from_upstream(self) -> AudioBlock: ...
+root_voice_from_upstream = Input(Channels, delivery="ordered", window=CHORD_MIX_WINDOW)
 ```
 
 so the engine resamples each voice to 48 kHz, averages the stereo one down to
 mono, and frames all three into exactly-512-sample blocks **before** `process()`
-runs. What the mixer reads with `ctx.inputs.read(port, into=AudioBlock)` is
+runs. What the mixer reads with `ctx.inputs.read(port)` is
 three windows of identical shape, and mixing them is one `+`. There is no
 resampler, no ring buffer and no format negotiation in this stream, because none
 of that is a node's job.
 
 Further things it teaches:
 
-- **A declared contract requires `delivery_profile="ordered"`.** Order matters
+- **A declared contract requires `delivery="ordered"`.** Order matters
   for samples, and `newest` skips messages by design — an accumulator that needs
-  contiguous samples would flush on nearly every read. `@node.input` refuses the
+  contiguous samples would flush on nearly every read. `@node.process` refuses the
   pair at import.
 - **`SpeakerSink` matches its own device.** The mixer publishes 48 kHz mono; the
   speaker's input declares `match_device`, so the same stage converts the mix to
   whatever the machine's playback device actually opened at. Nothing in
   the graph document names a device format.
-- **A message's payload is bytes.** Each voice and the mixer build an
-  `AudioBlock` and write `block.to_bytes()`, so a missing field or a sample
-  buffer of the wrong length is refused where it is written, not downstream.
+- **A block is a `[channel][sample]` array.** Each voice and the mixer write a
+  C-contiguous numpy array, with the stream-wide index of its first sample as
+  `start_sample`; a read hands back a `ChannelsBlock` that `numpy.from_dlpack`
+  views the same way. A voice's rate comes from its config, which its class
+  cannot state, so `Output(Channels, rate=from_config("sample_rate"))` and
+  `write_channels_block` name it per block. The mixer copies each window out of
+  its block, because a read's borrow ends with the `process()` that made it and
+  a window may wait several calls for its partners.
 - **Every timestamp is the machine's monotonic clock.** Each voice stamps a
   block with its run anchor plus an integer sample offset, never an accumulated
   per-block delta — which is what keeps 44.1 kHz-family rates exact.

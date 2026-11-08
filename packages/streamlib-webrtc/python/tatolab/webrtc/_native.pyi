@@ -47,9 +47,8 @@ class WhipSession:
         for every Opus stream, mono included.
         """
 
-    def write_video_media_frame(self, media_frame: Buffer, timestamp_ns: int) -> None:
-        """Send the Annex-B access unit `media_frame` carries after its varint
-        timestamp, on the RTP clock `timestamp_ns` places it.
+    def write_video_access_unit(self, annex_b_access_unit: Buffer, timestamp_ns: int) -> None:
+        """Send one Annex-B access unit on the RTP clock `timestamp_ns` places it.
 
         Whole, not per NAL unit: the H.264 payloader does its own STAP-A
         aggregation and FU-A fragmentation, and one Sample per NAL would
@@ -59,12 +58,11 @@ class WhipSession:
         payloader applies a sample's duration to the frame after it. The
         stream's rate is exact and its numbering trails real time by one frame,
         so video presents roughly one frame interval later than audio — about
-        33 ms at 30 fps. Bytes that are not a media frame raise `ValueError`.
+        33 ms at 30 fps. An empty message raises `ValueError`.
         """
 
-    def write_audio_media_frame(self, media_frame: Buffer) -> None:
-        """Send the Opus packet `media_frame` carries after its varint
-        timestamp, its RTP advance taken from the packet's own TOC."""
+    def write_audio_opus_packet(self, opus_packet: Buffer) -> None:
+        """Send one Opus packet, its RTP advance taken from the packet's own TOC."""
 
     def close(self) -> None:
         """Close the peer connection and DELETE the session, both bounded."""

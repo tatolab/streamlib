@@ -13,12 +13,16 @@ use iceoryx2::prelude::ipc_threadsafe;
 use serde_json::Value;
 
 use crate::error::{MoqModuleError, Result};
-use crate::moq_catalog::the_catalog_merged_from_the_entries_of;
+use crate::moq_catalog::{
+    the_catalog_merged_from_the_entries_of,
+    the_track_carries_its_timestamp_in_the_hang_legacy_container,
+};
 use crate::moq_gateway_receive_read::{
     MoqReceiveNodeContentSentByTheGateway, MoqTrackReceiveRequest, read_a_track_for_a_receive_node,
 };
 use crate::moq_gateway_relay_session::{MoqGatewayRelaySession, MoqGatewayTrackWriter};
 use crate::moq_gateway_relay_settings::MoqGatewayRelaySettings;
+use crate::moq_hang_legacy_container::write_hang_legacy_container_media_frame;
 use crate::moq_node_ipc::{
     MoqGatewayControlMessage, MoqNodeIpc, MoqNodeSliceSubscriber, MoqTrackContentSampleKind,
     MoqTrackContentSentToTheGatewayHeader,
@@ -90,6 +94,9 @@ struct DeclaredTrack {
     next_sequence_number: Option<u64>,
     writer: Option<MoqGatewayTrackWriter>,
     writer_refused_on_this_session: bool,
+    /// The buffer each Packets unit is wrapped in hang's legacy container in,
+    /// reused across the track's objects.
+    hang_legacy_container_media_frame_bytes: Vec<u8>,
 }
 
 impl DeclaredTrack {
@@ -329,6 +336,7 @@ impl MoqGatewayPasses {
                         next_sequence_number: None,
                         writer: None,
                         writer_refused_on_this_session: false,
+                        hang_legacy_container_media_frame_bytes: Vec::new(),
                     },
                 );
                 self.the_catalog_may_have_changed = true;
@@ -389,6 +397,10 @@ impl MoqGatewayPasses {
                     }
                 }
             }
+            let mut objects_ride_the_hang_legacy_container =
+                the_track_carries_its_timestamp_in_the_hang_legacy_container(
+                    declared.catalog_entry(),
+                );
             let mut samples_left_this_pass = CONTENT_SAMPLES_A_PASS_WRITES_PER_TRACK;
             loop {
                 if samples_left_this_pass == 0 {
@@ -426,6 +438,10 @@ impl MoqGatewayPasses {
                     if declared.catalog_entry_upstream != catalog_entry_upstream {
                         declared.catalog_entry_upstream = catalog_entry_upstream;
                         self.the_catalog_may_have_changed = true;
+                        objects_ride_the_hang_legacy_container =
+                            the_track_carries_its_timestamp_in_the_hang_legacy_container(
+                                declared.catalog_entry(),
+                            );
                     }
                     continue;
                 }
@@ -435,8 +451,22 @@ impl MoqGatewayPasses {
                 if header.lost_since_last_read > 0 {
                     writer.give_up_the_group_being_written();
                 }
+                let object_payload: &[u8] = if objects_ride_the_hang_legacy_container {
+                    if let Err(refusal) = write_hang_legacy_container_media_frame(
+                        &mut declared.hang_legacy_container_media_frame_bytes,
+                        header.timestamp_ns,
+                        sample.payload(),
+                    ) {
+                        tracing::debug!("MoqGateway: `{track_node}`: {refusal}");
+                        writer.give_up_the_group_being_written();
+                        continue;
+                    }
+                    &declared.hang_legacy_container_media_frame_bytes
+                } else {
+                    sample.payload()
+                };
                 writer.write_object(
-                    sample.payload(),
+                    object_payload,
                     header.timestamp_ns,
                     header.starts_group != 0,
                 );

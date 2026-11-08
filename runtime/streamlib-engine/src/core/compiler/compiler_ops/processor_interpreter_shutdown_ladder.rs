@@ -63,13 +63,37 @@ const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const COOPERATIVE_RUNG_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How one helper's shutdown ended.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
 pub(crate) enum HelperProcessShutdownOutcome {
     /// The child exited and was reaped, leaving no survivor.
     Reaped(ExitStatus),
     /// The child outlived every rung. It is named rather than waited on.
     AbandonedAfterTheLadder,
+}
+
+impl HelperProcessShutdownOutcome {
+    /// How the helper process ended, worded for a refusal or a log.
+    pub(crate) fn how_the_helper_process_ended(&self) -> String {
+        match self {
+            Self::Reaped(exit_status) => format!("its helper process ended with {exit_status}"),
+            Self::AbandonedAfterTheLadder => {
+                "its helper process outlived every signal sent to it and was abandoned".to_string()
+            }
+        }
+    }
+
+    /// Whether the helper died of a signal no rung of the ladder sends, such as
+    /// SIGSEGV, so it ended on its own before the ladder reached it.
+    pub(crate) fn ended_on_a_signal_the_ladder_never_sends(&self) -> bool {
+        let Self::Reaped(exit_status) = self else {
+            return false;
+        };
+        std::os::unix::process::ExitStatusExt::core_dumped(exit_status)
+            || std::os::unix::process::ExitStatusExt::signal(exit_status).is_some_and(|signal| {
+                ![libc::SIGINT, libc::SIGTERM, libc::SIGKILL].contains(&signal)
+            })
+    }
 }
 
 /// What waiting one slice of a cooperative rung for a helper's reply found.
@@ -794,5 +818,34 @@ time.sleep(120)
             }
             std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
         }
+    }
+
+    #[test]
+    fn a_helper_ending_on_a_signal_the_ladder_never_sends_ended_on_its_own() {
+        let exit_status_of_the_raw_wait_status =
+            <ExitStatus as std::os::unix::process::ExitStatusExt>::from_raw;
+        let segfaulted =
+            HelperProcessShutdownOutcome::Reaped(exit_status_of_the_raw_wait_status(libc::SIGSEGV));
+        let segfaulted_and_dumped_core = HelperProcessShutdownOutcome::Reaped(
+            exit_status_of_the_raw_wait_status(libc::SIGSEGV | 0x80),
+        );
+        assert!(segfaulted.ended_on_a_signal_the_ladder_never_sends());
+        assert!(segfaulted_and_dumped_core.ended_on_a_signal_the_ladder_never_sends());
+        for signal_the_ladder_sends in [libc::SIGINT, libc::SIGTERM, libc::SIGKILL] {
+            assert!(
+                !HelperProcessShutdownOutcome::Reaped(exit_status_of_the_raw_wait_status(
+                    signal_the_ladder_sends
+                ))
+                .ended_on_a_signal_the_ladder_never_sends()
+            );
+        }
+        assert!(
+            !HelperProcessShutdownOutcome::Reaped(exit_status_of_the_raw_wait_status(0))
+                .ended_on_a_signal_the_ladder_never_sends()
+        );
+        assert!(
+            !HelperProcessShutdownOutcome::AbandonedAfterTheLadder
+                .ended_on_a_signal_the_ladder_never_sends()
+        );
     }
 }

@@ -3,7 +3,7 @@
 
 """The one lens model the fisheye warp and its inverse are both built from.
 
-`RADIAL_DISTORTION_MODEL_GLSL` is the prelude both shaders start with, so the
+`RADIAL_DISTORTION_MODEL_SLANG` is the prelude both shaders start with, so the
 lens and the rectifier compute the same radius from the same pixel and scale it
 by the same polynomial. Not a node: the two node modules import it.
 """
@@ -14,7 +14,7 @@ __all__ = [
     "DEFAULT_RADIAL_DISTORTION_K1",
     "DEFAULT_RADIAL_DISTORTION_K2",
     "FRAME_TEXTURE_FORMAT",
-    "RADIAL_DISTORTION_MODEL_GLSL",
+    "RADIAL_DISTORTION_MODEL_SLANG",
     "STORAGE_AND_SAMPLED_TEXTURE_USAGE",
     "WORKGROUP_TILE_SIZE",
     "largest_recoverable_normalised_radius",
@@ -32,25 +32,29 @@ FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 # A kernel's output: written as a storage image, then sampled downstream.
 STORAGE_AND_SAMPLED_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
-# The dispatch's tile and the shader's `local_size`, one number for both: a
+# The dispatch's tile and the shader's `numthreads`, one number for both: a
 # shader tile larger than the dispatch's leaves the right and bottom of every
 # frame unwritten, and nothing refuses it.
 WORKGROUP_TILE_SIZE = 8
 
-RADIAL_DISTORTION_MODEL_GLSL = (
-    f"#version 450\n#define WORKGROUP_TILE_SIZE {WORKGROUP_TILE_SIZE}\n"
+RADIAL_DISTORTION_MODEL_SLANG = (
+    f"static const uint WORKGROUP_TILE_SIZE = {WORKGROUP_TILE_SIZE};\n"
     """
-layout(local_size_x = WORKGROUP_TILE_SIZE, local_size_y = WORKGROUP_TILE_SIZE) in;
+int2 frame_extent_of(RWTexture2D<float4> written_frame) {
+    uint2 extent;
+    written_frame.GetDimensions(extent.x, extent.y);
+    return int2(extent);
+}
 
-vec2 frame_centre(ivec2 extent) {
-    return (vec2(extent) - 1.0) * 0.5;
+float2 frame_centre(int2 extent) {
+    return (float2(extent) - 1.0) * 0.5;
 }
 
 // Normalised against the half-diagonal, so the corners of any aspect ratio sit
 // at r = 1, inside the range the coefficients describe.
-float normalised_radius(ivec2 at, ivec2 extent) {
-    vec2 centre = frame_centre(extent);
-    return length(vec2(at) - centre) / length(centre);
+float normalised_radius(int2 at, int2 extent) {
+    float2 centre = frame_centre(extent);
+    return length(float2(at) - centre) / length(centre);
 }
 
 // The factor a point's distance from the centre is multiplied by. Negative k1
@@ -62,8 +66,8 @@ float radial_scale(float radius, float k1, float k2) {
 
 // Texel `i`'s centre is at (i + 0.5) / extent in sampler coordinates; the
 // engine's sampler filters linearly between texels.
-vec2 texel_to_sampler_coordinates(vec2 texel, ivec2 extent) {
-    return (texel + 0.5) / vec2(extent);
+float2 texel_to_sampler_coordinates(float2 texel, int2 extent) {
+    return (texel + 0.5) / float2(extent);
 }
 """
 )

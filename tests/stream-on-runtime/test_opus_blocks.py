@@ -12,8 +12,8 @@ No microphone: a Python source publishes a stereo tone at a stated rate, so
 the channel count the encoder follows and the rate the decoder reconstructs at
 are the test's own facts rather than the machine's.
 
-The encoded-channel test reads libopus's output from Python the way a moq-dev
-player does: each message a media frame opening its own group, and the
+The encoded-channel test reads libopus's output from Python the way a decoder
+reads it: each message one bare Opus packet opening its own group, and the
 port's stream facts carrying the `OpusHead` a decoder takes its channel count
 and lookahead from.
 """
@@ -44,6 +44,9 @@ TWO_OPUS_MARKERS = [OpusEncoder, OpusDecoder]
 # clock. Every packet spans exactly this many per-channel samples.
 SAMPLES_IN_ONE_OPUS_PACKET = 960
 NANOSECONDS_PER_OPUS_PACKET = SAMPLES_IN_ONE_OPUS_PACKET * 1_000_000_000 // 48_000
+#: RFC 6716 §3.1's TOC configurations whose frame lasts 20 ms: SILK, hybrid
+#: and CELT at every bandwidth each mode codes.
+OPUS_TOC_CONFIGURATIONS_OF_ONE_20_MS_FRAME = frozenset({1, 5, 9, 13, 15, 19, 23, 27, 31})
 
 # libopus's lookahead at 48 kHz is `Fs/400 + Fs/250` = 312 samples, and 120 at
 # `lowdelay`. The assertions read `pre_skip` off the OpusHead rather than naming
@@ -122,12 +125,12 @@ def _reported(tatolabd: RuntimeProcessUnderTest, marker_name: str) -> "list[dict
 
 
 @pytest.mark.requires_gpu
-def test_the_encoded_channel_carries_media_frames_under_an_opus_head(
+def test_the_encoded_channel_carries_bare_opus_packets_under_an_opus_head(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The encoded-domain link, read from Python as a player reads it: every
-    message libopus produced is a media frame — the varint timestamp, then one
-    Opus packet — opening its own group, and the port's stream facts name
+    message libopus produced is one bare Opus packet stamped on the message,
+    opening its own group, and the port's stream facts name
     `opus` with an `OpusHead` naming the channel count and the lookahead.
     """
     tatolabd = start_the_opus_round_trip(start_tatolabd_running_stream)
@@ -149,9 +152,11 @@ def test_the_encoded_channel_carries_media_frames_under_an_opus_head(
         assert packet["lost_since_last_read"] == 0, (
             "a probe keeping up loses nothing on its link"
         )
-        assert packet["varint_timestamp_microseconds"] == packet["timestamp_ns"] // 1_000, (
-            "the media frame's varint is the envelope's stamp in microseconds"
+        assert packet["toc_byte"] >> 3 in OPUS_TOC_CONFIGURATIONS_OF_ONE_20_MS_FRAME, (
+            "the payload opens with the TOC of one 20 ms Opus frame, so nothing rides ahead "
+            f"of the packet; it opened with {packet['toc_byte']:#04x}"
         )
+        assert packet["toc_byte"] & 0b11 == 0, "each packet carries one frame"
         assert packet["byte_count"] > 0, "a packet with no bytes decodes to nothing"
         assert packet["stream_facts_codec"] == "opus"
         assert packet["stream_facts_sample_rate"] == 48_000, (

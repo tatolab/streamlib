@@ -6,13 +6,14 @@
 from pathlib import Path
 
 import pytest
-from tatolab.stream import msgpack
 
 from lower_third.lower_third_template import (
     DEMO_RUNDOWN,
+    LOWER_THIRD_RECORD_NAMES,
     LOWER_THIRD_VARIANTS,
     LowerThirdTemplate,
 )
+from lower_third.nodes.lower_third_rundown import LowerThirdRundown
 
 LOWER_THIRD_PAGE = Path(__file__).resolve().parents[1] / "templates" / "lower_third.html"
 
@@ -20,12 +21,19 @@ LOWER_THIRD_PAGE = Path(__file__).resolve().parents[1] / "templates" / "lower_th
 def test_a_lower_third_reaches_the_page_as_the_map_it_reads() -> None:
     lower_third = LowerThirdTemplate(variant="guest", title="A name", subtitle="A role")
 
-    assert msgpack.unpack(lower_third.to_bytes()) == {
+    assert lower_third.as_record() == {
         "variant": "guest",
         "title": "A name",
         "subtitle": "A role",
     }
-    assert LowerThirdTemplate.from_bytes(lower_third.to_bytes()) == lower_third
+
+
+def test_the_rundown_output_declares_every_key_the_page_reads() -> None:
+    page = LOWER_THIRD_PAGE.read_text()
+
+    assert LowerThirdRundown.lower_third_to_page.names == LOWER_THIRD_RECORD_NAMES
+    for name in LOWER_THIRD_RECORD_NAMES:
+        assert f"template.{name}" in page
 
 
 def test_a_variant_the_page_does_not_style_is_refused() -> None:

@@ -32,8 +32,7 @@ REVERB_WINDOW = AudioWindowContract(
 )
 
 
-@node.input(delivery_profile="ordered", audio_window=REVERB_WINDOW)
-def dry_audio_from_upstream(self) -> AudioBlock: ...
+dry_audio_from_upstream = Input(Channels, delivery="ordered", window=REVERB_WINDOW)
 ```
 
 On the way in, the engine mixes the capture device's stereo down to mono and
@@ -60,19 +59,20 @@ stages that run before anyone's `process()` does.
 ```
 
 That is the whole reason a delay-line algorithm can be a plain Python class
-here. `ReverbEffect` reads `ctx.inputs.read("dry_audio_from_upstream",
-into=AudioBlock)`, takes `block.samples[:, 0]` and knows it has 128 mono samples
+here. `ReverbEffect` reads `ctx.inputs.read(self.dry_audio_from_upstream)`, takes
+`numpy.from_dlpack(block)[0]` and knows it has 128 mono samples
 at 48 kHz, always, on every machine — so its filter lengths are fixed once in
 `__init__` and there is no resampler, no rechunker and no format negotiation
-anywhere in `nodes/reverb_effect.py`. What it writes back is an `AudioBlock`
-too, built and packed with `to_bytes()`, so the record's keys are checked where
-it is made rather than discovered wrong downstream.
+anywhere in `nodes/reverb_effect.py`. What it writes back is a `[1][128]`
+array on an `Output(Channels, rate=48_000, dtype="f32")`, with the dry block's
+own timestamp and `start_sample`, so the reverberated stream keeps the
+microphone's sample index.
 
 Three more things it teaches:
 
-- **A declared contract requires `delivery_profile="ordered"`.** A reverb is an
+- **A declared contract requires `delivery="ordered"`.** A reverb is an
   accumulator: its output depends on every sample before it. `newest` skips
-  messages by design, and a skipped block is a hole in a delay line. `@node.input`
+  messages by design, and a skipped block is a hole in a delay line. `@node.process`
   refuses a contract on a `newest` port at import.
 - **The window size is the latency dial** — 128 samples is 2.67 ms at 48 kHz,
   and it is the only number here you would expect to tune. It also has a real

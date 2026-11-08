@@ -7,9 +7,8 @@ An extension wheel that links no engine crate; each node runs in its own
 processor interpreter like any other Python node, and is defined here so its
 type is `tatolab.opus:OpusEncoder` and `tatolab.opus:OpusDecoder`.
 
-Both carry media frames — hang's legacy container, a QUIC varint timestamp in
-microseconds and then one Opus packet, each opening its own group — the layout
-the moq-dev players and `tatolab-webrtc` read and write. The codec state is
+Both carry bare Opus packets, one per message, each opening its own group and
+stamped on the message itself. The codec state is
 this wheel's Rust; what lives here is the port surface, the stream facts and
 the log lines, because a helper process's Rust has no `tracing` subscriber.
 """
@@ -84,9 +83,8 @@ class OpusEncoderConfig:
         "window_size=960, hop=960)` and states no channel count, so the engine resamples "
         "to Opus's own clock, converts to `f32` and frames into 20 ms windows while the "
         "count follows whatever the source publishes. One to eight channels; more is "
-        "refused by name. `encoded_audio` publishes one media frame per Opus packet — a "
-        "QUIC varint timestamp in microseconds, then the packet — each one opening its own "
-        "group. The port's stream facts are `PacketsStreamFacts` — `opus`, 48 000 Hz, the "
+        "refused by name. `encoded_audio` publishes one bare Opus packet per message, stamped "
+        "with the instant of its first sample and each one opening its own group. The port's stream facts are `PacketsStreamFacts` — `opus`, 48 000 Hz, the "
         "channel count — carrying the `OpusHead` hex-encoded as `codec_configuration_hex`, so a "
         "decoder learns the channel count and the encoder's lookahead before the first "
         "packet.\n\n"
@@ -98,7 +96,7 @@ class OpusEncoderConfig:
     ),
 )
 class OpusEncoder:
-    """Audio windows in, Opus media frames out."""
+    """Audio windows in, Opus packets out."""
 
     def __init__(self, config: OpusEncoderConfig) -> None:
         bitrate_bps = config.bitrate_bps
@@ -132,24 +130,23 @@ class OpusEncoder:
         ),
     )
     encoded_audio = Output(
-        Packets, codec=OPUS_RFC6381_CODEC_STRING, description="Opus media frames, one packet each"
+        Packets, codec=OPUS_RFC6381_CODEC_STRING, description="Opus packets, one per message"
     )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         while (window := ctx.inputs.read(self.audio)) is not None:
             interleaved_samples = numpy.ascontiguousarray(numpy.from_dlpack(window).T)
             try:
-                media_frame = self._encoder.encode_one_window(
+                opus_packet_bytes = self._encoder.encode_one_window(
                     interleaved_samples.tobytes(),
                     window.sample_rate,
                     window.channel_count,
                     window.samples_per_channel,
                     window.dtype,
-                    window.timestamp_ns,
                 )
             finally:
                 _log_codec_notices(self._encoder.take_notices())
-            if media_frame is None:
+            if opus_packet_bytes is None:
                 continue
             owed = self._encoder.take_stream_facts_owed_to_the_port()
             if owed is not None:
@@ -171,7 +168,7 @@ class OpusEncoder:
             # never the moment it was published.
             ctx.outputs.write(
                 self.encoded_audio,
-                media_frame,
+                opus_packet_bytes,
                 timestamp_ns=window.timestamp_ns,
                 starts_group=True,
             )
@@ -187,14 +184,14 @@ class OpusEncoder:
 @node.process(
     scheduling="high",
     description=(
-        "Decodes Opus media frames to audio blocks via libopus.\n\n"
-        "`encoded_audio` takes media frames in the layout `OpusEncoder` publishes — a "
-        "QUIC varint timestamp, then one Opus packet — and declares no window contract: "
-        "an encoded link carries whole packets. The channel count and the encoder's "
+        "Decodes Opus packets to audio blocks via libopus.\n\n"
+        "`encoded_audio` takes bare Opus packets, one per message as `OpusEncoder` "
+        "publishes them, and declares no window contract: an encoded link carries whole "
+        "packets. The channel count and the encoder's "
         "lookahead come from the `OpusHead` in the upstream port's stream facts. Facts "
         "carrying no `OpusHead` name the channel count; with no facts at all, the "
         "first packet's TOC fixes one or two channels for the run. Either way nothing is "
-        "trimmed. A message that is not a media frame, upstream facts naming a codec other "
+        "trimmed. An empty message, upstream facts naming a codec other "
         "than `opus`, an `OpusHead` that does not read, and a `pre_skip` past the "
         "5 760 samples one Opus packet can span are refused by name. `audio` publishes "
         "Channels blocks — `f32` at 48 000 Hz in the stream's own channel count.\n\n"
@@ -212,7 +209,7 @@ class OpusEncoder:
     ),
 )
 class OpusDecoder:
-    """Opus media frames in, audio blocks out."""
+    """Opus packets in, audio blocks out."""
 
     def __init__(self) -> None:
         self._decoder = _native.EncodedPacketToAudioBlockDecoder()
@@ -223,7 +220,7 @@ class OpusDecoder:
         Packets,
         delivery="ordered",
         requires_codec=(OPUS_RFC6381_CODEC_STRING,),
-        description="Opus media frames to decode",
+        description="Opus packets to decode",
     )
     audio = Output(
         Channels,

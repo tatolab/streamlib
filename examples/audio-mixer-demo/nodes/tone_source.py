@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""One voice of the chord: a sine wave published as `AudioBlock` messages.
+"""One voice of the chord: a sine wave published on a Channels port.
 
 Importable as `nodes.tone_source:ToneSource`, which is the name the engine
 spawns this node's child interpreter with. A voice publishes whatever rate,
@@ -14,9 +14,10 @@ from dataclasses import dataclass
 
 import numpy
 from tatolab.stream import (
-    AudioBlock,
+    Channels,
+    Output,
     RuntimeContextLimitedAccess,
-    catalog,
+    from_config,
     log,
     node,
 )
@@ -34,7 +35,7 @@ NANOSECONDS_PER_SECOND = 1_000_000_000
 
 @dataclass
 class ToneSourceConfig:
-    """ToneSource's settings, as `stream_builder.add(ToneSource, config={...})` spells them."""
+    """ToneSource's settings, as its node's config in the graph document spells them."""
 
     frequency_hz: float = 440.0
     sample_rate: int = 48_000
@@ -43,7 +44,11 @@ class ToneSourceConfig:
     amplitude: float = 0.3
 
 
-@node(execution="continuous", interval_ms=5)
+@node.process(
+    execution="continuous",
+    interval_ms=5,
+    description="A phase-continuous sine wave at the rate and channel count its config names",
+)
 class ToneSource:
     """A phase-continuous sine wave, paced by the monotonic clock.
 
@@ -52,11 +57,12 @@ class ToneSource:
     any rate and block size.
     """
 
-    @node.output(
-        description="This voice's sine wave, as AudioBlock messages",
-        catalog=catalog.BinaryEntry(mode="snapshot", mime="application/msgpack"),
+    voice_to_downstream = Output(
+        Channels,
+        rate=from_config("sample_rate"),
+        dtype="f32",
+        description="This voice's sine wave",
     )
-    def voice_to_downstream(self) -> AudioBlock: ...
 
     def __init__(self, config: ToneSourceConfig) -> None:
         self.frequency_hz = float(config.frequency_hz)
@@ -79,6 +85,9 @@ class ToneSource:
                 )
 
         self.run_anchor_timestamp_ns: int | None = None
+        # The stream-wide index of this run's first sample. A new run carries
+        # the samples it skipped, so the index keeps counting real time.
+        self.start_sample_of_this_run = 0
         self.samples_emitted_in_this_run = 0
         self.next_phase_radians = 0.0
 
@@ -97,6 +106,7 @@ class ToneSource:
                 samples_behind=samples_owed - self.samples_emitted_in_this_run,
                 frequency_hz=self.frequency_hz,
             )
+            self.start_sample_of_this_run += samples_owed
             self.run_anchor_timestamp_ns = now_ns
             self.samples_emitted_in_this_run = 0
             samples_owed = 0
@@ -111,17 +121,13 @@ class ToneSource:
 
     def _publish_one_block(self, ctx: RuntimeContextLimitedAccess) -> None:
         first_sample_timestamp_ns = self._stamp_for_the_next_block()
-        voice_block = AudioBlock(
-            samples=self._next_interleaved_sample_bytes(),
-            sample_rate=self.sample_rate,
-            channels=self.channels,
-            sample_count=self.block_size,
-            dtype="f32",
-            first_sample_timestamp_ns=first_sample_timestamp_ns,
-        )
-        ctx.outputs.write(
+        # The output's rate is the config's, which the class cannot state, so
+        # the block names it.
+        ctx.outputs.write_channels_block(
             VOICE_OUTPUT_PORT,
-            voice_block.to_bytes(),
+            self._next_planar_samples(),
+            start_sample=self.start_sample_of_this_run + self.samples_emitted_in_this_run,
+            sample_rate=self.sample_rate,
             timestamp_ns=first_sample_timestamp_ns,
         )
         self.samples_emitted_in_this_run += self.block_size
@@ -139,7 +145,8 @@ class ToneSource:
             // self.sample_rate
         )
 
-    def _next_interleaved_sample_bytes(self) -> bytes:
+    def _next_planar_samples(self) -> numpy.ndarray:
+        """The next block, `[channel][sample]`, every channel the same tone."""
         phase_step_radians = 2.0 * math.pi * self.frequency_hz / self.sample_rate
         phases = self.next_phase_radians + phase_step_radians * numpy.arange(
             self.block_size, dtype=numpy.float64
@@ -150,8 +157,7 @@ class ToneSource:
             self.next_phase_radians + phase_step_radians * self.block_size,
             2.0 * math.pi,
         )
-        # The payload is little-endian by contract, not by the platform's luck.
-        one_channel = (self.amplitude * numpy.sin(phases)).astype("<f4")
-        if self.channels == 1:
-            return one_channel.tobytes()
-        return numpy.repeat(one_channel, self.channels).tobytes()
+        one_channel = (self.amplitude * numpy.sin(phases)).astype(numpy.float32)
+        return numpy.ascontiguousarray(
+            numpy.broadcast_to(one_channel, (self.channels, self.block_size))
+        )

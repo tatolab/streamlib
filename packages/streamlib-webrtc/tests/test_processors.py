@@ -50,8 +50,8 @@ from tatolab.webrtc.processors import (
 from helper_process_link_wiring import wire_one_link
 from parent_stream_facts_stand_in import ParentHoldingStreamFacts
 from played_media_stand_ins import (
-    MEDIA_FRAME_OF_AN_ACCESS_UNIT,
-    MEDIA_FRAME_OF_AN_OPUS_PACKET,
+    ANNEX_B_ACCESS_UNIT,
+    OPUS_PACKET,
     MONO_OPUS_IDENTIFICATION_HEADER_HEX,
 )
 from tatolab.opus import OpusDecoder, OpusEncoder
@@ -688,8 +688,8 @@ class RecordingWhipSession:
         del endpoint_url, bearer_token
         self.is_connected = False
         self.offered: "tuple[bool, bool, int | None] | None" = None
-        self.video_media_frames: "list[tuple[bytes, int]]" = []
-        self.audio_media_frames: "list[bytes]" = []
+        self.video_access_units: "list[tuple[bytes, int]]" = []
+        self.audio_opus_packets: "list[bytes]" = []
         RecordingWhipSession.constructed.append(self)
 
     def connect(
@@ -698,11 +698,11 @@ class RecordingWhipSession:
         self.offered = (video, audio, audio_channels)
         self.is_connected = True
 
-    def write_video_media_frame(self, media_frame: Buffer, timestamp_ns: int) -> None:
-        self.video_media_frames.append((bytes(media_frame), timestamp_ns))
+    def write_video_access_unit(self, annex_b_access_unit: Buffer, timestamp_ns: int) -> None:
+        self.video_access_units.append((bytes(annex_b_access_unit), timestamp_ns))
 
-    def write_audio_media_frame(self, media_frame: Buffer) -> None:
-        self.audio_media_frames.append(bytes(media_frame))
+    def write_audio_opus_packet(self, opus_packet: Buffer) -> None:
+        self.audio_opus_packets.append(bytes(opus_packet))
 
     def close(self) -> None:
         self.is_connected = False
@@ -728,32 +728,32 @@ def recording_whip_session(monkeypatch) -> "type[RecordingWhipSession]":
     return RecordingWhipSession
 
 
-def test_a_media_frame_reaches_the_session_whole_with_its_envelope_stamp(
+def test_an_access_unit_reaches_the_session_whole_with_its_envelope_stamp(
     request, recording_whip_session
 ):
-    """The varint stays on: the session's Rust strips it, and the envelope's
-    stamp — the one a local reader is promised — places it on the RTP clock."""
+    """The envelope's stamp — the one a local reader is promised — places it
+    on the RTP clock."""
     wired = PublisherWiredToEncoders(request, ["encoded_video"], AN_ENDPOINT)
     wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
 
-    wired.publish("encoded_video", MEDIA_FRAME_OF_AN_ACCESS_UNIT, timestamp_ns=1_234)
+    wired.publish("encoded_video", ANNEX_B_ACCESS_UNIT, timestamp_ns=1_234)
 
     (session,) = recording_whip_session.constructed
     assert session.offered == (True, False, None)
-    assert session.video_media_frames == [(MEDIA_FRAME_OF_AN_ACCESS_UNIT, 1_234)]
+    assert session.video_access_units == [(ANNEX_B_ACCESS_UNIT, 1_234)]
 
 
-def test_an_opus_media_frame_offers_the_channel_count_its_stream_facts_name(
+def test_an_opus_packet_offers_the_channel_count_its_stream_facts_name(
     request, recording_whip_session
 ):
     wired = PublisherWiredToEncoders(request, ["encoded_audio"], AN_ENDPOINT)
     wired.state_stream_facts("encoded_audio", opus_stream_facts_of(2))
 
-    wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
+    wired.publish("encoded_audio", OPUS_PACKET)
 
     (session,) = recording_whip_session.constructed
     assert session.offered == (False, True, 2)
-    assert session.audio_media_frames == [MEDIA_FRAME_OF_AN_OPUS_PACKET]
+    assert session.audio_opus_packets == [OPUS_PACKET]
 
 
 def test_two_links_are_one_video_and_one_audio_track_by_their_stream_facts(
@@ -765,13 +765,13 @@ def test_two_links_are_one_video_and_one_audio_track_by_their_stream_facts(
     wired.state_stream_facts("encoded_video", H264_VIDEO_STREAM_FACTS)
     wired.state_stream_facts("encoded_audio", MONO_OPUS_STREAM_FACTS)
 
-    wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
-    wired.publish("encoded_video", MEDIA_FRAME_OF_AN_ACCESS_UNIT, timestamp_ns=5)
+    wired.publish("encoded_audio", OPUS_PACKET)
+    wired.publish("encoded_video", ANNEX_B_ACCESS_UNIT, timestamp_ns=5)
 
     (session,) = recording_whip_session.constructed
     assert session.offered == (True, True, 1)
-    assert session.audio_media_frames == [MEDIA_FRAME_OF_AN_OPUS_PACKET]
-    assert session.video_media_frames == [(MEDIA_FRAME_OF_AN_ACCESS_UNIT, 5)]
+    assert session.audio_opus_packets == [OPUS_PACKET]
+    assert session.video_access_units == [(ANNEX_B_ACCESS_UNIT, 5)]
 
 
 def test_a_link_whose_upstream_states_no_stream_facts_is_refused_before_any_session_opens(
@@ -782,7 +782,7 @@ def test_a_link_whose_upstream_states_no_stream_facts_is_refused_before_any_sess
     wired = PublisherWiredToEncoders(request, ["frames"], AN_ENDPOINT)
 
     with pytest.raises(ValueError, match="carries no Packets stream facts") as refused:
-        wired.publish("frames", MEDIA_FRAME_OF_AN_ACCESS_UNIT)
+        wired.publish("frames", ANNEX_B_ACCESS_UNIT)
 
     inbound_link = wired.inbound_link_by_encoder_output_port["frames"]
     assert f"`{inbound_link}`" in str(refused.value)
@@ -803,7 +803,7 @@ def test_multichannel_stream_facts_are_refused_before_any_session_is_opened(requ
     wired.state_stream_facts("encoded_audio", opus_stream_facts_of(6))
 
     with pytest.raises(ValueError, match="mono and stereo only"):
-        wired.publish("encoded_audio", MEDIA_FRAME_OF_AN_OPUS_PACKET)
+        wired.publish("encoded_audio", OPUS_PACKET)
 
 
 def test_a_video_link_is_entered_at_its_first_group_start(
@@ -819,7 +819,7 @@ def test_a_video_link_is_entered_at_its_first_group_start(
     wired.publish("encoded_video", b"\x03delta", timestamp_ns=3, starts_group=False)
 
     (session,) = recording_whip_session.constructed
-    assert session.video_media_frames == [(b"\x02keyframe", 2), (b"\x03delta", 3)]
+    assert session.video_access_units == [(b"\x02keyframe", 2), (b"\x03delta", 3)]
 
 
 class TracksInputReplayingMessages:
@@ -892,7 +892,7 @@ def test_a_reported_loss_discards_to_the_next_group_start(recording_whip_session
         publisher.process(context)
 
     (session,) = recording_whip_session.constructed
-    assert [media_frame for media_frame, _ in session.video_media_frames] == [
+    assert [access_unit for access_unit, _ in session.video_access_units] == [
         b"keyframe",
         b"next keyframe",
         b"keyframe reporting a loss",

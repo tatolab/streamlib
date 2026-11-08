@@ -313,15 +313,15 @@ def test_a_window_whose_channel_count_opus_cannot_place_is_refused_by_name_and_t
     assert opus_round_trip.decoded_blocks() == []
 
 
-def test_a_message_on_the_decoders_link_that_is_no_media_frame_is_refused_by_name(
+def test_an_empty_message_on_the_decoders_link_is_refused_by_name(
     opus_round_trip: OpusRoundTripOnWiredLinks,
 ):
     decoder = construct_processor_instance(OpusDecoder, {}, None)
-    with pytest.raises(ValueError, match="not a media frame"):
+    with pytest.raises(ValueError, match="no Opus packet"):
         decoder._decoder.decode_one_arriving_message(b"", 0, True, 0, None)
     with pytest.raises(ValueError, match="names codec `mp4a.40.2`"):
         decoder._decoder.decode_one_arriving_message(
-            b"\x00\xfc\xff\xfe",
+            b"\xfc\xff\xfe",
             0,
             True,
             0,
@@ -329,7 +329,7 @@ def test_a_message_on_the_decoders_link_that_is_no_media_frame_is_refused_by_nam
         )
     with pytest.raises(ValueError, match="names no codec"):
         decoder._decoder.decode_one_arriving_message(
-            b"\x00\xfc\xff\xfe", 0, True, 0, {"family": "packets", "channel_count": 2}
+            b"\xfc\xff\xfe", 0, True, 0, {"family": "packets", "channel_count": 2}
         )
 
 

@@ -9,6 +9,7 @@ pub mod moq_gateway;
 pub mod moq_gateway_receive_read;
 pub mod moq_gateway_relay_session;
 pub mod moq_gateway_relay_settings;
+pub mod moq_hang_legacy_container;
 pub mod moq_node_ipc;
 pub mod moq_node_thread;
 mod moq_python_bindings;

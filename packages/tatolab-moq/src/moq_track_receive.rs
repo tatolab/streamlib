@@ -12,6 +12,7 @@ use crate::moq_catalog::{
     packets_stream_facts_read_from_hang_catalog_entry,
     the_track_carries_its_timestamp_in_the_hang_legacy_container,
 };
+use crate::moq_hang_legacy_container::read_hang_legacy_container_media_frame;
 use crate::moq_node_ipc::{
     MoqGatewayControlMessage, MoqNodeIpc, MoqReceivedContentSampleKind,
     MoqTrackContentReceivedFromTheGatewayHeader, publish_slice,
@@ -203,16 +204,31 @@ impl MoqReceivedContentWriting {
                     return;
                 }
                 self.waiting_for_a_group_start = false;
-                let track_timestamp_ns = if self.timestamps_ride_the_hang_legacy_container {
-                    the_hang_legacy_container_timestamp_ns_of(payload)
-                } else {
-                    (header.object_timestamp_ns != 0)
-                        .then(|| i128::from(header.object_timestamp_ns))
-                };
+                let (track_timestamp_ns, unit_payload) =
+                    if self.timestamps_ride_the_hang_legacy_container {
+                        match read_hang_legacy_container_media_frame(payload) {
+                            Ok(media_frame) => (
+                                Some(i128::from(media_frame.timestamp_microseconds) * 1_000),
+                                media_frame.codec_payload_bytes,
+                            ),
+                            Err(refusal) => {
+                                tracing::debug!("MoqTrackReceive: {refusal}");
+                                output.declare_groups_given_up(1);
+                                self.waiting_for_a_group_start = true;
+                                return;
+                            }
+                        }
+                    } else {
+                        (
+                            (header.object_timestamp_ns != 0)
+                                .then(|| i128::from(header.object_timestamp_ns)),
+                            payload,
+                        )
+                    };
                 let timestamp_ns = self
                     .track_timestamp_rebasing
                     .stamp_on_the_stream_clock(track_timestamp_ns, output.stream_time_now_ns());
-                if !output.write_object(payload, timestamp_ns, starts_group) {
+                if !output.write_object(unit_payload, timestamp_ns, starts_group) {
                     output.declare_groups_given_up(1);
                     self.waiting_for_a_group_start = true;
                 }
@@ -220,19 +236,6 @@ impl MoqReceivedContentWriting {
             _ => {}
         }
     }
-}
-
-/// The microsecond QUIC varint opening a payload in hang's legacy container,
-/// in nanoseconds.
-fn the_hang_legacy_container_timestamp_ns_of(payload: &[u8]) -> Option<i128> {
-    let first = *payload.first()?;
-    let length = 1usize << (first >> 6);
-    let bytes = payload.get(..length)?;
-    let mut microseconds = u64::from(first & 0x3f);
-    for byte in &bytes[1..] {
-        microseconds = (microseconds << 8) | u64::from(*byte);
-    }
-    Some(i128::from(microseconds) * 1_000)
 }
 
 /// How far a re-based stamp may fall behind the object's arrival before the
@@ -302,20 +305,93 @@ impl TrackTimestampRebasedOntoTheStreamClock {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct ReceivedObjectsWritten {
+        objects: Vec<(Vec<u8>, i64, bool)>,
+        groups_given_up: u64,
+    }
+
+    impl MoqReceivedTrackOutput for ReceivedObjectsWritten {
+        fn write_object(&mut self, payload: &[u8], timestamp_ns: i64, starts_group: bool) -> bool {
+            self.objects
+                .push((payload.to_vec(), timestamp_ns, starts_group));
+            true
+        }
+        fn declare_groups_given_up(&mut self, given_up_group_count: u64) {
+            self.groups_given_up += given_up_group_count;
+        }
+        fn set_packets_stream_facts_read_from_the_remote_catalog_entry(
+            &mut self,
+            _packets_stream_facts: &serde_json::Value,
+        ) {
+        }
+        fn stream_time_now_ns(&self) -> i64 {
+            9_000_000_000
+        }
+    }
+
+    fn received_sample_header(
+        sequence_number: u64,
+        kind: MoqReceivedContentSampleKind,
+    ) -> MoqTrackContentReceivedFromTheGatewayHeader {
+        MoqTrackContentReceivedFromTheGatewayHeader {
+            sequence_number,
+            groups_given_up: 0,
+            object_timestamp_ns: 0,
+            kind: kind as u32,
+            starts_group: 1,
+        }
+    }
+
     #[test]
-    fn a_legacy_containers_varint_reads_as_its_timestamp() {
-        assert_eq!(
-            the_hang_legacy_container_timestamp_ns_of(&[0x25, 0xff]),
-            Some(37_000)
+    fn an_object_of_a_legacy_container_track_is_written_as_the_bare_unit_at_the_containers_stamp() {
+        let mut writing = MoqReceivedContentWriting::default();
+        let mut output = ReceivedObjectsWritten::default();
+        let catalog_entry = serde_json::json!({
+            "section": "video",
+            "entry": {"codec": "avc1.64001f", "codedWidth": 1280, "codedHeight": 720},
+        });
+        writing.write_the_sample(
+            received_sample_header(0, MoqReceivedContentSampleKind::CatalogEntry),
+            catalog_entry.to_string().as_bytes(),
+            &mut output,
+        );
+        let access_unit = [0x00, 0x00, 0x00, 0x01, 0x65, 0x88];
+        let mut media_frame_bytes = Vec::new();
+        crate::moq_hang_legacy_container::write_hang_legacy_container_media_frame(
+            &mut media_frame_bytes,
+            33_000_000,
+            &access_unit,
+        )
+        .unwrap();
+        writing.write_the_sample(
+            received_sample_header(1, MoqReceivedContentSampleKind::Object),
+            &media_frame_bytes,
+            &mut output,
         );
         assert_eq!(
-            the_hang_legacy_container_timestamp_ns_of(&[0x7b, 0xbd, 0x00]),
-            Some(15_293_000)
+            output.objects,
+            vec![(access_unit.to_vec(), 9_000_000_000, true)]
         );
-        assert_eq!(
-            the_hang_legacy_container_timestamp_ns_of(&[0x80, 0x01]),
-            None
+    }
+
+    #[test]
+    fn an_object_ending_inside_the_containers_varint_gives_up_its_group() {
+        let mut writing = MoqReceivedContentWriting::default();
+        let mut output = ReceivedObjectsWritten::default();
+        let catalog_entry = serde_json::json!({"section": "audio", "entry": {"codec": "opus", "sampleRate": 48000, "numberOfChannels": 2}});
+        writing.write_the_sample(
+            received_sample_header(0, MoqReceivedContentSampleKind::CatalogEntry),
+            catalog_entry.to_string().as_bytes(),
+            &mut output,
         );
+        writing.write_the_sample(
+            received_sample_header(1, MoqReceivedContentSampleKind::Object),
+            &[0x80, 0x01],
+            &mut output,
+        );
+        assert!(output.objects.is_empty());
+        assert_eq!(output.groups_given_up, 1);
     }
 
     #[test]

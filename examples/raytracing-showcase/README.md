@@ -49,23 +49,23 @@ Two of those modules are miss shaders, and that is the whole trick:
 
 ```python
 RAY_TRACING_STAGES = [
-    {"stage": "ray_gen", "source": RAY_GENERATION_GLSL},
-    {"stage": "miss", "source": SKY_MISS_GLSL},  # index 0
-    {"stage": "miss", "source": SHADOW_MISS_GLSL},  # index 1
-    {"stage": "closest_hit", "source": CLOSEST_HIT_GLSL},
+    {"stage": "ray_gen", "source": RAY_GENERATION_SLANG},
+    {"stage": "miss", "source": SKY_MISS_SLANG},  # index 0
+    {"stage": "miss", "source": SHADOW_MISS_SLANG},  # index 1
+    {"stage": "closest_hit", "source": CLOSEST_HIT_SLANG},
 ]
 ```
 
 A group names its modules **by index into `stages`**, because two modules can
 fill the same stage. A primary ray that hits nothing runs miss 0 and gets the
 sky. A shadow ray — cast from the hit shader, with
-`gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT`, at
+`RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER`, at
 miss index 1 — runs no hit shader at all, so *arriving* at miss 1 is the only
 thing that can happen to it, and that means nothing was in the way:
 
-```glsl
-lit_fraction = 0.0;                        // a hit leaves it dark
-traceRayEXT(scene_structure, …, SHADOW_MISS_INDEX, …, 1);
+```hlsl
+shadow.lit_fraction = 0.0;                 // a hit leaves it dark
+TraceRay(scene_structure, …, SHADOW_MISS_INDEX, towards_light, shadow);
 ```
 
 That is the question a fragment shader cannot ask, and it is why the right
@@ -73,26 +73,26 @@ half has shadows.
 
 ### The reflection bounces from ray generation, not from the hit shader
 
-A shader may declare only one incoming payload, so a hit shader cannot both
-receive at a payload location and trace at it. The mirror floor therefore
-reports its reflectivity back to `main()` in ray generation, which fires the
-second ray itself. Two consequences worth knowing:
+Every ray a hit shader casts costs a level of recursion depth, which a device
+caps. The mirror floor therefore reports its reflectivity back to `main()` in
+ray generation, which fires the second ray itself. Two consequences worth
+knowing:
 
 - `max_recursion_depth` stays at **2** — one hit shader casting one shadow ray
   — rather than the 3 a recursive reflection would need.
 - The reflected ray runs the same hit shader, so it casts its own shadow ray:
   the reflections come back with shadows already in them.
 
-### The scene is generated *into* the GLSL
+### The scene is generated *into* the Slang
 
 `nodes/showcase_box_scene.py` holds one table of ten boxes. Out of it come both
-the acceleration-structure instance transforms and the `const` arrays the
+the acceleration-structure instance transforms and the `static const` arrays the
 rasterizer's vertex shader reads:
 
 ```python
-SHOWCASE_SCENE_GLSL = (
-    _SHOWCASE_SCENE_DEFINES
-    + _glsl_vec3_array("SHOWCASE_BOX_CENTRES", [box.centre for box in SHOWCASE_BOXES])
+SHOWCASE_SCENE_SLANG = (
+    _SHOWCASE_SCENE_CONSTANTS
+    + _slang_float3_array("SHOWCASE_BOX_CENTRES", [box.centre for box in SHOWCASE_BOXES])
     + …
 )
 ```
@@ -101,7 +101,7 @@ The two renderers therefore cannot drift into drawing different scenes, they
 share one camera function and one lighting function, and the sky runs
 continuously across the divider because both sides ask the same
 `sky_colour_towards` for the same view ray. None of that is possible with an
-ahead-of-time `glslc` step: it works because a kernel's shader is a Python
+ahead-of-time `slangc` step: it works because a kernel's shader is a Python
 string the runtime compiles at `setup()`, and there is no toolchain to install.
 
 ### The labels are generated into the shader too
@@ -109,14 +109,14 @@ string the runtime compiles at `setup()`, and there is no toolchain to install.
 Text on a GPU frame usually means a font rasterizer and a glyph atlas. Two
 short labels need neither: `nodes/label_font.py` holds a 5×7 font written as
 ASCII art, Python lays each label out into a bitmap, and the compositor
-generates that bitmap into its GLSL as a `const uint` array. The shader unpacks
+generates that bitmap into its Slang as a `static const uint` array. The shader unpacks
 one bit per pixel, scales it to the frame, and draws white ink over a black
 outline sampled at eight offsets — legible over a bright sky and a dark floor
 alike.
 
 This is also the one place the stream builds a shader out of its own config:
 the kernel source is a function of `left_label` and `right_label`, not a module
-constant, so changing `splitscreencompositor`'s `left_label` changes the GLSL the runtime
+constant, so changing `splitscreencompositor`'s `left_label` changes the Slang the runtime
 compiles at `setup()`. It is why the project depends on nothing but
 `tatolab-stream`.
 
@@ -126,8 +126,8 @@ Both are honest properties of the Python graphics kernel rather than
 workarounds hidden in a helper:
 
 - **No vertex or index buffer reaches a Python node.** The vertex stage
-  fabricates its positions from `gl_VertexIndex` against the generated unit
-  cube, and `gl_InstanceIndex` picks which box.
+  fabricates its positions from `SV_VulkanVertexID` against the generated unit
+  cube, and `SV_VulkanInstanceID` picks which box.
 - **The pass attaches colour targets only, so it has no depth test.** The
   vertex shader collapses faces the camera cannot see (a test against the
   face's own centre, which every vertex of that face agrees on, and which needs
@@ -139,8 +139,9 @@ workarounds hidden in a helper:
 
 ### And the parts that are just the engine
 
-Both renderers publish a `VideoFrame` — a **surface id, an extent and a
-timestamp**; no pixels ride a link. The compositor binds both upstream ids
+Both renderers publish an Image frame with `ImageFrameToWrite.of_texture` — a
+**surface id, an extent, a colour description and a timestamp**; no pixels ride
+a link. The compositor binds both upstream ids
 straight into its dispatch, with **no landing copy**: a kernel binding resolves
 texture-backed surfaces, and a kernel output is exactly that, whichever process
 acquired it. (A camera publishes buffer-backed frames, which is why
@@ -150,7 +151,8 @@ not.)
 The compositor is also a fan-in: two producers, each in its own child
 interpreter, one consumer. The two run at their own cadences, so a wake rarely
 carries both ports at once — the compositor holds the newest rasterized frame,
-read as a `VideoFrame` so its surface stays claimed against reuse, and
+held as the `ImageFrame` the read returned so its surface stays claimed
+against reuse, and
 composites when the traced one lands. What keeps the halves the same picture
 despite that is the section below: one clock, not one cadence.
 
@@ -228,7 +230,7 @@ while `tatolab dev` runs and the stream loads again with it.
   instead of leaving a hole.
 
 One edit worth making on purpose, because it fails in an instructive way:
-rename a binding in the ray-generation GLSL but not in `DECLARED_BINDINGS`.
+rename a binding in the ray-generation Slang but not in `DECLARED_BINDINGS`.
 The declaration is asserted against the shaders' own reflection when the kernel
 is built, so the refusal lands at `setup()`, before a single frame.
 

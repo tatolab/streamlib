@@ -3,12 +3,12 @@
 
 """Sums three voices into one chord.
 
-Importable as `nodes.chord_mixer:ChordMixer`. Every input port declares the
-same window contract, so the engine resamples, mixes each voice down to mono
+Importable as `nodes.chord_mixer:ChordMixer`. Every Channels input declares the
+same window contract, so the runtime resamples, mixes each voice down to mono
 and frames it before `process()` runs: what this node receives is three
 exactly-512-sample mono f32 windows, and mixing them is addition. Its own job is
-deciding which three windows belong together, joined on
-`first_sample_timestamp_ns` rather than on arrival order.
+deciding which three windows belong together, joined on each window's
+`timestamp_ns` rather than on arrival order.
 """
 
 import collections
@@ -17,11 +17,13 @@ from typing import Final
 
 import numpy
 from tatolab.stream import (
-    AudioBlock,
     AudioWindowContract,
+    Channels,
+    ChannelsBlock,
+    Input,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    catalog,
     log,
     node,
 )
@@ -49,8 +51,6 @@ VOICE_INPUT_PORTS = (
     FIFTH_VOICE_INPUT_PORT,
 )
 
-MIXED_CHORD_OUTPUT_PORT = "mixed_chord_to_downstream"
-
 # ~85 ms per voice: far more slack than three sources paced by one clock need,
 # and a bound on what a stalled voice's partners can queue.
 MAXIMUM_PENDING_WINDOWS_PER_VOICE = 8
@@ -66,45 +66,60 @@ ALIGNMENT_TOLERANCE_NS = WINDOW_DURATION_NS
 
 @dataclass
 class ChordMixerConfig:
-    """ChordMixer's settings, as `stream_builder.add(ChordMixer, config={...})` spells them."""
+    """ChordMixer's settings, as its node's config in the graph document spells them."""
 
     voice_gain: float = 1.0
 
 
-@node
-class ChordMixer:
-    """Emits one mixed window per set of three time-aligned voice windows."""
+@dataclass
+class ChordVoiceWindow:
+    """One voice's window, copied out of the block it arrived in so it can wait for its partners."""
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=CHORD_MIX_WINDOW,
+    samples: numpy.ndarray
+    first_sample_timestamp_ns: int
+
+    @classmethod
+    def copied_from(cls, block: ChannelsBlock) -> "ChordVoiceWindow":
+        """The block's mono samples, copied: a read's borrow ends with the `process()` it was made in."""
+        return cls(
+            samples=numpy.array(numpy.from_dlpack(block)[0], dtype=numpy.float32),
+            first_sample_timestamp_ns=block.timestamp_ns,
+        )
+
+
+@node.process(description="Emits one mixed window per set of three time-aligned voice windows")
+class ChordMixer:
+    """Three voices in, at any rate and channel count; their mono sum out."""
+
+    root_voice_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=CHORD_MIX_WINDOW,
         description="The chord's root voice, converted to the mix window",
     )
-    def root_voice_from_upstream(self) -> AudioBlock: ...
-
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=CHORD_MIX_WINDOW,
+    third_voice_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=CHORD_MIX_WINDOW,
         description="The chord's third, converted to the mix window",
     )
-    def third_voice_from_upstream(self) -> AudioBlock: ...
-
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=CHORD_MIX_WINDOW,
+    fifth_voice_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=CHORD_MIX_WINDOW,
         description="The chord's fifth, converted to the mix window",
     )
-    def fifth_voice_from_upstream(self) -> AudioBlock: ...
-
-    @node.output(
-        description="The three voices summed, as AudioBlock messages",
-        catalog=catalog.BinaryEntry(mode="snapshot", mime="application/msgpack"),
+    mixed_chord_to_downstream = Output(
+        Channels,
+        rate=CHORD_MIX_SAMPLE_RATE,
+        dtype=CHORD_MIX_DTYPE,
+        description="The three voices summed",
     )
-    def mixed_chord_to_downstream(self) -> AudioBlock: ...
 
     def __init__(self, config: ChordMixerConfig) -> None:
         self.voice_gain = float(config.voice_gain)
-        self.pending_windows_by_port: dict[str, collections.deque[AudioBlock]] = {
+        self.mixed_samples_published = 0
+        self.pending_windows_by_port: dict[str, collections.deque[ChordVoiceWindow]] = {
             port_name: collections.deque(maxlen=MAXIMUM_PENDING_WINDOWS_PER_VOICE)
             for port_name in VOICE_INPUT_PORTS
         }
@@ -115,10 +130,10 @@ class ChordMixer:
         # A reactive `process()` runs as soon as any one port has a full window,
         # so a call normally finds one voice ready and the others not yet.
         for port_name in VOICE_INPUT_PORTS:
-            window = ctx.inputs.read(port_name, into=AudioBlock)
-            if window is None:
+            block = ctx.inputs.read(port_name)
+            if block is None:
                 continue
-            self._hold(port_name, window)
+            self._hold(port_name, ChordVoiceWindow.copied_from(block))
 
         while all(self.pending_windows_by_port[port] for port in VOICE_INPUT_PORTS):
             # Dropping a lagging head can empty its voice, so the loop re-checks
@@ -140,7 +155,7 @@ class ChordMixer:
                 realigned_windows=self.realigned_window_count,
             )
 
-    def _hold(self, port_name: str, window: AudioBlock) -> None:
+    def _hold(self, port_name: str, window: ChordVoiceWindow) -> None:
         pending = self.pending_windows_by_port[port_name]
         if len(pending) == MAXIMUM_PENDING_WINDOWS_PER_VOICE:
             self.dropped_window_count += 1
@@ -175,9 +190,7 @@ class ChordMixer:
             for port_name in VOICE_INPUT_PORTS
         ]
 
-        # `samples` is a read-only view over the message's own bytes, so the
-        # first voice is copied and the rest are summed into that copy.
-        mixed = windows[0].samples.astype("<f4")
+        mixed = windows[0].samples
         for window in windows[1:]:
             mixed += window.samples
         mixed *= self.voice_gain
@@ -191,16 +204,10 @@ class ChordMixer:
         first_sample_timestamp_ns = max(
             window.first_sample_timestamp_ns for window in windows
         )
-        mixed_chord_block = AudioBlock(
-            samples=mixed.tobytes(),
-            sample_rate=CHORD_MIX_SAMPLE_RATE,
-            channels=CHORD_MIX_CHANNELS,
-            sample_count=CHORD_MIX_WINDOW_SIZE,
-            dtype=CHORD_MIX_DTYPE,
-            first_sample_timestamp_ns=first_sample_timestamp_ns,
-        )
         ctx.outputs.write(
-            MIXED_CHORD_OUTPUT_PORT,
-            mixed_chord_block.to_bytes(),
+            self.mixed_chord_to_downstream,
+            mixed[numpy.newaxis, :],
             timestamp_ns=first_sample_timestamp_ns,
+            start_sample=self.mixed_samples_published,
         )
+        self.mixed_samples_published += CHORD_MIX_WINDOW_SIZE

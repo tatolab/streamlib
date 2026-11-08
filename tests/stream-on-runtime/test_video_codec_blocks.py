@@ -15,7 +15,7 @@ crop, proven from Python for both codecs, and the encoded frames carrying
 the padded extent is the other half of the same fact.
 
 The encoded-channel test reads the hardware encoder's output from Python the
-way a moq-dev player does: each message a media frame, a keyframe opening a
+way a decoder reads it: each message one bare access unit, a keyframe opening a
 group, and the port's stream facts naming the codec string the SPS spells.
 """
 
@@ -216,12 +216,12 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
 @pytest.mark.requires_gpu
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 @pytest.mark.rig_only_capability(reason="Vulkan Video")
-def test_the_encoded_channel_carries_media_frames_under_the_ports_stream_facts(
+def test_the_encoded_channel_carries_bare_access_units_under_the_ports_stream_facts(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]", codec
 ):
     """The encoded-domain link, read from Python as a player reads it: every
-    message the hardware encoder published is a media frame — the varint
-    timestamp, then one Annex-B access unit — a keyframe opens a group, and
+    message the hardware encoder published is one bare Annex-B access unit
+    stamped on the message, a keyframe opens a group, and
     the port's stream facts name the codec string and the coded extent.
 
     The probe enters the stream at a group start, as every reader of an
@@ -244,14 +244,11 @@ def test_the_encoded_channel_carries_media_frames_under_the_ports_stream_facts(
         "frame it admits opens one by construction"
     )
     for frame in encoded_frames:
-        assert frame["varint_timestamp_microseconds"] == frame["timestamp_ns"] // 1_000, (
-            "the media frame's varint is the envelope's stamp in microseconds"
-        )
         assert any(
             frame["opening_bytes"][: len(start_code)] == start_code
             for start_code in ANNEX_B_START_CODES
         ), (
-            "the payload after the varint must be one Annex-B access unit, and this "
+            "the payload must be one bare Annex-B access unit, and this "
             f"one opens {frame['opening_bytes']}"
         )
         assert frame["byte_count"] > 0, "an access unit with no bytes decodes to nothing"

@@ -67,7 +67,7 @@ both doors would list the same camera twice.
 
 **The effect publishes its own textures.** `nodes/inverting_effect.py` reads
 the camera's pixels through a read-only `numpy.from_dlpack(frame, device="cpu")`
-view and writes their inversion straight into a slot of its own
+view of the `ImageFrame` its `Input(Image)` port hands it, and writes their inversion straight into a slot of its own
 `NodeOutputTextureRing`, in one pass on the host. It never edits the frame
 it was handed: the passthrough sink is reading that same engine-owned surface.
 Whenever a producer's output feeds more than one consumer, an effect between
@@ -86,25 +86,26 @@ whatever the effect costs. An effect that stays on the GPU does not pay that —
 
 ## One host, many looks
 
-`nodes/shader_effect.py` is an effect written once. It takes a GLSL function
-as config, and the function *is* the look: `GlslPixelEffect` compiles it at
-`setup()` and runs it over every frame on the GPU, so the pixels never leave
-it. Three looks ship in `nodes/looks/` to start from: `grayscale.glsl`,
-`vignette.glsl` and `pixelate.glsl`.
+`nodes/shader_effect.py` is an effect written once. It takes a Slang function
+as config, and the function *is* the look: the effect wraps it in a compute
+kernel at `setup()` and runs it over every frame on the GPU, so the pixels
+never leave it. Three looks ship in `nodes/looks/` to start from:
+`grayscale.slang`, `vignette.slang` and `pixelate.slang`.
 
 ```json
 {"name": "vignette", "type": "nodes.shader_effect:ShaderEffect",
- "config": {"effect_glsl": "<the text of nodes/looks/vignette.glsl>"}}
+ "config": {"effect_slang": "<the text of nodes/looks/vignette.slang>"}}
 ```
 
-A new look is a paragraph of GLSL, not a node. It is one function returning
+A new look is a paragraph of Slang, not a node. It is one function returning
 the output pixel for the source pixel `source` at `at`, in pixels from the top
-left; `streamlib_extent` is the frame's size, and `streamlib_source_at(at)`
-reads any other source pixel, clamped to the frame's edge:
+left; `shader_effect_frame_extent()` is the frame's size, and
+`shader_effect_source_at(at)` reads any other source pixel, clamped to the
+frame's edge:
 
-```glsl
-vec4 effect(vec4 source, ivec2 at) {
-    return vec4(source.bgr, source.a);
+```hlsl
+float4 effect(float4 source, int2 at) {
+    return float4(source.bgr, source.a);
 }
 ```
 
@@ -121,7 +122,7 @@ the `type` `add_node` takes:
 
 1. `remove_node` with `{"stream": "main", "name": "invertingeffect"}`;
 2. `add_node` with `{"stream": "main", "type": "nodes.shader_effect:ShaderEffect",
-   "config": {"effect_glsl": "…"}}`, which answers the node's name —
+   "config": {"effect_slang": "…"}}`, which answers the node's name —
    `shadereffect`;
 3. `connect` `camerasource`'s `video` to `shadereffect`'s
    `video_from_upstream`, and `shadereffect`'s `video_to_downstream` to
@@ -132,7 +133,7 @@ Swapping one look for another is the same remove and add again. The camera,
 both sinks and every other node keep running through it — only the second
 camera goes without new frames for the moment the splice takes.
 
-Before the look runs, `GlslPixelEffect` copies each frame device-to-device into
+Before the look runs, the effect copies each frame device-to-device into
 a texture it owns, with `ctx.gpu_limited_access.copy_surface_to_surface`: a
 camera publishes buffer-backed frames, and a kernel samples textures.
 

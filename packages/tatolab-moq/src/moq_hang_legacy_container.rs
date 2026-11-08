@@ -1,17 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The media frame an encoder's port carries: hang's legacy container, a QUIC
-//! varint timestamp in microseconds followed by the codec's own payload
-//! (`hang::container::Frame`), which every moq-dev player reads as is.
-//!
-//! The varint duplicates the envelope's stamp by construction. Locally the
-//! envelope stamp is authoritative; the varint is what a player off the
-//! machine reads.
+//! hang's legacy container, the media frame a hang media track carries at the
+//! relay: a QUIC varint timestamp in microseconds followed by the codec's own
+//! payload (`hang::container::Frame`), which every moq-dev player reads as is.
+//! A send wraps each Packets unit in it on the way out and a receive unwraps
+//! it on the way in; on a port the unit is the codec's bytes alone.
 
 use hang::moq_net::VarInt;
 
-/// One media frame read off a port, borrowing the bytes it was read from.
+/// One media frame read off a track, borrowing the bytes it was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HangLegacyContainerMediaFrame<'payload> {
     /// The presentation timestamp the producer wrote, in microseconds.
@@ -41,7 +39,7 @@ impl std::fmt::Display for MediaFrameTimestampOutsideTheVarintRange {
     }
 }
 
-/// Why bytes read off a port are not a media frame.
+/// Why an object read off a track is not a media frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageIsNotAHangLegacyContainerMediaFrame {
     /// How many bytes the message held.

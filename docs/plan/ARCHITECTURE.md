@@ -1609,15 +1609,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   bounded**: on macOS the one that misses the one-shot waits until its own timeout or the next
   deadline, on Linux it returns `0` at once; the helper waits from one thread.
   [macos-capability-parity — SHIPPED #2408, #2409]
-- **DECIDED** — Helper-process placement is the only execution placement. Every Python
-  processor runs in its own child process — its own interpreter, its own GIL — spawned
+- **DECIDED** — Helper-process placement is the only execution placement of a Python
+  **class** node. Every one runs in its own child process — its own interpreter, its own
+  GIL — spawned
   by the Rust engine as an exec of the stream's own venv interpreter with the runtime's
   lend directory, which holds `tatolab/runtime/`, first on its `PYTHONPATH`: never fork
   (GPU contexts are fork-unsafe), never `multiprocessing` or a worker pool (the engine
   owns the child's lifecycle from its compiler ops and needs no GIL to manage it).
-  In-process hosting of a Python processor does not exist — not as a default, a
-  fallback, an optimisation, or an engine choice. Isolation, not latency, is the
-  optimised axis: no processor may ever block, stall, or degrade another. Same user
+  In-process hosting of a Python class node does not exist — not as a default, a
+  fallback, an optimisation, or an engine choice. Shaders and compiled function nodes run
+  without a process; a Python function node that does not compile runs inside its Python
+  reader, in a pool only in phase 4, and in its own process after a crash or a stall.
+  Isolation, not latency, is the optimised axis: no processor may ever block, stall, or
+  degrade another, which holds between class nodes. Same user
   code, one venv per stream — each stream's interpreters start from its own project's venv
   inside the one runtime process — no per-processor environments, no placement surface of
   any kind.
@@ -1626,7 +1630,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714; package-split-and-lend —
-  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711]
+  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; lightweight-node-kinds — SHIPPED
+  #3278, #3280, #3282, #3297; amended by lightweight-node-kinds: a shader runs without a
+  process, and an uncompiled Python function node runs in a pool]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
   the checkout lease and the retired-frame refusal are one platform-neutral core both arms

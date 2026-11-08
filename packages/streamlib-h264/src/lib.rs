@@ -84,7 +84,7 @@ struct H264DecoderThread {
 
 #[pymethods]
 impl H264DecoderThread {
-    /// Start decoding the media frames `encoded_video` receives onto `video`.
+    /// Start decoding the access units `encoded_video` receives onto `video`.
     #[new]
     #[pyo3(signature = (module_host_table, *, max_width=None, max_height=None))]
     fn start(

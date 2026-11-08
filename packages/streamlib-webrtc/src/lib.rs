@@ -23,7 +23,6 @@ pub mod error;
 pub mod h264_rtp_depacketiser;
 pub mod h264_sequence_parameter_set;
 mod h264_test_bitstreams;
-pub mod hang_legacy_container_media_frame;
 pub mod http_signalling;
 mod http_test_responder;
 pub mod monotonic_clock;
@@ -119,9 +118,8 @@ impl WhipSession {
         Ok(())
     }
 
-    /// Send the Annex-B access unit one media frame carries after its varint
-    /// timestamp, on the RTP clock `timestamp_ns` places it — the envelope's
-    /// stamp, which a local reader is promised; the varint's is not read.
+    /// Send one Annex-B access unit on the RTP clock `timestamp_ns`, the
+    /// envelope's stamp, places it.
     ///
     /// The RTP clock advances by the gap to the *previous* frame, because the
     /// payloader applies a sample's duration to the frame after it and a
@@ -129,16 +127,16 @@ impl WhipSession {
     /// stream's rate is exact and its RTP numbering trails real time by one
     /// frame, so video presents roughly one frame interval later than audio,
     /// whose duration comes from each packet's own sample count and is exact.
-    fn write_video_media_frame(
+    fn write_video_access_unit(
         &self,
         python: Python<'_>,
-        media_frame: PyBuffer<u8>,
+        annex_b_access_unit: PyBuffer<u8>,
         timestamp_ns: i64,
     ) -> PyResult<()> {
         // Copied while the GIL is held: the slice borrows Python's buffer.
-        let media_frame = bytes::Bytes::copy_from_slice(bytes_of_a_contiguous_buffer(
-            &media_frame,
-            "media_frame",
+        let annex_b_access_unit = bytes::Bytes::copy_from_slice(bytes_of_a_contiguous_buffer(
+            &annex_b_access_unit,
+            "annex_b_access_unit",
         )?);
 
         python.detach(|| {
@@ -151,7 +149,7 @@ impl WhipSession {
             };
             let session = connected(publishing.session.as_ref())?;
             transport_stack::transport_runtime()?
-                .block_on(session.write_video_media_frame(media_frame, duration))?;
+                .block_on(session.write_video_access_unit(annex_b_access_unit, duration))?;
             // Only after the write landed: a frame the track never saw must not
             // move the anchor, or the clock stays short by that frame's gap for
             // the rest of the stream.
@@ -161,25 +159,24 @@ impl WhipSession {
         Ok(())
     }
 
-    /// Send the Opus packet one media frame carries after its varint
-    /// timestamp, its RTP advance taken from the packet's own TOC rather than
+    /// Send one Opus packet, its RTP advance taken from the packet's own TOC rather than
     /// from an assumed 20 ms frame.
-    fn write_audio_media_frame(
+    fn write_audio_opus_packet(
         &self,
         python: Python<'_>,
-        media_frame: PyBuffer<u8>,
+        opus_packet: PyBuffer<u8>,
     ) -> PyResult<()> {
         // Copied while the GIL is held: the slice borrows Python's buffer.
-        let media_frame = bytes::Bytes::copy_from_slice(bytes_of_a_contiguous_buffer(
-            &media_frame,
-            "media_frame",
+        let opus_packet = bytes::Bytes::copy_from_slice(bytes_of_a_contiguous_buffer(
+            &opus_packet,
+            "opus_packet",
         )?);
 
         python.detach(|| {
             let publishing = self.locked_state()?;
             let session = connected(publishing.session.as_ref())?;
             transport_stack::transport_runtime()?
-                .block_on(session.write_audio_media_frame(media_frame))
+                .block_on(session.write_audio_opus_packet(opus_packet))
         })?;
         Ok(())
     }
@@ -336,14 +333,19 @@ impl WhepPlayerOutputPorts for WhepPlayerOutputPortsLentByTheModuleHost {
     fn write(
         &self,
         port: WhepPlayerOutputPort,
-        media_frame: &[u8],
+        packets_unit_bytes: &[u8],
         timestamp_ns: i64,
         starts_group: bool,
     ) -> Result<(), String> {
         let packets_unit = packets_unit_payload_descriptor(port.packets_unit_codec_name())
             .map_err(|refusal| refusal.to_string())?;
         self.output_port(port)
-            .write_described(media_frame, Some(timestamp_ns), starts_group, &packets_unit)
+            .write_described(
+                packets_unit_bytes,
+                Some(timestamp_ns),
+                starts_group,
+                &packets_unit,
+            )
             .map_err(|refusal| refusal.to_string())
     }
 

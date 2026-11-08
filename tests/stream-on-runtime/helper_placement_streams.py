@@ -12,7 +12,9 @@ from helper_placement_processors import (
     STEPPED_LFO_STEP_MS,
     STEPPED_LFO_STEPS_REPORTED,
     CountsItsOwnCalls,
+    CrashesItsHelper,
     DiesAbruptlyProbe,
+    LabelsTheLevel,
     ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
@@ -22,6 +24,7 @@ from helper_placement_processors import (
     ReportsTheLevelRecordsItReadSink,
     ReportsTheLfoValueOfEachStepSink,
     ReportsTheRawMessagePayloadItReadSink,
+    ReportsTheRecordsItReadSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
@@ -126,12 +129,15 @@ def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
 def function_nodes_read_by_two_native_converters_into_python_records_sink(
     stream_builder: StreamBuilder,
 ) -> None:
-    """`Lfo` into `Remap` into a native `ChannelsToRecords` into a Python class, and `Lfo` into a second converter.
+    """`Lfo` into `Remap` into a native `ChannelsToRecords` into a Python class, and a second `Lfo` into a second converter.
 
     Neither converter runs in a helper, so neither can evaluate the island it
-    reads: both islands go to the stream's one function node pool.
+    reads: both islands go to the stream's one function node pool. Each
+    island has an `Lfo` of its own, since a stateful node two readers read runs
+    in a process of its own.
     """
     lfo = stream_builder.add(Lfo)
+    second_lfo = stream_builder.add(Lfo, name="second-lfo")
     remap = stream_builder.add(Remap)
     first_converter = stream_builder.add(
         ChannelsToRecords, config={"channel_names": ["level"]}, name="first-converter"
@@ -142,7 +148,7 @@ def function_nodes_read_by_two_native_converters_into_python_records_sink(
     sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
     stream_builder.connect(lfo.output("result"), remap.input("x"))
     stream_builder.connect(remap.output("result"), first_converter.input("channels"))
-    stream_builder.connect(lfo.output("result"), second_converter.input("channels"))
+    stream_builder.connect(second_lfo.output("result"), second_converter.input("channels"))
     stream_builder.connect(first_converter.output("records"), sink.input("level_records"))
 
 
@@ -152,6 +158,22 @@ def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuil
     spinner = stream_builder.add(SpinsForever, name="spinner")
     sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(spinner.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def function_node_run_as_python_into_python_records_sink(stream_builder: StreamBuilder) -> None:
+    """A function node giving a `dict`, which runs as Python, read by a Python class as Records."""
+    labeller = stream_builder.add(LabelsTheLevel, name="labeller")
+    sink = stream_builder.add(ReportsTheRecordsItReadSink, name="sink")
+    stream_builder.connect(labeller.output("result"), sink.input("label"))
+
+
+@graph_generator
+def function_node_run_as_python_that_crashes_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A function node run as Python whose call takes its reader's helper down."""
+    crasher = stream_builder.add(CrashesItsHelper, name="crasher")
+    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(crasher.output("result"), sink.input("brightness"))
 
 
 @graph_generator

@@ -21,8 +21,8 @@ node catalog lists both nodes under the stream's `installed` section, before a g
 from tatolab.webrtc import WhepPlayer, WhipPublisher
 ```
 
-Both read and write media frames — hang's legacy container, a QUIC varint timestamp in
-microseconds and then the Annex-B access unit or Opus packet — with a keyframe opening a group.
+Both read and write bare Annex-B access units and Opus packets, one per message and stamped on
+it, with a keyframe opening a group.
 `WhipPublisher` takes one fan-in input, `tracks` — each inbound link becomes one RTP track,
 video or audio by the codec its upstream port's catalog entry names. `WhepPlayer` writes
 `encoded_video` and `encoded_audio`, and states each port's catalog entry — the codec string,

@@ -59,15 +59,15 @@ class H265EncoderConfig:
     description="Encodes published video surfaces to H.265 (HEVC) on Vulkan Video or VideoToolbox",
 )
 class H265Encoder:
-    """Video frames in, H.265 media frames out, encoded with Vulkan Video or VideoToolbox.
+    """Video frames in, H.265 access units out, encoded with Vulkan Video or VideoToolbox.
 
     `video` takes 8-bit RGBA or BGRA Image frames, buffer-backed (camera) or
     texture-backed (a test pattern, a GPU effect, a decoder), the colour their
     descriptor states written into the stream's VUI; any other format, and a
     message that is not an Image frame, is refused by name and dropped.
-    `encoded_video` publishes one media frame per access unit — a QUIC varint
-    timestamp in microseconds, then the Annex-B access unit, parameter sets
-    inline before each keyframe — and a keyframe opens a group. After the first
+    `encoded_video` publishes one bare Annex-B access unit per message, stamped
+    on the message, parameter sets inline before each keyframe, and a keyframe
+    opens a group. After the first
     keyframe the port's stream facts are `PacketsStreamFacts` naming the codec
     string the SPS spells and the coded extent. The session mints from the first
     frame's dimensions and re-mints when the upstream extent changes; a write
@@ -88,7 +88,7 @@ class H265Encoder:
 
     video = Input(Image, delivery="ordered", description="Video frames to encode")
     encoded_video = Output(
-        Packets, codec="h265", description="H.265 media frames, one access unit each"
+        Packets, codec="h265", description="H.265 access units, Annex-B, one per message"
     )
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
@@ -143,14 +143,13 @@ class H265DecoderConfig:
 
 @node.process(
     execution="manual",
-    description="Decodes H.265 media frames to published video textures on Vulkan Video or VideoToolbox",
+    description="Decodes H.265 access units to published video textures on Vulkan Video or VideoToolbox",
 )
 class H265Decoder:
-    """H.265 media frames in, video frames out, decoded with Vulkan Video or VideoToolbox.
+    """H.265 access units in, video frames out, decoded with Vulkan Video or VideoToolbox.
 
-    `encoded_video` takes media frames in the layout `H265Encoder` publishes — a
-    QUIC varint timestamp, then one Annex-B access unit, a keyframe opening a
-    group — from any producer; a message that is not a Packets unit of this codec is
+    `encoded_video` takes bare Annex-B access units, one per message as
+    `H265Encoder` publishes them, a keyframe opening a group, from any producer; a message that is not a Packets unit of this codec is
     refused by name.
     The decoder enters the stream at a group start and, after a read reports a
     loss, discards to the next one, so it never publishes a picture built from
@@ -158,7 +157,7 @@ class H265Decoder:
     ones before it reconfigures the decoder.
 
     `video` publishes an Image frame on an RGBA texture from this node's output
-    pool at the conformance-windowed extent, carrying the media frame's
+    pool at the conformance-windowed extent, carrying the access unit's
     timestamp and the colour the picture was converted with: the SPS
     VUI's, its matrix and range filled when the stream leaves them out (BT.709
     for HD, BT.601 for SD, limited range). The host converts each picture from
@@ -169,7 +168,7 @@ class H265Decoder:
     runtime's GPU, so a fault in the video engine ends this helper's stream and
     nothing else; a device without Vulkan Video decode refuses the device once.
     On macOS it runs on VideoToolbox's hardware decoder. Either way a refused
-    decoder discards every media frame after with no exception reaching Python.
+    decoder discards every access unit after with no exception reaching Python.
     """
 
     def __init__(self, config: H265DecoderConfig) -> None:
@@ -180,7 +179,7 @@ class H265Decoder:
         Packets,
         delivery="ordered",
         requires_codec=("h265",),
-        description="H.265 media frames to decode",
+        description="H.265 access units to decode",
     )
     video = Output(Image, description="Decoded video frames")
 

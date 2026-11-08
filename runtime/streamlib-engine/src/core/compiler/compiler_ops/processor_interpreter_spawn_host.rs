@@ -548,7 +548,13 @@ impl ProcessorInterpreterSpawnHostProcessor {
         };
 
         match lifecycle_reply_tag(&reply) {
-            Some("ready") => Ok(()),
+            Some("ready") => {
+                self.link_wiring
+                    .note_how_its_far_side_ran_its_function_nodes(
+                        reply.get("function_nodes_ran_compiled"),
+                    );
+                Ok(())
+            }
             _ => {
                 let reported = reported_reason(&reply).to_string();
                 // A helper that refused its own setup is never run and never
@@ -670,7 +676,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
             .max(FUNCTION_NODE_CALL_WATCHDOG_FLOOR)
     }
 
-    fn take_the_helper_process_group_down(&mut self) -> Option<String> {
+    fn take_the_helper_process_group_down(&mut self) -> Option<HelperProcessShutdownOutcome> {
         let outcome = self.child.take().map(|child| {
             HelperProcessShutdownLadder::taking_over(
                 self.processor_display_name.clone(),
@@ -681,16 +687,8 @@ impl ProcessorInterpreterSpawnHostProcessor {
             )
             .skip_to_terminating_the_process_group()
         });
-        let how_the_helper_process_ended = outcome.as_ref().map(|outcome| match outcome {
-            HelperProcessShutdownOutcome::Reaped(exit_status) => {
-                format!("its helper process ended with {exit_status}")
-            }
-            HelperProcessShutdownOutcome::AbandonedAfterTheLadder => {
-                "its helper process outlived every signal sent to it and was abandoned".to_string()
-            }
-        });
-        self.close_the_engines_end_of_the_helper_process(outcome);
-        how_the_helper_process_ended
+        self.close_the_engines_end_of_the_helper_process(outcome.clone());
+        outcome
     }
 
     /// Let go of everything this end held for the helper, whichever way it went.
@@ -1447,8 +1445,30 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         if !the_helper_died && stalled_function_node_call.is_none() {
             return;
         }
+        tracing::error!(
+            "[{}] its helper process (pid={helper_process_id}) {}; taking its process group \
+             down with it",
+            self.processor_display_name,
+            if the_helper_died {
+                "died"
+            } else {
+                "stalled in a function node"
+            },
+        );
+        let helper_process_shutdown_outcome = self.take_the_helper_process_group_down();
+        let how_the_helper_process_ended = helper_process_shutdown_outcome
+            .as_ref()
+            .map(HelperProcessShutdownOutcome::how_the_helper_process_ended)
+            .unwrap_or_else(|| "its helper process ended".to_string());
+        // A helper still writing its core dump reads as alive, so a crash can
+        // outlast the watchdog's budget; the signal it died of says it crashed.
+        let stalled_function_node_call = stalled_function_node_call.filter(|_| {
+            !helper_process_shutdown_outcome
+                .as_ref()
+                .is_some_and(HelperProcessShutdownOutcome::ended_on_a_signal_the_ladder_never_sends)
+        });
         let why_the_helper_was_lost =
-            match (&function_node_call_under_way, stalled_function_node_call) {
+            match (&function_node_call_under_way, &stalled_function_node_call) {
                 (Some(call_under_way), Some((call_has_run_for, watchdog_budget))) => format!(
                     "function node `{}` stalled: its call had run for {} ms, past the {} ms its \
                  reader's frame interval allows, so its helper process was ended. ",
@@ -1471,19 +1491,6 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
                 ),
                 (None, _) => String::new(),
             };
-        tracing::error!(
-            "[{}] its helper process (pid={helper_process_id}) {}; taking its process group \
-             down with it",
-            self.processor_display_name,
-            if the_helper_died {
-                "died"
-            } else {
-                "stalled in a function node"
-            },
-        );
-        let how_the_helper_process_ended = self
-            .take_the_helper_process_group_down()
-            .unwrap_or_else(|| "its helper process ended".to_string());
         let standard_error_tail = self
             .child_standard_error_tail
             .as_ref()

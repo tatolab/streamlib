@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.36](https://github.com/tatolab/streamlib/compare/v0.68.35...v0.68.36) (2026-11-08)
+
+
+### Features
+
+* typed stream facts on Image and Packets ports, the Records unchecked mark, and hang out of the port model ([513e263](https://github.com/tatolab/streamlib/commit/513e263c7f706648a648c256406370b4aa5aecd1))
+
 ## [0.68.35](https://github.com/tatolab/streamlib/compare/v0.68.34...v0.68.35) (2026-11-08)
 
 
