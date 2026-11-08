@@ -856,7 +856,7 @@ impl Runner {
     // =========================================================================
 
     /// Load `graph` as a stream: built in a scope of its own and published to
-    /// the stream table only once every node, link and exposure is in.
+    /// the stream table only once every node and link is in.
     ///
     /// The stream's id — `load_options`' key, else the graph's name, cast
     /// URL-safe — is refused when it casts to nothing, when there is none, and

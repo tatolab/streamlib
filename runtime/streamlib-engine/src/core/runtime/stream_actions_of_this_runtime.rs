@@ -5930,7 +5930,9 @@ mod tests {
             .unwrap();
         let (_, first_stream_tag, _) = the_one_running_stream_of(&first_run);
         let previous_record = the_record_of(&streams_directory, &camera);
-        project.compile_to(the_graph_of_a_function_named("camera"));
+        let mut a_graph_whose_record_differs = the_graph_of_a_function_named("camera");
+        a_graph_whose_record_differs["nodes"][0]["name"] = "replacement-source".into();
+        project.compile_to(a_graph_whose_record_differs);
 
         let refusal = {
             let _refusing_writes = StreamsDirectoryRefusingWrites::from_now_on(&streams_directory);

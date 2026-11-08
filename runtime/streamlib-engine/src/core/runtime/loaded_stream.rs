@@ -1356,8 +1356,8 @@ impl LoadedStreamInThisRuntime {
     /// Load `graph` into this stream, which is not in the stream table yet:
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
-    /// resolves, each node added under its name, each link connected by name,
-    /// and each exposure put at its level in the stream's live exposure map.
+    /// resolves, each node added under its name, and each link connected by
+    /// name.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,

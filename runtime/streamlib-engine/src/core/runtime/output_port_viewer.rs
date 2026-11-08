@@ -424,9 +424,8 @@ mod tests {
         }
     }
 
-    fn the_links_and_exposures_of(stream: &LoadedStreamInThisRuntime) -> (Value, Value) {
-        let graph = stream.to_json().unwrap();
-        (graph["links"].clone(), graph["exposed"].clone())
+    fn the_links_of(stream: &LoadedStreamInThisRuntime) -> Value {
+        stream.to_json().unwrap()["links"].clone()
     }
 
     fn the_next_message_read(reader: &mut OutputPortViewerReader) -> MessageReadFromAReservedSlot {
@@ -447,7 +446,7 @@ mod tests {
     #[serial]
     fn a_viewer_reads_an_unlinked_port_without_changing_the_graph() {
         let camera = ARunningCameraWithNoLinks::load();
-        let graph_before = the_links_and_exposures_of(&camera.stream);
+        let graph_before = the_links_of(&camera.stream);
         assert!(!camera.camera_output.has_channel_publisher("out1"));
 
         let viewer = camera
@@ -463,7 +462,7 @@ mod tests {
             ),
             ("a", &camera.camera_id, "camera", "out1")
         );
-        assert_eq!(the_links_and_exposures_of(&camera.stream), graph_before);
+        assert_eq!(the_links_of(&camera.stream), graph_before);
 
         let mut reader = OutputPortViewerReader::subscribe(
             &hand_off.iceoryx2_domain_root,
@@ -488,7 +487,7 @@ mod tests {
             !camera.camera_output.has_channel_publisher("out1"),
             "the port's channel goes with its viewer"
         );
-        assert_eq!(the_links_and_exposures_of(&camera.stream), graph_before);
+        assert_eq!(the_links_of(&camera.stream), graph_before);
     }
 
     /// A viewer names its node by id, so a name or an id the stream does not
