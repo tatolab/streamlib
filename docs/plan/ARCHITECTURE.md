@@ -1625,8 +1625,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714; package-split-and-lend —
-  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; lightweight-node-kinds —
-  function nodes SHIPPED #3224, #3225, #3234, shaders and the pool IN-FLIGHT]
+  SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; lightweight-node-kinds — SHIPPED
+  #3278, #3280, #3282, #3297; amended by lightweight-node-kinds: a shader runs without a
+  process, and an uncompiled Python function node runs in a pool]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
   the checkout lease and the retired-frame refusal are one platform-neutral core both arms
