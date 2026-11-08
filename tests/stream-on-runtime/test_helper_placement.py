@@ -20,6 +20,7 @@ import pytest
 from conftest import TatolabdUnderTest
 from helper_placement_processors import (
     MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE,
+    CALLS_RETURNED_BEFORE_A_CALL_HANGS,
     COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES,
     RAW_MESSAGE_PAYLOAD_BYTES,
     STEPPED_LFO_STEP_MS,
@@ -31,6 +32,7 @@ from helper_placement_streams import (
     function_node_run_as_python_into_a_class_lending_it_to_native_code,
     function_node_run_as_python_into_python_records_sink,
     function_node_run_as_python_that_crashes_into_python_sink,
+    function_node_slower_than_the_pools_frame_interval_read_by_a_native_converter,
     function_node_that_spins_forever_into_python_sink,
     function_nodes_read_by_two_native_converters_into_python_records_sink,
     held_level_read_by_two_python_sinks,
@@ -43,6 +45,7 @@ from helper_placement_streams import (
     one_probe_forking_a_worker_that_outlives_it,
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
+    pooled_counter_beside_a_pooled_node_that_hangs,
     only_labelled_source_into_sink,
     raw_message_payload_source_into_sink,
     reaped_labelled_source_into_sink,
@@ -518,6 +521,83 @@ def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool
     assert pools[0]["config"]["carries"] == [
         {"input_port": "island_0", "output_port": "island_0_output", "family": "records"}
     ], pools[0]
+
+
+def test_a_pooled_function_node_that_overruns_the_pools_frame_interval_three_times_moves_out_of_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A node slower than the pool's frame interval holds every island back, so it leaves the pool.
+
+    Each call of `sleeper` sleeps past the pool's 10 ms interval. On its third
+    such call running, the pool names it on its board; the engine ends the pool
+    and moves `sleeper` into a helper process of its own, which `graph` shows,
+    and the converter goes on reading its value from there.
+
+    Fail-without-fix: no call outlasts the stall watchdog's floor, so the pool
+    runs on at the sleeper's pace and `graph` shows no promotion.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        function_node_slower_than_the_pools_frame_interval_read_by_a_native_converter
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    overrun_line = tatolabd.await_stderr_containing("frame interval 3 times running")
+    tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
+    records_read = tatolabd.await_marker("LEVEL_RECORDS_READ")
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert "function node `sleeper` overran its island's 10 ms frame interval" in overrun_line, (
+        overrun_line
+    )
+    sleeper = next(node for node in graph["nodes"] if node["name"] == "sleeper")
+    promotion = sleeper["components"]["metrics"]["promoted_out_of_its_readers_islands"]
+    assert promotion["promotions"] == 1, promotion
+    assert "overran its island's 10 ms frame interval" in promotion["reason"], promotion
+    levels = [record["level"] for record in records_read["records"]]
+    assert all(level == pytest.approx(0.5) for level in levels), levels
+
+
+def test_a_hung_call_in_the_pool_respawns_it_and_its_stateful_nodes_keep_their_state(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A call that never returns ends the pool; its next process resumes every node's state.
+
+    `hanger` returns from its first calls and then never does, so the pool's
+    helper is ended as stalled and `hanger` moves into a helper process of its
+    own. The pool's next process resumes `counter` from the count its board
+    last held, so the counts the sink reads never start over.
+
+    Fail-without-fix: with the state kept only in the pool's process, the
+    count starts again from one after the respawn.
+    """
+    tatolabd = start_tatolabd_running_stream(pooled_counter_beside_a_pooled_node_that_hangs)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    tatolabd.await_marker("COUNT_RECORDS_READ")
+    stall_line = tatolabd.await_stderr_containing("stalled: its call had run for")
+    tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
+    reports_by_the_promotion = len(tatolabd.marker_payloads("COUNT_RECORDS_READ"))
+    tatolabd.await_marker("COUNT_RECORDS_READ", occurrence=reports_by_the_promotion + 2)
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert "function node `hanger` stalled" in stall_line, stall_line
+    counts = [
+        count
+        for report in tatolabd.marker_payloads("COUNT_RECORDS_READ")
+        for count in report["counts"]
+    ]
+    assert counts[-1] > CALLS_RETURNED_BEFORE_A_CALL_HANGS, (
+        f"the counter ran past the hanger's first calls and on after the respawn: {counts}"
+    )
+    assert all(later >= earlier for earlier, later in zip(counts, counts[1:])), (
+        f"the pool's next process resumes the count, and the sink read {counts}"
+    )
+    hanger = next(node for node in graph["nodes"] if node["name"] == "hanger")
+    promotion = hanger["components"]["metrics"]["promoted_out_of_its_readers_islands"]
+    assert promotion["promotions"] == 1, promotion
+    assert "function node `hanger` stalled" in promotion["reason"], promotion
 
 
 def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reader(

@@ -1457,6 +1457,7 @@ class HelperProcessLifecycle:
                         (entry["breadcrumb_number"], entry["resumes_from_f64_bits"])
                         for entry in loss_count_board.get("function_node_states", [])
                     ],
+                    loss_count_board.get("function_node_frame_interval_ns"),
                 )
             stream_clock = command.get("stream_clock") or {}
             stream_clock_board_service_name = stream_clock.get("board_service_name")
