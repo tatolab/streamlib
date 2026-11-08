@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.37](https://github.com/tatolab/streamlib/compare/v0.68.36...v0.68.37) (2026-11-08)
+
+
+### Features
+
+* a Packets unit is the codec's bytes alone; hang's legacy container moves into tatolab-moq ([5658f72](https://github.com/tatolab/streamlib/commit/5658f7268878dfb2da8734fef667067577c01f78))
+
 ## [0.68.36](https://github.com/tatolab/streamlib/compare/v0.68.35...v0.68.36) (2026-11-08)
 
 
