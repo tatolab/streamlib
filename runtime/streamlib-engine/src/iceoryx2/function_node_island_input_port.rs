@@ -52,6 +52,45 @@ pub trait FunctionNodeIslandEvaluatedAtEachRead: Send + Sync {
     fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)>;
 }
 
+/// The pin value an input port reads while nothing is linked into it: the
+/// island of no function nodes, stamped with the reader's time at each read.
+pub(crate) struct PinValueReadByAnUnlinkedInputPort {
+    pin_value: f64,
+    stream_clock_now_ns: Arc<dyn Fn() -> i64 + Send + Sync>,
+}
+
+impl PinValueReadByAnUnlinkedInputPort {
+    /// `pin_value`, read at the time `stream_clock_now_ns` gives.
+    pub(crate) fn read_at_the_time_of(
+        pin_value: f64,
+        stream_clock_now_ns: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Self {
+        Self {
+            pin_value,
+            stream_clock_now_ns,
+        }
+    }
+}
+
+impl FunctionNodeIslandEvaluatedAtEachRead for PinValueReadByAnUnlinkedInputPort {
+    fn evaluate_the_island_output_for_this_read(
+        &self,
+    ) -> Result<FunctionNodeIslandOutputForOneRead> {
+        Ok(FunctionNodeIslandOutputForOneRead {
+            value: FunctionNodeIslandOutputValue::ControlValue(self.pin_value),
+            evaluated_at_ns: (self.stream_clock_now_ns)(),
+        })
+    }
+
+    fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+        None
+    }
+
+    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
+        Vec::new()
+    }
+}
+
 /// One input port an island feeds, and how many reads it has answered.
 pub(crate) struct InputPortFedByAFunctionNodeIsland {
     island: Arc<dyn FunctionNodeIslandEvaluatedAtEachRead>,

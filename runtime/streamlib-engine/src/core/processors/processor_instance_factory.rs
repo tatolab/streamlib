@@ -840,6 +840,7 @@ mod tests {
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
+            pin_default: None,
         }
     }
 

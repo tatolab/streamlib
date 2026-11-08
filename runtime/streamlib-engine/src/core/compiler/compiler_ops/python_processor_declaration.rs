@@ -347,9 +347,48 @@ fn read_port_descriptors(
             )?;
             port = port.with_audio_window_contract(contract);
         }
+        if let Some(pin_default) = declaration.get("pin_default") {
+            let pin_default = read_pin_default(pin_default, &port, direction)?;
+            port = port.with_pin_default(pin_default);
+        }
         ports.push(port);
     }
     Ok(ports)
+}
+
+/// Read the value an input port reads while nothing is linked into it: a
+/// number or a bool on a Channels input, or `null` on an optional function
+/// node input of any family.
+fn read_pin_default(
+    pin_default: &serde_json::Value,
+    port: &PortDescriptor,
+    direction: PortDirection,
+) -> std::result::Result<serde_json::Value, String> {
+    if matches!(direction, PortDirection::Output) {
+        return Err(format!(
+            "output port {:?} declares a pin default, and only an input reads one",
+            port.name
+        ));
+    }
+    if !pin_default.is_null()
+        && port.family.family != crate::core::descriptors::PortFamily::Channels
+    {
+        return Err(format!(
+            "input port {:?} of family {} declares a pin default, and only a Channels input \
+             carries a control value",
+            port.name, port.family.family
+        ));
+    }
+    match pin_default {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Ok(pin_default.clone())
+        }
+        other => Err(format!(
+            "input port {:?}: pin_default must be a number or a bool, got {}",
+            port.name,
+            json_kind_name(other)
+        )),
+    }
 }
 
 /// Read one `family` declaration off a described port, refusing a key its
@@ -878,6 +917,42 @@ mod tests {
         }])));
         assert!(
             refusal.contains("\"frames\"") && refusal.contains("borrow_quota"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is_refused() {
+        let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
+            {"name": "level", "family": {"family": "channels"}, "description": "",
+             "delivery_profile": "newest", "pin_default": 0.5},
+            {"name": "maybe", "family": {"family": "records"}, "description": "",
+             "delivery_profile": "newest", "pin_default": null},
+        ])))
+        .unwrap_or_else(|refusal| panic!("a number and a null default read: {refusal}"));
+        assert_eq!(
+            declaration.descriptor.inputs[0].pin_default,
+            Some(serde_json::json!(0.5))
+        );
+        assert_eq!(
+            declaration.descriptor.inputs[1].pin_default,
+            Some(serde_json::Value::Null)
+        );
+
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "frames", "family": {"family": "records"}, "description": "",
+            "delivery_profile": "newest", "pin_default": 1,
+        }])));
+        assert!(
+            refusal.contains("\"frames\"") && refusal.contains("Channels"),
+            "got {refusal}"
+        );
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "level", "family": {"family": "channels"}, "description": "",
+            "delivery_profile": "newest", "pin_default": "loud",
+        }])));
+        assert!(
+            refusal.contains("\"level\"") && refusal.contains("a number or a bool"),
             "got {refusal}"
         );
     }

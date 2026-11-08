@@ -474,6 +474,9 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     pub(crate) late_fed_function_node_islands: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
     /// Every `(input port, link id)` whose island the far side was told to stop evaluating.
     pub(crate) unfed_function_node_islands: Arc<parking_lot::Mutex<Vec<(String, String)>>>,
+    /// Every set of pin values handed over, in order.
+    pub(crate) pin_values_handed_over:
+        Arc<parking_lot::Mutex<Vec<serde_json::Map<String, serde_json::Value>>>>,
 }
 
 impl crate::core::processors::OutOfProcessFarSideLinkDelivery
@@ -526,6 +529,14 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
         self.unfed_function_node_islands
             .lock()
             .push((input_port.to_string(), link_id.to_string()));
+        Ok(())
+    }
+
+    fn hand_over_the_pin_values_of_its_input_ports(
+        &self,
+        pin_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> crate::core::Result<()> {
+        self.pin_values_handed_over.lock().push(pin_values.clone());
         Ok(())
     }
 

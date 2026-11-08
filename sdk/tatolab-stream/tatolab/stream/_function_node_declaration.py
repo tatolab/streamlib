@@ -312,14 +312,15 @@ class _FunctionNodeSignatureReading:
         elif parameter.default is not inspect.Parameter.empty:
             signature_input["default"] = self._pin_default(parameter, pin_value_type)
         self._signature_inputs.append(signature_input)
-        self.input_ports.append(
-            {
-                "name": port_name,
-                "description": "",
-                "delivery_profile": "newest",
-                "family": {"family": family_declaration["family"]},
-            }
-        )
+        input_port: "dict[str, Any]" = {
+            "name": port_name,
+            "description": "",
+            "delivery_profile": "newest",
+            "family": {"family": family_declaration["family"]},
+        }
+        if "default" in signature_input:
+            input_port["pin_default"] = signature_input["default"]
+        self.input_ports.append(input_port)
 
     def _pin_default(self, parameter: inspect.Parameter, pin_value_type: str) -> Any:
         default = parameter.default

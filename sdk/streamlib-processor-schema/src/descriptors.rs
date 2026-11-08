@@ -46,6 +46,25 @@ pub struct PortDescriptor {
     pub audio_window: Option<AudioWindowContract>,
     /// The port family the port declares and its family's keys.
     pub family: PortFamilyDeclaration,
+    /// The value an *input* port reads while nothing is linked into it and no
+    /// pin value is set on its node; `None` when it declares none, and on
+    /// every output port. A JSON `null` is a default of no value, which an
+    /// optional function node input declares.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_a_pin_default_that_may_be_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pin_default: Option<serde_json::Value>,
+}
+
+fn deserialize_a_pin_default_that_may_be_null<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 impl PortDescriptor {
@@ -63,7 +82,15 @@ impl PortDescriptor {
             borrow_quota: None,
             audio_window: None,
             family,
+            pin_default: None,
         }
+    }
+
+    /// Builder-style override for the value an unlinked input port reads.
+    /// Meaningful only on an input port.
+    pub fn with_pin_default(mut self, pin_default: serde_json::Value) -> Self {
+        self.pin_default = Some(pin_default);
+        self
     }
 
     /// Builder-style override for the delivery profile. Meaningful only on

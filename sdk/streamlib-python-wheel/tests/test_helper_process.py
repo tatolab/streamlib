@@ -1561,6 +1561,54 @@ def test_an_island_fed_after_setup_is_evaluated_swapped_and_stopped_mid_run(stan
     assert not lifecycle_thread.is_alive()
 
 
+def test_an_unlinked_input_reads_the_pin_value_its_setup_carried_and_each_one_set_after(
+    stand_in_parent,
+):
+    """The engine hands a helper the pin value each unlinked Channels input
+    reads on its setup command and again, whole, as an unanswered
+    `set_pin_values` on each edit; an island fed into the port reads over its
+    pin until it is unfed.
+
+    Fail-without-fix: drop the `set_pin_values` arm from `_dispatch` and the
+    probe keeps reading the setup's 0.25.
+    """
+    from helper_process_probes import LEVELS_THE_ISLAND_READING_PROBE_READ
+
+    LEVELS_THE_ISLAND_READING_PROBE_READ.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:IslandReadingProbe")
+    )
+    stand_in_parent.send(
+        {"cmd": "setup", "capability": "full", "config": {}, "ports": {"pins": {"level": 0.25}}}
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
+    wait_until_the_island_reading_probe_reads(0.25)
+
+    stand_in_parent.send({"cmd": "set_pin_values", "pins": {"level": 0.5}})
+    wait_until_the_island_reading_probe_reads(0.5)
+
+    stand_in_parent.send(
+        {"cmd": "feed_island", "island": an_island_feeding_the_probes_level(then_double_it=False)}
+    )
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": "L-island-into-level"}
+    wait_until_the_island_reading_probe_reads(0.75)
+    stand_in_parent.send(
+        {"cmd": "unfeed_island", "port": "level", "link_id": "L-island-into-level"}
+    )
+    wait_until_the_island_reading_probe_reads(0.5)
+
+    stand_in_parent.send({"cmd": "set_pin_values", "pins": {}})
+    wait_until_the_island_reading_probe_reads(None)
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done", "`set_pin_values` answers nothing"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_parent):
     """The engine reports a link `wired` only on this answer, so a port that
     could not open has to say so rather than only logging: the reason is what

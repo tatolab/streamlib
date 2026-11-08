@@ -313,6 +313,14 @@ class ReportsEachBatchOfFunctionNodeValuesItReadSink:
             self.values_in_this_batch = []
 
 
+@node.process(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfPinValuesItReadSink(ReportsEachBatchOfFunctionNodeValuesItReadSink):
+    """Reads `brightness`, which nothing is linked into and which declares 0.25,
+    and reports the range of each batch of reads."""
+
+    brightness = Input(Channels, delivery="newest", default=0.25)
+
+
 @node.function
 def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
     """Never returns: a compiled call no thread can pre-empt, which only the watchdog ends."""

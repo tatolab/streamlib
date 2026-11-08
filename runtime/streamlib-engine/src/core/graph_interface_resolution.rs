@@ -380,6 +380,7 @@ impl GraphInterfaceAsDrawn {
                 stream_facts: None,
                 values_checked: None,
                 family: Some(PortFamilyDeclaration::of_family(declared.family)),
+                pin_default: None,
             };
             let (inputs, outputs) = match declared.direction {
                 GraphInterfacePortDirection::Output => (vec![value_port], Vec::new()),

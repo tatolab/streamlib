@@ -1051,6 +1051,9 @@ impl LoadedStreamInThisRuntime {
             }
             match value {
                 Some(value) => {
+                    crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read(
+                        node, input, &value,
+                    )?;
                     node.pins.insert(input.to_string(), value);
                 }
                 None => {
@@ -1060,6 +1063,9 @@ impl LoadedStreamInThisRuntime {
             crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed(
                 graph,
                 &[],
+            )?;
+            crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_pin_values_its_input_ports_read(
+                graph,
             )
         })?;
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);

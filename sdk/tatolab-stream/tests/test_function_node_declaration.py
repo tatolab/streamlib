@@ -91,8 +91,9 @@ def test_each_plain_parameter_is_a_newest_channels_input_and_the_return_is_resul
             "description": "",
             "delivery_profile": "newest",
             "family": {"family": "channels"},
+            **pin_default,
         }
-        for name in ("x", "low", "high")
+        for name, pin_default in (("x", {}), ("low", {"pin_default": 0.0}), ("high", {"pin_default": 1.0}))
     ]
     assert getattr(remap, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == [
         {

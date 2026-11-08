@@ -95,6 +95,7 @@ def test_its_ports_config_and_state_are_stamped_as_a_function_nodes():
             "description": "",
             "delivery_profile": "newest",
             "family": {"family": "channels"},
+            "pin_default": 0.5,
         }
     ]
     assert [port["name"] for port in getattr(Ramp, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [

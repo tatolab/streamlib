@@ -17,6 +17,7 @@ from helper_placement_processors import (
     LabelsTheLevel,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
+    ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
@@ -159,6 +160,12 @@ def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBui
     lfo = stream_builder.add(Lfo, name="lfo")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(lfo.output("result"), sink.input("brightness"))
+
+
+@stream
+def python_sink_reading_the_pin_value_of_its_unlinked_input(stream_builder: StreamBuilder) -> None:
+    """A Python class whose one input is linked to nothing, so it reads its pin value."""
+    stream_builder.add(ReportsEachBatchOfPinValuesItReadSink, name="sink")
 
 
 @stream

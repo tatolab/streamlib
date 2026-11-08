@@ -146,6 +146,11 @@ pub struct PortInfoOutput {
     /// of the setter's source port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
+    /// The value this input reads while nothing is linked into it and no pin
+    /// value is set on its node. Absent from the rendering on a port that
+    /// declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_default: Option<serde_json::Value>,
 }
 
 /// The kind of port - determines how data flows.
@@ -566,6 +571,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             stream_facts: None,
             values_checked: values_checked_of(&port.family),
             family: Some(port.family.clone()),
+            pin_default: port.pin_default.clone(),
         }
     }
 }
@@ -930,6 +936,7 @@ mod port_rendering_tests {
             delivery_profile: Some("newest".to_string()),
             borrow_quota: None,
             audio_window: None,
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -962,6 +969,7 @@ mod port_rendering_tests {
                 delivery_profile: None,
                 borrow_quota: None,
                 audio_window: None,
+                pin_default: None,
                 family: crate::core::descriptors::PortFamilyDeclaration {
                     frame_rate,
                     ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
@@ -1141,6 +1149,7 @@ mod port_rendering_tests {
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1190,6 +1199,7 @@ mod port_rendering_tests {
             delivery_profile: Some("ordered".to_string()),
             borrow_quota: None,
             audio_window: Some(declared_window_contract()),
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1231,6 +1241,7 @@ mod port_rendering_tests {
                     hop: 960,
                 },
             )),
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1260,6 +1271,7 @@ mod port_rendering_tests {
             delivery_profile: Some("ordered".to_string()),
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1292,6 +1304,7 @@ mod port_rendering_tests {
                 delivery_profile: Some("ordered".to_string()),
                 borrow_quota: None,
                 audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+                pin_default: None,
                 family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                     crate::core::descriptors::PortFamily::Image,
                 ),

@@ -59,6 +59,13 @@ pub trait OutOfProcessFarSideLinkDelivery: Send {
         link_id: &str,
     ) -> Result<()>;
 
+    /// Hand the far side the pin value each of its input ports reads while no
+    /// link feeds it, in place of those it reads now.
+    fn hand_over_the_pin_values_of_its_input_ports(
+        &self,
+        pin_values: &serde_json::Map<String, JsonValue>,
+    ) -> Result<()>;
+
     /// Refuse every link the far side still owes an answer for with `reason`,
     /// because its host gave up on it.
     fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str);
@@ -93,6 +100,9 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     input_links: Vec<JsonValue>,
     output_links: Vec<JsonValue>,
     function_node_islands_feeding_its_input_ports: Vec<JsonValue>,
+    /// The pin value each of its input ports reads while no link feeds it, by
+    /// port name.
+    pin_values_of_its_input_ports: serde_json::Map<String, JsonValue>,
     /// Each function node its islands call, by the breadcrumb number its far
     /// side writes while calling it.
     function_nodes_by_breadcrumb_number: Vec<FunctionNodeNumberedOnTheBreadcrumb>,
@@ -206,6 +216,7 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
             "inputs": self.input_links,
             "outputs": self.output_links,
             "islands": self.function_node_islands_feeding_its_input_ports,
+            "pins": self.pin_values_of_its_input_ports,
         })
     }
 }
@@ -393,6 +404,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     input_links: Vec::new(),
                     output_links: Vec::new(),
                     function_node_islands_feeding_its_input_ports: Vec::new(),
+                    pin_values_of_its_input_ports: serde_json::Map::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
                     runs_a_function_node_as_its_processor: false,
@@ -634,6 +646,31 @@ impl OutOfProcessLinkWiringEnvelope {
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
             | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(None),
+        }
+    }
+
+    /// Record the pin value each of its input ports reads while no link feeds
+    /// it, and hand them to a far side past its setup command when they differ
+    /// from those it holds.
+    pub(crate) fn record_the_pin_values_and_hand_them_to_a_far_side_past_its_setup_command(
+        &self,
+        pin_values: serde_json::Map<String, JsonValue>,
+    ) -> Result<()> {
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        if recorded.pin_values_of_its_input_ports == pin_values {
+            return Ok(());
+        }
+        recorded.pin_values_of_its_input_ports = pin_values;
+        match &recorded.how_a_link_reaches_the_far_side {
+            HowALinkReachesTheFarSide::HandedOverTo(delivery) => delivery
+                .hand_over_the_pin_values_of_its_input_ports(
+                    &recorded.pin_values_of_its_input_ports,
+                ),
+            HowALinkReachesTheFarSide::RidesTheSetupCommand
+            | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
+            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(()),
         }
     }
 

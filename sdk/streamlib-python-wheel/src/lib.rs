@@ -23,6 +23,7 @@ mod python_helper_process_pixel_exchange;
 #[cfg(unix)]
 mod python_helper_scheduling_loop;
 mod python_helper_stream_clock;
+mod python_input_port_pin_values;
 mod python_logging;
 #[cfg(target_os = "macos")]
 mod python_metal_framework_queue_synchronization;
@@ -105,6 +106,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         python_function_node_island::stop_feeding_an_input_port_from_a_function_node_island,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_input_port_pin_values::read_each_unlinked_input_port_as_its_pin_value,
         module
     )?)?;
     module

@@ -191,6 +191,8 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
     (Channels). `also_takes=` names the families the input takes a link from
     besides its own; a read of such an input hands back the arriving family's
     type. `connect` refuses a link whose output does not meet them.
+    `default=` is the number a Channels input reads while nothing is linked
+    into it and no pin value is set on its node.
     """
 
     __slots__ = (
@@ -201,6 +203,7 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         "formats",
         "window",
         "also_takes",
+        "default",
     )
 
     @overload
@@ -215,6 +218,7 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         formats: tuple[str, ...] = (),
         window: Optional[AudioWindowContract] = None,
         also_takes: tuple[()] = (),
+        default: Optional[float] = None,
         description: str = "",
     ) -> None: ...
 
@@ -230,6 +234,7 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         formats: tuple[str, ...] = (),
         window: Optional[AudioWindowContract] = None,
         also_takes: tuple[PortFamily[Any], ...],
+        default: Optional[float] = None,
         description: str = "",
     ) -> None: ...
 
@@ -244,6 +249,7 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         formats: tuple[str, ...] = (),
         window: Optional[AudioWindowContract] = None,
         also_takes: tuple[PortFamily[Any], ...] = (),
+        default: Optional[float] = None,
         description: str = "",
     ) -> None:
         super().__init__(_refuse_a_port_family_that_is_not_one(family, "Input"), description)
@@ -273,6 +279,11 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         self.requires_codec = _tuple_of_strings(requires_codec, "requires_codec")
         self.formats = _image_texture_formats(formats)
         self.window = window
+        if default is not None and (
+            isinstance(default, bool) or not isinstance(default, (int, float))
+        ):
+            raise TypeError(f"`default=` takes a number, got {default!r}")
+        self.default = default
 
     def _as_port_marker(self) -> "dict[str, Any]":
         from ._node_declaration import _audio_window_declaration
@@ -287,6 +298,7 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
                 and Packets not in families_the_input_takes,
                 "formats": bool(self.formats) and self.family is not Image,
                 "window": self.window is not None and self.family is not Channels,
+                "default": self.default is not None and self.family is not Channels,
             },
         )
         family_declaration: "dict[str, Any]" = {"family": self.family._wire_name}
@@ -308,6 +320,8 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         }
         if self.borrow_quota is not None:
             marker["borrow_quota"] = self.borrow_quota
+        if self.default is not None:
+            marker["pin_default"] = float(self.default)
         if self.window is not None:
             marker["audio_window"] = _audio_window_declaration(
                 self.window, self.port_name, self.delivery

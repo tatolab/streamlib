@@ -37,6 +37,7 @@ use super::audio_window::{
 use super::channel_name::InboundLinkName;
 use super::function_node_island_input_port::{
     FunctionNodeIslandEvaluatedAtEachRead, InputPortFedByAFunctionNodeIsland,
+    PinValueReadByAnUnlinkedInputPort,
 };
 use super::helper_process_loss_count_board::InboundLinkLossCountBoardSlotMirror;
 use super::input_port_borrow_quota::DEFAULT_INPUT_PORT_BORROW_QUOTA;
@@ -464,6 +465,8 @@ pub struct InputMailboxesInner {
         std::sync::OnceLock<Arc<UpstreamStreamFactsByInboundLink>>,
     input_ports_fed_by_function_node_islands:
         parking_lot::RwLock<HashMap<String, Arc<InputPortFedByAFunctionNodeIsland>>>,
+    input_ports_read_as_their_pin_value_while_unlinked:
+        parking_lot::RwLock<HashMap<String, Arc<InputPortFedByAFunctionNodeIsland>>>,
 }
 
 impl InputMailboxesInner {
@@ -480,6 +483,7 @@ impl InputMailboxesInner {
             ),
             upstream_stream_facts_by_inbound_link: std::sync::OnceLock::new(),
             input_ports_fed_by_function_node_islands: parking_lot::RwLock::default(),
+            input_ports_read_as_their_pin_value_while_unlinked: parking_lot::RwLock::default(),
         }
     }
 
@@ -549,6 +553,60 @@ impl InputMailboxesInner {
             .cloned()
     }
 
+    /// Read each port of `pin_values` as its pin value while no link feeds
+    /// it, at the time `stream_clock_now_ns` gives, in place of the pin values
+    /// read before; a port left out reads only its links again. A port kept
+    /// counts its reads on from where it was.
+    pub fn read_each_unlinked_input_port_as_its_pin_value(
+        &self,
+        pin_values: HashMap<String, f64>,
+        stream_clock_now_ns: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) {
+        let mut input_ports_read_as_their_pin_value = self
+            .input_ports_read_as_their_pin_value_while_unlinked
+            .write();
+        let pinned_ports = pin_values
+            .into_iter()
+            .map(|(port, pin_value)| {
+                let pin_value: Arc<dyn FunctionNodeIslandEvaluatedAtEachRead> =
+                    Arc::new(PinValueReadByAnUnlinkedInputPort::read_at_the_time_of(
+                        pin_value,
+                        Arc::clone(&stream_clock_now_ns),
+                    ));
+                let pinned_port = match input_ports_read_as_their_pin_value.get(&port) {
+                    Some(pinned_port_it_replaces) => {
+                        InputPortFedByAFunctionNodeIsland::evaluated_by_in_place_of(
+                            pin_value,
+                            pinned_port_it_replaces,
+                        )
+                    }
+                    None => InputPortFedByAFunctionNodeIsland::evaluated_by(pin_value),
+                };
+                (port, Arc::new(pinned_port))
+            })
+            .collect();
+        *input_ports_read_as_their_pin_value = pinned_ports;
+    }
+
+    /// The pin value `port` reads, when one is set on it and no link feeds it.
+    fn pin_value_read_by_an_unlinked(
+        &self,
+        port: &str,
+    ) -> Option<Arc<InputPortFedByAFunctionNodeIsland>> {
+        let pinned_port = self
+            .input_ports_read_as_their_pin_value_while_unlinked
+            .read()
+            .get(port)
+            .cloned()?;
+        let no_link_feeds_the_port = self
+            .inbound_link_subscribers_and_listener
+            .lock()
+            .bound_to_local_port(port)
+            .next()
+            .is_none();
+        no_link_feeds_the_port.then_some(pinned_port)
+    }
+
     /// Reach the upstream stream facts of the node this processor was
     /// created for.
     pub(crate) fn reach_upstream_stream_facts_by_inbound_link(
@@ -590,6 +648,10 @@ impl InputMailboxesInner {
         self.ports.lock().contains_key(port)
             || self
                 .input_ports_fed_by_function_node_islands
+                .read()
+                .contains_key(port)
+            || self
+                .input_ports_read_as_their_pin_value_while_unlinked
                 .read()
                 .contains_key(port)
     }
@@ -1375,6 +1437,9 @@ impl InputMailboxesInner {
         if let Some(island_port) = self.function_node_island_feeding(port) {
             return island_port.read_the_island_output().map(Some);
         }
+        if let Some(pinned_port) = self.pin_value_read_by_an_unlinked(port) {
+            return pinned_port.read_the_island_output().map(Some);
+        }
         Ok(self
             .next_bag_for_the_reader(port)?
             .map(|bag_for_the_reader| bag_for_the_reader.message))
@@ -1405,6 +1470,12 @@ impl InputMailboxesInner {
                 "input port '{port}' is fed by a function node island, evaluated at each read \
                  rather than delivered over a link, so there is no link to name. Read it with \
                  `read_raw`, which names no link"
+            )));
+        }
+        if self.pin_value_read_by_an_unlinked(port).is_some() {
+            return Err(Error::Link(format!(
+                "input port '{port}' has no link and reads its pin value, so there is no link \
+                 to name. Read it with `read_raw`, which names no link"
             )));
         }
         let Some(mut message_body_for_the_reader) = self.next_bag_for_the_reader(port)? else {
@@ -1478,7 +1549,9 @@ impl InputMailboxesInner {
     /// arrived bag: the contract promises `process()` exact-size blocks, so a
     /// reactive processor that woke and found nothing would contradict it.
     pub fn has_data(&self, port: &str) -> bool {
-        if self.function_node_island_feeding(port).is_some() {
+        if self.function_node_island_feeding(port).is_some()
+            || self.pin_value_read_by_an_unlinked(port).is_some()
+        {
             return true;
         }
         self.receive_pending();
@@ -1549,6 +1622,15 @@ impl InputMailboxesInner {
         for island_fed_port_name in self.input_ports_fed_by_function_node_islands.read().keys() {
             if !port_names.contains(island_fed_port_name) {
                 port_names.push(island_fed_port_name.clone());
+            }
+        }
+        for pinned_port_name in self
+            .input_ports_read_as_their_pin_value_while_unlinked
+            .read()
+            .keys()
+        {
+            if !port_names.contains(pinned_port_name) {
+                port_names.push(pinned_port_name.clone());
             }
         }
         port_names
@@ -1897,6 +1979,60 @@ mod tests {
         assert_eq!(
             mailboxes.the_function_node_run_as_python_by_the_island_feeding("unfed"),
             None
+        );
+    }
+
+    #[test]
+    fn an_unlinked_input_port_reads_its_pin_value_until_a_link_feeds_it() {
+        let mailboxes = InputMailboxesInner::new();
+        let stream_clock_now_ns: Arc<dyn Fn() -> i64 + Send + Sync> = Arc::new(|| 1_000);
+        mailboxes.read_each_unlinked_input_port_as_its_pin_value(
+            HashMap::from([("level".to_string(), 0.25)]),
+            Arc::clone(&stream_clock_now_ns),
+        );
+        assert!(mailboxes.has_port("level"));
+        assert!(mailboxes.has_data("level"));
+        assert!(!mailboxes.any_port_has_data());
+        let message = mailboxes.read_raw("level").unwrap().unwrap();
+        assert_eq!(message.payload.bytes(), 0.25f64.to_le_bytes());
+        assert_eq!(message.timestamp_ns, 1_000);
+        assert_eq!(start_sample_of_the_next_read(&mailboxes, "level"), 1);
+
+        mailboxes.read_each_unlinked_input_port_as_its_pin_value(
+            HashMap::from([("level".to_string(), 0.75)]),
+            Arc::clone(&stream_clock_now_ns),
+        );
+        let message = mailboxes.read_raw("level").unwrap().unwrap();
+        assert_eq!(message.payload.bytes(), 0.75f64.to_le_bytes());
+        assert_eq!(
+            streamlib_ipc_types::ChannelsBlockDescriptorBody::from_descriptor_body(
+                &message.payload_descriptor.body,
+            )
+            .start_sample,
+            2,
+            "a pin edit counts reads on from where the port was"
+        );
+
+        let (_publisher, subscriber) = open_channel_for_one_link("pin/linked", 4);
+        mailboxes.add_port("level", 8, ReadMode::SkipToLatest);
+        mailboxes.add_channel_subscriber(
+            "level",
+            "L-lfo",
+            &InboundLinkName::from("plfo/result"),
+            subscriber,
+        );
+        assert!(
+            mailboxes.read_raw("level").unwrap().is_none(),
+            "a linked port reads its link, which has sent nothing"
+        );
+        mailboxes.remove_channel_link("L-lfo");
+        assert!(mailboxes.read_raw("level").unwrap().is_some());
+
+        mailboxes
+            .read_each_unlinked_input_port_as_its_pin_value(HashMap::new(), stream_clock_now_ns);
+        assert!(
+            !mailboxes.has_port("level"),
+            "a port with no pin value and no link left is not one this processor reads"
         );
     }
 

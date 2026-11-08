@@ -166,6 +166,7 @@ from tatolab.runtime._engine import (
     note_stop_request_from_parent_on_runtime_context,
     open_node_link_data_access_for_helper_process,
     open_runtime_context_full_access_for_helper_process,
+    read_each_unlinked_input_port_as_its_pin_value,
     run_the_scheduling_loop_of_this_helper,
 )
 from tatolab.runtime._function_node_compilation import (
@@ -1380,6 +1381,9 @@ class HelperProcessLifecycle:
         elif verb == "unfeed_island":
             # Unanswered, like `unwire_link`.
             self._unfeed_island(command)
+        elif verb == "set_pin_values":
+            # Unanswered, like `unwire_link`.
+            self._set_pin_values(command)
         else:
             log.warn("the parent sent an unknown lifecycle command", cmd=verb)
 
@@ -1438,6 +1442,10 @@ class HelperProcessLifecycle:
                     port_wiring.get("islands") or [],
                     load_processor_class,
                 )
+            )
+            read_each_unlinked_input_port_as_its_pin_value(
+                link_data_access=self._link_data_access,
+                pin_values=dict(port_wiring.get("pins") or {}),
             )
             self._hosted = construct_hosted_processor(
                 self._processor_class,
@@ -1711,6 +1719,18 @@ class HelperProcessLifecycle:
                 link_id=command.get("link_id"),
                 input_port=input_port,
                 error=str(unfeed_failure),
+            )
+
+    def _set_pin_values(self, command: "dict[str, Any]") -> None:
+        try:
+            read_each_unlinked_input_port_as_its_pin_value(
+                link_data_access=self._link_data_access,
+                pin_values=dict(command.get("pins") or {}),
+            )
+        except Exception as pin_values_refused:
+            log.error(
+                "this processor could not read the pin values the engine handed it",
+                error=str(pin_values_refused),
             )
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:

@@ -32,6 +32,7 @@ from helper_placement_streams import (
     function_node_that_spins_forever_into_python_sink,
     function_nodes_read_by_two_native_converters_into_python_records_sink,
     lfo_into_python_sink_reporting_each_batch_it_reads,
+    python_sink_reading_the_pin_value_of_its_unlinked_input,
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
@@ -986,3 +987,59 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
         f"the processor started anyway: {processor_states}"
     )
 
+
+def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_set_live(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A Python class whose input is linked to nothing reads the 0.25 its port
+    declares; a live `set_pin_value` changes what it reads to the pin, in the
+    one process it started in, and taking the pin off reads the default again.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        python_sink_reading_the_pin_value_of_its_unlinked_input
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    defaulted, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert defaulted["lowest"] == defaulted["highest"] == pytest.approx(0.25), (
+        f"an unlinked input reads the default its port declares, and the class read {defaulted}"
+    )
+
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    (sink,) = [node for node in graph["nodes"] if node["name"] == "sink"]
+
+    def set_the_pin_live(value: "float | None") -> None:
+        local_api.call_tool(
+            "set_pin_value",
+            {
+                "stream": stream_id,
+                "node": sink["id"],
+                "input": "brightness",
+                "value": value,
+                "mode": "live",
+            },
+        )
+
+    set_the_pin_live(0.75)
+    pinned, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert pinned["lowest"] == pinned["highest"] == pytest.approx(0.75), (
+        f"a pin value set live is what the unlinked input reads next, and the class read {pinned}"
+    )
+    assert pinned["sink_pid"] == defaulted["sink_pid"], "a pin edit restarts nothing"
+    (sink_after_the_edit,) = [
+        node
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "sink"
+    ]
+    pins = sink_after_the_edit["pins"]
+    assert pins == {"brightness": 0.75}, f"`graph` shows the pin value set: {pins}"
+
+    set_the_pin_live(None)
+    defaulted_again, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert defaulted_again["lowest"] == defaulted_again["highest"] == pytest.approx(0.25), (
+        f"taking the pin off reads the declared default again, and the class read {defaulted_again}"
+    )

@@ -614,6 +614,8 @@ def _collect_declared_ports(
                 declared_input["audio_window"] = marker["audio_window"]
             if "family" in marker:
                 declared_input["family"] = marker["family"]
+            if "pin_default" in marker:
+                declared_input["pin_default"] = marker["pin_default"]
             input_ports.append(declared_input)
         else:
             declared_output: "dict[str, Any]" = {
