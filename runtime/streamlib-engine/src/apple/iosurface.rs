@@ -15,7 +15,7 @@ use objc2_io_surface::{
     kIOSurfacePixelFormat, kIOSurfaceWidth,
 };
 
-use crate::core::rhi::PixelFormat;
+use crate::core::rhi::{PixelFormat, TextureFormat};
 use crate::core::{Error, Result};
 
 /// A retained IOSurface that may be held and read from any thread.
@@ -191,50 +191,24 @@ pub(crate) fn write_rows_at_the_iosurfaces_stride(iosurface: &IOSurfaceRef, rows
     assert_eq!(unlocked, 0, "IOSurfaceUnlock");
 }
 
-/// A private IOSurface of `height` rows of `width` elements, each
-/// `bytes_per_element` wide, with rows packed back to back — no padding — so
-/// its pages read as one tightly laid-out pixel buffer.
-///
-/// Tagged with `pixel_format`'s CoreVideo code when it is a packed,
-/// single-plane format; otherwise the surface is described as elements
-/// alone. Refused when IOSurface would not honour the packed row pitch.
-pub fn create_private_iosurface_with_packed_rows(
-    width: u32,
-    height: u32,
-    bytes_per_element: u32,
-    pixel_format: PixelFormat,
-) -> Result<CFRetained<IOSurfaceRef>> {
-    const OPERATION: &str = "create_private_iosurface_with_packed_rows";
-    let packed_bytes_per_row =
-        byte_size_of_one_packed_row(OPERATION, width, height, bytes_per_element)?;
-    let iosurface = create_private_iosurface(
-        OPERATION,
-        width,
-        height,
-        bytes_per_element,
-        Some(packed_bytes_per_row),
-        pixel_format,
-    )?;
-    if iosurface.bytes_per_row() != packed_bytes_per_row as usize {
-        return Err(Error::TextureError(format!(
-            "{OPERATION}: IOSurface padded {width}x{height}'s rows to {} bytes; the packed \
-             layout needs {packed_bytes_per_row}",
-            iosurface.bytes_per_row()
-        )));
-    }
-    Ok(iosurface)
-}
-
-/// A private IOSurface of `height` rows of `width` elements, each
-/// `bytes_per_element` wide, with the row pitch IOSurface chooses — the
-/// alignment a Metal texture over the surface needs. Readers take the
-/// stride from the surface, never from `width`.
+/// A private IOSurface for a `width`x`height` GPU image of `format`, with the
+/// row pitch IOSurface chooses — the alignment a Metal texture over the
+/// surface needs. Readers take the stride from the surface, never from
+/// `width`. The surface carries the format's CoreVideo pixel format, which
+/// an importer such as Chromium's shared-image backing requires to match
+/// the format it imports the surface as. Refused for a planar format.
 pub fn create_private_iosurface_for_a_gpu_image(
     width: u32,
     height: u32,
-    bytes_per_element: u32,
+    format: TextureFormat,
 ) -> Result<CFRetained<IOSurfaceRef>> {
     const OPERATION: &str = "create_private_iosurface_for_a_gpu_image";
+    let pixel_format = format.host_view_pixel_format().ok_or_else(|| {
+        Error::NotSupported(format!(
+            "{OPERATION}: {format:?} is planar; a GPU image's IOSurface carries one plane"
+        ))
+    })?;
+    let bytes_per_element = format.bytes_per_pixel();
     byte_size_of_one_packed_row(OPERATION, width, height, bytes_per_element)?;
     create_private_iosurface(
         OPERATION,
@@ -242,7 +216,7 @@ pub fn create_private_iosurface_for_a_gpu_image(
         height,
         bytes_per_element,
         None,
-        PixelFormat::Unknown,
+        pixel_format,
     )
 }
 
@@ -343,12 +317,42 @@ mod tests {
 
     #[test]
     fn a_gpu_image_surface_takes_the_row_pitch_iosurface_aligns() {
-        let iosurface =
-            create_private_iosurface_for_a_gpu_image(641, 3, 4).expect("a private IOSurface");
+        let iosurface = create_private_iosurface_for_a_gpu_image(641, 3, TextureFormat::Rgba8Unorm)
+            .expect("a private IOSurface");
         assert_eq!(iosurface.width(), 641);
         assert_eq!(iosurface.bytes_per_element(), 4);
         assert!(iosurface.bytes_per_row() >= 641 * 4);
         assert!(iosurface.alloc_size() >= iosurface.bytes_per_row() * 3);
+    }
+
+    #[test]
+    fn a_gpu_image_surface_carries_its_formats_core_video_pixel_format() {
+        for (format, core_video_pixel_format) in [
+            (TextureFormat::Rgba8Unorm, u32::from_be_bytes(*b"RGBA")),
+            (TextureFormat::Rgba8UnormSrgb, u32::from_be_bytes(*b"RGBA")),
+            (TextureFormat::Bgra8Unorm, u32::from_be_bytes(*b"BGRA")),
+            (TextureFormat::Rgba16Float, u32::from_be_bytes(*b"RGhA")),
+            (TextureFormat::Rgba32Float, u32::from_be_bytes(*b"RGfA")),
+        ] {
+            let iosurface = create_private_iosurface_for_a_gpu_image(64, 4, format)
+                .expect("a private IOSurface");
+            assert_eq!(
+                iosurface.pixel_format(),
+                core_video_pixel_format,
+                "{format:?}'s surface"
+            );
+            assert_eq!(
+                iosurface.bytes_per_element(),
+                format.bytes_per_pixel() as usize
+            );
+        }
+    }
+
+    #[test]
+    fn a_planar_gpu_image_is_refused_by_name() {
+        let refused =
+            create_private_iosurface_for_a_gpu_image(64, 4, TextureFormat::Nv12).unwrap_err();
+        assert!(refused.to_string().contains("is planar"));
     }
 
     #[test]
@@ -373,7 +377,8 @@ mod tests {
     #[test]
     fn a_padded_surface_reads_out_with_its_padding_stripped() {
         let iosurface =
-            create_private_iosurface_for_a_gpu_image(1000, 5, 4).expect("a private IOSurface");
+            create_private_iosurface_for_a_gpu_image(1000, 5, TextureFormat::Rgba8Unorm)
+                .expect("a private IOSurface");
         assert!(
             iosurface.bytes_per_row() > 1000 * 4,
             "the fixture needs a stride that pads its rows"
