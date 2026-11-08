@@ -480,7 +480,7 @@ def test_every_observation_verb_reaches_a_loaded_stream_through_the_local_api_so
         "STATE",
         "NODES",
         "PROJECT",
-        "FUNCTION",
+        "ASSET",
     ], listed
     assert re.search(
         rf"^{re.escape(stream_id)}\s+main\s+running\s+2\s+", listed, re.MULTILINE
@@ -780,7 +780,7 @@ def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
 
 
 def node_ids_of(graph: "dict[str, Any]") -> "list[str]":
-    """The ids of a live graph's nodes, which the runtime mints afresh for each load."""
+    """The ids of a live graph's nodes: the UUIDs their graph document gives them."""
     return sorted(node["id"] for node in graph["nodes"])
 
 
@@ -852,8 +852,8 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     node_ids_after_the_good_save = node_ids_of(
         local_api.await_every_node_running(stream=stream_id)
     )
-    assert set(node_ids_after_the_good_save).isdisjoint(node_ids_before_the_bad_save), (
-        "a good save loads the stream with a load of its own"
+    assert node_ids_after_the_good_save == node_ids_before_the_bad_save, (
+        "a node keeps the UUID its graph document gives it on every load"
     )
     assert [listed["state"] for listed in local_api.list_streams()] == ["running"]
     assert tatolabd.process.poll() is None, "every load of the edit loop lands on the one runtime"

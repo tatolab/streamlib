@@ -28,6 +28,7 @@ from stream_runs_on_tatolabd import (
     StreamFunctionNotRunnableFromTheSuiteProject,
     TatolabRunOfAProject,
     graph_document_path_of,
+    graph_nodes_holding_a_uuid_each,
     stream_id_named,
     stream_id_of_a_one_stream_project,
     write_a_hand_written_graph_project,
@@ -65,7 +66,9 @@ def test_a_suite_stream_function_runs_as_a_one_stream_project_holding_its_graph_
         graph_document_path_of(project_directory, "named_pattern_into_a_named_sink").read_text()
     )
     stream_asset = graph_document.pop("asset")
-    assert graph_document == compile_stream_to_graph(named_pattern_into_a_named_sink)
+    assert graph_document == graph_nodes_holding_a_uuid_each(
+        compile_stream_to_graph(named_pattern_into_a_named_sink), stream_asset
+    )
     assert stream_id_of_a_one_stream_project(
         project_directory, named_pattern_into_a_named_sink
     ) == stream_id_named(
