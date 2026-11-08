@@ -133,7 +133,7 @@ reshapes #3216.
   `BrightnessMeter` and `numpy`; its dependencies are `tatolab-stream` from PyPI and
   `tatolab-testpattern` from the index the project names, both floored at the runtime's version. Ruff, pyright
   and the cross-floor check still gate it. The pathway the old scaffold modelled (pixels on the
-  GPU, logic on the CPU) moves to a sample. See decision 1 for the source.
+  GPU, logic on the CPU) moves to a sample.
 - **Where camera projects live** (`ARCHITECTURE.md:104-106`). "The docs' sample projects and,
   later, an examples folder the app installs" becomes the samples the runtime unit carries.
 - **Creating a project** (`ARCHITECTURE.md:327-347`). Create renders the starter or copies a
@@ -160,18 +160,12 @@ reshapes #3216.
 
 ## Decisions
 
-1. **[NEEDS DECISION] What the starter's one source is.**
-   - (a) `TestPatternSource` from `tatolab-testpattern`, resolved from the index. Buildable now,
-     needs no new node, and the branded animation is what a person sees first.
-   - (b) A generator node in the project's own `nodes/`, so the project depends on
-     `tatolab-stream` alone and the first thing a person edits is their own. It needs a
-     zero-input image node, which `lightweight-node-kinds`' `@node.shader` (Image in, Image out)
-     does not yet give.
-   - (c) An image generator added to `tatolab-ops`, the module `lightweight-node-kinds` bundles
-     with the runtime, so the starter resolves from what every stream's environment already has.
-     Waits on that change.
-
-   Recommendation: (a) now, and (c) once `tatolab-ops` ships, which changes one template line.
+1. **DECIDED — The starter's one source (owner, 2026-11-08).** `TestPatternSource` from
+   `tatolab-testpattern`, resolved from the index: buildable now, it needs no new node, and the
+   branded animation is what a person sees first. Once `tatolab-ops` ships with
+   `lightweight-node-kinds`, an image generator there can replace it, which changes one template
+   line. Rejected: a generator node in the project's own `nodes/`, which needs a zero-input image
+   node that `@node.shader` (Image in, Image out) does not give.
 2. **Assumed unless overruled: the PyPI copies.** The first-party projects already on PyPI stay
    registered so nobody else takes the names, and a new module's name is registered there with a
    placeholder that installs nothing, as the bare `tatolab` name is. They take no further uploads, and have every release
