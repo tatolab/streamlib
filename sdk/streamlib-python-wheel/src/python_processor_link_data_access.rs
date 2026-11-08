@@ -189,7 +189,8 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// Lend `input_port_names` and `output_port_names` to the node's native
-    /// code, refusing a name the class never declared or one already lent.
+    /// code, refusing a name the class never declared or one already lent, and
+    /// an input a function node island feeds that runs a node as Python.
     pub(crate) fn lend_ports_to_native_code(
         &self,
         input_port_names: &[String],
@@ -223,6 +224,19 @@ impl PythonProcessorLinkDataAccess {
             &self.declared_output_ports,
             &self.output_ports_lent_to_native_code,
         )?;
+        for lent_input_port_name in &lent_input_port_names {
+            if let Some(function_node_id) = input_mailboxes
+                .the_function_node_run_as_python_by_the_island_feeding(lent_input_port_name)
+            {
+                return Err(PyValueError::new_err(format!(
+                    "input port {lent_input_port_name:?} cannot be lent to native code: function \
+                     node `{function_node_id}` feeds it and runs as Python, since its body does \
+                     not compile, and a native read holds no Python interpreter lock to call it \
+                     with. To fix: make `{function_node_id}` compile, or read the port from \
+                     Python"
+                )));
+            }
+        }
         self.input_ports_lent_to_native_code
             .lock()
             .extend(lent_input_port_names.iter().cloned());

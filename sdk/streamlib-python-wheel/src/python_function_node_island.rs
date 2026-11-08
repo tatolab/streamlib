@@ -1,30 +1,70 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A function node island evaluated inside this helper's reads: each node's
-//! compiled evaluate entry called in turn, once per stream time.
+//! A function node island evaluated inside this helper's reads: each node
+//! called in turn, once per stream time, through its compiled evaluate entry
+//! or as Python in this helper's interpreter.
 
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyInt, PyList};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
-    HelperProcessLossCountBoardWriter,
+    FunctionNodeIslandOutputValue, HelperProcessLossCountBoardWriter,
 };
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_OK, ModuleHostTableFunctionNodeEvaluateEntry,
 };
 
+use crate::python_bag_conversion::records_message_payload_of;
 use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
+/// One value a function node takes or gives.
+#[derive(Debug)]
+enum FunctionNodeValue {
+    /// A number or a bool, as the f64 a compiled entry carries.
+    Number(f64),
+    /// A `dict`, which only a node run as Python takes or gives.
+    Record(Py<PyAny>),
+}
+
+impl FunctionNodeValue {
+    fn as_a_number_for_an_input_of(&self, node_id: &str, input_index: usize) -> Result<f64> {
+        match self {
+            Self::Number(number) => Ok(*number),
+            Self::Record(_) => Err(Error::Runtime(format!(
+                "function node `{node_id}` runs compiled and takes a number on input \
+                 {input_index}, and was handed a dict"
+            ))),
+        }
+    }
+
+    fn to_python<'py>(&self, python: Python<'py>) -> Bound<'py, PyAny> {
+        match self {
+            Self::Number(number) => number.into_pyobject(python).unwrap().into_any(),
+            Self::Record(record) => record.bind(python).clone(),
+        }
+    }
+
+    /// `value` as a function node gives it: a `dict` as a record, anything
+    /// else as the number it converts to.
+    fn from_python(value: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if value.is_instance_of::<PyDict>() {
+            return Ok(Self::Record(value.clone().unbind()));
+        }
+        Ok(Self::Number(value.extract::<f64>()?))
+    }
+}
+
 /// Where one input of a function node in an island takes its value from.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug)]
 enum WhereAFunctionNodeInputTakesItsValue {
     /// An output of a node evaluated earlier in the island.
     FromAnEarlierNodesOutput {
@@ -32,20 +72,45 @@ enum WhereAFunctionNodeInputTakesItsValue {
         output_index: usize,
     },
     /// The pin's value, as nothing is linked to it.
-    FromItsPin(f64),
+    FromItsPin(FunctionNodeValue),
 }
 
-/// One function node of an island, compiled, and the values it is called with.
-struct FunctionNodeCompiledIntoAnIsland {
-    node_id: String,
-    breadcrumb_number: u32,
+/// A function node's evaluate entry, compiled for its signature, and the f64
+/// buffers it is called with.
+struct FunctionNodeCalledThroughItsEvaluateEntry {
     evaluate_entry: ModuleHostTableFunctionNodeEvaluateEntry,
-    where_each_input_takes_its_value: Vec<WhereAFunctionNodeInputTakesItsValue>,
     config_values: Vec<f64>,
     input_values: Vec<f64>,
     state_values: Vec<f64>,
     state_values_of_the_call_under_way: Vec<f64>,
     output_values: Vec<f64>,
+}
+
+/// A function node whose body runs as Python in this helper's interpreter,
+/// through the object the bootstrap built for it.
+struct FunctionNodeCalledAsPython {
+    input_count: usize,
+    /// Answers `evaluate(input_values, now_ns)` with its outputs in port order,
+    /// keeping its state, and `state_values()` with that state as f64s when
+    /// its state record is numbers and bools.
+    run_as_python: Py<PyAny>,
+    /// The state it last answered, as written on the board.
+    state_values: Vec<f64>,
+}
+
+/// How one function node is called.
+enum HowAFunctionNodeIsCalled {
+    ThroughItsEvaluateEntry(FunctionNodeCalledThroughItsEvaluateEntry),
+    AsPython(FunctionNodeCalledAsPython),
+}
+
+/// One function node of an island, and the values it is called with.
+struct FunctionNodeInAnIsland {
+    node_id: String,
+    breadcrumb_number: u32,
+    how_it_is_called: HowAFunctionNodeIsCalled,
+    where_each_input_takes_its_value: Vec<WhereAFunctionNodeInputTakesItsValue>,
+    output_values: Vec<FunctionNodeValue>,
     /// Whether each call's new state is written on the helper's board, which
     /// carries an entry for the node exactly when its state is carried.
     writes_its_state_on_the_board: bool,
@@ -54,7 +119,7 @@ struct FunctionNodeCompiledIntoAnIsland {
 /// The values every node of an island last took, and the stream time they were
 /// evaluated at.
 struct FunctionNodeIslandEvaluation {
-    function_nodes_each_after_what_it_reads: Vec<FunctionNodeCompiledIntoAnIsland>,
+    function_nodes_each_after_what_it_reads: Vec<FunctionNodeInAnIsland>,
     last_evaluated_at_ns: Option<i64>,
     /// The board each call's breadcrumb is noted on, so the parent can name
     /// the node a call died or stalled in.
@@ -66,6 +131,7 @@ struct FunctionNodeIslandEvaluation {
 pub(crate) struct FunctionNodeIslandEvaluatedInThisHelper {
     island_output_node_index: usize,
     island_output_index: usize,
+    first_function_node_it_runs_as_python: Option<String>,
     evaluation: Mutex<FunctionNodeIslandEvaluation>,
     stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
 }
@@ -77,59 +143,61 @@ impl FunctionNodeIslandEvaluation {
                 .function_nodes_each_after_what_it_reads
                 .split_at_mut(node_index);
             let function_node = &mut from_this_node_on[0];
-            for (input_value, where_it_takes_its_value) in function_node
-                .input_values
-                .iter_mut()
-                .zip(&function_node.where_each_input_takes_its_value)
-            {
-                *input_value = match *where_it_takes_its_value {
+            let input_values: Vec<&FunctionNodeValue> = function_node
+                .where_each_input_takes_its_value
+                .iter()
+                .map(|where_it_takes_its_value| match where_it_takes_its_value {
                     WhereAFunctionNodeInputTakesItsValue::FromAnEarlierNodesOutput {
                         node_index,
                         output_index,
-                    } => evaluated_earlier[node_index].output_values[output_index],
+                    } => &evaluated_earlier[*node_index].output_values[*output_index],
                     WhereAFunctionNodeInputTakesItsValue::FromItsPin(pin_value) => pin_value,
-                };
-            }
+                })
+                .collect();
             call_noting_its_breadcrumb_on(
                 self.call_breadcrumb_board_writer.as_deref(),
-                function_node,
+                &function_node.node_id,
+                function_node.breadcrumb_number,
+                &mut function_node.how_it_is_called,
+                &mut function_node.output_values,
+                &input_values,
                 now_ns,
             )?;
+            if let Some(board_writer) = self.call_breadcrumb_board_writer.as_deref()
+                && function_node.writes_its_state_on_the_board
+            {
+                board_writer.write_the_state_of_a_function_node(
+                    function_node.breadcrumb_number,
+                    function_node.how_it_is_called.state_values(),
+                )?;
+            }
         }
         self.last_evaluated_at_ns = Some(now_ns);
         Ok(())
     }
 }
 
-/// Call `function_node` at `now_ns` with its breadcrumb noted on
-/// `call_breadcrumb_board_writer` for the length of the call.
+/// Call a function node at `now_ns` with `input_values`, its breadcrumb noted
+/// on `call_breadcrumb_board_writer` for the length of the call.
 fn call_noting_its_breadcrumb_on(
     call_breadcrumb_board_writer: Option<&HelperProcessLossCountBoardWriter>,
-    function_node: &mut FunctionNodeCompiledIntoAnIsland,
+    node_id: &str,
+    breadcrumb_number: u32,
+    how_it_is_called: &mut HowAFunctionNodeIsCalled,
+    output_values: &mut [FunctionNodeValue],
+    input_values: &[&FunctionNodeValue],
     now_ns: i64,
 ) -> Result<()> {
     let call_under_way = call_breadcrumb_board_writer.map(|board_writer| {
-        board_writer.note_a_function_node_call_started(
-            function_node.breadcrumb_number,
-            monotonic_clock_now_ns(),
-        )
+        board_writer.note_a_function_node_call_started(breadcrumb_number, monotonic_clock_now_ns())
     });
-    let called = function_node.call_its_evaluate_entry_at(now_ns);
+    let called = how_it_is_called.call_at(node_id, input_values, output_values, now_ns);
     if let (Some(board_writer), Some(call_under_way)) =
         (call_breadcrumb_board_writer, call_under_way)
     {
         board_writer.note_the_function_node_call_returned(call_under_way);
     }
-    called?;
-    if let Some(board_writer) = call_breadcrumb_board_writer
-        && function_node.writes_its_state_on_the_board
-    {
-        board_writer.write_the_state_of_a_function_node(
-            function_node.breadcrumb_number,
-            &function_node.state_values,
-        )?;
-    }
-    Ok(())
+    called
 }
 
 /// The state a function node starts its first call from: the state its stream
@@ -147,10 +215,124 @@ fn the_state_a_function_node_starts_from(
     }
 }
 
-impl FunctionNodeCompiledIntoAnIsland {
+impl HowAFunctionNodeIsCalled {
+    /// How the bootstrap hands a node over: its compiled entry's address, or
+    /// the object that runs its body as Python. A node run as Python is told
+    /// the state its stream carries for it, when it carries one.
+    fn handed_over_by_the_bootstrap(
+        node_id: &str,
+        called_through: Py<PyAny>,
+        config_values: Vec<f64>,
+        input_count: usize,
+        state_values: Vec<f64>,
+        resumes_from_the_state_its_stream_carries: bool,
+        output_count: usize,
+    ) -> std::result::Result<Self, String> {
+        Python::attach(|python| {
+            let called_through = called_through.bind(python);
+            if called_through.is_instance_of::<PyInt>() {
+                let evaluate_entry_address: usize = called_through
+                    .extract()
+                    .map_err(|refusal| format!("function node `{node_id}`: {refusal}"))?;
+                if evaluate_entry_address == 0 {
+                    return Err(format!(
+                        "function node `{node_id}` was handed over with no evaluate entry"
+                    ));
+                }
+                // SAFETY: the bootstrap hands over the address of an entry it
+                // compiled to this signature and keeps alive for as long as
+                // this helper reads, and the address was refused above when
+                // null.
+                let evaluate_entry = unsafe {
+                    std::mem::transmute::<usize, ModuleHostTableFunctionNodeEvaluateEntry>(
+                        evaluate_entry_address,
+                    )
+                };
+                return Ok(Self::ThroughItsEvaluateEntry(
+                    FunctionNodeCalledThroughItsEvaluateEntry {
+                        evaluate_entry,
+                        config_values,
+                        input_values: vec![0.0; input_count],
+                        state_values_of_the_call_under_way: vec![0.0; state_values.len()],
+                        state_values,
+                        output_values: vec![0.0; output_count],
+                    },
+                ));
+            }
+            if resumes_from_the_state_its_stream_carries {
+                called_through
+                    .call_method1("resume_from_state_values", (state_values.clone(),))
+                    .map_err(|refusal| {
+                        format!(
+                            "function node `{node_id}` did not resume from the state its \
+                             stream carries: {refusal}"
+                        )
+                    })?;
+            }
+            Ok(Self::AsPython(FunctionNodeCalledAsPython {
+                input_count,
+                run_as_python: called_through.clone().unbind(),
+                state_values,
+            }))
+        })
+    }
+
+    fn input_count(&self) -> usize {
+        match self {
+            Self::ThroughItsEvaluateEntry(compiled) => compiled.input_values.len(),
+            Self::AsPython(run_as_python) => run_as_python.input_count,
+        }
+    }
+
+    fn runs_as_python(&self) -> bool {
+        matches!(self, Self::AsPython(_))
+    }
+
+    fn state_values(&self) -> &[f64] {
+        match self {
+            Self::ThroughItsEvaluateEntry(compiled) => &compiled.state_values,
+            Self::AsPython(run_as_python) => &run_as_python.state_values,
+        }
+    }
+
+    /// Call the node with `input_values`, writing `output_values` and keeping
+    /// the new state only when the call succeeds.
+    fn call_at(
+        &mut self,
+        node_id: &str,
+        input_values: &[&FunctionNodeValue],
+        output_values: &mut [FunctionNodeValue],
+        now_ns: i64,
+    ) -> Result<()> {
+        match self {
+            Self::ThroughItsEvaluateEntry(compiled) => {
+                for (input_index, (input_slot, input_value)) in compiled
+                    .input_values
+                    .iter_mut()
+                    .zip(input_values)
+                    .enumerate()
+                {
+                    *input_slot = input_value.as_a_number_for_an_input_of(node_id, input_index)?;
+                }
+                compiled.call_its_evaluate_entry_at(node_id, now_ns)?;
+                for (output_value, compiled_output) in
+                    output_values.iter_mut().zip(&compiled.output_values)
+                {
+                    *output_value = FunctionNodeValue::Number(*compiled_output);
+                }
+                Ok(())
+            }
+            Self::AsPython(run_as_python) => {
+                run_as_python.call_at(node_id, input_values, output_values, now_ns)
+            }
+        }
+    }
+}
+
+impl FunctionNodeCalledThroughItsEvaluateEntry {
     /// Call the node's evaluate entry, keeping the state it wrote only when it
     /// answers OK.
-    fn call_its_evaluate_entry_at(&mut self, now_ns: i64) -> Result<()> {
+    fn call_its_evaluate_entry_at(&mut self, node_id: &str, now_ns: i64) -> Result<()> {
         self.state_values_of_the_call_under_way
             .copy_from_slice(&self.state_values);
         // SAFETY: the entry was compiled for this node's signature, so it reads
@@ -169,8 +351,7 @@ impl FunctionNodeCompiledIntoAnIsland {
         };
         if status != MODULE_HOST_TABLE_STATUS_OK {
             return Err(Error::Runtime(format!(
-                "function node `{}` refused its evaluation with status {status}",
-                self.node_id
+                "function node `{node_id}` refused its evaluation with status {status}"
             )));
         }
         std::mem::swap(
@@ -178,6 +359,62 @@ impl FunctionNodeCompiledIntoAnIsland {
             &mut self.state_values_of_the_call_under_way,
         );
         Ok(())
+    }
+}
+
+impl FunctionNodeCalledAsPython {
+    /// Call the node's body as Python, holding the interpreter's lock for the
+    /// length of the call.
+    fn call_at(
+        &mut self,
+        node_id: &str,
+        input_values: &[&FunctionNodeValue],
+        output_values: &mut [FunctionNodeValue],
+        now_ns: i64,
+    ) -> Result<()> {
+        Python::attach(|python| {
+            let raised = |refusal: PyErr| {
+                Error::Runtime(format!(
+                    "function node `{node_id}`, run as Python, raised: {refusal}"
+                ))
+            };
+            let input_list = PyList::new(
+                python,
+                input_values
+                    .iter()
+                    .map(|input_value| input_value.to_python(python)),
+            )
+            .map_err(raised)?;
+            let returned = self
+                .run_as_python
+                .bind(python)
+                .call_method1("evaluate", (input_list, now_ns))
+                .map_err(raised)?;
+            let returned: Vec<Bound<'_, PyAny>> = returned.extract().map_err(raised)?;
+            if returned.len() != output_values.len() {
+                return Err(Error::Runtime(format!(
+                    "function node `{node_id}`, run as Python, answered {} outputs, and it has {}",
+                    returned.len(),
+                    output_values.len()
+                )));
+            }
+            let mut outputs_given = Vec::with_capacity(returned.len());
+            for output in &returned {
+                outputs_given.push(FunctionNodeValue::from_python(output).map_err(raised)?);
+            }
+            if !self.state_values.is_empty() {
+                self.state_values = self
+                    .run_as_python
+                    .bind(python)
+                    .call_method0("state_values")
+                    .and_then(|state_values| state_values.extract())
+                    .map_err(raised)?;
+            }
+            for (output_value, output_given) in output_values.iter_mut().zip(outputs_given) {
+                *output_value = output_given;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -190,22 +427,44 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
         if evaluation.last_evaluated_at_ns != Some(now_ns) {
             evaluation.evaluate_every_node_at(now_ns)?;
         }
+        let island_output_node =
+            &evaluation.function_nodes_each_after_what_it_reads[self.island_output_node_index];
+        let value = match &island_output_node.output_values[self.island_output_index] {
+            FunctionNodeValue::Number(number) => {
+                FunctionNodeIslandOutputValue::ControlValue(*number)
+            }
+            FunctionNodeValue::Record(record) => Python::attach(|python| {
+                records_message_payload_of(
+                    &format!(
+                        "function node `{}`'s output {}",
+                        island_output_node.node_id, self.island_output_index
+                    ),
+                    record.bind(python),
+                    &[],
+                )
+                .map(FunctionNodeIslandOutputValue::RecordsMessage)
+                .map_err(|refusal| Error::Runtime(refusal.to_string()))
+            })?,
+        };
         Ok(FunctionNodeIslandOutputForOneRead {
-            value: evaluation.function_nodes_each_after_what_it_reads
-                [self.island_output_node_index]
-                .output_values[self.island_output_index],
+            value,
             evaluated_at_ns: now_ns,
         })
+    }
+
+    fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+        self.first_function_node_it_runs_as_python.as_deref()
     }
 }
 
 /// One function node as the bootstrap hands it over: its id, its breadcrumb
-/// number, its evaluate entry's address, where each input takes its value, its
-/// config values, its initial state values and how many outputs it writes.
+/// number, its compiled evaluate entry's address or the object that runs it as
+/// Python, where each input takes its value, its config values, its initial
+/// state values and how many outputs it writes.
 type FunctionNodeHandedOverByTheBootstrap = (
     String,
     u32,
-    usize,
+    Py<PyAny>,
     Vec<(Option<(usize, usize)>, f64)>,
     Vec<f64>,
     Vec<f64>,
@@ -220,13 +479,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
         state_resumed_from: &dyn Fn(u32) -> Option<Vec<f64>>,
     ) -> std::result::Result<Self, String> {
-        let mut function_nodes_each_after_what_it_reads = Vec::with_capacity(function_nodes.len());
+        let mut function_nodes_each_after_what_it_reads: Vec<FunctionNodeInAnIsland> =
+            Vec::with_capacity(function_nodes.len());
         for (
             node_index,
             (
                 node_id,
                 breadcrumb_number,
-                evaluate_entry_address,
+                called_through,
                 where_each_input_takes_its_value,
                 config_values,
                 initial_state_values,
@@ -234,23 +494,18 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             ),
         ) in function_nodes.into_iter().enumerate()
         {
-            if evaluate_entry_address == 0 {
-                return Err(format!(
-                    "function node `{node_id}` was handed over with no evaluate entry"
-                ));
-            }
             let mut where_each_input_takes_its_value_read = Vec::new();
             for (source, pin_value) in where_each_input_takes_its_value {
                 where_each_input_takes_its_value_read.push(match source {
-                    None => WhereAFunctionNodeInputTakesItsValue::FromItsPin(pin_value),
+                    None => WhereAFunctionNodeInputTakesItsValue::FromItsPin(
+                        FunctionNodeValue::Number(pin_value),
+                    ),
                     Some((source_node_index, output_index)) => {
                         let reads_an_output_evaluated_earlier = source_node_index < node_index
                             && output_index
                                 < function_nodes_each_after_what_it_reads
                                     .get(source_node_index)
-                                    .map_or(0, |earlier: &FunctionNodeCompiledIntoAnIsland| {
-                                        earlier.output_values.len()
-                                    });
+                                    .map_or(0, |earlier| earlier.output_values.len());
                         if !reads_an_output_evaluated_earlier {
                             return Err(format!(
                                 "function node `{node_id}` reads output {output_index} of node \
@@ -265,34 +520,33 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                     }
                 });
             }
-            // SAFETY: the bootstrap hands over the address of an entry it
-            // compiled to this signature and keeps alive for as long as this
-            // helper reads, and the address was refused above when null.
-            let evaluate_entry = unsafe {
-                std::mem::transmute::<usize, ModuleHostTableFunctionNodeEvaluateEntry>(
-                    evaluate_entry_address,
-                )
-            };
             let writes_its_state_on_the_board = !initial_state_values.is_empty()
                 && call_breadcrumb_board_writer
                     .as_deref()
                     .is_some_and(|board_writer| {
                         board_writer.carries_a_state_entry_for(breadcrumb_number)
                     });
-            let state_values = the_state_a_function_node_starts_from(
-                initial_state_values,
-                state_resumed_from(breadcrumb_number),
-            );
-            function_nodes_each_after_what_it_reads.push(FunctionNodeCompiledIntoAnIsland {
+            let state_resumed_from = state_resumed_from(breadcrumb_number)
+                .filter(|resumed| resumed.len() == initial_state_values.len());
+            let resumes_from_the_state_its_stream_carries =
+                state_resumed_from.is_some() && !initial_state_values.is_empty();
+            let how_it_is_called = HowAFunctionNodeIsCalled::handed_over_by_the_bootstrap(
+                &node_id,
+                called_through,
+                config_values,
+                where_each_input_takes_its_value_read.len(),
+                the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
+                resumes_from_the_state_its_stream_carries,
+                output_count,
+            )?;
+            function_nodes_each_after_what_it_reads.push(FunctionNodeInAnIsland {
                 node_id,
                 breadcrumb_number,
-                evaluate_entry,
-                input_values: vec![0.0; where_each_input_takes_its_value_read.len()],
+                how_it_is_called,
                 where_each_input_takes_its_value: where_each_input_takes_its_value_read,
-                config_values,
-                state_values_of_the_call_under_way: vec![0.0; state_values.len()],
-                state_values,
-                output_values: vec![0.0; output_count],
+                output_values: (0..output_count)
+                    .map(|_| FunctionNodeValue::Number(0.0))
+                    .collect(),
                 writes_its_state_on_the_board,
             });
         }
@@ -305,9 +559,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                  {island_output_node_index}, which the island does not hold"
             ));
         }
+        let first_function_node_it_runs_as_python = function_nodes_each_after_what_it_reads
+            .iter()
+            .find(|function_node| function_node.how_it_is_called.runs_as_python())
+            .map(|function_node| function_node.node_id.clone());
         Ok(Self {
             island_output_node_index,
             island_output_index,
+            first_function_node_it_runs_as_python,
             evaluation: Mutex::new(FunctionNodeIslandEvaluation {
                 function_nodes_each_after_what_it_reads,
                 last_evaluated_at_ns: None,
@@ -322,7 +581,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
 /// out of its readers' islands: called with the values its process reads.
 #[pyclass(name = "FunctionNodeEvaluatedAsItsHelpersProcessor", frozen)]
 pub(crate) struct FunctionNodeEvaluatedAsItsHelpersProcessor {
-    function_node: Mutex<FunctionNodeCompiledIntoAnIsland>,
+    function_node: Mutex<FunctionNodeInAnIsland>,
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
 }
 
@@ -333,7 +592,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         *,
         link_data_access,
         node_id,
-        evaluate_entry_address,
+        called_through,
         input_count,
         config_values,
         initial_state_values,
@@ -343,25 +602,12 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
     fn new(
         link_data_access: &PythonProcessorLinkDataAccess,
         node_id: String,
-        evaluate_entry_address: usize,
+        called_through: Py<PyAny>,
         input_count: usize,
         config_values: Vec<f64>,
         initial_state_values: Vec<f64>,
         output_count: usize,
     ) -> PyResult<Self> {
-        if evaluate_entry_address == 0 {
-            return Err(PyValueError::new_err(format!(
-                "function node `{node_id}` was handed over with no evaluate entry"
-            )));
-        }
-        // SAFETY: the bootstrap hands over the address of an entry it compiled
-        // to this signature and keeps alive for as long as this helper runs,
-        // and the address was refused above when null.
-        let evaluate_entry = unsafe {
-            std::mem::transmute::<usize, ModuleHostTableFunctionNodeEvaluateEntry>(
-                evaluate_entry_address,
-            )
-        };
         let breadcrumb_number =
             BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
         let call_breadcrumb_board_writer =
@@ -372,21 +618,30 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
                 .is_some_and(|board_writer| {
                     board_writer.carries_a_state_entry_for(breadcrumb_number)
                 });
-        let state_values = the_state_a_function_node_starts_from(
-            initial_state_values,
-            link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number),
-        );
+        let state_resumed_from = link_data_access
+            .the_state_a_function_node_resumes_from(breadcrumb_number)
+            .filter(|resumed| resumed.len() == initial_state_values.len());
+        let resumes_from_the_state_its_stream_carries =
+            state_resumed_from.is_some() && !initial_state_values.is_empty();
+        let how_it_is_called = HowAFunctionNodeIsCalled::handed_over_by_the_bootstrap(
+            &node_id,
+            called_through,
+            config_values,
+            input_count,
+            the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
+            resumes_from_the_state_its_stream_carries,
+            output_count,
+        )
+        .map_err(PyValueError::new_err)?;
         Ok(Self {
-            function_node: Mutex::new(FunctionNodeCompiledIntoAnIsland {
+            function_node: Mutex::new(FunctionNodeInAnIsland {
                 node_id,
                 breadcrumb_number,
-                evaluate_entry,
+                how_it_is_called,
                 where_each_input_takes_its_value: Vec::new(),
-                config_values,
-                input_values: vec![0.0; input_count],
-                state_values_of_the_call_under_way: vec![0.0; state_values.len()],
-                state_values,
-                output_values: vec![0.0; output_count],
+                output_values: (0..output_count)
+                    .map(|_| FunctionNodeValue::Number(0.0))
+                    .collect(),
                 writes_its_state_on_the_board,
             }),
             call_breadcrumb_board_writer,
@@ -394,28 +649,60 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
     }
 
     /// Call the node with `input_values` at the stream's time now, answering
-    /// its outputs; refused when it refuses, keeping the state it had.
-    fn evaluate(&self, python: Python<'_>, input_values: Vec<f64>) -> PyResult<Vec<f64>> {
+    /// its outputs, a `float` for a number or bool and a `dict` as given;
+    /// refused when it refuses, keeping the state it had.
+    fn evaluate<'py>(
+        &self,
+        python: Python<'py>,
+        input_values: Vec<Bound<'py, PyAny>>,
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
         let now_ns = helper_stream_clock_now_ns();
+        let input_values = input_values
+            .iter()
+            .map(FunctionNodeValue::from_python)
+            .collect::<PyResult<Vec<_>>>()?;
+        let function_node = &self.function_node;
+        let call_breadcrumb_board_writer = self.call_breadcrumb_board_writer.as_deref();
         python.detach(|| {
-            let mut function_node = self.function_node.lock();
-            if input_values.len() != function_node.input_values.len() {
+            let mut function_node = function_node.lock();
+            let function_node = &mut *function_node;
+            if input_values.len() != function_node.how_it_is_called.input_count() {
                 return Err(PyValueError::new_err(format!(
                     "function node `{}` takes {} inputs, and was called with {}",
                     function_node.node_id,
-                    function_node.input_values.len(),
+                    function_node.how_it_is_called.input_count(),
                     input_values.len()
                 )));
             }
-            function_node.input_values.copy_from_slice(&input_values);
+            let input_value_references: Vec<&FunctionNodeValue> = input_values.iter().collect();
             call_noting_its_breadcrumb_on(
-                self.call_breadcrumb_board_writer.as_deref(),
-                &mut function_node,
+                call_breadcrumb_board_writer,
+                &function_node.node_id,
+                function_node.breadcrumb_number,
+                &mut function_node.how_it_is_called,
+                &mut function_node.output_values,
+                &input_value_references,
                 now_ns,
             )
             .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
-            Ok(function_node.output_values.clone())
-        })
+            if let Some(board_writer) = call_breadcrumb_board_writer
+                && function_node.writes_its_state_on_the_board
+            {
+                board_writer
+                    .write_the_state_of_a_function_node(
+                        function_node.breadcrumb_number,
+                        function_node.how_it_is_called.state_values(),
+                    )
+                    .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+            }
+            Ok(())
+        })?;
+        let function_node = self.function_node.lock();
+        Ok(function_node
+            .output_values
+            .iter()
+            .map(|output_value| output_value.to_python(python))
+            .collect())
     }
 }
 
@@ -455,6 +742,19 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicI64, Ordering};
+
+    /// The handover of a compiled entry: its address, as the bootstrap passes
+    /// it, a Python int.
+    fn compiled_to(evaluate_entry: ModuleHostTableFunctionNodeEvaluateEntry) -> Py<PyAny> {
+        Python::initialize();
+        Python::attach(|python| {
+            (evaluate_entry as *const () as usize)
+                .into_pyobject(python)
+                .unwrap()
+                .into_any()
+                .unbind()
+        })
+    }
 
     fn a_stream_clock_the_test_sets() -> (Arc<AtomicI64>, Box<dyn Fn() -> i64 + Send + Sync>) {
         let stream_time_ns = Arc::new(AtomicI64::new(0));
@@ -513,7 +813,7 @@ mod tests {
                 (
                     "add_one".to_string(),
                     0,
-                    add_one_and_count_calls as *const () as usize,
+                    compiled_to(add_one_and_count_calls),
                     vec![(None, 2.0)],
                     vec![],
                     vec![0.0],
@@ -522,7 +822,7 @@ mod tests {
                 (
                     "scale".to_string(),
                     1,
-                    scale_by_config_plus_seconds as *const () as usize,
+                    compiled_to(scale_by_config_plus_seconds),
                     vec![(Some((0, 0)), 0.0)],
                     vec![10.0],
                     vec![],
@@ -543,7 +843,10 @@ mod tests {
         stream_time_ns.store(1_000_000_000, Ordering::SeqCst);
         let island = an_island_of_add_one_then_scale(stream_clock_now_ns);
         let output = island.evaluate_the_island_output_for_this_read().unwrap();
-        assert_eq!(output.value, (2.0 + 1.0) * 10.0 + 1.0);
+        assert_eq!(
+            output.value,
+            FunctionNodeIslandOutputValue::ControlValue((2.0 + 1.0) * 10.0 + 1.0)
+        );
         assert_eq!(output.evaluated_at_ns, 1_000_000_000);
     }
 
@@ -558,7 +861,8 @@ mod tests {
             .evaluation
             .lock()
             .function_nodes_each_after_what_it_reads[0]
-            .state_values[0];
+            .how_it_is_called
+            .state_values()[0];
         assert_eq!(calls_at_one_time, 1.0);
         stream_time_ns.store(6, Ordering::SeqCst);
         island.evaluate_the_island_output_for_this_read().unwrap();
@@ -567,7 +871,8 @@ mod tests {
                 .evaluation
                 .lock()
                 .function_nodes_each_after_what_it_reads[0]
-                .state_values[0],
+                .how_it_is_called
+                .state_values()[0],
             2.0
         );
     }
@@ -579,7 +884,7 @@ mod tests {
                 vec![(
                     "refuses".to_string(),
                     2,
-                    refuse_after_writing_state as *const () as usize,
+                    compiled_to(refuse_after_writing_state),
                     vec![],
                     vec![],
                     vec![1.0],
@@ -600,8 +905,9 @@ mod tests {
                 .evaluation
                 .lock()
                 .function_nodes_each_after_what_it_reads[0]
-                .state_values,
-            vec![1.0]
+                .how_it_is_called
+                .state_values(),
+            [1.0]
         );
     }
 
@@ -639,7 +945,7 @@ mod tests {
                 vec![(
                     "counts_calls".to_string(),
                     4,
-                    add_one_and_count_calls as *const () as usize,
+                    compiled_to(add_one_and_count_calls),
                     vec![(None, 0.0)],
                     vec![],
                     vec![0.0],
@@ -694,7 +1000,7 @@ mod tests {
                 vec![(
                     "reads_ahead".to_string(),
                     3,
-                    add_one_and_count_calls as *const () as usize,
+                    compiled_to(add_one_and_count_calls),
                     vec![(Some((0, 0)), 0.0)],
                     vec![],
                     vec![0.0],
@@ -709,6 +1015,202 @@ mod tests {
             .unwrap();
         assert!(
             refusal.contains("not an output of a node evaluated before it"),
+            "{refusal}"
+        );
+    }
+
+    /// An object as the bootstrap builds one to run a body as Python: this one
+    /// counts its calls in its state and answers a dict naming its input and
+    /// the count, raising on a negative input.
+    fn run_as_python_counting_its_calls() -> Py<PyAny> {
+        Python::initialize();
+        Python::attach(|python| {
+            let namespace = PyDict::new(python);
+            crate::python_class_from_source_for_tests::class_from_source_in_namespace(
+                python,
+                "class CountsItsCallsAsPython:\n\
+                 \x20   def __init__(self):\n\
+                 \x20       self.calls = 0.0\n\
+                 \x20   def evaluate(self, input_values, now_ns):\n\
+                 \x20       (x,) = input_values\n\
+                 \x20       if x < 0:\n\
+                 \x20           raise ValueError('a negative input')\n\
+                 \x20       self.calls += 1.0\n\
+                 \x20       return [{'x': x, 'calls': self.calls}, self.calls]\n\
+                 \x20   def state_values(self):\n\
+                 \x20       return [self.calls]\n\
+                 \x20   def resume_from_state_values(self, state_values):\n\
+                 \x20       (self.calls,) = state_values\n",
+                "CountsItsCallsAsPython",
+                &namespace,
+            )
+            .call0()
+            .unwrap()
+            .unbind()
+        })
+    }
+
+    fn an_island_of_add_one_then_a_node_run_as_python(
+        island_output: (usize, usize),
+        stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
+        state_resumed_from: &dyn Fn(u32) -> Option<Vec<f64>>,
+    ) -> FunctionNodeIslandEvaluatedInThisHelper {
+        FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+            vec![
+                (
+                    "add_one".to_string(),
+                    0,
+                    compiled_to(add_one_and_count_calls),
+                    vec![(None, 2.0)],
+                    vec![],
+                    vec![0.0],
+                    1,
+                ),
+                (
+                    "tally".to_string(),
+                    1,
+                    run_as_python_counting_its_calls(),
+                    vec![(Some((0, 0)), 0.0)],
+                    vec![],
+                    vec![0.0],
+                    2,
+                ),
+            ],
+            island_output,
+            stream_clock_now_ns,
+            None,
+            state_resumed_from,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_node_run_as_python_reads_a_compiled_nodes_output_and_gives_a_records_message() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        stream_time_ns.store(7, Ordering::SeqCst);
+        let island =
+            an_island_of_add_one_then_a_node_run_as_python((1, 0), stream_clock_now_ns, &|_| None);
+        assert_eq!(
+            island.the_first_function_node_it_runs_as_python(),
+            Some("tally")
+        );
+        let output = island.evaluate_the_island_output_for_this_read().unwrap();
+        let FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload) = output.value
+        else {
+            panic!("a dict output is a Records message: {:?}", output.value);
+        };
+        let record = rmpv::decode::read_value(&mut records_message_payload.as_slice()).unwrap();
+        assert_eq!(
+            record,
+            rmpv::Value::Map(vec![
+                (rmpv::Value::from("x"), rmpv::Value::from(3.0)),
+                (rmpv::Value::from("calls"), rmpv::Value::from(1.0)),
+            ])
+        );
+        assert_eq!(output.evaluated_at_ns, 7);
+    }
+
+    #[test]
+    fn a_number_a_node_run_as_python_gives_is_a_control_value() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let island = an_island_of_add_one_then_a_node_run_as_python(
+            (1, 1),
+            stream_clock_now_ns,
+            &|breadcrumb_number| (breadcrumb_number == 1).then(|| vec![41.0]),
+        );
+        stream_time_ns.store(1, Ordering::SeqCst);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::ControlValue(42.0),
+            "the node resumed from the state its stream carries"
+        );
+        assert_eq!(
+            island
+                .evaluation
+                .lock()
+                .function_nodes_each_after_what_it_reads[1]
+                .how_it_is_called
+                .state_values(),
+            [42.0],
+            "the state a node run as Python answers is what the board is written"
+        );
+    }
+
+    #[test]
+    fn an_island_of_compiled_nodes_runs_no_node_as_python() {
+        let island = an_island_of_add_one_then_scale(a_stream_clock_the_test_sets().1);
+        assert_eq!(island.the_first_function_node_it_runs_as_python(), None);
+    }
+
+    #[test]
+    fn a_node_run_as_python_that_raises_is_refused_naming_it_and_what_it_raised() {
+        let island =
+            FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+                vec![(
+                    "tally".to_string(),
+                    5,
+                    run_as_python_counting_its_calls(),
+                    vec![(None, -1.0)],
+                    vec![],
+                    vec![0.0],
+                    2,
+                )],
+                (0, 1),
+                a_stream_clock_the_test_sets().1,
+                None,
+                &|_| None,
+            )
+            .unwrap();
+        let refusal = island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("`tally`, run as Python, raised"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("a negative input"), "{refusal}");
+    }
+
+    #[test]
+    fn a_compiled_node_handed_a_dict_is_refused_naming_it() {
+        let island =
+            FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+                vec![
+                    (
+                        "tally".to_string(),
+                        0,
+                        run_as_python_counting_its_calls(),
+                        vec![(None, 1.0)],
+                        vec![],
+                        vec![],
+                        2,
+                    ),
+                    (
+                        "add_one".to_string(),
+                        1,
+                        compiled_to(add_one_and_count_calls),
+                        vec![(Some((0, 0)), 0.0)],
+                        vec![],
+                        vec![0.0],
+                        1,
+                    ),
+                ],
+                (1, 0),
+                a_stream_clock_the_test_sets().1,
+                None,
+                &|_| None,
+            )
+            .unwrap();
+        let refusal = island
+            .evaluate_the_island_output_for_this_read()
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("`add_one` runs compiled and takes a number on input 0"),
             "{refusal}"
         );
     }

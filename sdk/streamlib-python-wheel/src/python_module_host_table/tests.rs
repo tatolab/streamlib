@@ -279,6 +279,58 @@ fn lending_an_undeclared_port_or_one_already_lent_is_refused_by_name() {
 }
 
 #[test]
+fn an_input_an_island_running_a_node_as_python_feeds_is_refused_naming_the_node() {
+    Python::initialize();
+    Python::attach(|python| {
+        let (_source, destination) = one_wired_link(python, "lend_island_run_as_python");
+        destination.declare_ports(vec!["count".to_string()], Vec::new());
+        let namespace = PyDict::new(python);
+        python
+            .run(
+                c"class AnswersOne:\n    def evaluate(self, input_values, now_ns):\n        return [1.0]\n",
+                Some(&namespace),
+                None,
+            )
+            .unwrap();
+        let run_as_python = namespace
+            .get_item("AnswersOne")
+            .unwrap()
+            .unwrap()
+            .call0()
+            .unwrap()
+            .unbind();
+        crate::python_function_node_island::feed_an_input_port_from_a_function_node_island(
+            &destination,
+            "count",
+            vec![(
+                "tally".to_string(),
+                0,
+                run_as_python,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                1,
+            )],
+            (0, 0),
+        )
+        .unwrap();
+        let (context, _) =
+            full_access_context_recording_escalates(python, destination, "reads_the_tally");
+        note_execution_mode_from_parent_on_runtime_context(python, &context, "manual").unwrap();
+
+        let refusal = open_module_host_table(&context, &[], &["count", DESTINATION_INPUT_PORT])
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("\"count\""), "{refusal}");
+        assert!(refusal.contains("function node `tally`"), "{refusal}");
+        assert!(refusal.contains("runs as Python"), "{refusal}");
+
+        let _capsule = open_module_host_table(&context, &[], &[DESTINATION_INPUT_PORT])
+            .expect("a refused lend lends nothing, so the channel-fed input is still free");
+    });
+}
+
+#[test]
 fn a_port_python_did_not_lend_is_refused_when_native_code_opens_it() {
     Python::initialize();
     let module_host = Python::attach(|python| {

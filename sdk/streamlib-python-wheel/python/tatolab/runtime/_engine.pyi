@@ -58,14 +58,15 @@ class FunctionNodeEvaluatedAsItsHelpersProcessor:
         *,
         link_data_access: _stream_protocols.NodeLinkDataAccess,
         node_id: str,
-        evaluate_entry_address: int,
+        called_through: int | object,
         input_count: int,
         config_values: list[float],
         initial_state_values: list[float],
         output_count: int,
-    ) -> FunctionNodeEvaluatedAsItsHelpersProcessor: ...
-    def evaluate(self, input_values: list[float]) -> list[float]:
-        """Call the node with `input_values` at the stream's time now, answering its outputs."""
+    ) -> FunctionNodeEvaluatedAsItsHelpersProcessor:
+        """`called_through` is a compiled evaluate entry's address, or the object that runs the body as Python."""
+    def evaluate(self, input_values: list[float | dict[str, Any]]) -> list[float | dict[str, Any]]:
+        """Call the node with `input_values` at the stream's time now, answering its outputs, a `float` or a `dict` each."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,
@@ -73,15 +74,22 @@ def feed_an_input_port_from_a_function_node_island(
     input_port: str,
     function_nodes: list[
         tuple[
-            str, int, int, list[tuple[tuple[int, int] | None, float]], list[float], list[float], int
+            str,
+            int,
+            int | object,
+            list[tuple[tuple[int, int] | None, float]],
+            list[float],
+            list[float],
+            int,
         ]
     ],
     island_output: tuple[int, int],
 ) -> None:
-    """Feed `input_port` from an island of compiled function nodes, evaluated at each read.
+    """Feed `input_port` from an island of function nodes, evaluated at each read.
 
     Each node, after the nodes it reads, is its id, the breadcrumb number its
-    calls are noted under, its evaluate entry's address,
+    calls are noted under, its compiled evaluate entry's address or the object
+    whose `evaluate(input_values, now_ns)` runs its body as Python,
     where each input takes its value (an earlier node's output, or `None` and its
     pin value), its config values, its initial state values and its output count.
     `island_output` names the node and output the port reads.

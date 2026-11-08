@@ -13,6 +13,7 @@ use crate::core::Result;
 use crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::graph::HowItsReadersRanAFunctionNode;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::FunctionNodeStatesCarriedForOneStream;
@@ -82,6 +83,10 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// carries.
     stateful_function_nodes_its_far_side_calls: Vec<StatefulFunctionNodeItsFarSideCalls>,
     runs_a_function_node_as_its_processor: bool,
+    /// Where each function node its islands call is told how its far side ran
+    /// it, by the node's id.
+    how_its_far_side_ran_each_function_node:
+        std::collections::HashMap<String, Arc<HowItsReadersRanAFunctionNode>>,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -374,6 +379,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
                     runs_a_function_node_as_its_processor: false,
+                    how_its_far_side_ran_each_function_node: std::collections::HashMap::new(),
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
@@ -609,6 +615,44 @@ impl OutOfProcessLinkWiringEnvelope {
             }
             HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason) => {
                 Err(crate::core::error::Error::Runtime(reason.clone()))
+            }
+        }
+    }
+
+    /// Tell each of `function_nodes` how its far side ran it, once that far side
+    /// reports it at the end of its setup.
+    pub(crate) fn tell_each_function_node_how_its_far_side_ran_it(
+        &self,
+        function_nodes: impl IntoIterator<Item = (String, Arc<HowItsReadersRanAFunctionNode>)>,
+    ) {
+        self.recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .how_its_far_side_ran_each_function_node
+            .extend(function_nodes);
+    }
+
+    /// Note how the far side ran each function node its islands call, from the
+    /// `function_nodes_ran_compiled` map of node id to bool its `ready` carries.
+    pub(crate) fn note_how_its_far_side_ran_its_function_nodes(
+        &self,
+        function_nodes_ran_compiled: Option<&JsonValue>,
+    ) {
+        let Some(ran_compiled_by_function_node_id) =
+            function_nodes_ran_compiled.and_then(JsonValue::as_object)
+        else {
+            return;
+        };
+        let recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        for (function_node_id, ran_compiled) in ran_compiled_by_function_node_id {
+            if let (Some(how_it_ran), Some(ran_compiled)) = (
+                recorded
+                    .how_its_far_side_ran_each_function_node
+                    .get(function_node_id),
+                ran_compiled.as_bool(),
+            ) {
+                how_it_ran.note_it_ran_compiled(ran_compiled);
             }
         }
     }
@@ -2028,6 +2072,34 @@ mod tests {
                 .map(|node_id| serde_json::json!({"node": node_id, "links_into": []}))
                 .collect::<Vec<_>>(),
         })
+    }
+
+    /// The far side's `ready` says how it ran each function node, and only the
+    /// nodes its islands call are told; a bool is all it reads.
+    #[test]
+    fn each_function_node_is_told_how_the_far_side_ran_it() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        let how_lfo_ran = Arc::new(HowItsReadersRanAFunctionNode::default());
+        let how_tally_ran = Arc::new(HowItsReadersRanAFunctionNode::default());
+        envelope.tell_each_function_node_how_its_far_side_ran_it([
+            ("lfo-1".to_string(), Arc::clone(&how_lfo_ran)),
+            ("tally-1".to_string(), Arc::clone(&how_tally_ran)),
+        ]);
+
+        envelope.note_how_its_far_side_ran_its_function_nodes(Some(&serde_json::json!({
+            "lfo-1": true,
+            "tally-1": false,
+            "never-carried": false,
+        })));
+        assert_eq!(how_lfo_ran.ran_compiled(), Some(true));
+        assert_eq!(how_tally_ran.ran_compiled(), Some(false));
+
+        envelope.note_how_its_far_side_ran_its_function_nodes(Some(&serde_json::json!({
+            "lfo-1": "yes",
+        })));
+        envelope.note_how_its_far_side_ran_its_function_nodes(None);
+        assert_eq!(how_lfo_ran.ran_compiled(), Some(true));
     }
 
     /// Each function node an island calls rides the setup command with one

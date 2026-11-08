@@ -18,9 +18,9 @@ use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    FunctionNodePromotedToItsOwnProcessComponent, Graph, GraphEdgeWithComponents,
-    GraphNodeWithComponents, GraphWeight, Link, LinkState, LinkStateComponent, LinkUniqueId,
-    OutOfProcessLinkWiringComponent,
+    FunctionNodePromotedToItsOwnProcessComponent, FunctionNodeRanCompiledComponent, Graph,
+    GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight, HowItsReadersRanAFunctionNode,
+    Link, LinkState, LinkStateComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
 };
 
 /// How the compiler wires one link, by the kinds of its two ends.
@@ -125,8 +125,39 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
              `execution=\"continuous\"` with an `interval_ms`, or link it a source"
         )));
     }
+    let function_node_ids: Vec<ProcessorUniqueId> = island
+        .get("nodes")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node.get("node").and_then(JsonValue::as_str))
+        .map(ProcessorUniqueId::from)
+        .collect();
     reader_link_wiring.record_a_function_node_island_on_the_setup_command(island)?;
+    reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
+        function_node_ids.iter().filter_map(|function_node_id| {
+            the_report_of_how_its_readers_ran_a_function_node(graph, function_node_id)
+                .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
+        }),
+    );
     mark_a_link(graph, link_id, LinkState::Wired)
+}
+
+/// Where `function_node_id`'s readers note how they ran it, which `graph`
+/// renders on the node as `ran_compiled`; attached on its first reader.
+fn the_report_of_how_its_readers_ran_a_function_node(
+    graph: &mut Graph,
+    function_node_id: &ProcessorUniqueId,
+) -> Option<std::sync::Arc<HowItsReadersRanAFunctionNode>> {
+    let node = graph.traversal_mut().v(function_node_id).first_mut()?;
+    if let Some(component) = node.get::<FunctionNodeRanCompiledComponent>() {
+        return Some(std::sync::Arc::clone(&component.0));
+    }
+    let how_it_ran = std::sync::Arc::new(HowItsReadersRanAFunctionNode::default());
+    node.insert(FunctionNodeRanCompiledComponent(std::sync::Arc::clone(
+        &how_it_ran,
+    )));
+    Some(how_it_ran)
 }
 
 fn is_fed_by_a_node_that_is_not_a_function_node(
@@ -839,6 +870,47 @@ pub(crate) mod tests {
             reader_setup_command_ports(&graph, &reader)["islands"],
             serde_json::json!([])
         );
+    }
+
+    /// `graph` renders `ran_compiled` on each node an island carries: `null`
+    /// once its reader is wired, then what the reader's helper reported.
+    #[test]
+    fn each_island_node_renders_how_its_readers_helper_ran_it() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&lfo, "result"), (&remap, "x"));
+        let into_the_reader = link(&mut graph, (&remap, "result"), (&reader, "in1"));
+        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
+        let ran_compiled = |graph: &Graph, node_id: &ProcessorUniqueId| {
+            graph
+                .traversal()
+                .v(node_id)
+                .first()
+                .unwrap()
+                .serialize_components()
+                .get("ran_compiled")
+                .cloned()
+        };
+        assert_eq!(ran_compiled(&graph, &lfo), Some(JsonValue::Null));
+        assert_eq!(ran_compiled(&graph, &remap), Some(JsonValue::Null));
+
+        graph
+            .traversal()
+            .v(&reader)
+            .first()
+            .unwrap()
+            .get::<OutOfProcessLinkWiringComponent>()
+            .unwrap()
+            .0
+            .note_how_its_far_side_ran_its_function_nodes(Some(&serde_json::json!({
+                lfo.to_string(): true,
+                remap.to_string(): false,
+            })));
+        assert_eq!(ran_compiled(&graph, &lfo), Some(JsonValue::Bool(true)));
+        assert_eq!(ran_compiled(&graph, &remap), Some(JsonValue::Bool(false)));
     }
 
     #[test]

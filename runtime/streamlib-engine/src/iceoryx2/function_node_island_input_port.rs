@@ -13,12 +13,22 @@ use streamlib_ipc_types::{
     ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
 };
 
+/// The value an island's output took for one read, by the family its port
+/// carries.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FunctionNodeIslandOutputValue {
+    /// A number or a bool, carried as a control value.
+    ControlValue(f64),
+    /// A `dict`, as a Records message's msgpack payload.
+    RecordsMessage(Vec<u8>),
+}
+
 /// The value an island's output took for one read, and the reader's time it
 /// was evaluated at.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionNodeIslandOutputForOneRead {
     /// The island output's value.
-    pub value: f64,
+    pub value: FunctionNodeIslandOutputValue,
     /// The reader's stream-clock time the island was evaluated at.
     pub evaluated_at_ns: i64,
 }
@@ -31,6 +41,11 @@ pub trait FunctionNodeIslandEvaluatedAtEachRead: Send + Sync {
     fn evaluate_the_island_output_for_this_read(
         &self,
     ) -> Result<FunctionNodeIslandOutputForOneRead>;
+
+    /// The first function node of the island that runs as Python, which only a
+    /// read holding the Python interpreter's lock can call; `None` when every
+    /// node runs as native code.
+    fn the_first_function_node_it_runs_as_python(&self) -> Option<&str>;
 }
 
 /// One input port an island feeds, and how many reads it has answered.
@@ -47,24 +62,39 @@ impl InputPortFedByAFunctionNodeIsland {
         }
     }
 
-    /// The island's output for this read, as a control value on a wire is
-    /// carried: a Channels block of one f64 sample on one channel, at rate 0,
-    /// which states no regular rate.
+    /// The first function node the island runs as Python, if any.
+    pub(crate) fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+        self.island.the_first_function_node_it_runs_as_python()
+    }
+
+    /// The island's output for this read. A control value is carried as a
+    /// Channels block of one f64 sample on one channel, at rate 0, which states
+    /// no regular rate; a `dict` as a Records message.
     pub(crate) fn read_the_island_output(&self) -> Result<MessageReadFromInputPort> {
         let output = self.island.evaluate_the_island_output_for_this_read()?;
-        let block = ChannelsBlockDescriptorBody {
-            start_sample: self.reads_answered.fetch_add(1, Ordering::Relaxed),
-            sample_rate: 0,
-            channel_count: 1,
-            samples_per_channel: 1,
-            sample_type: ChannelsBlockSampleType::F64 as u32,
+        let reads_answered_before = self.reads_answered.fetch_add(1, Ordering::Relaxed);
+        let (payload_bytes, payload_descriptor) = match output.value {
+            FunctionNodeIslandOutputValue::ControlValue(control_value) => (
+                control_value.to_le_bytes().to_vec(),
+                DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
+                    start_sample: reads_answered_before,
+                    sample_rate: 0,
+                    channel_count: 1,
+                    samples_per_channel: 1,
+                    sample_type: ChannelsBlockSampleType::F64 as u32,
+                }),
+            ),
+            FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload) => (
+                records_message_payload,
+                DataChannelPayloadDescriptor::records_message(),
+            ),
         };
         Ok(MessageReadFromInputPort {
-            payload: InputPortMessagePayload::OwnedBytes(output.value.to_le_bytes().to_vec()),
+            payload: InputPortMessagePayload::OwnedBytes(payload_bytes),
             timestamp_ns: output.evaluated_at_ns,
             group_boundary: MessageGroupBoundary::StartsGroup,
             lost_since_last_read: 0,
-            payload_descriptor: DataChannelPayloadDescriptor::channels_block(block),
+            payload_descriptor,
         })
     }
 }
@@ -73,23 +103,27 @@ impl InputPortFedByAFunctionNodeIsland {
 mod tests {
     use super::*;
 
-    struct IslandAnsweringOneValue(f64);
+    struct IslandAnsweringOneValue(FunctionNodeIslandOutputValue);
 
     impl FunctionNodeIslandEvaluatedAtEachRead for IslandAnsweringOneValue {
         fn evaluate_the_island_output_for_this_read(
             &self,
         ) -> Result<FunctionNodeIslandOutputForOneRead> {
             Ok(FunctionNodeIslandOutputForOneRead {
-                value: self.0,
+                value: self.0.clone(),
                 evaluated_at_ns: 42,
             })
+        }
+
+        fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+            None
         }
     }
 
     #[test]
-    fn a_read_is_one_f64_sample_on_one_channel_at_no_regular_rate() {
+    fn a_control_value_is_one_f64_sample_on_one_channel_at_no_regular_rate() {
         let port = InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(
-            IslandAnsweringOneValue(0.25),
+            IslandAnsweringOneValue(FunctionNodeIslandOutputValue::ControlValue(0.25)),
         ));
         let message = port.read_the_island_output().unwrap();
         assert_eq!(message.payload.bytes(), 0.25f64.to_le_bytes());
@@ -111,6 +145,22 @@ mod tests {
             )
             .start_sample,
             1
+        );
+    }
+
+    #[test]
+    fn a_dict_is_one_records_message_carrying_its_msgpack_payload() {
+        let records_message_payload = vec![0x81, 0xa1, b'k', 0x01];
+        let port =
+            InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(IslandAnsweringOneValue(
+                FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload.clone()),
+            )));
+        let message = port.read_the_island_output().unwrap();
+        assert_eq!(message.payload.bytes(), records_message_payload);
+        assert_eq!(message.timestamp_ns, 42);
+        assert_eq!(
+            message.payload_descriptor,
+            DataChannelPayloadDescriptor::records_message()
         );
     }
 }
