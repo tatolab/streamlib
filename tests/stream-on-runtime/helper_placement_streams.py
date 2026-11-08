@@ -14,10 +14,12 @@ from helper_placement_processors import (
     CountsItsOwnCalls,
     CrashesItsHelper,
     DiesAbruptlyProbe,
+    HoldsItsConfiguredLevelCountingItsCalls,
     LabelsTheLevel,
     LevelScaledByItsGain,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
+    ReportsEachBatchOfItsConfiguredLevel,
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
@@ -225,6 +227,21 @@ def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> 
     for reader_name in ("first_reader", "second_reader"):
         reader = stream_builder.add(ReportsTheCountsItReadInOrderSink, name=reader_name)
         stream_builder.connect(counter.output("result"), reader.input("count"))
+
+
+@graph_generator
+def python_class_reporting_its_configured_level(stream_builder: StreamBuilder) -> None:
+    """A Python class reading the `level` of its config at each run."""
+    stream_builder.add(ReportsEachBatchOfItsConfiguredLevel, name="configured")
+
+
+@graph_generator
+def held_level_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
+    """A stateful function node holding the `level` of its config, read by two Python classes."""
+    held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
+    for reader_name in ("first_reader", "second_reader"):
+        reader = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name=reader_name)
+        stream_builder.connect(held.output("result"), reader.input("brightness"))
 
 
 @graph_generator

@@ -313,6 +313,41 @@ class ReportsEachBatchOfFunctionNodeValuesItReadSink:
             self.values_in_this_batch = []
 
 
+@dataclasses.dataclass
+class ReportsEachBatchOfItsConfiguredLevelConfig:
+    level: float = 0.25
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfItsConfiguredLevel:
+    """Reads the `level` of the config it was last handed at each run, a field a
+    link can drive once it is exposed, and reports the range of each batch."""
+
+    def __init__(self, config: ReportsEachBatchOfItsConfiguredLevelConfig) -> None:
+        self.level = config.level
+        self.levels_in_this_batch: "list[float]" = []
+        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+
+    def configure(self, config: ReportsEachBatchOfItsConfiguredLevelConfig) -> None:
+        self.level = config.level
+
+    def process(self, ctx) -> None:
+        if not self.levels_in_this_batch:
+            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        self.levels_in_this_batch.append(float(self.level))
+        if len(self.levels_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
+            report(
+                "FUNCTION_NODE_VALUE_BATCH_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
+                    "lowest": min(self.levels_in_this_batch),
+                    "highest": max(self.levels_in_this_batch),
+                },
+            )
+            self.levels_in_this_batch = []
+
+
 @node.process(execution="continuous", interval_ms=10)
 class ReportsEachBatchOfPinValuesItReadSink(ReportsEachBatchOfFunctionNodeValuesItReadSink):
     """Reads `brightness`, which nothing is linked into and which declares 0.25,
@@ -355,6 +390,20 @@ def LevelScaledByItsGain(  # noqa: N802
 ) -> float:
     """Its level scaled by the `gain` of its config, a field a link can drive once it is exposed."""
     return level * config.gain
+
+
+@dataclasses.dataclass(frozen=True)
+class HeldLevelConfig:
+    level: float = 0.25
+
+
+@node.function
+def HoldsItsConfiguredLevelCountingItsCalls(  # noqa: N802
+    step: float = 1.0, *, config: HeldLevelConfig, previous: State[CallsCountedSoFar]
+) -> Stateful[float, CallsCountedSoFar]:
+    """The `level` of its config, a field a link can drive once it is exposed;
+    stateful, so two readers move it into a helper of its own."""
+    return config.level, CallsCountedSoFar(previous.calls + step)
 
 
 #: The count at which a sink whose count started fresh takes its own helper down.

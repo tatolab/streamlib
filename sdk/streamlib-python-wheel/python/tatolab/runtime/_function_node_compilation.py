@@ -463,6 +463,10 @@ class FunctionNodeBodyRunAsPython:
             if parameter.kind is inspect.Parameter.POSITIONAL_ONLY
         ]
 
+    def take_the_config(self, config: Any) -> None:
+        """Call the body with `config` from the next evaluation on."""
+        self._config = _config_record_of_one_function_node(self._run_as_python, self._node_id, config)
+
     def runs(self, run_as_python: FunctionNodeReadyToEvaluate) -> bool:
         """Whether this is the body of `run_as_python`, so an island fed again can call it with its state."""
         return self._run_as_python is run_as_python
