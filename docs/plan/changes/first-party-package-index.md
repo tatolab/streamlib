@@ -66,7 +66,7 @@ reshapes #3216.
   resolves without downloading a wheel. A wheel is written once and never overwritten: a release
   that would write a file the bucket already holds with different bytes fails. The release
   regenerates the index pages from what the bucket holds, after the wheels and before `latest`,
-  in one GitHub Actions concurrency group that queues and never cancels, so two releases never
+  in one GitHub Actions concurrency group that queues runs with `cancel-in-progress` off, so two releases never
   write the pages at once and a later run's pages always list an earlier run's wheels.
 - **The index a project names.** Every project that uses a first-party module names the index in
   its `pyproject.toml`, in the standard uv form, so `uv sync` resolves it with no Tatolab
