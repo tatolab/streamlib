@@ -44,8 +44,6 @@ pub struct AudioWindowToEncode<'samples> {
     /// Per-channel samples.
     pub sample_count: u32,
     pub dtype: AudioSampleDtype,
-    /// The monotonic instant of the window's first sample.
-    pub first_sample_timestamp_ns: i64,
 }
 
 /// One decoded block of interleaved little-endian `f32` at Opus's rate.

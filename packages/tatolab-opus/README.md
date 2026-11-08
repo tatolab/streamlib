@@ -20,8 +20,7 @@ from tatolab.opus import OpusDecoder, OpusEncoder
 
 `OpusEncoder` takes Channels blocks on `audio`, which declares a 20 ms window at 48 kHz in `f32` and
 follows the source's channel count (one to eight), and writes one Packets message per Opus packet
-on `encoded_audio`, codec `opus`, in hang's legacy container, a QUIC varint timestamp in microseconds and then
-the packet. The port's stream facts carry the channel count and the `OpusHead`. Its config
+on `encoded_audio`, codec `opus`, each message one bare packet stamped with its first sample's instant. The port's stream facts carry the channel count and the `OpusHead`. Its config
 is optional: `bitrate_bps`, and `application` (`audio`, `voip` or `lowdelay`).
 
 `OpusDecoder` takes those Packets on `encoded_audio`, which requires codec `opus`, and writes

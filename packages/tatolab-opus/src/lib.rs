@@ -15,7 +15,6 @@ use pyo3::types::{PyBytes, PyDict};
 pub mod audio_window;
 pub mod audio_window_to_encoded_packet_encoder;
 pub mod encoded_packet_to_audio_block_decoder;
-pub mod hang_legacy_container_media_frame;
 pub mod message_group_loss_recovery_gate;
 pub mod opus_codec_refusal;
 pub mod opus_identification_header;
@@ -43,7 +42,7 @@ fn notices_for_python(notices: Vec<OpusCodecNotice>) -> Vec<OpusCodecNoticeForPy
         .collect()
 }
 
-/// Encodes 20 ms windows of audio into Opus media frames.
+/// Encodes 20 ms windows of audio into Opus packets.
 ///
 /// One thread drives a node's hooks, so the instance is never shared.
 #[pyclass(name = "AudioWindowToEncodedPacketEncoder", unsendable)]
@@ -64,15 +63,13 @@ impl AudioWindowToEncodedPacketEncoderForPython {
         })
     }
 
-    /// One media frame stamped at the window's first sample, or `None` while
-    /// the encoder discards a source it already refused.
+    /// One Opus packet, or `None` while the encoder discards a source it already refused.
     #[pyo3(signature = (
         interleaved_sample_bytes,
         sample_rate,
         channels,
         sample_count,
         dtype,
-        first_sample_timestamp_ns,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn encode_one_window<'py>(
@@ -83,7 +80,6 @@ impl AudioWindowToEncodedPacketEncoderForPython {
         channels: u32,
         sample_count: u32,
         dtype: &str,
-        first_sample_timestamp_ns: i64,
     ) -> PyResult<Option<Bound<'py, PyBytes>>> {
         let window = AudioWindowToEncode {
             interleaved_sample_bytes: bytes_of_a_contiguous_buffer(
@@ -94,10 +90,9 @@ impl AudioWindowToEncodedPacketEncoderForPython {
             channels,
             sample_count,
             dtype: AudioSampleDtype::from_wire_spelling(dtype)?,
-            first_sample_timestamp_ns,
         };
-        let media_frame = self.encoder.encode_one_window(&window)?;
-        Ok(media_frame.map(|media_frame| PyBytes::new(python, &media_frame)))
+        let opus_packet_bytes = self.encoder.encode_one_window(&window)?;
+        Ok(opus_packet_bytes.map(|opus_packet_bytes| PyBytes::new(python, &opus_packet_bytes)))
     }
 
     /// The stream facts the last mint owes the output port, once.
@@ -146,7 +141,7 @@ impl OpusEncoderPortStreamFactsForPython {
     }
 }
 
-/// Decodes Opus media frames into audio blocks.
+/// Decodes Opus packets into audio blocks.
 ///
 /// One thread drives a node's hooks, so the instance is never shared.
 #[pyclass(name = "EncodedPacketToAudioBlockDecoder", unsendable)]

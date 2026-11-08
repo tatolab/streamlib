@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The `OpusEncoder` body: one 20 ms audio window in, one Opus media frame
-//! out, and the port's Packets stream facts — the `OpusHead` hex-encoded as
+//! The `OpusEncoder` body: one 20 ms audio window in, one Opus packet out, and the port's Packets stream facts — the `OpusHead` hex-encoded as
 //! its codec configuration — owed whenever an encoder is minted.
 //!
 //! The encoder is minted from the first window's channel count, because the
@@ -18,7 +17,6 @@
 //! port's stream facts.
 
 use crate::audio_window::{AudioSampleDtype, AudioWindowToEncode};
-use crate::hang_legacy_container_media_frame::hang_legacy_container_media_frame_bytes;
 use crate::opus_codec_refusal::{OpusCodecNotice, OpusCodecRefusal, Result};
 use crate::opus_identification_header::OpusIdentificationHeader;
 #[cfg(test)]
@@ -194,7 +192,7 @@ struct MintedOpusEncoder {
     highest_packet_bytes: usize,
 }
 
-/// Encodes 20 ms audio windows into Opus media frames.
+/// Encodes 20 ms audio windows into Opus packets.
 #[derive(Default)]
 pub struct AudioWindowToEncodedPacketEncoder {
     config: OpusEncoderConfig,
@@ -226,8 +224,7 @@ impl AudioWindowToEncodedPacketEncoder {
         }
     }
 
-    /// Encode one window into one Opus media frame stamped at its first
-    /// sample, or hand back `None` when this encoder has already refused its
+    /// Encode one window into one Opus packet, or hand back `None` when this encoder has already refused its
     /// source and is discarding what follows.
     pub fn encode_one_window(
         &mut self,
@@ -237,11 +234,6 @@ impl AudioWindowToEncodedPacketEncoder {
             return Ok(None);
         }
         let interleaved_samples = read_window_as_interleaved_f32(window)?;
-        let mut media_frame =
-            hang_legacy_container_media_frame_bytes(window.first_sample_timestamp_ns, &[])
-                .map_err(|refusal| {
-                    OpusCodecRefusal(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}"))
-                })?;
 
         if let Some(stale) = self
             .minted
@@ -294,9 +286,8 @@ impl AudioWindowToEncodedPacketEncoder {
         let opus_packet_bytes = minted
             .instance
             .encode_interleaved_f32(&interleaved_samples, minted.highest_packet_bytes)?;
-        media_frame.extend_from_slice(&opus_packet_bytes);
         self.packets_encoded += 1;
-        Ok(Some(media_frame))
+        Ok(Some(opus_packet_bytes))
     }
 
     /// The stream facts the port does not carry yet, owed by the last mint.
@@ -432,7 +423,6 @@ fn mint_encoder_for_window(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hang_legacy_container_media_frame::read_hang_legacy_container_media_frame;
 
     const WINDOW_SAMPLE_COUNT: u32 = 960;
 
@@ -443,7 +433,6 @@ mod tests {
         sample_rate: u32,
         channels: u32,
         dtype: AudioSampleDtype,
-        first_sample_timestamp_ns: i64,
     }
 
     impl OwnedAudioWindow {
@@ -462,7 +451,6 @@ mod tests {
                 sample_rate: OPUS_SAMPLE_RATE_HZ,
                 channels,
                 dtype: AudioSampleDtype::F32,
-                first_sample_timestamp_ns: 1_000,
             }
         }
 
@@ -473,7 +461,6 @@ mod tests {
                 channels: self.channels,
                 sample_count: WINDOW_SAMPLE_COUNT,
                 dtype: self.dtype,
-                first_sample_timestamp_ns: self.first_sample_timestamp_ns,
             }
         }
     }
@@ -515,30 +502,13 @@ mod tests {
     }
 
     #[test]
-    fn a_window_leaves_as_a_media_frame_stamped_at_its_first_sample() {
+    fn a_window_leaves_as_one_bare_opus_packet() {
         let mut encoder = AudioWindowToEncodedPacketEncoder::default();
-        let media_frame = encode(&mut encoder, &OwnedAudioWindow::of(2, 0))
+        let opus_packet_bytes = encode(&mut encoder, &OwnedAudioWindow::of(2, 0))
             .expect("encodes")
-            .expect("publishes a media frame");
-        let read = read_hang_legacy_container_media_frame(&media_frame).expect("a media frame");
-        assert_eq!(read.timestamp_microseconds, 1);
-        assert!(!read.codec_payload_bytes.is_empty());
-    }
-
-    #[test]
-    fn a_window_stamped_before_zero_is_refused_before_it_mints_or_encodes() {
-        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
-        let mut stamped_before_zero = OwnedAudioWindow::of(2, 0);
-        stamped_before_zero.first_sample_timestamp_ns = -1_000;
-
-        let refusal = encode(&mut encoder, &stamped_before_zero)
-            .expect_err("a timestamp the container cannot carry is refused")
-            .to_string();
-
-        assert!(refusal.contains("-1000"), "{refusal}");
-        assert!(encoder.take_stream_facts_owed_to_the_port().is_none());
-        assert_eq!(encoder.packets_encoded(), 0);
-        assert!(encoder.minted.is_none());
+            .expect("publishes a packet");
+        assert!(!opus_packet_bytes.is_empty());
+        assert_eq!(encoder.packets_encoded(), 1);
     }
 
     #[test]
@@ -547,7 +517,7 @@ mod tests {
             let mut encoder = AudioWindowToEncodedPacketEncoder::default();
             encode(&mut encoder, &OwnedAudioWindow::of(channels, 0))
                 .expect("encodes")
-                .expect("publishes a media frame");
+                .expect("publishes a packet");
 
             let stream_facts = encoder
                 .take_stream_facts_owed_to_the_port()
@@ -572,7 +542,7 @@ mod tests {
             let mut encoder = AudioWindowToEncodedPacketEncoder::default();
             encode(&mut encoder, &OwnedAudioWindow::of(channels, 0))
                 .expect("encodes")
-                .expect("publishes a media frame");
+                .expect("publishes a packet");
             let stream_facts = encoder.take_stream_facts_owed_to_the_port().unwrap();
             pre_skips.push(opus_identification_header_of(&stream_facts).pre_skip);
         }
@@ -597,7 +567,7 @@ mod tests {
                 &OwnedAudioWindow::of(channels, window_index as u32 * WINDOW_SAMPLE_COUNT),
             )
             .expect("encodes across the re-mint")
-            .expect("publishes a media frame");
+            .expect("publishes a packet");
             entries_owed.push(
                 encoder
                     .take_stream_facts_owed_to_the_port()
