@@ -48,7 +48,7 @@ reshapes #3216.
 - **The release checks the scaffold locks this run's wheels** by passing them to `uv lock` as
   find-links beside PyPI (`reusable-distributions.yml:243-300`).
 - **Samples have no home**: the scaffold entry sends camera projects to "the docs' sample projects
-  and, later, an examples folder the app installs" (`ARCHITECTURE.md:103-106`). #3216 plans to
+  and, later, an examples folder the app installs" (`ARCHITECTURE.md:104-106`). #3216 plans to
   list `examples/` in the catalog as `git+https://github.com/tatolab/streamlib@<tag>` requirements.
 - **`project-and-assets` is on `main`** (`docs/plan/changes/project-and-assets.md`): a project is
   a repository of assets with no `stream.py`, and create writes the project file, one stream asset,
@@ -96,7 +96,7 @@ reshapes #3216.
 
 ## MODIFIED
 
-- **First-party distribution** (`ARCHITECTURE.md:3637-3646`, `:569-580`, `:511-517`, `:907-918`).
+- **First-party distribution** (`ARCHITECTURE.md:3648-3657`, `:569-580`, `:511-517`, `:907-918`).
   The release publishes `tatolab-stream` to PyPI and every first-party module to Tatolab's index,
   at the one version. A module still depends on `tatolab-stream` by a minimum version and on
   nothing of the runtime's. "Published to PyPI beside `tatolab-stream`" reads "published to
@@ -120,7 +120,7 @@ reshapes #3216.
   `tatolab-testpattern` pinned to the index, both floored at the runtime's version. Ruff, pyright
   and the cross-floor check still gate it. The pathway the old scaffold modelled (pixels on the
   GPU, logic on the CPU) moves to a sample. See decision 1 for the source.
-- **Where camera projects live** (`ARCHITECTURE.md:103-106`). "The docs' sample projects and,
+- **Where camera projects live** (`ARCHITECTURE.md:104-106`). "The docs' sample projects and,
   later, an examples folder the app installs" becomes the samples the runtime unit carries.
 - **Creating a project** (`ARCHITECTURE.md:327-347`). Create renders the starter or copies a
   sample; everything after the files are written is unchanged.
