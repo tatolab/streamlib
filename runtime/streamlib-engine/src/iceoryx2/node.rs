@@ -39,9 +39,9 @@ use streamlib_ipc_types::{
     create_the_reserved_slot_subscriber_of,
 };
 use streamlib_ipc_types::{
-    HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
-    InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry, StreamClockBoardEntry,
-    StreamClockBoardKey,
+    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessLossCountBoardKey,
+    HelperProcessStepProgressBoardEntry, InboundLinkLossCountBoardSlot,
+    OutputPortBagCountBoardEntry, StreamClockBoardEntry, StreamClockBoardKey,
 };
 
 /// Nodes a channel or notify service admits per subscriber or notifier slot.
@@ -414,6 +414,10 @@ impl Iceoryx2Node {
             creator = creator.add_with_default::<HelperProcessStepProgressBoardEntry>(
                 HelperProcessLossCountBoardKey::STEP_PROGRESS,
             );
+            creator = creator
+                .add_with_default::<HelperProcessFunctionNodeCallBreadcrumbBoardEntry>(
+                    HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB,
+                );
             creator.create().map_err(|refusal| {
                 Error::Runtime(format!(
                     "could not create the loss-count board '{service_name}': {refusal:?}"

@@ -74,6 +74,9 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     input_links: Vec<JsonValue>,
     output_links: Vec<JsonValue>,
     function_node_islands_feeding_its_input_ports: Vec<JsonValue>,
+    /// Each function node its islands call, by the breadcrumb number its far
+    /// side writes while calling it.
+    function_nodes_by_breadcrumb_number: Vec<String>,
     answer_cells_of_links_handed_over_past_the_setup_command:
         Vec<(Option<String>, Arc<OutOfProcessLinkWireReply>)>,
     how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
@@ -121,6 +124,23 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         never_opened
     }
 
+    /// The breadcrumb number of `function_node_id`, the one it was first given.
+    fn the_breadcrumb_number_of_a_function_node(&mut self, function_node_id: &str) -> u32 {
+        let position = match self
+            .function_nodes_by_breadcrumb_number
+            .iter()
+            .position(|numbered| numbered == function_node_id)
+        {
+            Some(position) => position,
+            None => {
+                self.function_nodes_by_breadcrumb_number
+                    .push(function_node_id.to_string());
+                self.function_nodes_by_breadcrumb_number.len() - 1
+            }
+        };
+        position as u32
+    }
+
     fn as_setup_command_ports(&self) -> JsonValue {
         serde_json::json!({
             "inputs": self.input_links,
@@ -154,6 +174,14 @@ fn refuse_every_link_waiting_behind_the_setup_command(
     for waiting_link in waiting {
         waiting_link.refuse_because(reason);
     }
+}
+
+/// A call to one function node a far side had under way, as its breadcrumb
+/// names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FunctionNodeCallUnderWayInTheFarSide {
+    pub(crate) function_node_id: String,
+    pub(crate) call_started_at_monotonic_ns: u64,
 }
 
 /// One out-of-process processor's link wiring, shared between the host of its
@@ -204,6 +232,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     input_links: Vec::new(),
                     output_links: Vec::new(),
                     function_node_islands_feeding_its_input_ports: Vec::new(),
+                    function_nodes_by_breadcrumb_number: Vec::new(),
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
                         HowALinkReachesTheFarSide::RidesTheSetupCommand,
@@ -325,18 +354,32 @@ impl OutOfProcessLinkWiringEnvelope {
     }
 
     /// Record the function node island feeding one of this processor's input
-    /// ports, which only a setup command carries.
+    /// ports, which only a setup command carries, numbering each node it calls
+    /// with the breadcrumb its far side writes while calling it.
     ///
     /// Refused once setup has begun: a running far side is not re-islanded.
     pub(crate) fn record_a_function_node_island_on_the_setup_command(
         &self,
-        function_node_island: JsonValue,
+        mut function_node_island: JsonValue,
     ) -> Result<()> {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock();
         match &recorded.how_a_link_reaches_the_far_side {
             HowALinkReachesTheFarSide::RidesTheSetupCommand => {
+                if let Some(nodes) = function_node_island
+                    .get_mut("nodes")
+                    .and_then(JsonValue::as_array_mut)
+                {
+                    for node in nodes {
+                        let Some(node_id) = node.get("node").and_then(JsonValue::as_str) else {
+                            continue;
+                        };
+                        let breadcrumb_number =
+                            recorded.the_breadcrumb_number_of_a_function_node(node_id);
+                        node["breadcrumb_number"] = JsonValue::from(breadcrumb_number);
+                    }
+                }
                 recorded
                     .function_node_islands_feeding_its_input_ports
                     .push(function_node_island);
@@ -355,6 +398,28 @@ impl OutOfProcessLinkWiringEnvelope {
                 Err(crate::core::error::Error::Runtime(reason.clone()))
             }
         }
+    }
+
+    /// The function node its far side last noted a call under way to, read
+    /// off the current spawn's board even after the far side died.
+    pub(crate) fn function_node_call_its_far_side_has_under_way(
+        &self,
+    ) -> Option<FunctionNodeCallUnderWayInTheFarSide> {
+        let breadcrumb = self
+            .loss_counts
+            .function_node_call_breadcrumb_its_helper_wrote()?;
+        let breadcrumb_number = breadcrumb.function_node_whose_call_is_under_way()?;
+        let function_node_id = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .function_nodes_by_breadcrumb_number
+            .get(breadcrumb_number as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("numbered {breadcrumb_number}"));
+        Some(FunctionNodeCallUnderWayInTheFarSide {
+            function_node_id,
+            call_started_at_monotonic_ns: breadcrumb.call_started_at_monotonic_ns,
+        })
     }
 
     /// Forget the function node island `link_id` carries, so no later setup
@@ -1283,6 +1348,66 @@ mod tests {
         assert_eq!(
             link_ids_the_setup_command_carries(&ports, "outputs"),
             ["L-past-setup"]
+        );
+    }
+
+    fn an_island_of(input_port: &str, function_node_ids: &[&str]) -> JsonValue {
+        serde_json::json!({
+            "input_port": input_port,
+            "link_id": format!("L-{input_port}"),
+            "output": {"node": function_node_ids.last().unwrap(), "port": "result"},
+            "nodes": function_node_ids
+                .iter()
+                .map(|node_id| serde_json::json!({"node": node_id, "links_into": []}))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    /// Each function node an island calls rides the setup command with one
+    /// breadcrumb number, the same in every island that calls it, so the
+    /// number its far side writes names one node.
+    #[test]
+    fn each_function_node_rides_the_setup_command_with_one_breadcrumb_number() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        envelope
+            .record_a_function_node_island_on_the_setup_command(an_island_of(
+                "brightness",
+                &["lfo-1", "remap-1"],
+            ))
+            .unwrap();
+        envelope
+            .record_a_function_node_island_on_the_setup_command(an_island_of(
+                "hue",
+                &["lfo-1", "clamp-1"],
+            ))
+            .unwrap();
+
+        let islands = envelope.as_setup_command_ports()["islands"].clone();
+        let breadcrumb_numbers: Vec<Vec<(String, u64)>> = islands
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|island| {
+                island["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|node| {
+                        (
+                            node["node"].as_str().unwrap().to_string(),
+                            node["breadcrumb_number"].as_u64().unwrap(),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            breadcrumb_numbers,
+            [
+                vec![("lfo-1".to_string(), 0), ("remap-1".to_string(), 1)],
+                vec![("lfo-1".to_string(), 0), ("clamp-1".to_string(), 2)],
+            ]
         );
     }
 }

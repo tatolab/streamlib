@@ -24,6 +24,7 @@ from helper_placement_processors import (
 from helper_placement_streams import (
     dies_abruptly_beside_a_survivor_pair,
     first_labelled_source_into_sink,
+    function_node_that_spins_forever_into_python_sink,
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
@@ -296,6 +297,33 @@ def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_proce
     assert len(set(values)) > 1, (
         f"the island is evaluated at each read on the stream's moving clock, and every read "
         f"returned {values[0]}"
+    )
+
+
+def test_a_function_node_call_that_never_returns_ends_its_reader_naming_the_node(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A stalled function-node call is handled as a crash.
+
+    No thread can pre-empt a compiled call, so the reader's helper is held
+    inside it. The engine reads the call's breadcrumb off the helper's board,
+    ends the helper once the call has run past its watchdog budget, names the
+    node that stalled, and starts a new helper.
+
+    Fail-without-fix: read only whether the process exited and the reader is
+    held for ever, with nothing logged.
+    """
+    tatolabd = start_tatolabd_running_stream(function_node_that_spins_forever_into_python_sink)
+    stall_line = tatolabd.await_stderr_containing("stalled: its call had run for")
+    tatolabd.await_stderr_containing("a new one starts in")
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert "function node `spinner" in stall_line, (
+        f"the stall must name the node whose call never returned: {stall_line}"
+    )
+    assert not tatolabd.marker_payloads("FUNCTION_NODE_VALUES_READ"), (
+        f"no read can return while the node spins:\n{tatolabd.recent_stderr()}"
     )
 
 

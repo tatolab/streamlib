@@ -130,6 +130,14 @@ impl PythonProcessorLinkDataAccess {
         self.loss_count_board_writer.get().map(Arc::as_ref)
     }
 
+    /// The loss-count board this helper writes, shared with what notes on it
+    /// past this call, once its setup opened it.
+    pub(crate) fn shared_loss_count_board_writer_of_this_helper(
+        &self,
+    ) -> Option<Arc<HelperProcessLossCountBoardWriter>> {
+        self.loss_count_board_writer.get().cloned()
+    }
+
     /// The wake on each publish of this helper's stream clock, once it listens
     /// for them.
     pub(crate) fn stream_clock_board_publish_listener_of_this_helper(

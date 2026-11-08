@@ -270,3 +270,12 @@ class ReportsTheFunctionNodeValuesItReadSink:
                     "sample_rates": sorted(self.sample_rates_read),
                 },
             )
+
+
+@node.function
+def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
+    """Never returns: a compiled call no thread can pre-empt, which only the watchdog ends."""
+    climbing = start
+    while climbing > 0.0:
+        climbing = climbing + 1.0
+    return climbing

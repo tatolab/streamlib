@@ -12,12 +12,14 @@ use pyo3::prelude::*;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
+    HelperProcessLossCountBoardWriter,
 };
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_OK, ModuleHostTableFunctionNodeEvaluateEntry,
 };
 
 use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
+use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
 /// Where one input of a function node in an island takes its value from.
@@ -35,6 +37,7 @@ enum WhereAFunctionNodeInputTakesItsValue {
 /// One function node of an island, compiled, and the values it is called with.
 struct FunctionNodeCompiledIntoAnIsland {
     node_id: String,
+    breadcrumb_number: u32,
     evaluate_entry: ModuleHostTableFunctionNodeEvaluateEntry,
     where_each_input_takes_its_value: Vec<WhereAFunctionNodeInputTakesItsValue>,
     config_values: Vec<f64>,
@@ -49,6 +52,9 @@ struct FunctionNodeCompiledIntoAnIsland {
 struct FunctionNodeIslandEvaluation {
     function_nodes_each_after_what_it_reads: Vec<FunctionNodeCompiledIntoAnIsland>,
     last_evaluated_at_ns: Option<i64>,
+    /// The board each call's breadcrumb is noted on, so the parent can name
+    /// the node a call died or stalled in.
+    call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
 }
 
 /// A function node island this helper evaluates at each read of the port it
@@ -80,7 +86,17 @@ impl FunctionNodeIslandEvaluation {
                     WhereAFunctionNodeInputTakesItsValue::FromItsPin(pin_value) => pin_value,
                 };
             }
-            function_node.call_its_evaluate_entry_at(now_ns)?;
+            if let Some(board_writer) = &self.call_breadcrumb_board_writer {
+                board_writer.note_a_function_node_call_started(
+                    function_node.breadcrumb_number,
+                    monotonic_clock_now_ns(),
+                );
+            }
+            let called = function_node.call_its_evaluate_entry_at(now_ns);
+            if let Some(board_writer) = &self.call_breadcrumb_board_writer {
+                board_writer.note_the_function_node_call_returned();
+            }
+            called?;
         }
         self.last_evaluated_at_ns = Some(now_ns);
         Ok(())
@@ -139,11 +155,12 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
     }
 }
 
-/// One function node as the bootstrap hands it over: its id, its evaluate
-/// entry's address, where each input takes its value, its config values, its
-/// initial state values and how many outputs it writes.
+/// One function node as the bootstrap hands it over: its id, its breadcrumb
+/// number, its evaluate entry's address, where each input takes its value, its
+/// config values, its initial state values and how many outputs it writes.
 type FunctionNodeHandedOverByTheBootstrap = (
     String,
+    u32,
     usize,
     Vec<(Option<(usize, usize)>, f64)>,
     Vec<f64>,
@@ -156,12 +173,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         function_nodes: Vec<FunctionNodeHandedOverByTheBootstrap>,
         (island_output_node_index, island_output_index): (usize, usize),
         stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
+        call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
     ) -> std::result::Result<Self, String> {
         let mut function_nodes_each_after_what_it_reads = Vec::with_capacity(function_nodes.len());
         for (
             node_index,
             (
                 node_id,
+                breadcrumb_number,
                 evaluate_entry_address,
                 where_each_input_takes_its_value,
                 config_values,
@@ -211,6 +230,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             };
             function_nodes_each_after_what_it_reads.push(FunctionNodeCompiledIntoAnIsland {
                 node_id,
+                breadcrumb_number,
                 evaluate_entry,
                 input_values: vec![0.0; where_each_input_takes_its_value_read.len()],
                 where_each_input_takes_its_value: where_each_input_takes_its_value_read,
@@ -235,6 +255,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             evaluation: Mutex::new(FunctionNodeIslandEvaluation {
                 function_nodes_each_after_what_it_reads,
                 last_evaluated_at_ns: None,
+                call_breadcrumb_board_writer,
             }),
             stream_clock_now_ns,
         })
@@ -263,6 +284,7 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
             function_nodes,
             island_output,
             Box::new(helper_stream_clock_now_ns),
+            link_data_access.shared_loss_count_board_writer_of_this_helper(),
         )
         .map_err(PyValueError::new_err)?;
     input_mailboxes.feed_an_input_port_from_a_function_node_island(input_port, Arc::new(island));
@@ -330,6 +352,7 @@ mod tests {
             vec![
                 (
                     "add_one".to_string(),
+                    0,
                     add_one_and_count_calls as *const () as usize,
                     vec![(None, 2.0)],
                     vec![],
@@ -338,6 +361,7 @@ mod tests {
                 ),
                 (
                     "scale".to_string(),
+                    1,
                     scale_by_config_plus_seconds as *const () as usize,
                     vec![(Some((0, 0)), 0.0)],
                     vec![10.0],
@@ -347,6 +371,7 @@ mod tests {
             ],
             (1, 0),
             stream_clock_now_ns,
+            None,
         )
         .unwrap()
     }
@@ -392,6 +417,7 @@ mod tests {
             FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
                 vec![(
                     "refuses".to_string(),
+                    2,
                     refuse_after_writing_state as *const () as usize,
                     vec![],
                     vec![],
@@ -400,6 +426,7 @@ mod tests {
                 )],
                 (0, 0),
                 a_stream_clock_the_test_sets().1,
+                None,
             )
             .unwrap();
         let refusal = island
@@ -422,6 +449,7 @@ mod tests {
             FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
                 vec![(
                     "reads_ahead".to_string(),
+                    3,
                     add_one_and_count_calls as *const () as usize,
                     vec![(Some((0, 0)), 0.0)],
                     vec![],
@@ -430,6 +458,7 @@ mod tests {
                 )],
                 (0, 0),
                 a_stream_clock_the_test_sets().1,
+                None,
             )
             .err()
             .unwrap();

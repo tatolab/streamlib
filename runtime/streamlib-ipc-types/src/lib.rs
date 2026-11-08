@@ -883,9 +883,12 @@ const HELPER_PROCESS_LOSS_COUNT_BOARD_OUTPUT_PORT_SECTION: u32 = 1;
 /// The board section holding the helper's one step-progress entry.
 const HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION: u32 = 2;
 
+/// The board section holding the helper's one function-node call breadcrumb.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION: u32 = 3;
+
 /// The key of one entry on a helper process's loss-count blackboard: an
-/// inbound-link slot, a declared output port by its index, or the helper's step
-/// progress.
+/// inbound-link slot, a declared output port by its index, the helper's step
+/// progress, or its function-node call breadcrumb.
 ///
 /// The iceoryx2 type name is pinned for the reason
 /// [`DataChannelSampleUserHeader`]'s is: the parent creates the board
@@ -918,6 +921,12 @@ impl HelperProcessLossCountBoardKey {
     /// The key of the helper's step-progress entry.
     pub const STEP_PROGRESS: Self = Self {
         section: HELPER_PROCESS_LOSS_COUNT_BOARD_STEP_PROGRESS_SECTION,
+        index_within_section: 0,
+    };
+
+    /// The key of the helper's function-node call breadcrumb.
+    pub const FUNCTION_NODE_CALL_BREADCRUMB: Self = Self {
+        section: HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION,
         index_within_section: 0,
     };
 }
@@ -978,6 +987,31 @@ pub struct HelperProcessStepProgressBoardEntry {
     pub callbacks_in_flight: u32,
     /// Always zero; keeps the entry a multiple of 8 bytes.
     pub reserved: u32,
+}
+
+/// The function-node call a helper process has under way, as it last wrote it:
+/// what its parent reads after the helper dies, and what the parent's watchdog
+/// times.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("HelperProcessFunctionNodeCallBreadcrumbBoardEntry")]
+#[repr(C)]
+pub struct HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+    /// The machine's monotonic time the call started at, in nanoseconds; zero
+    /// while no function-node call is under way.
+    pub call_started_at_monotonic_ns: u64,
+    /// The number the parent gave the called function node on the helper's
+    /// setup command; read only while a call is under way.
+    pub function_node_breadcrumb_number: u32,
+    /// Always zero; keeps the entry a multiple of 8 bytes.
+    pub reserved: u32,
+}
+
+impl HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+    /// The breadcrumb number of the function node whose call is under way, or
+    /// `None` between calls.
+    pub fn function_node_whose_call_is_under_way(&self) -> Option<u32> {
+        (self.call_started_at_monotonic_ns != 0).then_some(self.function_node_breadcrumb_number)
+    }
 }
 
 /// The key of the one entry on a stream's clock blackboard.
@@ -1239,6 +1273,11 @@ mod tests {
             HelperProcessLossCountBoardKey::inbound_link_slot(0),
             "the step-progress entry is in a section of its own"
         );
+        assert_ne!(
+            HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB,
+            HelperProcessLossCountBoardKey::STEP_PROGRESS,
+            "the function-node call breadcrumb is in a section of its own"
+        );
         assert_eq!(
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
             unsafe { <HelperProcessLossCountBoardKey as ZeroCopySend>::type_name() },
@@ -1333,6 +1372,61 @@ mod tests {
             // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
             unsafe { <HelperProcessStepProgressBoardEntry as ZeroCopySend>::type_name() },
             "HelperProcessStepProgressBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_helpers_function_node_call_breadcrumb_is_a_u64_and_two_u32s_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<HelperProcessFunctionNodeCallBreadcrumbBoardEntry>(),
+            16
+        );
+        assert_eq!(
+            std::mem::align_of::<HelperProcessFunctionNodeCallBreadcrumbBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+                call_started_at_monotonic_ns
+            ),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+                function_node_breadcrumb_number
+            ),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeCallBreadcrumbBoardEntry, reserved),
+            12
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe {
+                <HelperProcessFunctionNodeCallBreadcrumbBoardEntry as ZeroCopySend>::type_name()
+            },
+            "HelperProcessFunctionNodeCallBreadcrumbBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_breadcrumb_names_a_function_node_only_while_its_call_is_under_way() {
+        let between_calls = HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+            call_started_at_monotonic_ns: 0,
+            function_node_breadcrumb_number: 3,
+            reserved: 0,
+        };
+        assert_eq!(between_calls.function_node_whose_call_is_under_way(), None);
+        let during_a_call = HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+            call_started_at_monotonic_ns: 42,
+            ..between_calls
+        };
+        assert_eq!(
+            during_a_call.function_node_whose_call_is_under_way(),
+            Some(3)
         );
     }
 

@@ -24,8 +24,9 @@ use iceoryx2::prelude::*;
 use iceoryx2::service::port_factory::blackboard::PortFactory as BlackboardPortFactory;
 use parking_lot::Mutex;
 use streamlib_ipc_types::{
-    HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
-    InboundLinkLossCountBoardSlot, MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortBagCountBoardEntry,
+    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessLossCountBoardKey,
+    HelperProcessStepProgressBoardEntry, InboundLinkLossCountBoardSlot,
+    MAX_INBOUND_LINKS_PER_DESTINATION, OutputPortBagCountBoardEntry,
 };
 
 use crate::core::error::{Error, Result};
@@ -100,6 +101,11 @@ struct HelperProcessLossCountBoardReadHandles {
         HelperProcessLossCountBoardKey,
         HelperProcessStepProgressBoardEntry,
     >,
+    function_node_call_breadcrumb: EntryHandle<
+        ipc_threadsafe::Service,
+        HelperProcessLossCountBoardKey,
+        HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+    >,
     _reader: Reader<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
@@ -135,12 +141,16 @@ impl HelperProcessLossCountBoard {
         let step_progress = reader
             .entry(&HelperProcessLossCountBoardKey::STEP_PROGRESS)
             .map_err(unreadable_entry)?;
+        let function_node_call_breadcrumb = reader
+            .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB)
+            .map_err(unreadable_entry)?;
         Ok(Self {
             service_name,
             board_read_handles: HelperProcessLossCountBoardReadHandles {
                 inbound_link_slots,
                 output_ports,
                 step_progress,
+                function_node_call_breadcrumb,
                 _reader: reader,
                 _service: service,
             },
@@ -180,6 +190,13 @@ impl HelperProcessLossCountBoard {
     /// What the helper last wrote of its node's step progress.
     pub fn step_progress_entry(&self) -> HelperProcessStepProgressBoardEntry {
         *self.board_read_handles.step_progress.get()
+    }
+
+    /// What the helper last wrote of the function-node call it has under way.
+    pub fn function_node_call_breadcrumb_entry(
+        &self,
+    ) -> HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+        *self.board_read_handles.function_node_call_breadcrumb.get()
     }
 }
 
@@ -230,6 +247,13 @@ struct HelperProcessLossCountBoardWriteHandles {
     inbound_link_slots: Vec<Mutex<InboundLinkLossCountBoardSlotBeingWritten>>,
     output_ports: Vec<(String, Mutex<OutputPortBagCountBoardEntryBeingWritten>)>,
     step_progress: Mutex<HelperProcessStepProgressBoardEntryBeingWritten>,
+    function_node_call_breadcrumb: Mutex<
+        EntryHandleMut<
+            ipc_threadsafe::Service,
+            HelperProcessLossCountBoardKey,
+            HelperProcessFunctionNodeCallBreadcrumbBoardEntry,
+        >,
+    >,
     _writer: Writer<ipc_threadsafe::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
@@ -287,12 +311,17 @@ impl HelperProcessLossCountBoardWriter {
                 })
             })
             .map_err(unwritable_entry)?;
+        let function_node_call_breadcrumb = writer
+            .entry(&HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB)
+            .map(Mutex::new)
+            .map_err(unwritable_entry)?;
         Ok(Self {
             service_name,
             board_write_handles: HelperProcessLossCountBoardWriteHandles {
                 inbound_link_slots,
                 output_ports,
                 step_progress,
+                function_node_call_breadcrumb,
                 _writer: writer,
                 _service: service,
             },
@@ -388,6 +417,33 @@ impl HelperProcessLossCountBoardWriter {
                     .max(finished_step_index.saturating_add(1));
             }
         });
+    }
+
+    /// Note a call to the function node the parent numbered
+    /// `function_node_breadcrumb_number` started at `call_started_at_monotonic_ns`,
+    /// which is never zero; it stays noted until
+    /// [`Self::note_the_function_node_call_returned`].
+    pub fn note_a_function_node_call_started(
+        &self,
+        function_node_breadcrumb_number: u32,
+        call_started_at_monotonic_ns: u64,
+    ) {
+        self.board_write_handles
+            .function_node_call_breadcrumb
+            .lock()
+            .update_with_copy(HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
+                call_started_at_monotonic_ns: call_started_at_monotonic_ns.max(1),
+                function_node_breadcrumb_number,
+                reserved: 0,
+            });
+    }
+
+    /// Note the function-node call under way returned.
+    pub fn note_the_function_node_call_returned(&self) {
+        self.board_write_handles
+            .function_node_call_breadcrumb
+            .lock()
+            .update_with_copy(HelperProcessFunctionNodeCallBreadcrumbBoardEntry::default());
     }
 
     fn write_on_the_step_progress_entry(
@@ -853,6 +909,18 @@ impl HelperPlacedProcessorLossCounts {
             .map(HelperProcessLossCountBoard::step_progress_entry)
     }
 
+    /// What the current spawn's helper last wrote of the function-node call it
+    /// has under way, read off the board it wrote even after it died; `None`
+    /// before any spawn's board exists.
+    pub fn function_node_call_breadcrumb_its_helper_wrote(
+        &self,
+    ) -> Option<HelperProcessFunctionNodeCallBreadcrumbBoardEntry> {
+        self.board
+            .lock()
+            .as_ref()
+            .map(HelperProcessLossCountBoard::function_node_call_breadcrumb_entry)
+    }
+
     /// This processor's dropped bags across every inbound link, each read for
     /// its link's own wiring.
     pub fn total_dropped_bag_count(&self) -> u64 {
@@ -1240,6 +1308,42 @@ mod tests {
                 .map(|entry| entry.steps_finished),
             Some(0),
             "a restarted helper has finished no step until it finishes the one open"
+        );
+    }
+
+    #[test]
+    fn a_function_node_call_breadcrumb_is_set_for_the_call_and_outlives_the_helper_that_set_it() {
+        let counts = HelperPlacedProcessorLossCounts::default();
+        assert_eq!(
+            counts.function_node_call_breadcrumb_its_helper_wrote(),
+            None
+        );
+        let (board, writer, helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+        counts.hold_the_board_of_this_spawn(board);
+        let breadcrumb_under_way = || {
+            counts
+                .function_node_call_breadcrumb_its_helper_wrote()
+                .and_then(|entry| entry.function_node_whose_call_is_under_way())
+        };
+        assert_eq!(breadcrumb_under_way(), None);
+
+        writer.note_a_function_node_call_started(2, 1_000);
+        assert_eq!(breadcrumb_under_way(), Some(2));
+        writer.note_the_function_node_call_returned();
+        assert_eq!(
+            breadcrumb_under_way(),
+            None,
+            "a call that returned leaves no breadcrumb a later crash could read"
+        );
+
+        writer.note_a_function_node_call_started(5, 2_000);
+        drop(writer);
+        drop(helper_node);
+        assert_eq!(
+            breadcrumb_under_way(),
+            Some(5),
+            "the parent reads the call a helper died in off the board it holds"
         );
     }
 
