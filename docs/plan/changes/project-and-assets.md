@@ -88,8 +88,12 @@ API's addressing, the processor model's load path, and adds the project as a sto
 - **Content.** An asset's bytes live in `.tatolab/content/`, named by their SHA-256, and only the
   sidecar enters history, as Git LFS keeps a pointer. Node code (`nodes/*.py`, Slang) is plain
   files in history, named by import path as today.
-- **The asset verbs**, each a transaction: `import_asset {path or bytes, kind?, into}` (answers the
-  new UUID), `list_assets`, `describe_asset`, `rename_asset`, `move_asset`, `delete_asset` (refused
+- **Content never rides a transaction.** An import first copies the bytes into the content store
+  (from a path on the machine, or from an upload a client streams to the store), and the
+  transaction carries only the asset's UUID, kind and content hash, as Unreal and Unity keep
+  content apart from the operations that reference it.
+- **The asset verbs**, each a transaction: `import_asset {source, kind?, into}`, `source` a path on
+  the machine or a finished upload's content hash (answers the new UUID), `list_assets`, `describe_asset`, `rename_asset`, `move_asset`, `delete_asset` (refused
   while a reference names it, listing them) and `set_asset_settings`. `graph`'s reference edges
   extend to assets: a config value `{"asset": "<uuid>"}` is a reference edge to an asset, checked at
   load as a node reference is. A node opens its asset's content through the runtime by UUID.
@@ -117,7 +121,9 @@ API's addressing, the processor model's load path, and adds the project as a sto
   Git engine the runtime unit carries, never the person's own Git or `.git`. Every committed
   transaction is one commit on the current branch, its author the transaction's. The first slice
   keeps one branch, `main`; stock `git clone` of the history must read it, so an Artifacts remote
-  can later take a push unchanged.
+  can later take a push unchanged. Its operations follow Artifacts' programmatic model — create,
+  fork, import, branch, tag, read a file or a commit by path — so a local project and a hosted
+  one are driven the same way.
 - **Linked dependencies.** `add_dependency {source, revision}` pins another project — a local
   path, an Artifacts remote or a package that ships a project — at a commit or tag; its history is
   fetched into `.tatolab/dependencies/<project uuid>/`. Its assets are used by reference,
