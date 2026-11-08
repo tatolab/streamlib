@@ -23,6 +23,7 @@ fn is_skipped_project_directory(directory_path: &Path, directory_name: &str) -> 
     directory_name.starts_with('.')
         || directory_name == "venv"
         || directory_name == "__pycache__"
+        || directory_name == "node_modules"
         || directory_path.join("pyvenv.cfg").exists()
 }
 

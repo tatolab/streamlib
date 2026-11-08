@@ -163,17 +163,21 @@ struct StreamAssetRead {
     graph_or_why_none: std::result::Result<GraphSnapshot, String>,
 }
 
-/// The graph `stream_document` holds, or why it holds none: it names no stream asset, or it
-/// does not read as a graph.
+/// The graph `stream_document` holds, or why it holds none: it does not read, it names no
+/// stream asset, or it does not load as a graph.
 fn the_graph_a_stream_document_holds(
     stream_document: &ProjectStreamDocument,
 ) -> std::result::Result<GraphSnapshot, String> {
     let why_it_holds_no_graph =
         |why: String| format!("its graph document `{}` {why}", stream_document.path);
+    let bytes = stream_document
+        .bytes
+        .as_ref()
+        .map_err(|not_read| why_it_holds_no_graph(format!("does not read: {not_read}")))?;
     stream_document
         .asset_written_in_it()
         .map_err(|why| why_it_holds_no_graph(format!("names no stream asset: {why}")))?;
-    let document_text = std::str::from_utf8(&stream_document.bytes)
+    let document_text = std::str::from_utf8(bytes)
         .map_err(|not_utf8| why_it_holds_no_graph(format!("is not UTF-8: {not_utf8}")))?;
     GraphSnapshot::from_json_str(document_text)
         .map_err(|not_a_graph| why_it_holds_no_graph(format!("does not load: {not_a_graph}")))

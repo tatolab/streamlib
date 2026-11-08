@@ -14,13 +14,14 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 /// The top-level key of a graph document that holds its stream asset's UUID.
 pub const STREAM_DOCUMENT_ASSET_KEY: &str = "asset";
 
-/// One stream asset's graph document as it sits in its project: its path and its bytes.
+/// One stream asset's graph document as it sits in its project: its path and its bytes, or why
+/// they do not read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectStreamDocument {
     /// Where the document sits in the project: `streams/main.graph.json`.
     pub path: ProjectRelativeAssetPath,
-    /// The document's bytes, as read.
-    pub bytes: Vec<u8>,
+    /// The document's bytes, as read, or why they do not read.
+    pub bytes: Result<Vec<u8>, String>,
 }
 
 impl ProjectStreamDocument {
@@ -34,7 +35,11 @@ impl ProjectStreamDocument {
 
     /// The stream asset's UUID the document holds under `asset`, or why it holds none.
     pub fn asset_written_in_it(&self) -> Result<Uuid, String> {
-        let document: Value = serde_json::from_slice(&self.bytes)
+        let bytes = self
+            .bytes
+            .as_ref()
+            .map_err(|not_read| format!("the graph document does not read: {not_read}"))?;
+        let document: Value = serde_json::from_slice(bytes)
             .map_err(|not_parsed| format!("the graph document does not parse: {not_parsed}"))?;
         let written = document
             .get(STREAM_DOCUMENT_ASSET_KEY)
@@ -59,14 +64,16 @@ impl ProjectStreamDocument {
     }
 }
 
-/// Every stream asset's graph document in the project at `project_directory`, sorted by path.
+/// Every stream asset's graph document in the project at `project_directory`, sorted by path; a
+/// document that does not read is kept with why, so the others still load.
 pub fn project_stream_documents(
     project_directory: &Path,
 ) -> Result<Vec<ProjectStreamDocument>, ProjectRepositoryRefusal> {
     let mut stream_documents = Vec::new();
     for relative_path in project_files_ending_with(project_directory, GRAPH_DOCUMENT_FILE_SUFFIX)? {
         let path = ProjectRelativeAssetPath::parse(&relative_path)?;
-        let bytes = std::fs::read(path.on_disk_under(project_directory))?;
+        let bytes = std::fs::read(path.on_disk_under(project_directory))
+            .map_err(|not_read| not_read.to_string());
         stream_documents.push(ProjectStreamDocument { path, bytes });
     }
     Ok(stream_documents)
@@ -79,7 +86,7 @@ mod tests {
     fn document_at(path: &str, bytes: &str) -> ProjectStreamDocument {
         ProjectStreamDocument {
             path: ProjectRelativeAssetPath::parse(path).unwrap(),
-            bytes: bytes.as_bytes().to_vec(),
+            bytes: Ok(bytes.as_bytes().to_vec()),
         }
     }
 
@@ -109,6 +116,21 @@ mod tests {
         assert_ne!(
             document_at("streams/main.graph.json", "{").stream_asset(project),
             document_at("streams/other.graph.json", "{").stream_asset(project)
+        );
+    }
+
+    #[test]
+    fn a_document_that_does_not_read_says_why_and_keeps_a_stable_identity() {
+        let project = Uuid::new_v4();
+        let unread = ProjectStreamDocument {
+            path: ProjectRelativeAssetPath::parse("streams/main.graph.json").unwrap(),
+            bytes: Err("Permission denied (os error 13)".to_owned()),
+        };
+        let why = unread.asset_written_in_it().unwrap_err();
+        assert!(why.contains("does not read"), "{why}");
+        assert_eq!(
+            unread.stream_asset(project),
+            document_at("streams/main.graph.json", "{").stream_asset(project)
         );
     }
 

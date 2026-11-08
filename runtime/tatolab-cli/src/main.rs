@@ -118,7 +118,7 @@ enum TatolabVerb {
     #[command(
         long_about = "Queue a load of the project on its stream action queue and return at once: \
                       once the project's earlier actions have run, the runtime makes its .venv \
-                      when it does not run, reads every graph document under its streams/, and \
+                      when it does not run, reads every graph document in the project outside its hidden folders, and \
                       loads each as its own stream, recorded so it runs across the runtime's restarts \
                       until `tatolab stop` or `tatolab rm`. Loading the project again replaces \
                       each stream under the same id. A stream whose graph document fails to \

@@ -160,11 +160,14 @@ impl ProjectRepository {
             {
                 continue;
             }
+            let Ok(bytes) = &stream_document.bytes else {
+                continue;
+            };
             let stream_asset = ProjectAsset {
                 asset: stream_document.stream_asset(self.project_file.project),
                 kind: ProjectAssetKind::Stream,
-                content_sha256: content_sha256_of(&stream_document.bytes),
-                content_byte_len: stream_document.bytes.len() as u64,
+                content_sha256: content_sha256_of(bytes),
+                content_byte_len: bytes.len() as u64,
                 import_settings: serde_json::Map::new(),
                 path: stream_document.path,
             };

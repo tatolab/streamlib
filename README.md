@@ -35,8 +35,8 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
   sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
   the stream runs — the same operations the `tatolab` CLI uses.
-- **A fast edit loop.** `tatolab dev` restarts the stream on every saved edit, and keeps the running
-  one when an edit fails to load.
+- **A fast edit loop.** `tatolab dev` restarts the stream on every saved edit; an edit that fails
+  to load records the stream failed, with why in the log, until the next save.
 
 > **Alpha.** APIs will change. On Linux one command installs the runtime; on macOS you build it
 > from a checkout of this repository for now. One runtime per machine runs every stream on it. See
@@ -165,7 +165,7 @@ tatolabd                    # in a terminal of its own: this machine's runtime
 ```bash
 tatolab new my-stream       # the runtime writes a test pattern → GPU effect, plus a CPU meter, and runs it
 cd my-stream
-tatolab dev                 # the test pattern through a GPU lens, encoded and shared, its brightness logged
+tatolab dev                 # the test pattern through a GPU lens, its brightness logged
 ```
 
 `tatolab new` asks the runtime to create the project: it writes the files, makes the `.venv` and
@@ -176,10 +176,12 @@ no directory, the runtime creates the project in a new folder under `~/streams` 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
 starts one. `dev` queues a load of the project in the working directory and follows the project's
 log: the runtime syncs the project's `.venv` with the uv it carries, reads every graph document
-under `streams/`, loads each one as its own stream and starts it, and `dev` prints every record in
+in the project, loads each one as its own stream and starts it, and `dev` prints every record in
 your terminal. Save an edit and `dev` queues another load, and the runtime replaces the running
 streams with the edit. An edit that fails unloads its stream and records it failed: the reason
-lands in the log `dev` prints, and the next save loads it again. Ctrl-C ends `dev`
+lands in the log `dev` prints, and the next save loads it again. An edit that leaves
+`tatolab-project.json` unreadable fails the load itself and leaves the running streams as they
+were. Ctrl-C ends `dev`
 and leaves the streams running. Every stream the runtime loads is recorded: it runs until
 `tatolab stop` or `tatolab rm`, and the runtime loads it again each time it starts. `tatolab run`
 queues the load once, without watching for edits, prints the action's id and returns at once;
@@ -198,34 +200,35 @@ them, and nothing that runs. `tatolab new` writes `streams/main.graph.json`:
   "asset": "6f1c2e9a-3b4d-4c5e-8f60-71a2b3c4d5e6",
   "links": [
     {
-      "source": {"node": "0b7c1d2e-…", "port": "video"},
-      "target": {"node": "4e5f6a7b-…", "port": "video_from_upstream"}
+      "source": {"node": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "port": "video"},
+      "target": {"node": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "port": "video_from_upstream"}
     },
     {
-      "source": {"node": "4e5f6a7b-…", "port": "video_to_downstream"},
-      "target": {"node": "8c9d0e1f-…", "port": "video_from_upstream"}
+      "source": {"node": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "port": "video_to_downstream"},
+      "target": {"node": "8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f", "port": "video_from_upstream"}
     }
   ],
   "nodes": [
-    {"config": {}, "id": "0b7c1d2e-…", "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"},
-    {"config": {}, "id": "4e5f6a7b-…", "name": "halftonelenseffect", "type": "nodes.halftone_lens_effect:HalftoneLensEffect"},
-    {"config": {}, "id": "8c9d0e1f-…", "name": "brightnessmeter", "type": "nodes.brightness_meter:BrightnessMeter"}
+    {"config": {}, "id": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"},
+    {"config": {}, "id": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "name": "halftonelenseffect", "type": "nodes.halftone_lens_effect:HalftoneLensEffect"},
+    {"config": {}, "id": "8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f", "name": "brightnessmeter", "type": "nodes.brightness_meter:BrightnessMeter"}
   ]
 }
 ```
 
 `asset` is the stream's UUID and each node's `id` is its own, which the runtime generates when it
 places the node and never reuses; a link end names its node by that UUID. A node may also hold
-`pins`, the values on its unlinked inputs, and `studio`, how Tato Studio draws it. A load runs no
-code of the project: it reads the document as it is on disk.
+`pins`, the values on its unlinked inputs, and `studio`, how Tato Studio draws it. Reading the
+document runs no code, but a load imports each node's module in the project's interpreter to
+describe its ports, so a module's import-time code runs at every load.
 
 The meter reads the effect's output and logs its brightness each second; open that output in
 Tato Studio's viewer to watch it. Swap `tatolab.testpattern:TestPatternSource` for
-`tatolab.camera:CameraSource` (`pip install tatolab-camera`), which publishes on the same `video`
+`tatolab.camera:CameraSource` (`uv add tatolab-camera` in the project), which publishes on the same `video`
 port, to run your camera through the same effect.
 
 To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes
-(`pip install tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
+(`uv add tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
 declares a track of it, and a `MoqTrackSend` writes a port's messages to that track. Another
 stream, on this machine or another, reads the track through a `MoqTrackReceive` node naming a
 gateway on the same relay; a link's two ends are always in one stream.
@@ -337,11 +340,14 @@ its process imports the class by that name.
 
 A project may hold several graph documents, and a load of the project loads each one as its own
 stream; a document that is gone unloads and forgets its stream. `--dir DIR` names another project
-directory than the working one. A stream shows under its document's name until `tatolab rename`
+directory than the working one. A stream first loaded by `run` or `dev` shows under its document's
+name, and the one `tatolab new` creates under the project folder's name, until `tatolab rename`
 gives it another display name, which a load of the project keeps. A stream is keyed and addressed
 by its **stream id**, `<project name>-<stream name>-<hash>`, the hash over the project's UUID in
-`tatolab-project.json` and the stream asset's UUID in its document: moving the project or renaming
-the document keeps the id, and running a project again replaces its stream under the same id. A
+`tatolab-project.json` and the stream asset's UUID in its document. Once recorded, a stream keeps
+its id when the project moves or its document is renamed, since the runtime finds its record by
+those two UUIDs; a document first loaded after a rename takes its id from the new name. Running a
+project again replaces its stream under the same id. A
 second copy of a project, the same project UUID in another directory, is refused while the first
 holds the stream.
 
@@ -379,7 +385,7 @@ tatolab enable-virtual-camera [--print]
   action with nothing written.
 - **`run`** queues a load of the project on the project's queue and prints
   `<action> queued: load of <project>` and how to follow it, then returns 0 at once. The runtime
-  syncs the project's `.venv`, reads every graph document under `streams/`, and loads and
+  syncs the project's `.venv`, reads every graph document in the project, and loads and
   records each one; `tatolab logs --action <action>` and `tatolab streams` show how it went. A
   stream whose document does not load is not refused: the runtime records it failed, with why in
   the project's log. `run` exits 1 only when the load is not queued: the runtime refuses it or
@@ -528,7 +534,7 @@ interpreter, and whether it is stopped — and its own log. At each start it loa
 recorded stream that is neither stopped nor failed.
 
 `tatolab run` queues a load of a project. The runtime syncs the project's `.venv`, reads
-`tatolab-project.json` and each graph document under `streams/`, then loads each graph, starts it
+`tatolab-project.json` and each graph document in the project, then loads each graph, starts it
 and records it, writing every step to the project's log;
 `tatolab run` returns as soon as the load is queued.
 

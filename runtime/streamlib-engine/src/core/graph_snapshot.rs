@@ -132,7 +132,7 @@ pub struct GraphSnapshotNode {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "a_node_uuid_or_an_earlier_renders_processor_id"
+        deserialize_with = "a_node_uuid_or_none_for_a_string_that_is_no_uuid"
     )]
     pub id: Option<Uuid>,
 
@@ -161,9 +161,8 @@ fn a_config_naming_no_setting() -> serde_json::Value {
     serde_json::Value::Object(serde_json::Map::new())
 }
 
-/// A node's `id` as a UUID; a `graph` render from before node UUIDs carried a run's
-/// processor id there, which reads as no UUID.
-fn a_node_uuid_or_an_earlier_renders_processor_id<'de, D: Deserializer<'de>>(
+/// A node's `id` as a UUID; a string that is no UUID reads as none.
+fn a_node_uuid_or_none_for_a_string_that_is_no_uuid<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<Uuid>, D::Error> {
     let written = Option::<String>::deserialize(deserializer)?;
