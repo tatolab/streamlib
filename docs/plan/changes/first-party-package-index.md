@@ -30,9 +30,9 @@ reshapes #3216.
 - **The release uploads every first-party module to PyPI**, one file at a time, because PyPI
   rate-limits new project names: `reusable-distributions.yml:585-698` (`publish-to-pypi`), with
   `pypi_refused_only_new_project_names` letting the Linux runtime publish anyway
-  (`reusable-distributions.yml:699-711`). `tatolab-testpattern` and `tatolab-virtualcamera` have
-  never been created on PyPI (#3172), so every project `create_project` writes fails its first
-  `uv sync`. `tatolab-h264` and `-h265` failed to build for several releases (#3115).
+  (`reusable-distributions.yml:699-711`). `tatolab-testpattern` and `tatolab-virtualcamera` were
+  refused as new names for several releases (#3172), and every project `create_project` wrote then
+  failed its first `uv sync`; both are registered now, but the next new name meets the same limit. `tatolab-h264` and `-h265` failed to build for several releases (#3115).
 - **The release already writes to the bucket**: `install.sh`, `latest` and the Linux tarball go
   to `get-tatolab-com` through R2's S3 API with a bucket-scoped token
   (`reusable-distributions.yml:778-796`). The index needs no new credential.
