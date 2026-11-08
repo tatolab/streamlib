@@ -1322,6 +1322,7 @@ class HelperProcessLifecycle:
         self._function_node_islands_it_reads: "Optional[FunctionNodeIslandsFedToTheirPorts]" = None
         self._config_fields_its_node_exposes_as_inputs: "tuple[str, ...]" = ()
         self._config_as_last_applied: "dict[str, Any]" = {}
+        self._config_its_node_was_last_handed: "dict[str, Any]" = {}
         self._exposed_config_values_last_refused: "dict[str, Any]" = {}
 
     def run_until_the_parent_is_done(self) -> None:
@@ -1416,6 +1417,7 @@ class HelperProcessLifecycle:
                 port_wiring.get("exposed_config_fields") or []
             )
             self._config_as_last_applied = dict(configuration or {})
+            self._config_its_node_was_last_handed = dict(configuration or {})
             # Declared ahead of any wiring: a processor added to a running
             # graph has ports before it has links, and reads and writes on
             # them must not raise in between.
@@ -1648,6 +1650,33 @@ class HelperProcessLifecycle:
         self._exposed_config_values_last_refused = {}
         self._config_as_last_applied = configuration
 
+    def _hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(self, field: str) -> None:
+        """Hand the processor the config's own value of `field`, in place of the last one its link gave.
+
+        A field its node's config does not set goes back to its declared default.
+        """
+        if self._hosted is None or field not in self._config_fields_its_node_exposes_as_inputs:
+            return
+        configuration = {
+            config_field: value
+            for config_field, value in self._config_as_last_applied.items()
+            if config_field != field
+        }
+        if field in self._config_its_node_was_last_handed:
+            configuration[field] = self._config_its_node_was_last_handed[field]
+        if configuration == self._config_as_last_applied:
+            return
+        try:
+            apply_configuration(self._hosted.instance, configuration)
+        except Exception as configuration_refused:
+            log.error(
+                "this processor refused the config value of a field its link stopped driving",
+                field=field,
+                error=str(configuration_refused),
+            )
+            return
+        self._config_as_last_applied = configuration
+
     def take_the_lifecycle_commands_that_woke_the_scheduling_loop(self) -> "tuple[bool, bool]":
         """Dispatch every lifecycle command waiting, answering whether the
         processor still runs and whether it is paused."""
@@ -1748,6 +1777,10 @@ class HelperProcessLifecycle:
                 link_id=command.get("link_id"),
                 error=str(unwire_failure),
             )
+        if command.get("direction") == "input" and isinstance(command.get("port"), str):
+            self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(
+                command["port"]
+            )
 
     def _wire_link(self, command: "dict[str, Any]") -> None:
         direction = command.get("direction")
@@ -1821,6 +1854,7 @@ class HelperProcessLifecycle:
                 input_port=input_port,
                 error=str(unfeed_failure),
             )
+        self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(input_port)
 
     def _set_pin_values(self, command: "dict[str, Any]") -> None:
         try:
@@ -1873,6 +1907,7 @@ class HelperProcessLifecycle:
             self._bridge.send({"rpc": "error", "error": str(configuration_failure)})
             return
         self._config_as_last_applied = dict(command.get("config") or {})
+        self._config_its_node_was_last_handed = dict(command.get("config") or {})
         self._bridge.send({"rpc": "ok"})
 
 

@@ -19,6 +19,7 @@ from helper_placement_processors import (
     LevelScaledByItsGain,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
+    ReportsEachBatchOfItsConfiguredLevel,
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
@@ -229,6 +230,12 @@ def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> 
 
 
 @graph_generator
+def python_class_reporting_its_configured_level(stream_builder: StreamBuilder) -> None:
+    """A Python class reading the `level` of its config at each run."""
+    stream_builder.add(ReportsEachBatchOfItsConfiguredLevel, name="configured")
+
+
+@graph_generator
 def held_level_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
     """A stateful function node holding the `level` of its config, read by two Python classes."""
     held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
@@ -237,7 +244,7 @@ def held_level_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
         stream_builder.connect(held.output("result"), reader.input("brightness"))
 
 
-@stream
+@graph_generator
 def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
     stream_builder: StreamBuilder,
 ) -> None:

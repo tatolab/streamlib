@@ -1769,6 +1769,53 @@ def test_each_new_value_a_link_gives_an_exposed_config_field_is_a_live_config_up
     assert not lifecycle_thread.is_alive()
 
 
+def test_an_exposed_config_field_its_link_stops_driving_goes_back_to_its_config_value(
+    stand_in_parent,
+):
+    """Unlinking an exposed field hands the processor its config's own value
+    again, the one the last config update set, as a live config update.
+
+    Fail-without-fix: the probe keeps the 1.5 the island last gave its gain.
+    """
+    from helper_process_probes import GAINS_THE_EXPOSED_GAIN_PROBE_TOOK
+
+    GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ExposedGainProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {"gain": 1.0},
+            "ports": {"exposed_config_fields": ["gain"]},
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
+    stand_in_parent.send({"cmd": "update_config", "config": {"gain": 2.0}})
+    assert stand_in_parent.receive() == {"rpc": "ok"}
+    wait_until_the_exposed_gain_probe_took(2.0)
+
+    island_into_the_gain = an_island_feeding_the_probes_level(then_double_it=True)
+    island_into_the_gain["input_port"] = "gain"
+    stand_in_parent.send({"cmd": "feed_island", "island": island_into_the_gain})
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": "L-island-into-level"}
+    wait_until_the_exposed_gain_probe_took(1.5)
+
+    stand_in_parent.send(
+        {"cmd": "unfeed_island", "port": "gain", "link_id": "L-island-into-level"}
+    )
+    wait_until_the_exposed_gain_probe_took(2.0)
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done", "`unfeed_island` answers nothing"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_parent):
     """The engine reports a link `wired` only on this answer, so a port that
     could not open has to say so rather than only logging: the reason is what
