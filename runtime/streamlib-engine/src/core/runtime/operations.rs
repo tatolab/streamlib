@@ -4,7 +4,6 @@
 use crate::core::error::Result;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
-use crate::core::runtime::ExposedOutputPortSubscription;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
@@ -80,19 +79,6 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
-
-    /// Subscribe to output port `port_name` of node `node_name` through its
-    /// channel's reserved slot — the runtime's publisher's one read of an
-    /// exposed port — yielding each message as written with its stamp, group
-    /// flag and the bags lost ahead of it. The port's channel is held open
-    /// whether or not a link out of it exists, until the subscription drops.
-    /// Refused while the port is internal, while its node does not run, and
-    /// while the slot is held.
-    fn subscribe_to_an_exposed_output_port(
-        &self,
-        node_name: String,
-        port_name: String,
-    ) -> BoxFuture<'_, Result<ExposedOutputPortSubscription>>;
 
     /// Hold output port `port_name` of node `node_id` open for a viewer,
     /// answering how the viewer subscribes to its channel's reserved slot from

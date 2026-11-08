@@ -8,14 +8,13 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeT
 
 use super::operations::RuntimeOperations;
 use super::{
-    CreateProjectRequest, LoadedStreamAndTheOutputPortsItExposes, MachineName,
-    OutputPortExposureOutcome, ProjectCreationQueued, ProjectStreamsListing, RunProjectRequest,
-    Runner, StreamAction, StreamActionQueued, StreamListing, StreamRenameOutcome,
+    CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectStreamsListing,
+    RunProjectRequest, Runner, StreamAction, StreamActionQueued, StreamListing,
+    StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::context::StreamClockReading;
 use crate::core::error::Result;
-use crate::core::graph::OutputPortExposureLevel;
 use crate::core::processors::InstalledModuleOfANodeType;
 
 /// What the local API reaches a runtime through: the runtime's description, the
@@ -70,13 +69,6 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// The ids of the loaded streams, in order.
     fn ids_of_the_loaded_streams(&self) -> Vec<String>;
 
-    /// Every loaded stream, in id order, with the output ports it exposes
-    /// now — one read of the stream table. Blocks while a stream compiles, so
-    /// the local API calls it from a blocking task.
-    fn every_loaded_stream_and_the_output_ports_it_exposes(
-        &self,
-    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes>;
-
     /// [`Runner::run_project`].
     fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued>;
 
@@ -106,15 +98,6 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::list_streams`].
     fn list_streams(&self) -> Vec<StreamListing>;
-
-    /// [`Runner::expose_port`].
-    fn expose_port(
-        &self,
-        stream_id: &str,
-        node: &str,
-        port: &str,
-        level: OutputPortExposureLevel,
-    ) -> Result<OutputPortExposureOutcome>;
 
     /// [`Runner::set_stream_clock_scale`].
     fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading>;
@@ -171,12 +154,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::ids_of_the_loaded_streams(self)
     }
 
-    fn every_loaded_stream_and_the_output_ports_it_exposes(
-        &self,
-    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
-        Runner::every_loaded_stream_and_the_output_ports_it_exposes(self)
-    }
-
     fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
         Runner::run_project(self, request)
     }
@@ -215,16 +192,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn list_streams(&self) -> Vec<StreamListing> {
         Runner::list_streams(self)
-    }
-
-    fn expose_port(
-        &self,
-        stream_id: &str,
-        node: &str,
-        port: &str,
-        level: OutputPortExposureLevel,
-    ) -> Result<OutputPortExposureOutcome> {
-        Runner::expose_port(self, stream_id, node, port, level)
     }
 
     fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading> {

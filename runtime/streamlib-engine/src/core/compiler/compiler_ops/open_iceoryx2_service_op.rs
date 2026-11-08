@@ -391,7 +391,6 @@ const A_RESERVED_SLOT_READER_AS_A_DESTINATION_PORT: &str = "a-reserved-slot-read
 /// releases the source's side, then the services.
 pub(crate) struct SourceSideHeldOpenForAReaderOnTheReservedSlot {
     pub(crate) channel_service_name: String,
-    pub(crate) channel_sizing: ChannelSizing,
     /// Where a helper source answers whether it opened its port; `None` for a
     /// source with nothing to answer.
     pub(crate) wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
@@ -445,7 +444,6 @@ pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
     );
     Ok(SourceSideHeldOpenForAReaderOnTheReservedSlot {
         channel_service_name: opened.channel_service_name,
-        channel_sizing: opened.channel_sizing,
         wire_reply_awaited_from_the_source: opened.wire_reply_awaited_from_the_source,
         _source_side: source_side,
         _services: Iceoryx2ServicesHeldOpenForLinkComponent {
@@ -4315,11 +4313,12 @@ mod tests {
             &OutputLinkPortRef::new(&source_id, "out1"),
             &Iceoryx2Node::for_this_test_process(),
         )
-        .expect("the publisher joins a channel a link opened");
+        .expect("the viewer joins a channel a link opened");
         assert_eq!(
-            held.channel_sizing.channel_service_creation_depth,
+            creation_depth_of_the_channel_held_by(&graph, &plain_link),
             depth_the_link_opened_it_at
         );
+        drop(held);
     }
 
     /// A port the publisher holds keeps publishing once a live graph change

@@ -11,9 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::LoadedStreamInThisRuntime;
-use super::exposed_output_port_subscription::{
-    ExposedOutputPortSourceWiring, the_source_wiring_its_answer_says,
-};
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
@@ -23,12 +20,43 @@ use crate::core::graph::{
     Graph, OutputLinkPortRef, ProcessorNode, ProcessorUniqueId, names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
 };
+use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
 /// How long an open waits for a helper process to open the port it runs.
 const A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN: Duration = Duration::from_secs(10);
 
 /// How often an open asks whether a helper source has answered.
 const HOW_OFTEN_AN_OPEN_ASKS_FOR_A_HELPERS_ANSWER: Duration = Duration::from_millis(10);
+
+/// Whether the source of a viewed port has opened its end of the channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SourceWiringOfAViewedOutputPort {
+    /// The source publishes on the channel.
+    Wired,
+    /// The source's helper process has not yet said whether it opened its port.
+    AwaitingItsHelpersAnswer,
+    /// The source's helper process could not open its port, and said why.
+    RefusedByItsHelper { reason: String },
+}
+
+/// What a helper source's answer, or its absence for a source with nothing to
+/// answer, says of the port's wiring.
+fn the_source_wiring_its_answer_says(
+    wire_reply: Option<&OutOfProcessLinkWireReply>,
+) -> SourceWiringOfAViewedOutputPort {
+    let Some(wire_reply) = wire_reply else {
+        return SourceWiringOfAViewedOutputPort::Wired;
+    };
+    match wire_reply.the_far_sides_answer() {
+        None => SourceWiringOfAViewedOutputPort::AwaitingItsHelpersAnswer,
+        Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => {
+            SourceWiringOfAViewedOutputPort::Wired
+        }
+        Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason }) => {
+            SourceWiringOfAViewedOutputPort::RefusedByItsHelper { reason }
+        }
+    }
+}
 
 /// What a viewer needs to read an output port's channel from its own process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,7 +154,7 @@ impl OutputPortViewerHeldOpen {
         &self.hand_off
     }
 
-    fn source_wiring(&self) -> ExposedOutputPortSourceWiring {
+    fn source_wiring(&self) -> SourceWiringOfAViewedOutputPort {
         the_source_wiring_its_answer_says(
             self.source_side
                 .wire_reply_awaited_from_the_source
@@ -209,11 +237,11 @@ impl LoadedStreamInThisRuntime {
         let gave_up_at = tokio::time::Instant::now() + A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN;
         let refusal = loop {
             match viewer_held_open.source_wiring() {
-                ExposedOutputPortSourceWiring::Wired => return Ok(viewer_held_open),
-                ExposedOutputPortSourceWiring::RefusedByItsHelper { reason } => {
+                SourceWiringOfAViewedOutputPort::Wired => return Ok(viewer_held_open),
+                SourceWiringOfAViewedOutputPort::RefusedByItsHelper { reason } => {
                     break format!("its helper process could not open the port: {reason}");
                 }
-                ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer
+                SourceWiringOfAViewedOutputPort::AwaitingItsHelpersAnswer
                     if tokio::time::Instant::now() >= gave_up_at =>
                 {
                     break format!(
@@ -221,7 +249,7 @@ impl LoadedStreamInThisRuntime {
                         A_HELPER_SOURCE_OPENS_ITS_PORT_WITHIN.as_secs()
                     );
                 }
-                ExposedOutputPortSourceWiring::AwaitingItsHelpersAnswer => {
+                SourceWiringOfAViewedOutputPort::AwaitingItsHelpersAnswer => {
                     tokio::time::sleep(HOW_OFTEN_AN_OPEN_ASKS_FOR_A_HELPERS_ANSWER).await
                 }
             }

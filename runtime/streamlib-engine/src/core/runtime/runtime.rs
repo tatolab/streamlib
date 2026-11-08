@@ -19,10 +19,7 @@ use super::loaded_stream::{
 };
 use super::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
-use super::{
-    LoadedStreamAndTheOutputPortsItExposes, RuntimeShutdownEscalation, StreamEnvironment,
-    StreamLocation,
-};
+use super::{RuntimeShutdownEscalation, StreamEnvironment, StreamLocation};
 use crate::core::context::{CaptureDeviceAccessPrompting, GpuContext};
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
@@ -290,32 +287,20 @@ impl EngineResourcesSharedByEveryStream {
 
     /// Take `stream` out of the table, unless another stream has taken its
     /// name since, into the streams whose end is not yet recorded — under the
-    /// table's lock, so a wait always finds it in one or the other — then say
-    /// it left on
-    /// [`topics::OUTPUT_PORT_EXPOSURE`](crate::core::pubsub::topics::OUTPUT_PORT_EXPOSURE).
+    /// table's lock, so a wait always finds it in one or the other.
     pub(crate) fn remove_from_the_stream_table(&self, stream: &Arc<LoadedStreamInThisRuntime>) {
-        let removed = {
-            let mut streams = self.streams_loaded_in_this_runtime.lock();
-            let it_is_this_stream = streams
-                .get(stream.stream_id())
-                .is_some_and(|loaded| Arc::ptr_eq(loaded, stream));
-            if it_is_this_stream {
-                streams.remove(stream.stream_id());
-                let mut streams_out_of_the_table = self
-                    .streams_out_of_the_table_until_their_end_is_recorded
-                    .lock();
-                streams_out_of_the_table.retain(|left| !left.has_its_end_recorded());
-                streams_out_of_the_table.push(
-                    LoadedStreamOutOfTheTableUntilItsEndIsRecorded::leaving_the_table(stream),
-                );
-            }
-            it_is_this_stream
-        };
-        if removed {
-            crate::core::pubsub::OutputPortExposureChange::StreamUnloaded {
-                stream_id: stream.stream_id().to_string(),
-            }
-            .publish();
+        let mut streams = self.streams_loaded_in_this_runtime.lock();
+        let it_is_this_stream = streams
+            .get(stream.stream_id())
+            .is_some_and(|loaded| Arc::ptr_eq(loaded, stream));
+        if it_is_this_stream {
+            streams.remove(stream.stream_id());
+            let mut streams_out_of_the_table = self
+                .streams_out_of_the_table_until_their_end_is_recorded
+                .lock();
+            streams_out_of_the_table.retain(|left| !left.has_its_end_recorded());
+            streams_out_of_the_table
+                .push(LoadedStreamOutOfTheTableUntilItsEndIsRecorded::leaving_the_table(stream));
         }
     }
 
@@ -335,22 +320,6 @@ impl EngineResourcesSharedByEveryStream {
             .lock()
             .values()
             .cloned()
-            .collect()
-    }
-
-    /// Every loaded stream, in id order, with the output ports it exposes
-    /// now, each with its level and catalog entry — one read of the stream
-    /// table. Blocks while a stream compiles.
-    pub(crate) fn every_loaded_stream_and_the_output_ports_it_exposes(
-        &self,
-    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
-        self.every_loaded_stream()
-            .iter()
-            .map(|stream| LoadedStreamAndTheOutputPortsItExposes {
-                stream_id: stream.stream_id().to_string(),
-                display_name: stream.display_name(),
-                exposed_output_ports: stream.exposed_output_ports(),
-            })
             .collect()
     }
 
@@ -1072,28 +1041,10 @@ impl Runner {
             .loaded_stream_of_the_id_when_loaded(stream_id)
     }
 
-    /// The exposed output ports of every stream loaded in this runtime, read
-    /// again after each change to them, to their catalog entries, or to the
-    /// loaded streams.
-    pub fn exposure_changes(&self) -> Result<crate::core::runtime::ExposureChangeReceiver> {
-        crate::core::runtime::ExposureChangeReceiver::subscribed_on(
-            &self.engine_resources_shared_by_every_stream,
-        )
-    }
-
     /// Every loaded stream, read under one lock of the stream table.
     pub fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
             .every_loaded_stream()
-    }
-
-    /// Every loaded stream, in id order, with the output ports it exposes
-    /// now — one read of the stream table. Blocks while a stream compiles.
-    pub fn every_loaded_stream_and_the_output_ports_it_exposes(
-        &self,
-    ) -> Vec<LoadedStreamAndTheOutputPortsItExposes> {
-        self.engine_resources_shared_by_every_stream
-            .every_loaded_stream_and_the_output_ports_it_exposes()
     }
 
     /// The ids of the loaded streams, in order.

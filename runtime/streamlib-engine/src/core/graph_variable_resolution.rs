@@ -504,16 +504,6 @@ impl GraphSnapshot {
             });
         }
 
-        for exposed in &self.exposed {
-            if variable_node_casts.contains(&cast_of(&exposed.node)?) {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}`, a variable node's port; expose the port \
-                     its `SetVariable` takes",
-                    exposed.node, exposed.port
-                )));
-            }
-        }
-
         let mut values_the_set_variables_hold: Vec<SetVariableAndTheValueItHolds> =
             setters_by_variable
                 .values()
@@ -532,7 +522,6 @@ impl GraphSnapshot {
                 clock: self.clock,
                 nodes: runtime_nodes,
                 links: runtime_links,
-                exposed: self.exposed.clone(),
             },
             variables_as_drawn: GraphVariablesAsDrawn {
                 variable_node_positions: self
@@ -1058,7 +1047,6 @@ mod tests {
                 ("back", "video_in"),
             )],
             references: Vec::new(),
-            exposed: Vec::new(),
             machine: "vm".to_string(),
         };
         resolution
@@ -1089,7 +1077,6 @@ mod tests {
                 ("back", "video_in"),
             )],
             references: Vec::new(),
-            exposed: Vec::new(),
             machine: "vm".to_string(),
         };
         resolution

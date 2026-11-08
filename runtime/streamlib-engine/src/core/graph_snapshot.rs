@@ -5,8 +5,8 @@
 //! renders.
 //!
 //! A [`GraphSnapshot`] is the spec keys of a `graph` document — `stream`, `clock`,
-//! `nodes[].name` / `type` / `config`, `links[].source` / `target` and
-//! `exposed` — and nothing else, so `graph`'s own output reads into one with
+//! `nodes[].name` / `type` / `config` and `links[].source` / `target` — and
+//! nothing else, so `graph`'s own output reads into one with
 //! its live keys skipped, and any other key is refused by name. Loading one is
 //! [`Runner::load_stream_from_graph_snapshot`](crate::core::runtime::Runner::load_stream_from_graph_snapshot);
 //! there is no saver, because the render is the export.
@@ -19,10 +19,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    OutputPortExposureLevel, cast_exposed_name_to_url_safe,
-    config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
-    node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
-    refuse_a_reference_to_a_node_of_the_wrong_type,
+    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
+    config_node_reference_edges_of_one_node, node_names_listed_for_a_refusal,
+    port_names_listed_for_a_refusal, refuse_a_reference_to_a_node_of_the_wrong_type,
     refuse_a_second_referrer_of_a_node_that_takes_one,
 };
 use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
@@ -30,12 +29,12 @@ use crate::core::graph_variable_resolution::{
     GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
 };
 use crate::core::json_schema::GraphResponse;
-use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
+use crate::core::json_schema::LinkPortRefOutput;
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
 /// A graph a runtime runs: its nodes by class import path, config and name,
-/// the links between their ports, and the output ports the stream exposes.
+/// and the links between their ports.
 ///
 /// Read only through [`Self::from_json_str`] and [`Self::from_graph_document`],
 /// which refuse a key the runtime does not read.
@@ -49,14 +48,11 @@ pub struct GraphSnapshot {
     #[serde(skip_serializing_if = "StreamClockSpec::is_real")]
     pub clock: StreamClockSpec,
 
-    /// Every node, each under the name links and exposures name it by.
+    /// Every node, each under the name links name it by.
     pub nodes: Vec<GraphSnapshotNode>,
 
     /// Every link, each end a node's port.
     pub links: Vec<GraphSnapshotLink>,
-
-    /// The output ports the stream exposes, each at its level.
-    pub exposed: Vec<ExposedOutputPortOutput>,
 }
 
 /// The spec keys a graph document is read through, before its keys are checked.
@@ -69,12 +65,10 @@ struct GraphSnapshotAsWritten {
     nodes: Vec<GraphSnapshotNode>,
     #[serde(default)]
     links: Vec<GraphSnapshotLink>,
-    #[serde(default)]
-    exposed: Vec<ExposedOutputPortOutput>,
 }
 
-/// One JSON object of a graph document: the graph, a node, a link, a link end
-/// or an exposure.
+/// One JSON object of a graph document: the graph, a node, a link or a link
+/// end.
 type GraphDocumentObject = serde_json::Map<String, serde_json::Value>;
 
 /// The keys one kind of object in a graph document is written with: the spec
@@ -90,7 +84,7 @@ struct GraphDocumentObjectKeys {
 
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
-    spec_keys: &["stream", "clock", "nodes", "links", "exposed"],
+    spec_keys: &["stream", "clock", "nodes", "links"],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &["extensions", "machine", "references", "runtime_name"],
 };
@@ -114,20 +108,14 @@ const GRAPH_LINK_END_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 };
 
 /// The keys a link end naming another stream's or another machine's port
-/// would carry, each refused naming [`RELAY_TRACK_SOURCE_READS_ANOTHER_STREAMS_PORT`].
+/// would carry, each refused naming [`TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT`].
 const LINK_END_KEYS_NAMING_A_PORT_OUTSIDE_THIS_STREAM: [&str; 2] = ["machine", "stream"];
 
 /// How a stream reads a port outside it, as a refusal of a link end naming
 /// one says.
-const RELAY_TRACK_SOURCE_READS_ANOTHER_STREAMS_PORT: &str = "a link's ends are both in this \
-     stream; read another stream's port, on this machine or another, through a \
-     `RelayTrackSource` node";
-
-const GRAPH_EXPOSURE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
-    object_kind: "an exposure",
-    spec_keys: &["node", "port", "level"],
-    live_keys: &[],
-};
+const TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT: &str = "a link's ends are both in this \
+     stream; read another stream's track at a relay, on this machine or another, through a \
+     `MoqTrackReceive` node";
 
 /// One node of a [`GraphSnapshot`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,7 +167,6 @@ impl GraphSnapshot {
             clock,
             nodes,
             links,
-            exposed,
         } = GraphSnapshotAsWritten::deserialize(&graph_document)
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
         Ok(Self {
@@ -187,7 +174,6 @@ impl GraphSnapshot {
             clock,
             nodes,
             links,
-            exposed,
         })
     }
 
@@ -200,9 +186,8 @@ impl GraphSnapshot {
     /// Check the graph without loading it: every `type` one the stream
     /// resolves on this floor, every config one its type takes, names unique
     /// once cast, every link end a port of the right direction on a node the
-    /// graph holds, every reference edge a node of the type its config key
-    /// takes, and every exposure an output port a node has, named once, at a
-    /// level beyond internal.
+    /// graph holds, and every reference edge a node of the type its config key
+    /// takes.
     ///
     /// Its variables and interface nodes are resolved first: the graph the
     /// runtime would run is checked, and each setter's value and each
@@ -315,42 +300,6 @@ impl GraphSnapshot {
             }
         }
         refuse_a_second_referrer_of_a_node_that_takes_one(&references_of_every_node)?;
-
-        let mut exposures_seen: HashSet<(String, String)> = HashSet::new();
-        for exposed in &self.exposed {
-            let node_cast = cast_exposed_name_to_url_safe(&exposed.node)?.into_owned();
-            let port_cast = cast_exposed_name_to_url_safe(&exposed.port)?.into_owned();
-            let Some(node) = nodes_by_cast_name.get(&node_cast) else {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}`, and holds no node `{}`. The graph holds: {}",
-                    exposed.node,
-                    exposed.port,
-                    exposed.node,
-                    the_names_the_graph_holds()
-                )));
-            };
-            refuse_a_port_the_node_does_not_have(
-                node_types,
-                &exposed.node,
-                node,
-                &exposed.port,
-                PortDirection::Output,
-            )?;
-            if exposed.level == OutputPortExposureLevel::Internal {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}` at the level `internal`, and an internal port \
-                     is one the graph leaves out of `exposed`. A port is exposed `private` \
-                     or `public`",
-                    exposed.node, exposed.port
-                )));
-            }
-            if !exposures_seen.insert((node_cast, port_cast)) {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}` twice",
-                    exposed.node, exposed.port
-                )));
-            }
-        }
 
         Ok(())
     }
@@ -501,7 +450,7 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
 }
 
 /// Refuse the first key of `graph_document` the runtime does not read — at the
-/// top, on a node, a link, a link end or an exposure — naming it and where it
+/// top, on a node, a link or a link end — naming it and where it
 /// sits, before the spec is read, so a misspelled key is named rather than
 /// reported as the key it stands in for being missing. A link end naming a
 /// machine or a stream is refused naming how a stream reads a port outside it.
@@ -571,11 +520,6 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
             refuse_a_key_no_such_object_holds(link_end, &GRAPH_LINK_END_KEYS, link_end_named)?;
         }
     }
-    for exposure in objects_of("exposed") {
-        refuse_a_key_no_such_object_holds(exposure, &GRAPH_EXPOSURE_KEYS, || {
-            format!("the exposure `{}`", port_address_of(exposure))
-        })?;
-    }
     Ok(())
 }
 
@@ -600,7 +544,7 @@ fn refuse_a_link_end_naming_a_port_outside_this_stream(
         return Ok(());
     }
     Err(Error::GraphError(format!(
-        "{} names {}: {RELAY_TRACK_SOURCE_READS_ANOTHER_STREAMS_PORT}",
+        "{} names {}: {TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT}",
         link_end_named(),
         what_it_names.join(" and ")
     )))
@@ -765,7 +709,6 @@ mod tests {
                  "source": {"node": "camera", "port": "video"},
                  "target": {"node": "display", "port": "video"}}
             ],
-            "exposed": [{"node": "camera", "port": "video"}],
             "extensions": [],
             "machine": "desk"
         });
@@ -783,14 +726,6 @@ mod tests {
                 port: "video".into()
             }
         );
-        assert_eq!(
-            graph.exposed,
-            vec![ExposedOutputPortOutput {
-                node: "camera".into(),
-                port: "video".into(),
-                level: OutputPortExposureLevel::Private,
-            }]
-        );
     }
 
     #[test]
@@ -804,7 +739,6 @@ mod tests {
                 config: serde_json::json!({}),
             }],
             links: vec![],
-            exposed: vec![],
         };
 
         let serialized = serde_json::to_value(&graph).unwrap();
@@ -813,8 +747,7 @@ mod tests {
             serialized,
             serde_json::json!({
                 "nodes": [{"name": "camera", "type": A_CAMERA_CLASS, "config": {}}],
-                "links": [],
-                "exposed": []
+                "links": []
             })
         );
         assert_eq!(
@@ -868,78 +801,6 @@ mod tests {
 
         assert!(refusal.contains("`display`"), "{refusal}");
         assert!(refusal.contains("camera"), "{refusal}");
-    }
-
-    #[test]
-    fn an_exposure_naming_a_node_the_graph_does_not_hold_is_refused() {
-        let camera_class = a_registered_camera_class();
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": camera_class}],
-            "exposed": [{"node": "display", "port": "video"}]
-        }))
-        .unwrap();
-
-        let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
-            .unwrap_err()
-            .to_string();
-
-        assert!(refusal.contains("holds no node `display`"), "{refusal}");
-    }
-
-    #[test]
-    fn an_exposure_reads_its_level_and_one_written_without_a_level_reads_as_private() {
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
-            "exposed": [
-                {"node": "camera", "port": "video", "level": "public"},
-                {"node": "camera", "port": "preview"}
-            ]
-        }))
-        .unwrap();
-
-        assert_eq!(
-            graph
-                .exposed
-                .iter()
-                .map(|exposed| (exposed.port.as_str(), exposed.level))
-                .collect::<Vec<_>>(),
-            [
-                ("video", OutputPortExposureLevel::Public),
-                ("preview", OutputPortExposureLevel::Private)
-            ]
-        );
-    }
-
-    #[test]
-    fn an_exposure_at_the_level_internal_is_refused_naming_the_levels_an_exposure_takes() {
-        let camera_class = a_registered_camera_class();
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": camera_class}],
-            "exposed": [{"node": "camera", "port": "video", "level": "internal"}]
-        }))
-        .unwrap();
-
-        let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
-            .unwrap_err()
-            .to_string();
-
-        for named in ["`camera/video`", "`internal`", "`private`", "`public`"] {
-            assert!(refusal.contains(named), "{named:?} not in: {refusal}");
-        }
-    }
-
-    #[test]
-    fn an_exposure_at_a_level_no_runtime_knows_does_not_parse() {
-        let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
-            "exposed": [{"node": "camera", "port": "video", "level": "everyone"}]
-        }))
-        .unwrap_err()
-        .to_string();
-
-        assert!(refusal.contains("everyone"), "{refusal}");
     }
 
     #[test]
@@ -1101,7 +962,7 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`stream`, `clock`, `nodes`, `links` and `exposed`",
+                    "`stream`, `clock`, `nodes` and `links`",
                 ],
             ),
             (
@@ -1132,14 +993,6 @@ mod tests {
                 [
                     "the source end of the link `camera/video` → `display/video` carries the key `prot`",
                     "`node` and `port`",
-                ],
-            ),
-            (
-                serde_json::json!({"nodes": [a_node.clone()],
-                                   "exposed": [{"node": "camera", "port": "video", "levle": "public"}]}),
-                [
-                    "the exposure `camera/video` carries the key `levle`",
-                    "`node`, `port` and `level`",
                 ],
             ),
         ] {
@@ -1188,10 +1041,6 @@ mod tests {
             (&definitions["ProcessorNodeOutput"], &GRAPH_NODE_KEYS),
             (&definitions["LinkOutput"], &GRAPH_LINK_KEYS),
             (&definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
-            (
-                &definitions["ExposedOutputPortOutput"],
-                &GRAPH_EXPOSURE_KEYS,
-            ),
         ] {
             let rendered = keys_rendered_on(object_schema);
             for key in &rendered {
@@ -1233,8 +1082,7 @@ mod tests {
             )
             .expect("the type is described into the stream");
         let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "described", "type": described_class}],
-            "exposed": [{"node": "described", "port": "video"}]
+            "nodes": [{"name": "described", "type": described_class}]
         }))
         .unwrap();
 
@@ -1476,9 +1324,9 @@ mod tests {
 
     /// A link's ends are both in the stream that loads the graph, so an end
     /// naming a stream — this one or another — or a machine is refused naming
-    /// the key and `RelayTrackSource` as how a stream reads a port outside it.
+    /// the key and `MoqTrackReceive` as how a stream reads a port outside it.
     #[test]
-    fn a_link_end_naming_a_stream_or_a_machine_is_refused_naming_relay_track_source() {
+    fn a_link_end_naming_a_stream_or_a_machine_is_refused_naming_the_track_receive() {
         for (source, target, the_end_and_what_it_names) in [
             (
                 serde_json::json!({"stream": "camera-rig", "node": "camerasource", "port": "video"}),
@@ -1515,9 +1363,8 @@ mod tests {
             assert_eq!(
                 refusal,
                 format!(
-                    "Stream graph error: {the_end_and_what_it_names}: a link's ends are both in this \
-                     stream; read another stream's port, on this machine or another, through a \
-                     `RelayTrackSource` node"
+                    "Stream graph error: {the_end_and_what_it_names}: \
+                     {TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT}"
                 )
             );
         }
@@ -1527,7 +1374,7 @@ mod tests {
     /// the state that runtime gave it, is refused naming how to read that
     /// stream's port, not for the key it rendered on the link.
     #[test]
-    fn a_link_to_another_stream_as_an_older_runtime_rendered_it_is_refused_naming_relay_track_source()
+    fn a_link_to_another_stream_as_an_older_runtime_rendered_it_is_refused_naming_the_track_receive()
      {
         let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
             "nodes": [{"name": "camera", "type": a_registered_camera_class()}],
@@ -1542,7 +1389,7 @@ mod tests {
         .to_string();
         assert!(
             refusal.contains("names the stream `camera-rig`")
-                && refusal.contains("`RelayTrackSource` node"),
+                && refusal.contains("`MoqTrackReceive` node"),
             "{refusal}"
         );
     }
@@ -1573,7 +1420,7 @@ mod tests {
         let graph = GraphSnapshot::from_json_str(r#"{"nodes": []}"#).unwrap();
 
         assert!(graph.validate(&NodeTypesOneStreamResolves::new()).is_ok());
-        assert!(graph.links.is_empty() && graph.exposed.is_empty());
+        assert!(graph.links.is_empty());
     }
     #[test]
     fn an_integer_wider_than_64_bits_is_refused_naming_it_rather_than_read_as_a_float() {

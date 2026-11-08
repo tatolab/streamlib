@@ -284,7 +284,6 @@ impl LoadedStreamInThisRuntime {
                 shutdown_escalation: shutdown_escalation.clone(),
                 teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
                 log_route: Arc::clone(&log_route),
-                this_stream: this_stream.clone(),
                 capture_device_access_prompting,
             }),
             processor_interpreter_launch_record: Arc::new(
@@ -1430,10 +1429,6 @@ impl LoadedStreamInThisRuntime {
             })?;
         }
         *self.graph_only_nodes_as_drawn.lock() = resolution.graph_only_nodes_as_drawn;
-
-        for exposed in &graph.exposed {
-            self.set_output_port_exposure_level(&exposed.node, &exposed.port, exposed.level)?;
-        }
         Ok(())
     }
 }
