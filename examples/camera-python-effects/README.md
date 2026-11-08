@@ -1,42 +1,27 @@
 # camera-python-effects
 
-Camera → six Python nodes → H.264, watched in a browser. A cyberpunk broadcast
+Camera → six Python nodes, seen in Tato Studio's viewer. A cyberpunk broadcast
 look built out of GLSL kernels, MediaPipe pose tracking, a ModernGL avatar and
 a skia overlay, all authored in Python.
 
 ```
 CameraSource ─┬─ CameraFrameToTexture ─ CyberpunkGlitch ─ CrtFilmGrain ─┐
               │                                                         ▼
-              └─ CyberpunkAvatar ──────────────────────▶ BreakingNewsCompositor ─ H264Encoder
+              └─ CyberpunkAvatar ──────────────────────▶ BreakingNewsCompositor
                                                                         ▲
                                       NeonOverlaySource ────────────────┘
 ```
 
 ## The model this example teaches
 
-**A stream with many nodes is still a normal Python project.** `stream.py`
-holds the one `@stream` function; the nodes, the code they share and their
-shaders live in an ordinary installable package, `src/camera_python_effects/`:
+**A stream with many nodes is still one graph asset.** `streams/main.graph.json`
+holds the seven nodes, their config and their links; the nodes, the code they
+share and their shaders live in an ordinary installable package,
+`src/camera_python_effects/`.
 
-```python
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    camera = stream_builder.add(CameraSource, config=camera_config)
-    camera_texture = stream_builder.add(CameraFrameToTexture)
-    ...
-    compositor = stream_builder.add(BreakingNewsCompositor)
-    encoder = stream_builder.add(H264Encoder)
-    ...
-    stream_builder.connect(
-        compositor.output("video_to_downstream"), encoder.input("video")
-    )
-    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)
-```
-
-- `CameraSource` and `H264Encoder` come from the **`tatolab-camera` and
-  `tatolab-h264` modules**, two dependencies in `pyproject.toml`. Each runs in
-  its own child process, and its per-frame path is the module's Rust, never
-  Python.
+- `CameraSource` comes from the **`tatolab-camera` module**, a dependency in
+  `pyproject.toml`. It runs in its own child process, and its per-frame path is
+  the module's Rust, never Python.
 - The six between them are this project's own `@node` classes, one module each
   under `camera_python_effects/nodes/`. **Every one runs in its own child
   process with its own interpreter**, so pose tracking at whatever rate the CPU
@@ -44,46 +29,38 @@ def main(stream_builder: StreamBuilder) -> None:
 - A node is named by its class's import path —
   `camera_python_effects.nodes.crt_film_grain:CrtFilmGrain` — and the child
   imports it by that name from the stream's venv. That is why the nodes are a
-  package: `uv sync` installs it, editable, into `.venv`, and the shared
+  package: the runtime installs it, editable, into the project's `.venv`, and the shared
   modules (`avatar_rig`, `gpu_surface_conventions`, the shaders) come along
   under one import root. The `tatolab new` scaffold's `nodes/` directory is the
   same idea for a project small enough to need no package.
-- **The runtime opens no windows.** The composited picture goes through
-  `H264Encoder`, and `expose` makes its output a track at this machine's local
-  relay, which a browser plays and any other stream or MoQ client reads.
+- **The runtime opens no windows.** Any port of the running stream, the
+  composited picture among them, is seen in Tato Studio's viewer.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — beside
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI — the authoring surface — beside
 numpy, skia-python, MediaPipe, ModernGL and this project's own package, and
-builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
-(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+builds `tatolab-camera` from this checkout, as an editable path dependency
+(`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin project,
 so the build needs a Rust toolchain. The runtime itself is not on pip.
 
-Then open the stream in a browser:
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main
-```
-
-`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
-ports.
+Then watch `breakingnewscompositor`'s `video_to_downstream` in Tato Studio's
+viewer.
 
 Runs on Linux with an NVIDIA GPU and a V4L2 camera, and on macOS arm64. The
 first run downloads MediaPipe's pose model (`pose_landmarker_lite.task`,
 ~5.5 MB) into `~/.cache/camera-python-effects`; the shaders need no toolchain —
 the runtime compiles them when each node's `setup()` builds its kernel.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved
-`.py` or `pyproject.toml` edit — and `tatolab run` otherwise. Both keep the
-stream as long as the command runs; Ctrl-C unloads it.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
 ## The pieces
 
@@ -102,7 +79,7 @@ any `.py` file (or restart `tatolab dev`) to load it.
 
 Each node's config is a dataclass beside it with ordinary Python defaults,
 named by its `__init__(self, config: ...)` annotation —
-`stream_builder.add(CrtFilmGrain, config={"barrel_curve": 0.0})` flattens the
+setting `crtfilmgrain`'s `barrel_curve` to `0.0` flattens the
 tube. `CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar`
 takes `scene_width`, `scene_height`, `detection_confidence` and
 `pose_model_path` (a local `.task` file, which skips the download).
@@ -153,13 +130,8 @@ smoke test is skipped where no GL context can be created.
 
 ## The physical-AI story: this graph is a data-collection rig
 
-Set `LEROBOT_DATASET_ROOT` at the top of `stream.py` to an absolute directory
-and the same graph records imitation-learning episodes while it runs:
-
-```bash
-uv sync --extra lerobot
-tatolab dev
-```
+Add the recorder (see Knobs) with `dataset_root` set to an absolute directory
+and the same graph records imitation-learning episodes while it runs.
 
 One more node, `LeRobotRecorder`, in one more child process, reads three ports
 that all descend from the same camera frame — the raw view, the composited
@@ -173,49 +145,37 @@ The dataset loads in LeRobot's own tooling (`LeRobotDataset(...,
 video_backend="pyav")`), visualizes with their viewer, and pushes to the Hub
 with `dataset.push_to_hub()`. Episode saves video-encode for whole seconds —
 and stall exactly one process. The camera keeps capturing, the effects keep
-running, and the encoder keeps publishing.
+running, and the composite keeps publishing.
 
 ## Observing it
 
-From another terminal:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-A node is named after its class, lowercased — `camerasource`,
-`breakingnewscompositor`, `h264encoder` — unless `add` passes `name=`. An
-exposed port is the track `<node>/<port>` of the broadcast
-`<machine>/<stream>.hang` at the machine's local relay, so any MoQ client reads
-it; this repository's `tatolab-read-track` writes a track's objects to files:
-
-```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    h264encoder/encoded_video --count 30 --out /tmp/camera-python-effects
-```
-
-Each file is one H.264 access unit, so the files concatenated in
-`objects.jsonl` order are an H.264 stream ffmpeg plays.
-
-Every other port is internal to the stream; `tatolab expose main <node>
-<port>` makes one a track too. A video port's objects are frame records, not
-pictures — `surface_id`, `width`, `height` and `timestamp_ns`, naming
-engine-owned GPU memory that means nothing outside the runtime — which is why
-the picture is shared through the encoder. The avatar's pose is data all the
-way through: `tatolab expose main cyberpunkavatar pose_to_downstream` and each
-object is one msgpack pose record — the frame's stamp, `detected` / `held` /
-`idle`, and the settled joints.
+The nodes are `camerasource`, `cameraframetotexture`, `cyberpunkglitch`,
+`crtfilmgrain`, `cyberpunkavatar`, `neonoverlaysource` and
+`breakingnewscompositor`.
 
 ## Knobs
 
-Everything is literal config in `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `LEROBOT_DATASET_ROOT` | top of `stream.py` | Directory the LeRobot recorder writes episodes into, after `uv sync --extra lerobot`. `None` leaves the recorder out of the graph. |
-| `FRAME_WIDTH` / `FRAME_HEIGHT` | top of `stream.py` | The camera's resolution cap and the overlay's canvas size. Default 1920×1080. |
-| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |
+| `device_id` | `camerasource` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. Absent picks the first device found. |
+| `max_width` / `max_height` | `camerasource` | The camera's resolution cap. 1920×1080. |
+| `width` / `height` | `neonoverlaysource` | The overlay's canvas size. 1920×1080. |
+
+The LeRobot recorder is not in the graph. To record episodes, `uv sync --extra
+lerobot`, add a `camera_python_effects.nodes.lerobot_recorder:LeRobotRecorder`
+node with `dataset_root` set, and link `camerasource`'s `video` to its
+`video_from_camera`, `cyberpunkavatar`'s `pose_to_downstream` to its
+`pose_from_avatar`, and `breakingnewscompositor`'s `video_to_downstream` to its
+`stylized_from_compositor`.

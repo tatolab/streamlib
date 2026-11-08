@@ -3,32 +3,41 @@
 Camera + microphone → H.264 and Opus → one WHIP session, two RTP tracks.
 
 The showcase of a **node package**: `WhipPublisher` is not a built-in. It ships
-in the `tatolab-webrtc` package — Rust inside, an ordinary `@node` class as the
-binding — and this stream reaches it the way it reaches any third-party node,
-by importing it and passing the class to `add`.
+in the `tatolab-webrtc` package — Rust inside, an ordinary `@node.process` class as the
+binding — and this project reaches it the way it reaches any third-party node, by
+its import path.
 
 ## The model this example teaches
 
 **A node package is an ordinary Python package.** There is no plugin manifest,
 no registry and no ABI: `tatolab-webrtc` is one more dependency in
-`pyproject.toml`, and `from tatolab.webrtc import WhipPublisher` is the whole
-integration:
+`pyproject.toml`, and a node's `type` names the class. This project's
+one node, `nodes/whip_publisher_to_the_runtime_environments_endpoint.py`,
+subclasses `WhipPublisher` only to read its endpoint from the environment, and
+the graph links both encoders into its `tracks`:
 
-```python
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    ...
-    publisher = stream_builder.add(WhipPublisher, config={"url": ...})
-    stream_builder.connect(
-        video_encoder.output("encoded_video"), publisher.input("tracks")
-    )
-    stream_builder.connect(
-        audio_encoder.output("encoded_audio"), publisher.input("tracks")
-    )
+```json
+{
+  "nodes": [
+    {"name": "h264encoder", "type": "tatolab.h264:H264Encoder", "config": {}},
+    {"name": "opusencoder", "type": "tatolab.opus:OpusEncoder", "config": {}},
+    {"name": "whippublisher",
+     "type": "nodes.whip_publisher_to_the_runtime_environments_endpoint:WhipPublisherToTheRuntimeEnvironmentsEndpoint",
+     "config": {}}
+  ],
+  "links": [
+    {"source": {"node": "h264encoder", "port": "encoded_video"}, "target": {"node": "whippublisher", "port": "tracks"}},
+    {"source": {"node": "opusencoder", "port": "encoded_audio"}, "target": {"node": "whippublisher", "port": "tracks"}}
+  ]
+}
 ```
 
+The file itself names each node and each link end by the node's UUID; the
+names stand in for them here, and the camera and microphone feeding the
+encoders are left out.
+
 The package's WebRTC stack comes up inside the publisher's own interpreter the
-first time a session needs it. Nothing in `stream.py` asks for it.
+first time a session needs it. Nothing in the graph asks for it.
 
 **A track is an inbound link.** `tracks` is a fan-in input: any number of
 links may name it, and each one becomes one RTP track whose medium — video or
@@ -52,34 +61,34 @@ bitrate is kilobytes, and no raw frame or GPU surface ever crosses.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts),
+With this machine's runtime running (`tatolabd`, which Tato Studio starts),
 and the WHIP URL in *its* environment (see below):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI and builds `tatolab-camera`, `tatolab-h264`, `tatolab-microphone`, `tatolab-opus` and `tatolab-webrtc` from this checkout, as editable path dependencies
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI and builds `tatolab-camera`, `tatolab-h264`, `tatolab-microphone`, `tatolab-opus` and `tatolab-webrtc` from this checkout, as editable path dependencies
 (`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
 so the build needs a Rust toolchain.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs; Ctrl-C unloads it, which closes the WHIP session.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
 ## The URL is a credential
 
 Cloudflare Stream puts the stream key in the URL's path, so the WHIP URL *is*
 the ingest credential — there is nothing else to authenticate with. It never
-appears in `stream.py`: the stream reads it from `STREAMLIB_WHIP_URL`, and
-refuses to load without it rather than falling back to a placeholder that would
+appears in the graph document, which the project's history keeps: the
+publisher reads it from `STREAMLIB_WHIP_URL` as its node is constructed, and
+refuses to start without it rather than falling back to a placeholder that would
 fail later and further away. An endpoint that authenticates with RFC 9725's
 `Authorization: Bearer` instead also takes `STREAMLIB_WHIP_BEARER_TOKEN`;
 Cloudflare Stream needs none.
 
-**The runtime compiles the stream, so the variable is read from `tatolabd`'s
-environment — not the shell `tatolab dev` runs in.** Exporting it before
+**Each node's process inherits `tatolabd`'s environment, so the variable is
+read from there — not the shell `tatolab dev` runs in.** Exporting it before
 `tatolab dev` does nothing. Either start the runtime yourself, in a terminal of
 its own, with the variable set:
 
@@ -98,9 +107,8 @@ systemctl --user set-environment STREAMLIB_WHIP_URL="$STREAMLIB_WHIP_URL"
 systemctl --user restart tatolabd
 ```
 
-`read -s` keeps the URL out of your shell history. Every stream that runtime
-loads can read the variable, and the URL lands in the publisher's config — see
-Observing it.
+`read -s` keeps the URL out of your shell history. Every node that runtime
+runs can read the variable.
 
 ## What the hardware has to have
 
@@ -115,63 +123,44 @@ Nothing here decodes, so no decoder is needed. Playing the stream back is
 
 ## Observing it
 
-From another terminal:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-**`tatolab graph` renders every node's config, so its output carries the WHIP
-URL — the credential.** Read it in a pipe and never save it, paste it or attach
-it anywhere:
-
-```bash
-tatolab graph --stream main | jq '.nodes[] | {name, type}'
-```
-
-A node is named after its class, lowercased — `camerasource`, `h264encoder`,
-`microphonesource`, `opusencoder`, `whippublisher` — unless `add` passes
-`name=`.
+The nodes are `camerasource`, `h264encoder`, `microphonesource`, `opusencoder`
+and `whippublisher`. No node's config holds the WHIP URL, so `tatolab graph`
+never prints it.
 
 The publisher logs `opening a session on the first bag`, then `the relay
 accepted the session`, then `bags_published=` every 300 messages. A stream with
 none of these and no error line means nothing reached the publisher — look
 upstream, at the encoders.
 
-Nothing in this stream is exposed. To watch what is being published on this
-machine too, expose the video encoder's output while the stream runs and open
-it in a browser:
-
-```bash
-tatolab expose main h264encoder encoded_video
-```
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main
-```
-
-`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
-ports.
+To watch what is being published on this machine too, open `camerasource`'s
+`video` or `h264encoder`'s `encoded_video` in Tato Studio's viewer.
 
 ## Knobs
 
-Everything but the credential is literal config in `stream.py` — edit it and
-save while `tatolab dev` runs.
+The credential is in `tatolabd`'s environment. Every other knob is a node's
+config in `streams/main.graph.json`; change it in Tato Studio's inspector or with
+the runtime's `set_node_config` MCP tool, which records the edit in the project's
+history and applies it to the running stream.
 
 | Knob | Where | Effect |
 | --- | --- | --- |
 | `STREAMLIB_WHIP_URL` | `tatolabd`'s environment | **Required.** The WHIP endpoint. A credential — never in a file in this directory. |
 | `STREAMLIB_WHIP_BEARER_TOKEN` | `tatolabd`'s environment | Bearer token, for an endpoint that wants one. Cloudflare Stream does not. |
-| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `device_id` | `MicrophoneSourceConfig` in `tatolab.microphone` | Capture device. Absent: the audio backend's default device. |
-| `bitrate_bps` | `H264EncoderConfig` in `tatolab.h264`, `OpusEncoderConfig` in `tatolab.opus` | Target bitrate. Absent: the encoder's own default. |
+| `device_id` | `camerasource` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. Absent picks the first device found. |
+| `device_id` | `microphonesource` | Capture device. Absent: the audio backend's default device. |
+| `bitrate_bps` | `h264encoder`, `opusencoder` | Target bitrate. Absent: the encoder's own default. |
 
 Each node's keys are its module's config dataclass: `CameraSourceConfig` in
 `tatolab.camera`, `H264EncoderConfig` in `tatolab.h264`, `MicrophoneSourceConfig`
-in `tatolab.microphone`, `OpusEncoderConfig` in `tatolab.opus` and
-`WhipPublisherConfig` in `tatolab.webrtc`.
+in `tatolab.microphone`, and `OpusEncoderConfig` in `tatolab.opus`.
 
 ## One known offset
 

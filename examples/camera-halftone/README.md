@@ -1,6 +1,6 @@
 # camera-halftone
 
-Camera → a GLSL compute kernel → H.264, watched in a browser. Your webcam
+Camera → a GLSL compute kernel, seen in Tato Studio's viewer. Your webcam
 printed as newsprint: one ink dot per cell, each dot as big as that cell is
 bright. The pixels never leave the GPU.
 
@@ -35,38 +35,38 @@ declares.
 
 ## The stream
 
-```python
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    camera = stream_builder.add(CameraSource, config=camera_config)
-    halftone = stream_builder.add(HalftoneCompute, config={"cell_size": 8, ...})
-    encoder = stream_builder.add(H264Encoder)
-    stream_builder.connect(
-        camera.output("video"), halftone.input("camera_frame_from_upstream")
-    )
-    stream_builder.connect(
-        halftone.output("halftone_frame_to_downstream"), encoder.input("video")
-    )
-    stream_builder.expose(encoder.output("encoded_video"), Exposure.PRIVATE)
+`streams/main.graph.json` is the stream: two nodes and the link between them.
+
+```json
+{
+  "nodes": [
+    {"name": "camerasource", "type": "tatolab.camera:CameraSource", "config": {"max_width": 1920, "max_height": 1080}},
+    {"name": "halftonecompute", "type": "nodes.halftone_compute:HalftoneCompute", "config": {"cell_size": 8, "dot_boost": 1.3, "background_level": 0.0627}}
+  ],
+  "links": [
+    {"source": {"node": "camerasource", "port": "video"}, "target": {"node": "halftonecompute", "port": "camera_frame_from_upstream"}}
+  ]
+}
 ```
 
-- `tatolab dev` reads `stream.py` from the current directory and loads its one
-  `@stream` function into this machine's runtime, `tatolabd`.
-- `CameraSource` and `H264Encoder` come from the **`tatolab-camera` and
-  `tatolab-h264` modules**, two dependencies in `pyproject.toml`. Each runs in
-  its own child process, and its per-frame path is the module's Rust, never
-  Python.
+The file itself names each node and each link end by the node's UUID; the
+names stand in for them here.
+
+- `tatolab dev` queues a load of this project: this machine's runtime,
+  `tatolabd`, reads every graph document under `streams/` and loads each as its
+  own stream.
+- `CameraSource` comes from the **`tatolab-camera` module**, a dependency in
+  `pyproject.toml`. It runs in its own child process, and its per-frame path is
+  the module's Rust, never Python.
 - `HalftoneCompute` is this project's own node, in `nodes/halftone_compute.py`
-  — never in `stream.py`, because every Python node runs in its own child
+  — its own module, because every Python node runs in its own child
   interpreter with its own GIL, which imports the class by name. Its config is
-  the `HalftoneComputeConfig` dataclass its `__init__` names; `add` passes a
-  dict and the child builds the dataclass from it.
+  the `HalftoneComputeConfig` dataclass its `__init__` names; the graph document holds
+  a dict and the child builds the dataclass from it.
 - The input port declares `delivery_profile="newest"`, the profile for a
   stream where a stale frame has no value once a fresher one exists.
-- **The runtime opens no windows.** What a stream shows, it exposes: `expose`
-  makes the encoder's output a track at this machine's local relay, which a
-  browser plays and any other stream or MoQ client reads. `H264Encoder` takes
-  a texture-backed frame like the kernel's output as readily as the camera's.
+- **The runtime opens no windows.** Any port of the running stream, the
+  kernel's output among them, is seen in Tato Studio's viewer.
 
 ## A kernel is an object
 
@@ -186,30 +186,23 @@ own frame — it never waits on a consumer.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — and
-builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
-(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI — the authoring surface — and
+builds `tatolab-camera` from this checkout, as an editable path dependency
+(`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin project,
 so the build needs a Rust toolchain. The runtime itself is not on pip.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs; Ctrl-C unloads it.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
-Then open the stream in a browser — your camera, printed as dots:
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main
-```
-
-`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
-ports.
+Then watch `halftonecompute`'s `halftone_frame_to_downstream` in Tato Studio's
+viewer — your camera, printed as dots.
 
 This stream needs real hardware: the kernel runs on the engine's own Vulkan
 device, so a machine without one fails while the stream is starting. It runs on
@@ -222,7 +215,7 @@ while `tatolab dev` runs and the stream loads again with the new text compiled.
 
 Four edits worth making, in rising order of how much they teach:
 
-- **Turn the screen up.** Raise `cell_size` from 8 to 24 in `stream.py` and the
+- **Turn the screen up.** Raise `halftonecompute`'s `cell_size` from 8 to 24 and the
   dots get big enough to count, the effect unmistakable from across a room;
   drop it to 3 and the picture comes back. No shader change — it is a push
   constant.
@@ -251,47 +244,26 @@ itself:
 
 ## Observing it
 
-From another terminal:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-The nodes are `camerasource`, `halftonecompute` and `h264encoder` — each named
-after its class, lowercased, since `add` passes no `name=`. An exposed port is
-the track `<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the
-machine's local relay, so any MoQ client reads it; this repository's
-`tatolab-read-track` writes a track's objects to files:
-
-```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    h264encoder/encoded_video --count 30 --out /tmp/halftone
-```
-
-Each file is one H.264 access unit, so the files concatenated in `objects.jsonl`
-order are an H.264 stream ffmpeg decodes — to PNGs, to see exactly what the
-kernel wrote.
-
-The kernel's own `halftone_frame_to_downstream` port is internal to the stream.
-`tatolab expose main halftonecompute halftone_frame_to_downstream` makes it a
-track too, but each of its objects is a frame's record, not its picture: a
-`VideoFrame` naming its `surface_id`, `width`, `height`, `timestamp_ns` and the
-camera's `color_info`. The pixels stay in
-engine-owned GPU memory that the surface id names, which means nothing outside
-the runtime — that is why the picture is shared through the encoder.
+The nodes are `camerasource` and `halftonecompute`.
 
 ## Knobs
 
-Everything is literal config in `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `CAPTURE_MAX_WIDTH` / `CAPTURE_MAX_HEIGHT` | top of `stream.py` | The camera's resolution cap; the negotiated format is clamped to fit. 1920×1080. |
-| `cell_size` | `add(HalftoneCompute, config=…)` | Pixels across one dot cell; bigger is a coarser screen. At least 2. |
-| `dot_boost` | `add(HalftoneCompute, config=…)` | How far a dot's ink is lifted above the colour it sampled; above 0.0. |
-| `background_level` | `add(HalftoneCompute, config=…)` | The grey the paper is, 0.0 black to 1.0 white. |
-| `Exposure.PRIVATE` | `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |
+| `device_id` | `camerasource` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. Absent picks the first device found. |
+| `max_width` / `max_height` | `camerasource` | Resolution cap; the negotiated format is clamped to fit. |
+| `cell_size` | `halftonecompute` | Pixels across one dot cell; bigger is a coarser screen. At least 2. |
+| `dot_boost` | `halftonecompute` | How far a dot's ink is lifted above the colour it sampled; above 0.0. |
+| `background_level` | `halftonecompute` | The grey the paper is, 0.0 black to 1.0 white. |

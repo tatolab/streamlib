@@ -1,7 +1,7 @@
 # fisheye-object-detection
 
 Camera → a fisheye lens → rectify → detect, with the distorted and the corrected
-view both encoded and watched in a browser. The pipeline a monocular drone flies
+view both seen in Tato Studio's viewer. The pipeline a monocular drone flies
 with, running on a desk.
 
 A wide-FOV lens is what a small aircraft carries — one camera, and as much of
@@ -18,8 +18,7 @@ directions, and a claim about detection quality needs a dataset and a metric,
 not a webcam. What it does show is that the correction is real: against a static
 test pattern, measured on the uncompressed frames, the rectified frame scores
 about **36 dB** PSNR on the camera frame it came from, where the distorted frame
-scores about **15 dB**. The two encoded tracks show the same difference by eye,
-and reproduce the figures only approximately, since the encode is lossy.
+scores about **15 dB**. The two views in the viewer show the same difference by eye.
 
 There is no fisheye lens on your desk, so `SyntheticFisheyeLens` applies the
 distortion a real one would have baked in. Everything downstream of it is the
@@ -27,10 +26,10 @@ real thing.
 
 ## The model this example teaches
 
-**A Tatolab stream is a normal Python project.** `stream.py` holds one `@stream`
-function that adds, links and exposes nodes; `tatolab dev` loads it into this
-machine's runtime, `tatolabd`. `CameraSource` and `H264Encoder` come
-from the `tatolab-camera` and `tatolab-h264` modules. `SyntheticFisheyeLens` and
+**A Tatolab stream is a graph asset in a project.** `streams/main.graph.json`
+holds the stream's nodes, their config and the links between them; `tatolab dev`
+loads it into this machine's runtime, `tatolabd`. `CameraSource` comes from the
+`tatolab-camera` module. `SyntheticFisheyeLens` and
 `UndistortingObjectDetector` are this project's own nodes, in `nodes/`, and each
 runs in its own child interpreter, which imports the class by name — so the
 detector's torch and its network load in a process of their own, and nothing
@@ -118,22 +117,9 @@ one step if you want it on its own.
 
 ### One output, two destinations
 
-`stream.py` connects the lens's single output port twice — once to an encoder
-and once to the rectifier:
-
-```python
-stream_builder.connect(
-    lens.output("fisheye_frame_to_downstream"),
-    fisheye_frame_encoder.input("video"),
-)
-stream_builder.connect(
-    lens.output("fisheye_frame_to_downstream"),
-    detector.input("fisheye_frame_from_upstream"),
-)
-```
-
-The producer does not know or care: the engine sizes the channel for the
-destinations it has. Behind each output port is a `NodeOutputTextureRing`, a
+The lens's single output port is read twice — by the rectifier it is linked to,
+and by Tato Studio's viewer while you watch it. The producer does not know or
+care: the engine sizes the channel for the destinations it has. Behind each output port is a `NodeOutputTextureRing`, a
 pool the engine owns. A slot a consumer still holds is skipped and never
 rewritten, and the pool grows while consumers hold frames; `depth` is how many
 published frames nobody claimed stay resolvable behind the newest one.
@@ -141,13 +127,11 @@ published frames nobody claimed stay resolvable behind the newest one.
 | Ring | Depth | Why |
 | --- | --- | --- |
 | the lens's landing texture | 1 | `dispatch` returns with the GPU work retired, and nothing outside the lens ever names it |
-| the lens's output | 3 | two consumers read every frame from it — the encoder and the rectifier |
-| the rectifier's output | 2 | the standard depth — one consumer, its encoder |
+| the lens's output | 3 | two consumers can read every frame from it — the rectifier and a viewer |
+| the rectifier's output | 2 | the standard depth — one consumer, a viewer |
 
-The two `H264Encoder`s are two nodes, added under the names
-`fisheye-frame-encoder` and `annotated-frame-encoder`, and each exposed
-`encoded_video` port is its own track. A stream shows a picture by exposing an
-encoder's output: the runtime opens no windows.
+The runtime opens no windows: any port of the running stream is seen in Tato
+Studio's viewer.
 
 ### One lens model, two shaders
 
@@ -225,40 +209,25 @@ demonstration of the pipeline rather than of the calibration.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — beside
-`torch` and `ultralytics`, and builds `tatolab-camera` and `tatolab-h264` from this checkout, as editable path dependencies
-(`[tool.uv.sources]` in `pyproject.toml`); each module is a maturin project,
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI — the authoring surface — beside
+`torch` and `ultralytics`, and builds `tatolab-camera` from this checkout, as an editable path dependency
+(`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin project,
 so the build needs a Rust toolchain. The runtime is not on pip.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs; Ctrl-C unloads it.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
-Then open the stream in a browser:
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main
-```
-
-The page plays the broadcast with its video tracks to pick from:
-`fisheye-frame-encoder/encoded_video` is the barrelled camera frame, and
-`annotated-frame-encoder/encoded_video` the rectified one with its detections
-outlined. Each opens on its own too:
-
-```text
-http://127.0.0.1:4446/watch/<machine>/main/fisheye-frame-encoder/encoded_video
-http://127.0.0.1:4446/watch/<machine>/main/annotated-frame-encoder/encoded_video
-```
-
-`http://127.0.0.1:4446/` lists this machine's name and every stream's exposed
-ports. Point the camera at something COCO knows (a person, a chair, a bottle, a
+Then watch two ports in Tato Studio's viewer: `syntheticfisheyelens`'s
+`fisheye_frame_to_downstream` is the barrelled camera frame, and
+`undistortingobjectdetector`'s `annotated_frame_to_downstream` the rectified one
+with its detections outlined. Point the camera at something COCO knows (a person, a chair, a bottle, a
 laptop) and the boxes appear; a webcam aimed at a blank wall detects nothing
 and says so, once a second, in the log.
 
@@ -306,14 +275,14 @@ torch and loads a network onto the GPU.
 Three edits worth making on purpose, because each teaches something the code
 alone does not:
 
-- **Change `DEFAULT_RADIAL_DISTORTION_K1` in `nodes/radial_distortion_model.py`
-  and save.** `stream.py` hands it to both nodes, so both get the new value,
+- **Change `radial_distortion_k1` on both `syntheticfisheyelens` and
+  `undistortingobjectdetector`.** Both nodes get the new value,
   the barrel deepens, and the black border grows — the recoverable disc
   shrinks as the barrel deepens, which the detector's `rectifier and
   detector ready` log line reports as `largest_recoverable_radius`.
-- **Give the rectifier a coefficient the lens does not have** (edit the
-  detector's `config` in `stream.py` on its own). Nothing refuses, nothing
-  warns, and the rectified track looks almost right. That is the failure mode
+- **Give the rectifier a coefficient the lens does not have** (change the
+  detector's `radial_distortion_k1` on its own). Nothing refuses, nothing
+  warns, and the rectified view looks almost right. That is the failure mode
   the shared prelude exists to make structurally impossible for everything
   *except* the coefficients, and the reason a real stack treats its
   calibration as load-bearing data.
@@ -326,73 +295,30 @@ alone does not:
 
 ## Observing it
 
-From another terminal:
+From another terminal, in this folder:
 
 ```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-A node is named after its class, lowercased — `camerasource`,
-`syntheticfisheyelens`, `undistortingobjectdetector` — unless `add` passes
-`name=`, as it does for the two encoders. An exposed port is the track
-`<node>/<port>` of the broadcast `<machine>/<stream>.hang` at the machine's
-local relay, so any MoQ client reads it; this repository's `tatolab-read-track`
-writes a track's objects to files:
-
-```bash
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    annotated-frame-encoder/encoded_video --count 30 --out /tmp/rectified
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    fisheye-frame-encoder/encoded_video --count 30 --out /tmp/fisheye
-```
-
-Each file is one H.264 access unit, so the files concatenated in
-`objects.jsonl` order are an H.264 stream ffmpeg decodes to PNGs — the
-before-and-after, frame by frame.
-
-The detector's own port is worth reading as it is. It is internal to the
-stream until `tatolab expose` makes it a track; each object is then the record
-the detector wrote, which carries the picture as a surface id and the
-detections beside it, as ordinary fields:
-
-```bash
-tatolab expose main undistortingobjectdetector annotated_frame_to_downstream
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    undistortingobjectdetector/annotated_frame_to_downstream --count 3 --out /tmp/detections
-```
-
-Each `object-*.bin` is one msgpack record; decoded, it reads:
-
-```json
-{"surface_id": "...", "width": 1280, "height": 720, "timestamp_ns": 12345,
- "color_info": {"primaries": "...", "transfer": "...", "matrix": "...",
-                "range": "..."},
- "detection_count": 1,
- "detections": [{"class_index": 0, "class_name": "person",
-                 "confidence": 0.87, "box_xyxy": [412, 96, 890, 719]}]}
-```
-
-Nothing in the engine knows what any of those keys mean — a record is an open
-map and a link is plumbing. The encoder on that same port reads `surface_id`,
-`width`, `height` and `timestamp_ns` and ignores the rest. The surface id means
-nothing outside the runtime: the pixels stay in engine-owned GPU memory, which
-is why the picture is shared through the encoder.
+The nodes are `camerasource`, `syntheticfisheyelens` and
+`undistortingobjectdetector`.
 
 ## Knobs
 
-Everything is literal config in `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. `None` picks the first device found. |
-| `FRAME_WIDTH` / `FRAME_HEIGHT` | top of `stream.py` | The camera's `max_width` / `max_height`: the negotiated format is clamped to fit. |
-| `DEFAULT_RADIAL_DISTORTION_K1` / `_K2` | `nodes/radial_distortion_model.py` | The lens the stream simulates and the lens the rectifier assumes; negative `k1` is barrel. |
-| `DETECTION_CONFIDENCE_THRESHOLD` | top of `stream.py` | How sure the model must be before a box is drawn. |
-| `detection_model_weights` | `UndistortingObjectDetector`'s `config` | Any ultralytics detection checkpoint; `yolov8n.pt` by default, resolved against the project directory. |
-| `Exposure.PRIVATE` | each `expose` | `Exposure.PUBLIC` shares the track off this machine, at every relay the runtime has joined. |
+| `device_id` | `camerasource` | Capture device — a V4L2 path (`/dev/video2`) on Linux, an AVFoundation unique ID on macOS. Absent picks the first device found. |
+| `max_width` / `max_height` | `camerasource` | The camera's resolution cap; the negotiated format is clamped to fit. 1280×720. |
+| `radial_distortion_k1` / `_k2` | `syntheticfisheyelens`, `undistortingobjectdetector` | The lens the stream simulates and the lens the rectifier assumes; negative `k1` is barrel. Keep the two nodes equal. |
+| `detection_confidence_threshold` | `undistortingobjectdetector` | How sure the model must be before a box is drawn. |
+| `detection_model_weights` | `undistortingobjectdetector` | Any ultralytics detection checkpoint; `yolov8n.pt` by default, resolved against the project directory. |
 
 ## Where the pixels do touch the host
 

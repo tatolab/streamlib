@@ -1,0 +1,55 @@
+{
+  "asset": "201bbf78-13ea-40a7-b152-3524b7491863",
+  "links": [
+    {
+      "source": {
+        "node": "4d0392b8-f2fb-4425-ab82-dbc798e9f97e",
+        "port": "video"
+      },
+      "target": {
+        "node": "4dc0b988-aba8-4bbb-b1b3-5ced65a955d4",
+        "port": "camera_frame_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "4dc0b988-aba8-4bbb-b1b3-5ced65a955d4",
+        "port": "fisheye_frame_to_downstream"
+      },
+      "target": {
+        "node": "2da3e043-330b-4935-a732-09048e8fbaa2",
+        "port": "fisheye_frame_from_upstream"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "max_height": 720,
+        "max_width": 1280
+      },
+      "id": "4d0392b8-f2fb-4425-ab82-dbc798e9f97e",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {
+        "radial_distortion_k1": -0.25,
+        "radial_distortion_k2": 0.0
+      },
+      "id": "4dc0b988-aba8-4bbb-b1b3-5ced65a955d4",
+      "name": "syntheticfisheyelens",
+      "type": "nodes.synthetic_fisheye_lens:SyntheticFisheyeLens"
+    },
+    {
+      "config": {
+        "detection_confidence_threshold": 0.35,
+        "radial_distortion_k1": -0.25,
+        "radial_distortion_k2": 0.0
+      },
+      "id": "2da3e043-330b-4935-a732-09048e8fbaa2",
+      "name": "undistortingobjectdetector",
+      "type": "nodes.undistorting_object_detector:UndistortingObjectDetector"
+    }
+  ]
+}

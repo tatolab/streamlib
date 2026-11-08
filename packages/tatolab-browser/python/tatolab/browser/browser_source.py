@@ -23,7 +23,9 @@ the node. Python runs at start and stop, never per frame.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from tatolab.stream import (
     Channels,
@@ -52,7 +54,9 @@ PAINTED_PAGE_TEXTURE_FORMAT = "rgba8_unorm"
 class BrowserSourceConfig:
     """What a `BrowserSource` is configured with."""
 
-    url: Annotated[str, "The page to render: http(s), file or data URL."]
+    url: Annotated[
+        str, "The page to render: an http(s), file or data URL, or a file path inside the project."
+    ]
     width: Annotated[int, "The page's width in pixels, and each frame's."] = 1920
     height: Annotated[int, "The page's height in pixels, and each frame's."] = 1080
     frame_rate: Annotated[
@@ -69,6 +73,20 @@ class BrowserSourceConfig:
     ] = 4
 
 
+def page_url_of(url_or_project_path: str) -> str:
+    """The URL the browser host opens: `url_or_project_path` itself when it has a scheme, else
+    the file it names, relative to the project directory every node's process runs in."""
+    if urlsplit(url_or_project_path).scheme:
+        return url_or_project_path
+    page_path = Path(url_or_project_path).resolve()
+    if not page_path.is_file():
+        raise FileNotFoundError(
+            f"BrowserSource: `url` {url_or_project_path!r} has no scheme, so it names a file "
+            f"in the project, and {page_path} is not one"
+        )
+    return page_path.as_uri()
+
+
 @node.process(
     execution="manual",
     description="Renders a web page offscreen with Chromium and publishes its frames, audio and events",
@@ -77,7 +95,7 @@ class BrowserSource:
     """A web page, published as RGBA Image frames, Channels blocks and Records."""
 
     def __init__(self, config: BrowserSourceConfig) -> None:
-        self._config = config
+        self._config = dataclasses.replace(config, url=page_url_of(config.url))
         self._rendering: "_native.BrowserPageRendering | None" = None
 
     data = Input(

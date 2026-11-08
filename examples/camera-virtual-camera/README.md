@@ -8,44 +8,38 @@ both are gone.
 
 ## The model this example teaches
 
-**A camera is a node.** `VirtualCameraSink` is a native built-in: it takes video
+**A camera is a node.** `VirtualCameraSink`, from the `tatolab-virtualcamera`
+module, takes video
 on an input port and has no output port, because its output is a camera other
 applications open. Each instance is one camera that exists exactly as long as
 its node runs — created at `setup()`, removed at `teardown()` — so from every
 other application's point of view a stream starting is a USB camera being
 plugged in, and Ctrl-C is it being pulled back out.
 
-**As many as the stream adds.** Two cameras is two `add` calls and one more
-`connect`; there is no registry, no device number to reserve, and no limit in
-the built-in:
+**As many as the stream adds.** Two cameras is two sink nodes in
+`streams/main.graph.json` and one more link; there is no registry, no device number to reserve, and no limit in
+the module:
 
-```python
-@stream
-def main(stream_builder: StreamBuilder) -> None:
-    camera = stream_builder.add(CameraSource, config=camera_config)
-    inverting_effect = stream_builder.add(InvertingEffect)
-    passthrough_virtual_camera = stream_builder.add(
-        VirtualCameraSink,
-        name="passthrough-virtual-camera",
-        config={"name": "Tatolab Camera"},
-    )
-    inverted_virtual_camera = stream_builder.add(
-        VirtualCameraSink,
-        name="inverted-virtual-camera",
-        config={"name": "Tatolab Camera Inverted"},
-    )
-
-    stream_builder.connect(
-        camera.output("video"), passthrough_virtual_camera.input("video")
-    )
-    stream_builder.connect(
-        camera.output("video"), inverting_effect.input("video_from_upstream")
-    )
-    stream_builder.connect(
-        inverting_effect.output("video_to_downstream"),
-        inverted_virtual_camera.input("video"),
-    )
+```json
+{
+  "nodes": [
+    {"name": "camerasource", "type": "tatolab.camera:CameraSource", "config": {}},
+    {"name": "invertingeffect", "type": "nodes.inverting_effect:InvertingEffect", "config": {}},
+    {"name": "passthrough-virtual-camera", "type": "tatolab.virtualcamera:VirtualCameraSink",
+     "config": {"name": "Tatolab Camera", "door": "auto"}},
+    {"name": "inverted-virtual-camera", "type": "tatolab.virtualcamera:VirtualCameraSink",
+     "config": {"name": "Tatolab Camera Inverted", "door": "auto"}}
+  ],
+  "links": [
+    {"source": {"node": "camerasource", "port": "video"}, "target": {"node": "passthrough-virtual-camera", "port": "video"}},
+    {"source": {"node": "camerasource", "port": "video"}, "target": {"node": "invertingeffect", "port": "video_from_upstream"}},
+    {"source": {"node": "invertingeffect", "port": "video_to_downstream"}, "target": {"node": "inverted-virtual-camera", "port": "video"}}
+  ]
+}
 ```
+
+The file itself names each node and each link end by the node's UUID; the
+names stand in for them here.
 
 The camera's one output port feeds two consumers. That is an ordinary fan-out —
 the passthrough sink and the effect each get every frame — and it is why this
@@ -98,12 +92,9 @@ as config, and the function *is* the look: `GlslPixelEffect` compiles it at
 it. Three looks ship in `nodes/looks/` to start from: `grayscale.glsl`,
 `vignette.glsl` and `pixelate.glsl`.
 
-```python
-from nodes.shader_effect import ShaderEffect, shipped_look_glsl
-
-vignette = stream_builder.add(
-    ShaderEffect, config={"effect_glsl": shipped_look_glsl("vignette.glsl")}
-)
+```json
+{"name": "vignette", "type": "nodes.shader_effect:ShaderEffect",
+ "config": {"effect_glsl": "<the text of nodes/looks/vignette.glsl>"}}
 ```
 
 A new look is a paragraph of GLSL, not a node. It is one function returning
@@ -151,24 +142,24 @@ This stream runs on Linux only. `VirtualCameraSink` is a v4l2loopback and
 PipeWire mechanism, and macOS has no virtual camera the runtime can create; off
 Linux the runtime refuses the stream at load, naming the platform. The nodes are
 not what binds it — they use nothing single-floor, and the cross-floor check
-`tatolab dev` prints names only the two sinks in `stream.py`.
+`tatolab dev` prints names only the two sinks.
 
-With this machine's runtime running (`tatolabd`, which the installer starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts):
 
 ```bash
-uv sync
 tatolab dev
 ```
 
-`uv sync` installs `tatolab-stream` from PyPI — the authoring surface — beside
-`numpy`, and builds `tatolab-camera` from this checkout, as an editable path
-dependency (`[tool.uv.sources]` in `pyproject.toml`); the module is a maturin
-project, so the build needs a Rust toolchain. `CameraSource` comes from it. The
+The runtime makes the project's `.venv` on its first load: it installs `tatolab-stream` from PyPI — the authoring surface — beside
+`numpy`, and builds `tatolab-camera` and `tatolab-virtualcamera` from this
+checkout, as editable path dependencies (`[tool.uv.sources]` in
+`pyproject.toml`); each module is a maturin project, so the build needs a Rust
+toolchain. The
 runtime itself is not on pip.
 
-Use `tatolab dev` while editing — it loads the stream again on every saved edit
-— and `tatolab run` otherwise. Both keep the stream as long as the command
-runs; Ctrl-C unloads it, and both cameras go with it.
+`tatolab dev` follows the project's log and loads the project again on every
+saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop <stream>` stops it.
 
 That is enough for a camera. If the application you want to open it in
 enumerates `/dev/video*` — OBS, `ffmpeg`, `v4l2-ctl`, Chrome as it ships today —
@@ -190,88 +181,25 @@ this verb.
 
 ## Observing it
 
-The cameras are the output, so the first place to look is another application.
-Both appear by name in any picker: Chrome's `chrome://settings/content/camera`
-or a video call's device list, OBS's "Video Capture Device" source, GNOME's
-Camera app.
-
-From a terminal, which door the sinks took decides what can see them — the log
-line at setup says which it was. **On the v4l2loopback door** they are ordinary
-video nodes:
+From another terminal, in this folder:
 
 ```bash
-v4l2-ctl --list-devices        # both by name, beside the real capture devices
-ffplay /dev/videoN             # whichever number the list gave you
-```
-
-**On the PipeWire door** there is no `/dev/video*` entry to find, so those two
-commands will not show them. Ask PipeWire instead:
-
-```bash
-pw-dump | grep -A2 node.description   # both by name, among the graph's nodes
-pw-cli ls Node                        # the same, node by node
-```
-
-Either way, run the listing again after Ctrl-C and neither camera is there.
-
-The stream itself is observed like any other, from another terminal:
-
-```bash
-tatolab streams                 # the streams this machine's runtime holds
-tatolab graph --stream main     # nodes, ports, links, exposed ports and counters, as JSON
-tatolab logs --stream main -f   # the stream's records, Rust and Python alike
+tatolab streams                  # the streams this machine's runtime holds, `main` among them
+tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
+tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
 The nodes are `camerasource`, `invertingeffect`, `passthrough-virtual-camera`
-and `inverted-virtual-camera` — a node is named after its class, lowercased,
-unless `add` passes `name=`. `tatolab logs` is where the door decision is
-written down: one record per sink at setup, carrying the camera, the `door`,
-the reason it chose that door and, on the loopback door, the device it created
-and the module version; then the tier the GPU writes the device's buffers
-through; and at teardown the frames each sink wrote and dropped.
-
-To watch the effect's frames rather than its picture, expose its output. An
-exposed port is the track `<node>/<port>` of the broadcast
-`<machine>/<stream>.hang` at the machine's local relay, so any MoQ client reads
-it; read the machine's name out of `tatolab graph`. This repository's
-`tatolab-read-track` writes a track's objects to files:
-
-```bash
-tatolab expose main invertingeffect video_to_downstream
-cargo run -p tatolab-read-track -- http://127.0.0.1:4443 <machine>/main.hang \
-    invertingeffect/video_to_downstream --count 5 --out /tmp/effect
-```
-
-Each object is one frame's record, and it is metadata, not picture —
-`surface_id`, `width`, `height`, `timestamp_ns` and `color_info` — naming pixels
-that stay in engine-owned GPU memory, so it is a few hundred bytes whatever the
-resolution. The `surface_id` differs from the camera's: it names the effect's
-own ring slot, which is the whole point of the ring. The `timestamp_ns` does
-not — the effect carries the camera's stamp through, so both cameras present
-the same picture under the same time.
+and `inverted-virtual-camera`.
 
 ## Knobs
 
-Everything is literal config at the top of `stream.py` — edit it and save while
-`tatolab dev` runs.
+Each knob is a node's config in `streams/main.graph.json`. Change it in Tato
+Studio's inspector or with the runtime's `set_node_config` MCP tool, which
+records the edit in the project's history and applies it to the running stream.
 
-| Knob | Where | Effect |
+| Knob | Node | Effect |
 | --- | --- | --- |
-| `CAMERA_DEVICE_ID` | top of `stream.py` | Capture device — a V4L2 path (`/dev/video2`). `None` picks the first device found. |
-| `PASSTHROUGH_VIRTUAL_CAMERA_NAME` | top of `stream.py` | The untouched camera's name in every picker. `Tatolab Camera`. |
-| `INVERTED_VIRTUAL_CAMERA_NAME` | top of `stream.py` | The inverted camera's name. `Tatolab Camera Inverted`. |
-| `VIRTUAL_CAMERA_DOOR` | top of `stream.py` | `auto` (the sink's own default), `v4l2loopback`, or `pipewire`. Applies to both sinks. |
-
-A name is what every picker shows, on either door. The loopback device's label
-field holds 31 bytes, so a longer name is cut to fit — pick one that reads whole
-in a list. This stream always passes a camera name; a sink given none is named
-`StreamLib Camera` plus a short id unique to the node and the stream.
-
-Naming `v4l2loopback` explicitly turns the fallback off: without the permission
-the sink refuses at `setup()` by name, saying it cannot create a camera and
-naming `tatolab enable-virtual-camera`. That node never reaches `Running`, the
-rest of the stream keeps going, and `tatolab graph --stream main` shows it in
-state `Error` — which is what you want when you meant the door that every
-application can see and would rather know than be quietly given the other one.
-`pipewire` is taken whatever the control node says, and refuses by name where
-no PipeWire session answers.
+| `device_id` | `camerasource` | Capture device — a V4L2 path (`/dev/video2`). Absent picks the first device found. |
+| `name` | `passthrough-virtual-camera`, `inverted-virtual-camera` | Each camera's name in every picker. `Tatolab Camera` and `Tatolab Camera Inverted`. |
+| `door` | `passthrough-virtual-camera`, `inverted-virtual-camera` | `auto` (the sink's own default), `v4l2loopback`, or `pipewire`. |
