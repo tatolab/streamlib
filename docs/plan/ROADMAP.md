@@ -61,14 +61,14 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), ticket 2.
 - Done when the removal gate passes on every `REMOVED:` bullet of the change and
   `/ship-change` has folded it.
 
-## 5. The graph document
+## 5. Projects and assets
 
-Change: [`changes/graph-document.md`](changes/graph-document.md).
+Change: [`changes/project-and-assets.md`](changes/project-and-assets.md).
 
-A stream's source of truth becomes its graph document, edited only through transactions the
-runtime applies, with stable node ids and no `stream.py`. It waits on step 4, because `exposed`
-leaves the spec keys and the stream record there. Tickets: loading from the document, edits as
-transactions, `@stream` generators as frozen fragments, and the project read that replaces #3152.
+A project becomes a versioned repository of assets with its own history, a stream's graph is one
+asset, every asset and node gets a runtime-generated UUID, every change is a transaction, and
+another project's assets are linked dependencies. No `stream.py`. It waits on step 4, because
+`exposed` leaves the spec keys and the stream record there.
 
 ## 6. New capability: lightweight nodes, then shaders
 
