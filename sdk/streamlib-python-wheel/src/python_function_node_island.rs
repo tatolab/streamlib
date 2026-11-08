@@ -699,6 +699,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         called_through,
         input_count,
         config_values,
+        config_value_indices_set_by_the_inputs_past_its_own,
         initial_state_values,
         output_count,
     ))]
@@ -709,6 +710,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         called_through: Py<PyAny>,
         input_count: usize,
         config_values: Vec<f64>,
+        config_value_indices_set_by_the_inputs_past_its_own: Vec<usize>,
         initial_state_values: Vec<f64>,
         output_count: usize,
     ) -> PyResult<Self> {
@@ -731,7 +733,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
             &node_id,
             called_through,
             config_values,
-            Vec::new(),
+            config_value_indices_set_by_the_inputs_past_its_own,
             input_count,
             the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
             resumes_from_the_state_its_stream_carries,

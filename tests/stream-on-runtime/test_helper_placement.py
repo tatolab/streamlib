@@ -32,6 +32,7 @@ from helper_placement_streams import (
     function_node_run_as_python_that_crashes_into_python_sink,
     function_node_that_spins_forever_into_python_sink,
     function_nodes_read_by_two_native_converters_into_python_records_sink,
+    held_level_read_by_two_python_sinks,
     level_scaled_by_its_gain_into_python_sink,
     lfo_into_python_sink_reporting_each_batch_it_reads,
     python_sink_reading_the_pin_value_of_its_unlinked_input,
@@ -1194,4 +1195,68 @@ def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
     )
     assert driven["highest"] - driven["lowest"] > 0.5, (
         f"the `Lfo` linked into `gain` drives the field in place of 0.25, and the class read {driven}"
+    )
+
+
+def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_a_link_drives_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`HoldsItsConfiguredLevelCountingItsCalls`, its config's `level` 0.25, is
+    stateful and read by two Python classes, so it runs in a helper of its own.
+    Exposing `level` live with nothing linked into it leaves the node reading the
+    config. Linking an `Lfo` into `level` drives the field, so the classes read
+    the `Lfo`'s -1..1 in place of 0.25.
+
+    Fail-without-fix: the promoted node keeps its config's 0.25 with the `Lfo`
+    linked, and its helper logs that it cannot be reconfigured while running.
+    """
+    tatolabd = start_tatolabd_running_stream(held_level_read_by_two_python_sinks)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), (
+        f"the config's level 0.25, and a class read {configured}"
+    )
+    assert len(set(helper_process_ids_started_in(tatolabd.stderr_text))) == 3, (
+        f"the two readers and the held node each get a helper:\n{tatolabd.recent_stderr()}"
+    )
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    (held_node,) = [
+        node
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "held"
+    ]
+    edit_live(
+        "set_exposed_config_fields",
+        {"node": held_node["id"], "exposed_config_fields": ["level"]},
+    )
+    exposed_unlinked, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert exposed_unlinked["lowest"] == exposed_unlinked["highest"] == pytest.approx(0.25), (
+        f"an exposed field no link drives reads the config, and a class read {exposed_unlinked}"
+    )
+
+    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    edit_live(
+        "connect",
+        {
+            "source": {"node": lfo["node"], "port": "result"},
+            "target": {"node": held_node["id"], "port": "level"},
+        },
+    )
+    driven, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert driven["highest"] - driven["lowest"] > 0.5, (
+        f"the `Lfo` linked into `level` drives the field in place of 0.25, and a class read {driven}"
+    )
+    assert "cannot be reconfigured while running" not in tatolabd.stderr_text, (
+        f"the promoted node takes the linked value as its config:\n{tatolabd.recent_stderr()}"
     )

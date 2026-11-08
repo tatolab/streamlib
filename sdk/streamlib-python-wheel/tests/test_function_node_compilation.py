@@ -33,7 +33,7 @@ from tatolab.runtime._function_node_run_as_its_helpers_processor import (
     ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs,
     the_processor_class_a_promoted_function_node_runs_as,
 )
-from tatolab.runtime._processor_hosting import construct_processor_instance
+from tatolab.runtime._processor_hosting import apply_configuration, construct_processor_instance
 from tatolab.stream import State, Stateful, Time, node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -491,6 +491,107 @@ def test_a_promoted_function_node_starts_from_its_pin_values():
     runner.process(ctx)
 
     assert ctx.outputs.blocks_written == [("result", [[7.0]], 0, 0)]
+
+
+def test_a_promoted_function_node_reads_a_live_config_update_at_its_next_call():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    assert isinstance(
+        prepare_function_node_to_evaluate(amplify, f"{__name__}:amplify"),
+        FunctionNodeCompiledToItsEvaluateEntry,
+    )
+    runner_class = the_processor_class_a_promoted_function_node_runs_as(
+        amplify, f"{__name__}:amplify", "amplify-1", data_plane
+    )
+    runner = construct_processor_instance(runner_class, {"gain": 3.0}, data_plane)
+    ctx = _ContextOfOneProcess()
+    ctx.inputs.control_value_by_port["x"] = 2.0
+    runner.process(ctx)
+
+    apply_configuration(runner, {"gain": 5.0, "inverted": True})
+    runner.process(ctx)
+
+    assert ctx.outputs.blocks_written == [
+        ("result", [[6.0]], 0, 0),
+        ("result", [[-10.0]], 1, 0),
+    ], "a compiled node's float and bool config fields reach the call after the update"
+
+
+@dataclass(frozen=True)
+class LabelledGainConfig:
+    gain: float = 2.0
+    label: str = "gain"
+
+
+@node.function
+def amplify_while_labelled(x: float, config: LabelledGainConfig) -> float:
+    return x * config.gain if config.label else 0.0
+
+
+def test_a_promoted_function_node_run_as_python_reads_a_live_config_update_at_its_next_call():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    import_path = f"{__name__}:amplify_while_labelled"
+    assert isinstance(
+        prepare_function_node_to_evaluate(amplify_while_labelled, import_path),
+        FunctionNodeRunAsPythonInItsReader,
+    ), "a `str` config field does not compile"
+    runner_class = the_processor_class_a_promoted_function_node_runs_as(
+        amplify_while_labelled, import_path, "amplify-1", data_plane
+    )
+    runner = construct_processor_instance(runner_class, {"gain": 3.0}, data_plane)
+    ctx = _ContextOfOneProcess()
+    ctx.inputs.control_value_by_port["x"] = 2.0
+    runner.process(ctx)
+
+    apply_configuration(runner, {"gain": 0.5, "label": "half"})
+    runner.process(ctx)
+    apply_configuration(runner, {"gain": 0.5, "label": ""})
+    runner.process(ctx)
+
+    assert ctx.outputs.blocks_written == [
+        ("result", [[6.0]], 0, 0),
+        ("result", [[1.0]], 1, 0),
+        ("result", [[0.0]], 2, 0),
+    ], "a body run as Python reads each field of the config it was last handed"
+
+
+@dataclass(frozen=True)
+class CallStepConfig:
+    step: float = 1.0
+
+
+@dataclass(frozen=True)
+class CallsCountedByTheirStep:
+    total: float = 0.0
+
+
+@node.function
+def counts_its_calls_by_its_configured_step(
+    x: float, *, config: CallStepConfig, previous: State[CallsCountedByTheirStep]
+) -> Stateful[float, CallsCountedByTheirStep]:
+    total = previous.total + config.step
+    return total, CallsCountedByTheirStep(total)
+
+
+def test_a_promoted_stateful_function_node_keeps_its_state_through_a_live_config_update():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner_class = the_processor_class_a_promoted_function_node_runs_as(
+        counts_its_calls_by_its_configured_step,
+        f"{__name__}:counts_its_calls_by_its_configured_step",
+        "counter-1",
+        data_plane,
+    )
+    runner = construct_processor_instance(runner_class, None, data_plane)
+    ctx = _ContextOfOneProcess()
+    ctx.inputs.control_value_by_port["x"] = 0.0
+    runner.process(ctx)
+    runner.process(ctx)
+
+    apply_configuration(runner, {"step": 10.0})
+    runner.process(ctx)
+
+    assert [block[1] for block in ctx.outputs.blocks_written] == [[[1.0]], [[2.0]], [[12.0]]], (
+        "the count carries on from its state, stepping by the step it was handed"
+    )
 
 
 @node.function

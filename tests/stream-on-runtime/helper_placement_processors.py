@@ -357,6 +357,20 @@ def LevelScaledByItsGain(  # noqa: N802
     return level * config.gain
 
 
+@dataclasses.dataclass(frozen=True)
+class HeldLevelConfig:
+    level: float = 0.25
+
+
+@node.function
+def HoldsItsConfiguredLevelCountingItsCalls(  # noqa: N802
+    step: float = 1.0, *, config: HeldLevelConfig, previous: State[CallsCountedSoFar]
+) -> Stateful[float, CallsCountedSoFar]:
+    """The `level` of its config, a field a link can drive once it is exposed;
+    stateful, so two readers move it into a helper of its own."""
+    return config.level, CallsCountedSoFar(previous.calls + step)
+
+
 #: The count at which a sink whose count started fresh takes its own helper down.
 COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES = 20.0
 

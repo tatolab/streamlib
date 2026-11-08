@@ -14,6 +14,7 @@ from helper_placement_processors import (
     CountsItsOwnCalls,
     CrashesItsHelper,
     DiesAbruptlyProbe,
+    HoldsItsConfiguredLevelCountingItsCalls,
     LabelsTheLevel,
     LevelScaledByItsGain,
     ForksAWorkerThatOutlivesItProbe,
@@ -228,6 +229,15 @@ def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> 
 
 
 @graph_generator
+def held_level_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
+    """A stateful function node holding the `level` of its config, read by two Python classes."""
+    held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
+    for reader_name in ("first_reader", "second_reader"):
+        reader = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name=reader_name)
+        stream_builder.connect(held.output("result"), reader.input("brightness"))
+
+
+@stream
 def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
     stream_builder: StreamBuilder,
 ) -> None:
