@@ -666,3 +666,16 @@ def test_a_node_with_neither_is_described_by_the_empty_string():
         pass
 
     assert DescribedByNothingAtAll.__tatolab_node_description__ == ""
+
+
+def test_a_process_node_is_filed_under_its_module_unless_it_names_a_category():
+    @node.process
+    class Uncategorized:
+        frames_from_upstream = Input(Image, delivery="newest")
+
+    @node.process(category="Image effects")
+    class Categorized:
+        frames_from_upstream = Input(Image, delivery="newest")
+
+    assert Uncategorized.__tatolab_node_category__ == __name__
+    assert Categorized.__tatolab_node_category__ == "Image effects"

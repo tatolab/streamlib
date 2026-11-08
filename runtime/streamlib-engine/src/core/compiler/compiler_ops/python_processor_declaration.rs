@@ -22,6 +22,7 @@ use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
 const DESCRIBED_DESCRIPTION_KEY: &str = "description";
+const DESCRIBED_CATEGORY_KEY: &str = "category";
 const DESCRIBED_KIND_KEY: &str = "kind";
 const DESCRIBED_LANGUAGE_KEY: &str = "language";
 const DESCRIBED_EXECUTION_KEY: &str = "execution";
@@ -79,6 +80,9 @@ impl PythonProcessorDeclaration {
         .with_runtime(ProcessorRuntime::Python)
         .with_entrypoint(requested_import_path.as_str())
         .with_config_schema(read_config_schema_document(described_node_type)?);
+        if let Some(category) = read_category(described_node_type)? {
+            descriptor = descriptor.with_category(category);
+        }
         let how_a_python_node_of_the_type_runs =
             match read_described_node_kind(described_node_type)? {
                 NodeKind::Process => {
@@ -113,6 +117,23 @@ impl PythonProcessorDeclaration {
             descriptor,
             how_a_python_node_of_the_type_runs,
         })
+    }
+}
+
+/// The palette category a described node type declares, refused when it is
+/// not a non-blank string; none when it declares none.
+fn read_category(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<Option<String>, String> {
+    match described_node_type.get(DESCRIBED_CATEGORY_KEY) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(category)) if !category.trim().is_empty() => {
+            Ok(Some(category.clone()))
+        }
+        Some(other) => Err(format!(
+            "{DESCRIBED_CATEGORY_KEY} must be a non-blank string, got {}",
+            json_kind_name(other)
+        )),
     }
 }
 
@@ -347,9 +368,48 @@ fn read_port_descriptors(
             )?;
             port = port.with_audio_window_contract(contract);
         }
+        if let Some(pin_default) = declaration.get("pin_default") {
+            let pin_default = read_pin_default(pin_default, &port, direction)?;
+            port = port.with_pin_default(pin_default);
+        }
         ports.push(port);
     }
     Ok(ports)
+}
+
+/// Read the value an input port reads while nothing is linked into it: a
+/// number or a bool on a Channels input, or `null` on an optional function
+/// node input of any family.
+fn read_pin_default(
+    pin_default: &serde_json::Value,
+    port: &PortDescriptor,
+    direction: PortDirection,
+) -> std::result::Result<serde_json::Value, String> {
+    if matches!(direction, PortDirection::Output) {
+        return Err(format!(
+            "output port {:?} declares a pin default, and only an input reads one",
+            port.name
+        ));
+    }
+    if !pin_default.is_null()
+        && port.family.family != crate::core::descriptors::PortFamily::Channels
+    {
+        return Err(format!(
+            "input port {:?} of family {} declares a pin default, and only a Channels input \
+             carries a control value",
+            port.name, port.family.family
+        ));
+    }
+    match pin_default {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Ok(pin_default.clone())
+        }
+        other => Err(format!(
+            "input port {:?}: pin_default must be a number or a bool, got {}",
+            port.name,
+            json_kind_name(other)
+        )),
+    }
 }
 
 /// Read one `family` declaration off a described port, refusing a key its
@@ -880,6 +940,68 @@ mod tests {
             refusal.contains("\"frames\"") && refusal.contains("borrow_quota"),
             "got {refusal}"
         );
+    }
+
+    #[test]
+    fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is_refused() {
+        let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
+            {"name": "level", "family": {"family": "channels"}, "description": "",
+             "delivery_profile": "newest", "pin_default": 0.5},
+            {"name": "maybe", "family": {"family": "records"}, "description": "",
+             "delivery_profile": "newest", "pin_default": null},
+        ])))
+        .unwrap_or_else(|refusal| panic!("a number and a null default read: {refusal}"));
+        assert_eq!(
+            declaration.descriptor.inputs[0].pin_default,
+            Some(serde_json::json!(0.5))
+        );
+        assert_eq!(
+            declaration.descriptor.inputs[1].pin_default,
+            Some(serde_json::Value::Null)
+        );
+
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "frames", "family": {"family": "records"}, "description": "",
+            "delivery_profile": "newest", "pin_default": 1,
+        }])));
+        assert!(
+            refusal.contains("\"frames\"") && refusal.contains("Channels"),
+            "got {refusal}"
+        );
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "level", "family": {"family": "channels"}, "description": "",
+            "delivery_profile": "newest", "pin_default": "loud",
+        }])));
+        assert!(
+            refusal.contains("\"level\"") && refusal.contains("a number or a bool"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_declared_category_reaches_the_catalog_and_one_that_is_no_string_is_refused() {
+        let mut described_node_type = described_node_type_with_input_ports(serde_json::json!([]));
+        assert_eq!(
+            read(&described_node_type).unwrap().descriptor.category,
+            None
+        );
+
+        described_node_type["category"] = serde_json::json!("audio meters");
+        let descriptor = read(&described_node_type).unwrap().descriptor;
+        assert_eq!(descriptor.category.as_deref(), Some("audio meters"));
+        assert_eq!(
+            serde_json::to_value(crate::core::json_schema::ProcessorDescriptorOutput::from(
+                &descriptor
+            ))
+            .unwrap()["category"],
+            "audio meters"
+        );
+
+        for not_a_category in [serde_json::json!(7), serde_json::json!("  ")] {
+            described_node_type["category"] = not_a_category;
+            let refusal = refusal_of(&described_node_type);
+            assert!(refusal.contains("category"), "got {refusal}");
+        }
     }
 
     #[test]

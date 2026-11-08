@@ -6,11 +6,19 @@ that depends on `tatolab-stream` and on no engine crate. Each body is compiled t
 native code by Numba when the helper that reads it loads, and runs inside that
 helper's read, with no process of its own.
 
-- `Lfo` is a sine wave from -1 to 1 at `rate_hz`, advanced by the stream time
-  between reads.
-- `Remap` maps `x` linearly from `from_low`..`from_high` (-1..1 by default) onto
-  `to_low`..`to_high` (0..1 by default).
-- `Clamp` holds `x` between `low` and `high`.
+- Math: `Add`, `Subtract`, `Multiply`, `Divide`, `Power`, `Minimum`, `Maximum`,
+  `Absolute` and `Modulo`. A division or remainder by 0, and a power that is no real
+  number, answer 0.
+- Shaping: `Lerp`, `Clamp`, `Remap` (from -1..1 onto 0..1 by default), `Smoothstep` and
+  `Step`.
+- Logic: `Compare` (`less`, `equal` and `greater`, within a tolerance), `Switch`, which
+  picks between two values by a bool, and `Select`, which picks one of four by an index.
+- Values and noise: `Constant`, `Random`, which draws afresh for each stream time and the
+  same for the same seed and time, and `PerlinNoise` along `x`.
+- Time: `Lfo`, a sine wave from -1 to 1 at `rate_hz`; `Timer`, the seconds since its start
+  or reset; `Lag`, which follows its input smoothly; `Trigger`, on for the one evaluation its
+  input turns on; `Counter`; and `SampleAndHold`.
+- `Feedback`, the one node a loop of function nodes closes through.
 
 ```python
 from tatolab.ops import Lfo, Remap
@@ -27,6 +35,9 @@ stream_builder.connect(brightness.output("result"), dimmer.input("brightness"))
 uv venv --python 3.12 .venv && VIRTUAL_ENV=.venv uv pip install ../../sdk/tatolab-stream -e . pytest
 .venv/bin/pytest tests && uvx pyright@1.1.411
 ```
+
+With the runtime's wheel installed beside it, the suite also compiles each node and holds its
+native code to the Python it was written as.
 
 Running compiled inside a reader is proven on a runtime, in the integration
 suite's `test_helper_placement.py`.

@@ -203,6 +203,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                         "family": {"family": "packets"},
                     }
                 ],
+                "category": "described_nodes",
             }
         ],
         "refused_node_types": [],

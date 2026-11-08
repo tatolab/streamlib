@@ -6,6 +6,7 @@ pub(crate) mod cross_floor_check_in_the_projects_interpreter;
 pub(crate) mod function_node_island;
 pub(crate) mod function_node_pool;
 pub(crate) mod function_node_promotion;
+pub(crate) mod input_port_pin_values;
 mod open_iceoryx2_service_op;
 mod prepare_processor_op;
 pub(crate) mod processor_interpreter_describe;

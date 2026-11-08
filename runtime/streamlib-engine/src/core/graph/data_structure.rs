@@ -226,7 +226,11 @@ impl Graph {
             nodes: self
                 .digraph
                 .node_indices()
-                .map(|idx| ProcessorNodeOutput::from(&self.digraph[idx]))
+                .map(|idx| &self.digraph[idx])
+                .map(|node| ProcessorNodeOutput {
+                    inputs_waiting_for_a_value: crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for(self, node),
+                    ..ProcessorNodeOutput::from(node)
+                })
                 .collect(),
             links: self
                 .digraph

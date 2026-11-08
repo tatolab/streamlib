@@ -470,6 +470,15 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
         Arc<parking_lot::Mutex<Vec<Arc<crate::core::processors::OutOfProcessLinkWireReply>>>>,
     /// Every port the far side was told to drop.
     pub(crate) reclaimed_links: Arc<parking_lot::Mutex<Vec<ReclaimedLink>>>,
+    /// Every function node island handed over, as the far side received it.
+    pub(crate) late_fed_function_node_islands: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+    /// Every `(input port, link id)` whose island the far side was told to stop evaluating.
+    pub(crate) unfed_function_node_islands: Arc<parking_lot::Mutex<Vec<(String, String)>>>,
+    /// Every set of pin values handed over, in order.
+    pub(crate) pin_values_handed_over:
+        Arc<parking_lot::Mutex<Vec<serde_json::Map<String, serde_json::Value>>>>,
+    /// Every set of exposed config fields handed over, in order.
+    pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
 }
 
 impl crate::core::processors::OutOfProcessFarSideLinkDelivery
@@ -499,6 +508,47 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
             local_port_name: local_port_name.to_string(),
             link_id: link_id.to_string(),
         });
+        Ok(())
+    }
+
+    fn hand_over_a_function_node_island_wired_after_setup(
+        &self,
+        function_node_island: &serde_json::Value,
+        answer_cell: Arc<crate::core::processors::OutOfProcessLinkWireReply>,
+    ) -> crate::core::Result<()> {
+        self.late_fed_function_node_islands
+            .lock()
+            .push(function_node_island.clone());
+        self.wire_answers_owed.lock().push(answer_cell);
+        Ok(())
+    }
+
+    fn tell_the_far_side_a_function_node_island_was_unwired(
+        &self,
+        input_port: &str,
+        link_id: &str,
+    ) -> crate::core::Result<()> {
+        self.unfed_function_node_islands
+            .lock()
+            .push((input_port.to_string(), link_id.to_string()));
+        Ok(())
+    }
+
+    fn hand_over_the_pin_values_of_its_input_ports(
+        &self,
+        pin_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> crate::core::Result<()> {
+        self.pin_values_handed_over.lock().push(pin_values.clone());
+        Ok(())
+    }
+
+    fn hand_over_the_config_fields_its_node_exposes_as_inputs(
+        &self,
+        exposed_config_fields: &[String],
+    ) -> crate::core::Result<()> {
+        self.exposed_config_fields_handed_over
+            .lock()
+            .push(exposed_config_fields.to_vec());
         Ok(())
     }
 

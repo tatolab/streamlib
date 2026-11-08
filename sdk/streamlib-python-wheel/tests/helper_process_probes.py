@@ -10,10 +10,11 @@ suite inside the child.
 """
 
 import json
+import struct
 import time
 from typing import TypedDict
 
-from tatolab.stream import Input, Output, Packets, node
+from tatolab.stream import Channels, Input, Output, Packets, node
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
@@ -217,3 +218,52 @@ class ReleasesAStructureInTeardownProbe:
 
     def teardown(self, ctx) -> None:
         self.structure = None
+
+
+@node.function
+def hold_a_level(level: float = 0.75) -> float:
+    return level
+
+
+@node.function
+def double_a_level(x: float) -> float:
+    return 2.0 * x
+
+
+# What each `process()` of the island-reading probe read from `level`, `None`
+# when nothing fed it. A test reads it to see which island fed the port.
+LEVELS_THE_ISLAND_READING_PROBE_READ: "list[float | None]" = []
+
+
+@node.process(execution="continuous", interval_ms=5)
+class IslandReadingProbe:
+    """Records the control value each `process()` reads from `level`."""
+
+    level = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        payload = ctx.inputs.read("level")
+        LEVELS_THE_ISLAND_READING_PROBE_READ.append(
+            None if payload is None else struct.unpack("<d", bytes(payload))[0]
+        )
+
+
+GAINS_THE_EXPOSED_GAIN_PROBE_TOOK: "list[float]" = []
+
+
+class ExposedGainProbeConfig(TypedDict, total=False):
+    gain: float
+
+
+@node.process(execution="continuous", interval_ms=5)
+class ExposedGainProbe:
+    """Records the `gain` of each config it is handed; the node exposes `gain` as an input."""
+
+    def __init__(self, config: ExposedGainProbeConfig) -> None:
+        GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.append(config.get("gain", 1.0))
+
+    def configure(self, config: ExposedGainProbeConfig) -> None:
+        GAINS_THE_EXPOSED_GAIN_PROBE_TOOK.append(config.get("gain", 1.0))
+
+    def process(self, ctx) -> None:
+        pass

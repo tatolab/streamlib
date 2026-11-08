@@ -114,7 +114,7 @@ class _FunctionNodeRunAsItsHelpersProcessor:
             prepared.pin_defaults_by_input_port.get(input_port) for input_port in prepared.input_ports
         ]
         self._control_values_written = 0
-        called_through, config_values = how_one_function_node_is_called(
+        called_through, config_values, _ = how_one_function_node_is_called(
             prepared, self._node_id, _config_as_a_mapping(prepared, config)
         )
         self._evaluation = FunctionNodeEvaluatedAsItsHelpersProcessor(

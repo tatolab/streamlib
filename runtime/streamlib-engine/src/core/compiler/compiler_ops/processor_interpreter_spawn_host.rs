@@ -2765,7 +2765,7 @@ sys.exit(0)
             .helper_placed_processor_loss_counts()
             .hold_the_board_of_this_spawn(board);
         host.link_wiring
-            .record_a_function_node_island_on_the_setup_command(serde_json::json!({
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(serde_json::json!({
                 "input_port": "brightness",
                 "link_id": "L-island",
                 "output": {"node": "Plfo1", "port": "result"},

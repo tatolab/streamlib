@@ -107,7 +107,9 @@ impl GraphInterfaceNodeAsDrawn {
             config: Some(self.node.config.clone()),
             config_checksum: compute_json_checksum(&self.node.config),
             pins: self.node.pins.clone(),
+            exposed_config_fields: self.node.exposed_config_fields.clone(),
             studio: self.node.studio.clone(),
+            inputs_waiting_for_a_value: Vec::new(),
             ports: ProcessorNodePortsOutput { inputs, outputs },
             components,
             fragment: None,
@@ -531,6 +533,7 @@ impl GraphInterfacePort {
             stream_facts: None,
             values_checked: None,
             family: Some(PortFamilyDeclaration::of_family(self.family)),
+            pin_default: None,
         }
     }
 
@@ -839,7 +842,9 @@ mod tests {
             },
             components: serde_json::Map::new(),
             pins: serde_json::Map::new(),
+            exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
+            inputs_waiting_for_a_value: Vec::new(),
             fragment: None,
         };
         let mut graph_response: GraphResponse = serde_json::from_value(serde_json::json!({

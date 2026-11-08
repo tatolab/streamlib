@@ -85,6 +85,7 @@ def declare_function_node(
     function: Callable[_FunctionNodeParameters, _FunctionNodeReturn],
     *,
     description: str,
+    category: str,
     declaration_stamps: "dict[str, str]",
 ) -> FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]:
     """Read `function`'s signature into a function node, refusing by name what is not one.
@@ -107,6 +108,7 @@ def declare_function_node(
             else derive_config_class_json_schema(config_class)
         ),
         declaration_stamps["description"]: description or inspect.getdoc(function) or "",
+        declaration_stamps["category"]: category or function.__module__,
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
@@ -312,14 +314,15 @@ class _FunctionNodeSignatureReading:
         elif parameter.default is not inspect.Parameter.empty:
             signature_input["default"] = self._pin_default(parameter, pin_value_type)
         self._signature_inputs.append(signature_input)
-        self.input_ports.append(
-            {
-                "name": port_name,
-                "description": "",
-                "delivery_profile": "newest",
-                "family": {"family": family_declaration["family"]},
-            }
-        )
+        input_port: "dict[str, Any]" = {
+            "name": port_name,
+            "description": "",
+            "delivery_profile": "newest",
+            "family": {"family": family_declaration["family"]},
+        }
+        if "default" in signature_input:
+            input_port["pin_default"] = signature_input["default"]
+        self.input_ports.append(input_port)
 
     def _pin_default(self, parameter: inspect.Parameter, pin_value_type: str) -> Any:
         default = parameter.default

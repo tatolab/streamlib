@@ -94,9 +94,16 @@ pub struct ProcessorNodeOutput {
     /// The values set on the node's unlinked inputs, by input name.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub pins: serde_json::Map<String, serde_json::Value>,
+    /// The config fields the node takes as inputs too, each an input of the field's name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposed_config_fields: Vec<String>,
     /// What the studio draws the node with: canvas position, group, comment, colour.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub studio: serde_json::Map<String, serde_json::Value>,
+    /// The inputs of a function node that no link feeds, that carry no pin value and that
+    /// declare no default; the node holds without evaluating until each has a value.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs_waiting_for_a_value: Vec<String>,
     /// Runtime components (dynamic, varies based on processor state).
     pub components: serde_json::Map<String, serde_json::Value>,
     /// What a fragment holds: its graph generator's stored output, each node rendered as this
@@ -161,6 +168,11 @@ pub struct PortInfoOutput {
     /// of the setter's source port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
+    /// The value this input reads while nothing is linked into it and no pin
+    /// value is set on its node. Absent from the rendering on a port that
+    /// declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_default: Option<serde_json::Value>,
 }
 
 /// The kind of port - determines how data flows.
@@ -407,6 +419,10 @@ pub struct ProcessorDescriptorOutput {
     pub language: Option<FunctionNodeLanguageOutput>,
     /// Human-readable description.
     pub description: String,
+    /// The palette category an editor files this node type under; absent on a
+    /// type that declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     /// Repository URL.
     pub repository: String,
     /// Runtime environment.
@@ -492,7 +508,9 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
             config: node.config.clone(),
             config_checksum: node.config_checksum,
             pins: node.pins.clone(),
+            exposed_config_fields: node.exposed_config_fields.clone(),
             studio: node.studio.clone(),
+            inputs_waiting_for_a_value: Vec::new(),
             ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
             components: node.serialize_components(),
             fragment: None,
@@ -584,6 +602,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             stream_facts: None,
             values_checked: values_checked_of(&port.family),
             family: Some(port.family.clone()),
+            pin_default: port.pin_default.clone(),
         }
     }
 }
@@ -706,6 +725,7 @@ impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
             kind,
             language,
             description: desc.description.clone(),
+            category: desc.category.clone(),
             repository: desc.repository.clone(),
             runtime: ProcessorRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),
@@ -948,6 +968,7 @@ mod port_rendering_tests {
             delivery_profile: Some("newest".to_string()),
             borrow_quota: None,
             audio_window: None,
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -980,6 +1001,7 @@ mod port_rendering_tests {
                 delivery_profile: None,
                 borrow_quota: None,
                 audio_window: None,
+                pin_default: None,
                 family: crate::core::descriptors::PortFamilyDeclaration {
                     frame_rate,
                     ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
@@ -1159,6 +1181,7 @@ mod port_rendering_tests {
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1208,6 +1231,7 @@ mod port_rendering_tests {
             delivery_profile: Some("ordered".to_string()),
             borrow_quota: None,
             audio_window: Some(declared_window_contract()),
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1249,6 +1273,7 @@ mod port_rendering_tests {
                     hop: 960,
                 },
             )),
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1278,6 +1303,7 @@ mod port_rendering_tests {
             delivery_profile: Some("ordered".to_string()),
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+            pin_default: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -1310,6 +1336,7 @@ mod port_rendering_tests {
                 delivery_profile: Some("ordered".to_string()),
                 borrow_quota: None,
                 audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+                pin_default: None,
                 family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                     crate::core::descriptors::PortFamily::Image,
                 ),

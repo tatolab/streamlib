@@ -198,14 +198,12 @@ def declare_rust_function_node(
     input_ports: "list[dict[str, Any]]" = []
     signature_inputs: "list[dict[str, Any]]" = []
     for input_pin in declaration.input_pins:
-        input_ports.append(
-            {
-                "name": input_pin.port,
-                "description": "",
-                "delivery_profile": "newest",
-                "family": {"family": "channels"},
-            }
-        )
+        input_port: "dict[str, Any]" = {
+            "name": input_pin.port,
+            "description": "",
+            "delivery_profile": "newest",
+            "family": {"family": "channels"},
+        }
         signature_input: "dict[str, Any]" = {
             "parameter": input_pin.port,
             "port": input_pin.port,
@@ -214,6 +212,8 @@ def declare_rust_function_node(
         }
         if input_pin.pin_default is not None:
             signature_input["default"] = _from_f64(input_pin.pin_default, input_pin.value_type)
+            input_port["pin_default"] = signature_input["default"]
+        input_ports.append(input_port)
         signature_inputs.append(signature_input)
     several_outputs = [output_port.name for output_port in declaration.output_ports] != ["result"]
     stamps: "dict[str, Any]" = {
@@ -223,6 +223,7 @@ def declare_rust_function_node(
         declaration_stamps["config_class"]: None,
         declaration_stamps["config_schema"]: _config_schema(declaration.config_fields),
         declaration_stamps["description"]: declaration.description,
+        declaration_stamps["category"]: module_name,
         declaration_stamps["input_ports"]: input_ports,
         declaration_stamps["output_ports"]: [
             {

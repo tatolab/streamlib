@@ -15,7 +15,10 @@ from helper_placement_processors import (
     CrashesItsHelper,
     DiesAbruptlyProbe,
     LabelsTheLevel,
+    LevelScaledByItsGain,
     ForksAWorkerThatOutlivesItProbe,
+    ReportsEachBatchOfFunctionNodeValuesItReadSink,
+    ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
@@ -150,6 +153,36 @@ def function_nodes_read_by_two_native_converters_into_python_records_sink(
     stream_builder.connect(remap.output("result"), first_converter.input("channels"))
     stream_builder.connect(second_lfo.output("result"), second_converter.input("channels"))
     stream_builder.connect(first_converter.output("records"), sink.input("level_records"))
+
+
+@graph_generator
+def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Lfo` read directly by a Python class reporting each batch of values."""
+    lfo = stream_builder.add(Lfo, name="lfo")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(lfo.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def clamp_with_its_input_linked_to_nothing_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Clamp`, its `x` linked to nothing and unpinned, read by a Python class."""
+    clamp = stream_builder.add(Clamp, name="clamp")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(clamp.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def level_scaled_by_its_gain_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A function node scaling its level by the `gain` of its config, read by a Python class."""
+    scaled = stream_builder.add(LevelScaledByItsGain, name="scaled")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(scaled.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def python_sink_reading_the_pin_value_of_its_unlinked_input(stream_builder: StreamBuilder) -> None:
+    """A Python class whose one input is linked to nothing, so it reads its pin value."""
+    stream_builder.add(ReportsEachBatchOfPinValuesItReadSink, name="sink")
 
 
 @graph_generator

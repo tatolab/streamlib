@@ -603,6 +603,7 @@ fn generate_descriptor_from_schema(
                     borrow_quota: #borrow_quota_tokens,
                     audio_window: #audio_window_tokens,
                     family: #family_tokens,
+                    pin_default: ::std::option::Option::None,
                 })
             }
         })
@@ -626,6 +627,7 @@ fn generate_descriptor_from_schema(
                     borrow_quota: ::std::option::Option::None,
                     audio_window: #no_audio_window_tokens,
                     family: #family_tokens,
+                    pin_default: ::std::option::Option::None,
                 })
             }
         })

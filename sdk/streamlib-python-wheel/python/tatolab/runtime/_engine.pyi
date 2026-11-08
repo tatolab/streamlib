@@ -40,7 +40,9 @@ __all__ = [
     "note_stop_request_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
+    "read_each_unlinked_input_port_as_its_pin_value",
     "run_the_scheduling_loop_of_this_helper",
+    "stop_feeding_an_input_port_from_a_function_node_island",
 ]
 
 MODULE_HOST_TABLE_ABI_MAJOR: int
@@ -81,6 +83,7 @@ def feed_an_input_port_from_a_function_node_island(
             list[float],
             list[float],
             int,
+            list[int],
         ]
     ],
     island_output: tuple[int, int],
@@ -91,9 +94,26 @@ def feed_an_input_port_from_a_function_node_island(
     calls are noted under, its compiled evaluate entry's address or the object
     whose `evaluate(input_values, now_ns)` runs its body as Python,
     where each input takes its value (an earlier node's output, or `None` and its
-    pin value), its config values, its initial state values and its output count.
-    `island_output` names the node and output the port reads.
+    pin value), its config values, its initial state values, its output count,
+    and the index among its config values each input past its own sets.
+    `island_output` names the node and output the port reads. An island
+    already feeding the port is replaced, and each stateful node it shares
+    resumes from its state.
     """
+
+def stop_feeding_an_input_port_from_a_function_node_island(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    input_port: str,
+) -> bool:
+    """Stop feeding `input_port` from the island feeding it; whether one did."""
+
+def read_each_unlinked_input_port_as_its_pin_value(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    pin_values: dict[str, float],
+) -> None:
+    """Read each input port of `pin_values` as its pin value while no link feeds it, in place of the pin values read before; a port left out reads only its links again."""
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
     """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.

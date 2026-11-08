@@ -145,6 +145,7 @@ from tatolab.stream._function_node_declaration import (
     FunctionNode,
 )
 from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_DECLARED_STAMP,
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
@@ -166,11 +167,13 @@ from tatolab.runtime._engine import (
     note_stop_request_from_parent_on_runtime_context,
     open_node_link_data_access_for_helper_process,
     open_runtime_context_full_access_for_helper_process,
+    read_each_unlinked_input_port_as_its_pin_value,
     run_the_scheduling_loop_of_this_helper,
 )
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeIslandsFedToTheirPorts,
     feed_each_input_port_from_its_function_node_island,
+    the_value_a_config_field_takes,
 )
 from tatolab.runtime._function_node_pool import (
     FunctionNodePool,
@@ -184,6 +187,9 @@ from tatolab.runtime._processor_hosting import (
     apply_configuration,
     construct_processor_instance,
 )
+
+#: Wire contract: a control value is one little-endian f64 sample.
+_CONTROL_VALUE_SAMPLE_FORMAT = "<d"
 
 if sys.platform == "darwin":
     from tatolab.runtime._engine import (
@@ -857,6 +863,7 @@ DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+    ("category", NODE_DECLARATION_CATEGORY_STAMP),
 )
 
 
@@ -870,6 +877,7 @@ DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
     ("function_signature", NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP),
     ("state_fields", NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP),
+    ("category", NODE_DECLARATION_CATEGORY_STAMP),
 )
 
 
@@ -1312,6 +1320,9 @@ class HelperProcessLifecycle:
         self._scheduling_loop_runs = False
         self._pause_hook_last_called: "Optional[str]" = None
         self._function_node_islands_it_reads: "Optional[FunctionNodeIslandsFedToTheirPorts]" = None
+        self._config_fields_its_node_exposes_as_inputs: "tuple[str, ...]" = ()
+        self._config_as_last_applied: "dict[str, Any]" = {}
+        self._exposed_config_values_last_refused: "dict[str, Any]" = {}
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -1375,6 +1386,20 @@ class HelperProcessLifecycle:
             # its own link-scoped rpc tag so it never becomes the reply to the
             # next lifecycle command.
             self._wire_link(command)
+        elif verb == "feed_island":
+            # Answered on the island's link, like `wire_link`.
+            self._feed_island(command)
+        elif verb == "unfeed_island":
+            # Unanswered, like `unwire_link`.
+            self._unfeed_island(command)
+        elif verb == "set_pin_values":
+            # Unanswered, like `unwire_link`.
+            self._set_pin_values(command)
+        elif verb == "set_exposed_config_fields":
+            # Unanswered, like `unwire_link`.
+            self._take_the_config_fields_its_node_exposes_as_inputs(
+                command.get("exposed_config_fields") or []
+            )
         else:
             log.warn("the parent sent an unknown lifecycle command", cmd=verb)
 
@@ -1386,6 +1411,11 @@ class HelperProcessLifecycle:
                     configuration or {}
                 )
                 configuration = None
+            port_wiring = command.get("ports") or {}
+            self._take_the_config_fields_its_node_exposes_as_inputs(
+                port_wiring.get("exposed_config_fields") or []
+            )
+            self._config_as_last_applied = dict(configuration or {})
             # Declared ahead of any wiring: a processor added to a running
             # graph has ports before it has links, and reads and writes on
             # them must not raise in between.
@@ -1425,15 +1455,18 @@ class HelperProcessLifecycle:
                     self._board_service_name_of_a_stream_clock_that_may_step = (
                         stream_clock_board_service_name
                     )
-            port_wiring = command.get("ports") or {}
             wire_link_data_access(self._link_data_access, port_wiring)
-            function_node_islands = port_wiring.get("islands") or []
-            if function_node_islands:
-                self._function_node_islands_it_reads = (
-                    feed_each_input_port_from_its_function_node_island(
-                        self._link_data_access, function_node_islands, load_processor_class
-                    )
+            self._function_node_islands_it_reads = (
+                feed_each_input_port_from_its_function_node_island(
+                    self._link_data_access,
+                    port_wiring.get("islands") or [],
+                    load_processor_class,
                 )
+            )
+            read_each_unlinked_input_port_as_its_pin_value(
+                link_data_access=self._link_data_access,
+                pin_values=dict(port_wiring.get("pins") or {}),
+            )
             self._hosted = construct_hosted_processor(
                 self._processor_class,
                 configuration,
@@ -1574,7 +1607,46 @@ class HelperProcessLifecycle:
         if hook_name in ("on_pause", "on_resume"):
             self._call_the_pause_hook_once_per_transition(hook_name)
             return
+        if hook_name == "process" and self._config_fields_its_node_exposes_as_inputs:
+            self._take_each_new_value_a_link_gives_an_exposed_config_field()
         self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
+
+    def _take_the_config_fields_its_node_exposes_as_inputs(self, exposed_config_fields: "list[str]") -> None:
+        """Read each of `exposed_config_fields` from the input port of its name, in place of those read before."""
+        self._config_fields_its_node_exposes_as_inputs = tuple(exposed_config_fields)
+        self._link_data_access.declare_ports(list(exposed_config_fields), [])
+
+    def _take_each_new_value_a_link_gives_an_exposed_config_field(self) -> None:
+        """Hand the processor each new value a link gives a config field it exposes, as a live config update.
+
+        A value the update refuses is logged once and the config it last took is kept.
+        """
+        assert self._hosted is not None
+        changed_values_by_field: "dict[str, Any]" = {}
+        for field in self._config_fields_its_node_exposes_as_inputs:
+            payload = self._hosted.limited_access_context.inputs.read(field)
+            if payload is None:
+                continue
+            (input_value,) = struct.unpack_from(_CONTROL_VALUE_SAMPLE_FORMAT, bytes(payload))
+            value = the_value_a_config_field_takes(self._config_as_last_applied.get(field), input_value)
+            if self._config_as_last_applied.get(field) != value:
+                changed_values_by_field[field] = value
+        if not changed_values_by_field:
+            return
+        configuration = {**self._config_as_last_applied, **changed_values_by_field}
+        try:
+            apply_configuration(self._hosted.instance, configuration)
+        except Exception as configuration_refused:
+            if changed_values_by_field != self._exposed_config_values_last_refused:
+                self._exposed_config_values_last_refused = changed_values_by_field
+                log.error(
+                    "this processor refused a value a link gave a config field it exposes as an input",
+                    fields=sorted(changed_values_by_field),
+                    error=str(configuration_refused),
+                )
+            return
+        self._exposed_config_values_last_refused = {}
+        self._config_as_last_applied = configuration
 
     def take_the_lifecycle_commands_that_woke_the_scheduling_loop(self) -> "tuple[bool, bool]":
         """Dispatch every lifecycle command waiting, answering whether the
@@ -1714,6 +1786,54 @@ class HelperProcessLifecycle:
             return
         self._answer_the_parents_wire_link(link_id, None)
 
+    def _feed_island(self, command: "dict[str, Any]") -> None:
+        island = command.get("island") or {}
+        link_id = island.get("link_id")
+        input_port = island.get("input_port")
+        if not self._set_up_succeeded or self._function_node_islands_it_reads is None:
+            self._answer_the_parents_wire_link(
+                link_id, "this processor's setup did not succeed, so no island feeds its inputs"
+            )
+            return
+        try:
+            self._function_node_islands_it_reads.feed_an_input_port_from_its_island(island)
+        except Exception as feed_failure:
+            log.error(
+                "this processor could not evaluate an island the engine handed it after setup",
+                link_id=link_id,
+                input_port=input_port,
+                error=str(feed_failure),
+            )
+            self._answer_the_parents_wire_link(link_id, str(feed_failure))
+            return
+        self._answer_the_parents_wire_link(link_id, None)
+
+    def _unfeed_island(self, command: "dict[str, Any]") -> None:
+        input_port = command.get("port")
+        if self._function_node_islands_it_reads is None or not isinstance(input_port, str):
+            return
+        try:
+            self._function_node_islands_it_reads.stop_feeding_an_input_port(input_port)
+        except Exception as unfeed_failure:
+            log.error(
+                "this processor could not stop evaluating an island unlinked from it",
+                link_id=command.get("link_id"),
+                input_port=input_port,
+                error=str(unfeed_failure),
+            )
+
+    def _set_pin_values(self, command: "dict[str, Any]") -> None:
+        try:
+            read_each_unlinked_input_port_as_its_pin_value(
+                link_data_access=self._link_data_access,
+                pin_values=dict(command.get("pins") or {}),
+            )
+        except Exception as pin_values_refused:
+            log.error(
+                "this processor could not read the pin values the engine handed it",
+                error=str(pin_values_refused),
+            )
+
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
         """Tell the parent whether this processor's port for one link is open.
 
@@ -1752,6 +1872,7 @@ class HelperProcessLifecycle:
         except Exception as configuration_failure:
             self._bridge.send({"rpc": "error", "error": str(configuration_failure)})
             return
+        self._config_as_last_applied = dict(command.get("config") or {})
         self._bridge.send({"rpc": "ok"})
 
 

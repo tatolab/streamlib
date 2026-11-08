@@ -23,6 +23,9 @@ pub struct StreamGraphDocumentNode {
     /// The value set on each unlinked input, by input name.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub pins: Map<String, Value>,
+    /// The config fields the node takes as inputs too, each an input of the field's name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposed_config_fields: Vec<String>,
     /// What the studio draws the node with.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub studio: Map<String, Value>,
@@ -94,6 +97,12 @@ pub enum StreamGraphOperation {
         from: Map<String, Value>,
         to: Map<String, Value>,
     },
+    /// The config fields the node takes as inputs were replaced whole.
+    SetExposedConfigFields {
+        node: Uuid,
+        from: Vec<String>,
+        to: Vec<String>,
+    },
 }
 
 impl StreamGraphOperation {
@@ -130,6 +139,11 @@ impl StreamGraphOperation {
                 from: to,
                 to: from,
             },
+            Self::SetExposedConfigFields { node, from, to } => Self::SetExposedConfigFields {
+                node,
+                from: to,
+                to: from,
+            },
         }
     }
 
@@ -150,6 +164,9 @@ impl StreamGraphOperation {
             Self::SetPinValue { node, input, .. } => format!("set_pin_value {node}/{input}"),
             Self::RenameNode { node, to, .. } => format!("rename_node {node} {to}"),
             Self::SetStudioFields { node, .. } => format!("set_studio_fields {node}"),
+            Self::SetExposedConfigFields { node, .. } => {
+                format!("set_exposed_config_fields {node}")
+            }
         }
     }
 
@@ -161,7 +178,8 @@ impl StreamGraphOperation {
             Self::SetNodeConfig { node, .. }
             | Self::SetPinValue { node, .. }
             | Self::RenameNode { node, .. }
-            | Self::SetStudioFields { node, .. } => *node,
+            | Self::SetStudioFields { node, .. }
+            | Self::SetExposedConfigFields { node, .. } => *node,
         }
     }
 
@@ -368,6 +386,18 @@ impl StreamGraphDocument {
                 }
                 Ok(())
             }
+            StreamGraphOperation::SetExposedConfigFields { node, to, .. } => {
+                let node_object = self.node_object_mut(*node)?;
+                if to.is_empty() {
+                    node_object.remove("exposed_config_fields");
+                } else {
+                    node_object.insert(
+                        "exposed_config_fields".to_owned(),
+                        Value::Array(to.iter().cloned().map(Value::String).collect()),
+                    );
+                }
+                Ok(())
+            }
         }
     }
 
@@ -519,6 +549,7 @@ mod tests {
             node_type: "nodes.effect:Effect".to_owned(),
             config: json!({}),
             pins: Map::new(),
+            exposed_config_fields: Vec::new(),
             studio: Map::new(),
             fragment: None,
         }
@@ -580,6 +611,11 @@ mod tests {
                 node: sink.id,
                 from: Map::new(),
                 to: json!({"position": [10, 20]}).as_object().unwrap().clone(),
+            },
+            StreamGraphOperation::SetExposedConfigFields {
+                node: sink.id,
+                from: Vec::new(),
+                to: vec!["gain".to_owned()],
             },
         ];
         for operation in &operations {
