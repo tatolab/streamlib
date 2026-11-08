@@ -45,13 +45,16 @@ def feed_an_input_port_from_a_function_node_island(
     link_data_access: _stream_protocols.NodeLinkDataAccess,
     input_port: str,
     function_nodes: list[
-        tuple[str, int, list[tuple[tuple[int, int] | None, float]], list[float], list[float], int]
+        tuple[
+            str, int, int, list[tuple[tuple[int, int] | None, float]], list[float], list[float], int
+        ]
     ],
     island_output: tuple[int, int],
 ) -> None:
     """Feed `input_port` from an island of compiled function nodes, evaluated at each read.
 
-    Each node, after the nodes it reads, is its id, its evaluate entry's address,
+    Each node, after the nodes it reads, is its id, the breadcrumb number its
+    calls are noted under, its evaluate entry's address,
     where each input takes its value (an earlier node's output, or `None` and its
     pin value), its config values, its initial state values and its output count.
     `island_output` names the node and output the port reads.

@@ -250,10 +250,14 @@ class ReportsTheFunctionNodeValuesItReadSink:
     def __init__(self) -> None:
         self.values_read: "list[float]" = []
         self.sample_rates_read: "set[int]" = set()
+        self.reported_its_start = False
 
     brightness = Input(Channels, delivery="newest")
 
     def process(self, ctx) -> None:
+        if not self.reported_its_start:
+            self.reported_its_start = True
+            report("FUNCTION_NODE_SINK_STARTED", {"pid": os.getpid()})
         if len(self.values_read) >= FUNCTION_NODE_ISLAND_READS_BEFORE_REPORTING:
             return
         block = ctx.inputs.read(self.brightness)
@@ -270,3 +274,12 @@ class ReportsTheFunctionNodeValuesItReadSink:
                     "sample_rates": sorted(self.sample_rates_read),
                 },
             )
+
+
+@node.function
+def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
+    """Never returns: a compiled call no thread can pre-empt, which only the watchdog ends."""
+    climbing = start
+    while climbing > 0.0:
+        climbing = climbing + 1.0
+    return climbing

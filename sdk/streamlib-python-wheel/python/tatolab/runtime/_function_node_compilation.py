@@ -104,6 +104,7 @@ def feed_each_input_port_from_its_function_node_island(
             function_nodes_handed_over.append(
                 (
                     node_id,
+                    island_node["breadcrumb_number"],
                     compiled.evaluate_entry_address,
                     _where_each_input_takes_its_value(
                         compiled,

@@ -62,9 +62,10 @@ pub use function_node_island_input_port::{
 #[cfg(test)]
 pub(crate) use helper_process_loss_count_board::a_loss_count_board_and_its_helpers_writer_for_this_test_process;
 pub use helper_process_loss_count_board::{
-    HelperPlacedProcessorLossCounts, HelperProcessLossCountBoard,
-    HelperProcessLossCountBoardWriter, InboundLinkLossCountBoardSlotAndWiringGeneration,
-    InboundLinkLossCountBoardSlotMirror, OutputPortBagCountBoardMirror, ProcessorLossCountSnapshot,
+    FunctionNodeCallUnderWayInThisHelper, HelperPlacedProcessorLossCounts,
+    HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter,
+    InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkLossCountBoardSlotMirror,
+    OutputPortBagCountBoardMirror, ProcessorLossCountSnapshot,
 };
 #[cfg(test)]
 pub(crate) use iceoryx2_domain_for_this_test_process::a_notifier_nothing_listens_on;

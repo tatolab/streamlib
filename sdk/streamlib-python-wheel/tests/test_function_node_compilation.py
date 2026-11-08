@@ -295,12 +295,14 @@ def an_island_of_lfo_then_remap_feeding(input_port: str) -> "dict[str, Any]":
         "nodes": [
             {
                 "node": "lfo-1",
+                "breadcrumb_number": 0,
                 "import_path": f"{__name__}:lfo",
                 "config": None,
                 "links_into": [],
             },
             {
                 "node": "remap-1",
+                "breadcrumb_number": 1,
                 "import_path": f"{__name__}:remap",
                 "config": None,
                 "links_into": [{"port": "x", "from": {"node": "lfo-1", "port": "result"}}],
@@ -345,7 +347,13 @@ def an_island_of_one_node(
         "link_id": f"L-{input_port}",
         "output": {"node": node_id, "port": "result"},
         "nodes": [
-            {"node": node_id, "import_path": import_path, "config": config, "links_into": []}
+            {
+                "node": node_id,
+                "breadcrumb_number": 0,
+                "import_path": import_path,
+                "config": config,
+                "links_into": [],
+            }
         ],
     }
 

@@ -16,6 +16,7 @@ from helper_placement_processors import (
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
+    SpinsForever,
     WritesRawMessagePayloadSource,
 )
 
@@ -110,3 +111,11 @@ def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
     sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
     stream_builder.connect(lfo.output("result"), remap.input("x"))
     stream_builder.connect(remap.output("result"), sink.input("brightness"))
+
+
+@stream
+def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A function node whose compiled call never returns, inside the read of a Python class."""
+    spinner = stream_builder.add(SpinsForever, name="spinner")
+    sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
+    stream_builder.connect(spinner.output("result"), sink.input("brightness"))
