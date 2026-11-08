@@ -215,7 +215,7 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
     effect_source = template_text(EFFECT_MODULE_PATH)
     meter_source = template_text(METER_MODULE_PATH)
 
-    assert "GlslPixelEffect.compile(" in effect_source
+    assert "create_compute_kernel(" in effect_source
     assert "numpy" not in effect_source, "the effect in the video path touches no host pixels"
     assert "frame.cpu()" in meter_source, "the meter's host view of the pixels is explicit"
     assert "ctx.time" in meter_source, "the meter paces itself on the monotonic clock"

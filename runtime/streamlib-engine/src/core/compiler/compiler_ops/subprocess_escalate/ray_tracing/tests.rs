@@ -64,83 +64,63 @@ fn refusal_message(response: EscalateResponse) -> String {
 /// Traces one ray per pixel straight down `-Z` at the bound structure
 /// and writes whatever the hit or miss stage left in the payload. Both
 /// bindings are resolved by the names this source gives them.
-const TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL: &str = "\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_geometry;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D traced_output;
-layout(location = 0) rayPayloadEXT vec3 traced_colour;
+const TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG: &str = "\
+[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene_geometry;
+[[vk::binding(1, 0)]] [format(\"rgba8\")] RWTexture2D<float4> traced_output;
+struct TracedColourPayload { float3 traced_colour; };
 void main() {
-    vec2 pixel_centre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-    vec2 normalized_device_coordinate =
-        pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
-    traced_colour = vec3(0.0);
-    traceRayEXT(
-        scene_geometry,
-        gl_RayFlagsOpaqueEXT,
-        0xff,
-        0, 0, 0,
-        vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
-        0.001,
-        vec3(0.0, 0.0, -1.0),
-        100.0,
-        0
-    );
-    imageStore(traced_output, ivec2(gl_LaunchIDEXT.xy), vec4(traced_colour, 1.0));
+    float2 pixel_centre = float2(DispatchRaysIndex().xy) + float2(0.5);
+    float2 normalized_device_coordinate =
+        pixel_centre / float2(DispatchRaysDimensions().xy) * 2.0 - 1.0;
+    RayDesc ray;
+    ray.Origin = float3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0);
+    ray.TMin = 0.001;
+    ray.Direction = float3(0.0, 0.0, -1.0);
+    ray.TMax = 100.0;
+    TracedColourPayload payload;
+    payload.traced_colour = float3(0.0);
+    TraceRay(scene_geometry, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, ray, payload);
+    traced_output[DispatchRaysIndex().xy] = float4(payload.traced_colour, 1.0);
 }
 ";
 
 /// The same pass with the payload inverted before it is stored, so
 /// registering it produces a different pipeline — and therefore a
-/// different kernel id — from [`TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL`].
-const TRACE_AND_INVERT_RAY_GEN_GLSL: &str = "\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_geometry;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D traced_output;
-layout(location = 0) rayPayloadEXT vec3 traced_colour;
+/// different kernel id — from [`TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG`].
+const TRACE_AND_INVERT_RAY_GEN_SLANG: &str = "\
+[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene_geometry;
+[[vk::binding(1, 0)]] [format(\"rgba8\")] RWTexture2D<float4> traced_output;
+struct TracedColourPayload { float3 traced_colour; };
 void main() {
-    vec2 pixel_centre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-    vec2 normalized_device_coordinate =
-        pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
-    traced_colour = vec3(0.0);
-    traceRayEXT(
-        scene_geometry,
-        gl_RayFlagsOpaqueEXT,
-        0xff,
-        0, 0, 0,
-        vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
-        0.001,
-        vec3(0.0, 0.0, -1.0),
-        100.0,
-        0
-    );
-    imageStore(
-        traced_output,
-        ivec2(gl_LaunchIDEXT.xy),
-        vec4(vec3(1.0) - traced_colour, 1.0)
-    );
+    float2 pixel_centre = float2(DispatchRaysIndex().xy) + float2(0.5);
+    float2 normalized_device_coordinate =
+        pixel_centre / float2(DispatchRaysDimensions().xy) * 2.0 - 1.0;
+    RayDesc ray;
+    ray.Origin = float3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0);
+    ray.TMin = 0.001;
+    ray.Direction = float3(0.0, 0.0, -1.0);
+    ray.TMax = 100.0;
+    TracedColourPayload payload;
+    payload.traced_colour = float3(0.0);
+    TraceRay(scene_geometry, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, 0, ray, payload);
+    traced_output[DispatchRaysIndex().xy] = float4(float3(1.0) - payload.traced_colour, 1.0);
 }
 ";
 
 /// A ray that hit nothing paints black.
-const MISS_PAINTS_BLACK_GLSL: &str = "\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(location = 0) rayPayloadInEXT vec3 traced_colour;
-void main() {
-    traced_colour = vec3(0.0);
+const MISS_PAINTS_BLACK_SLANG: &str = "\
+struct TracedColourPayload { float3 traced_colour; };
+void main(inout TracedColourPayload payload) {
+    payload.traced_colour = float3(0.0);
 }
 ";
 
 /// A ray that hit the scene's one triangle paints white, so a traced
 /// pixel says which of the two stages ran for it.
-const CLOSEST_HIT_PAINTS_WHITE_GLSL: &str = "\
-#version 460
-#extension GL_EXT_ray_tracing : require
-layout(location = 0) rayPayloadInEXT vec3 traced_colour;
-void main() {
-    traced_colour = vec3(1.0);
+const CLOSEST_HIT_PAINTS_WHITE_SLANG: &str = "\
+struct TracedColourPayload { float3 traced_colour; };
+void main(inout TracedColourPayload payload, BuiltInTriangleIntersectionAttributes hit) {
+    payload.traced_colour = float3(1.0);
 }
 ";
 
@@ -242,7 +222,7 @@ fn triangles_hit_group(
     }
 }
 
-fn stage_from_glsl(
+fn stage_from_slang(
     stage: EscalateRequestRegisterRayTracingKernelStageStage,
     source: &str,
 ) -> EscalateRequestRegisterRayTracingKernelStage {
@@ -255,10 +235,9 @@ fn stage_from_glsl(
 }
 
 /// The three-stage kernel every registration test starts from, built
-/// from GLSL — which is what the wire carries now that the engine owns
-/// compilation. Tests that need a specific shape mutate fields after
-/// calling.
-fn register_from_glsl(
+/// from Slang, which is what the wire carries. Tests that need a
+/// specific shape mutate fields after calling.
+fn register_from_slang(
     request_id: &str,
     ray_gen_source: &str,
 ) -> EscalateRequestRegisterRayTracingKernel {
@@ -282,17 +261,17 @@ fn register_from_glsl(
         push_constant_stages: 0,
         request_id: request_id.to_string(),
         stages: vec![
-            stage_from_glsl(
+            stage_from_slang(
                 EscalateRequestRegisterRayTracingKernelStageStage::RayGen,
                 ray_gen_source,
             ),
-            stage_from_glsl(
+            stage_from_slang(
                 EscalateRequestRegisterRayTracingKernelStageStage::Miss,
-                MISS_PAINTS_BLACK_GLSL,
+                MISS_PAINTS_BLACK_SLANG,
             ),
-            stage_from_glsl(
+            stage_from_slang(
                 EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit,
-                CLOSEST_HIT_PAINTS_WHITE_GLSL,
+                CLOSEST_HIT_PAINTS_WHITE_SLANG,
             ),
         ],
     }
@@ -401,7 +380,7 @@ fn make_ray_traced_scene_if_available() -> Option<ARayTracedSceneUnderTest> {
     let kernel_id = register_ray_tracing_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("scene-kernel", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+        register_from_slang("scene-kernel", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG),
     )
     .handle_id;
 
@@ -667,7 +646,7 @@ fn a_stage_mask_naming_a_bit_no_ray_tracing_stage_owns_is_refused() {
     };
     let bit_no_stage_owns = RayTracingShaderStageFlags::ALL.bits() + 1;
 
-    let mut declaration = register_from_glsl("k", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+    let mut declaration = register_from_slang("k", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG);
     declaration.bindings[0].stages = bit_no_stage_owns;
     let message = prepare_ray_tracing_kernel_registration(&sandbox, declaration)
         .err()
@@ -677,7 +656,7 @@ fn a_stage_mask_naming_a_bit_no_ray_tracing_stage_owns_is_refused() {
         "must name the binding and why the mask is wrong, got: {message}"
     );
 
-    let mut push_constants = register_from_glsl("k", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+    let mut push_constants = register_from_slang("k", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG);
     push_constants.push_constant_stages = bit_no_stage_owns;
     let message = prepare_ray_tracing_kernel_registration(&sandbox, push_constants)
         .err()
@@ -697,7 +676,7 @@ fn a_procedural_group_leaving_intersection_at_the_sentinel_is_refused() {
         println!("a_procedural_group_without_an_intersection: no GPU — skipping");
         return;
     };
-    let mut req = register_from_glsl("k-proc", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+    let mut req = register_from_slang("k-proc", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG);
     req.groups[2] = EscalateRequestRegisterRayTracingKernelGroup {
         kind: EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit,
         general_stage: RAY_TRACING_STAGE_INDEX_NONE,
@@ -720,7 +699,7 @@ fn register_with_invalid_stage_hex_returns_err() {
         return;
     };
     let registry = EscalateHandleRegistry::new();
-    let mut req = register_from_glsl("k-bad-hex", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+    let mut req = register_from_slang("k-bad-hex", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG);
     req.stages[1].source = String::new();
     req.stages[1].spv_hex = "qq".to_string();
     let message = refusal_message(
@@ -742,61 +721,74 @@ fn register_with_invalid_stage_hex_returns_err() {
 /// `ray_tracing_pipeline_stage_from_wire` picks what the compiler
 /// targets and `ray_tracing_stage_from_wire` picks what the shader
 /// group is built from — so a swapped pair in either would build a miss
-/// shader as a closest-hit without complaint. Each body below is legal
-/// only in its own stage: `rayPayloadEXT` is raygen-only,
-/// `rayPayloadInEXT` is miss/hit-only, `reportIntersectionEXT` is
-/// intersection-only and `callableDataInEXT` is callable-only, so a
-/// mis-mapped compile target fails to compile rather than quietly
-/// producing the wrong module.
+/// shader as a closest-hit without complaint. Slang compiles most of
+/// these bodies for any ray-tracing stage, so the compiled module's own
+/// `OpEntryPoint` execution model is what proves the compile target.
 #[test]
 fn every_ray_tracing_wire_stage_compiles_for_the_stage_it_names() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
         println!("every_ray_tracing_wire_stage_compiles: no GPU — skipping");
         return;
     };
+    const SPIRV_EXECUTION_MODEL_RAY_GENERATION: u32 = 5313;
+    const SPIRV_EXECUTION_MODEL_INTERSECTION: u32 = 5314;
+    const SPIRV_EXECUTION_MODEL_ANY_HIT: u32 = 5315;
+    const SPIRV_EXECUTION_MODEL_CLOSEST_HIT: u32 = 5316;
+    const SPIRV_EXECUTION_MODEL_MISS: u32 = 5317;
+    const SPIRV_EXECUTION_MODEL_CALLABLE: u32 = 5318;
+    let payload = "struct RayPayload { float3 colour; };\n";
     let stages = [
         (
             EscalateRequestRegisterRayTracingKernelStageStage::RayGen,
             RayTracingShaderStage::RayGen,
-            "layout(location = 0) rayPayloadEXT vec3 payload;\nvoid main() { payload = vec3(1.0); }",
+            SPIRV_EXECUTION_MODEL_RAY_GENERATION,
+            "[[vk::binding(0, 0)]] [format(\"rgba8\")] RWTexture2D<float4> traced_output;\n\
+             void main() { traced_output[DispatchRaysIndex().xy] = float4(1.0); }",
         ),
         (
             EscalateRequestRegisterRayTracingKernelStageStage::Miss,
             RayTracingShaderStage::Miss,
-            "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { payload = vec3(0.0); }",
+            SPIRV_EXECUTION_MODEL_MISS,
+            "void main(inout RayPayload payload) { payload.colour = float3(0.0); }",
         ),
         (
             EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit,
             RayTracingShaderStage::ClosestHit,
-            "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { payload = vec3(0.5); }",
+            SPIRV_EXECUTION_MODEL_CLOSEST_HIT,
+            "void main(inout RayPayload payload, BuiltInTriangleIntersectionAttributes hit) \
+             { payload.colour = float3(0.5); }",
         ),
         (
             EscalateRequestRegisterRayTracingKernelStageStage::AnyHit,
             RayTracingShaderStage::AnyHit,
-            "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { ignoreIntersectionEXT; }",
+            SPIRV_EXECUTION_MODEL_ANY_HIT,
+            "void main(inout RayPayload payload, BuiltInTriangleIntersectionAttributes hit) \
+             { IgnoreHit(); }",
         ),
         (
             EscalateRequestRegisterRayTracingKernelStageStage::Intersection,
             RayTracingShaderStage::Intersection,
-            "hitAttributeEXT vec2 barycentric;\nvoid main() { reportIntersectionEXT(1.0, 0u); }",
+            SPIRV_EXECUTION_MODEL_INTERSECTION,
+            "struct SphereHit { float2 uv; };\n\
+             void main() { SphereHit hit; hit.uv = float2(0.0); ReportHit(1.0, 0, hit); }",
         ),
         (
             EscalateRequestRegisterRayTracingKernelStageStage::Callable,
             RayTracingShaderStage::Callable,
-            "layout(location = 0) callableDataInEXT vec3 callable_payload;\nvoid main() { callable_payload = vec3(1.0); }",
+            SPIRV_EXECUTION_MODEL_CALLABLE,
+            "void main(inout RayPayload callable_payload) { callable_payload.colour = float3(1.0); }",
         ),
     ];
-    for (index, (wire_stage, expected_stage, body)) in stages.into_iter().enumerate() {
-        let mut req = register_from_glsl(
-            &format!("rt-glsl-{index}"),
-            TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL,
+    for (index, (wire_stage, expected_stage, expected_execution_model, body)) in
+        stages.into_iter().enumerate()
+    {
+        let mut req = register_from_slang(
+            &format!("rt-slang-{index}"),
+            TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG,
         );
         req.bindings = Vec::new();
         req.groups = vec![general_group(0)];
-        req.stages = vec![stage_from_glsl(
-            wire_stage,
-            &format!("#version 460\n#extension GL_EXT_ray_tracing : require\n{body}\n"),
-        )];
+        req.stages = vec![stage_from_slang(wire_stage, &format!("{payload}{body}\n"))];
         let prepared = prepare_ray_tracing_kernel_registration(&sandbox, req)
             .unwrap_or_else(|e| panic!("{wire_stage:?} did not compile as itself: {e}"));
         assert_eq!(
@@ -805,10 +797,39 @@ fn every_ray_tracing_wire_stage_compiles_for_the_stage_it_names() {
             "{wire_stage:?} reached the kernel as something other than SPIR-V"
         );
         assert_eq!(
+            spirv_entry_point_execution_model(&prepared.stages[0].spirv),
+            Some(expected_execution_model),
+            "{wire_stage:?} was compiled for the wrong pipeline stage"
+        );
+        assert_eq!(
             prepared.stages[0].stage, expected_stage,
             "{wire_stage:?} was classified as the wrong pipeline stage"
         );
     }
+}
+
+/// The execution model of a module's first `OpEntryPoint`.
+fn spirv_entry_point_execution_model(spirv: &[u8]) -> Option<u32> {
+    const SPIRV_HEADER_WORD_COUNT: usize = 5;
+    const OP_ENTRY_POINT: u32 = 15;
+    let words: Vec<u32> = spirv
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
+        .collect();
+    let mut at = SPIRV_HEADER_WORD_COUNT;
+    while at < words.len() {
+        let word_count = (words[at] >> 16) as usize;
+        if words[at] & 0xffff == OP_ENTRY_POINT {
+            return words.get(at + 1).copied();
+        }
+        if word_count == 0 {
+            return None;
+        }
+        at += word_count;
+    }
+    None
 }
 
 // ----- registration, over a ray-tracing device ------------------
@@ -825,7 +846,7 @@ fn registration_answers_with_the_shaders_binding_names_and_kinds() {
     let ok = register_ray_tracing_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("reg", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+        register_from_slang("reg", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG),
     );
     let bindings = ok.bindings.expect("a register response carries the shape");
     assert_eq!(
@@ -853,13 +874,13 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
     let first = register_ray_tracing_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("a", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+        register_from_slang("a", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG),
     )
     .handle_id;
     let second = register_ray_tracing_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("b", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+        register_from_slang("b", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG),
     )
     .handle_id;
     assert_eq!(
@@ -870,7 +891,7 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
     let other = register_ray_tracing_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("c", TRACE_AND_INVERT_RAY_GEN_GLSL),
+        register_from_slang("c", TRACE_AND_INVERT_RAY_GEN_SLANG),
     )
     .handle_id;
     assert_ne!(
@@ -918,10 +939,10 @@ fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
     register_ray_tracing_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("warm", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+        register_from_slang("warm", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG),
     );
 
-    let mut req = register_from_glsl("reg-wrong", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+    let mut req = register_from_slang("reg-wrong", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_SLANG);
     req.bindings = vec![EscalateRequestRegisterRayTracingKernelBinding {
         kind: EscalateRayTracingBindingKind::StorageBuffer,
         name: "scene_parameters".to_string(),

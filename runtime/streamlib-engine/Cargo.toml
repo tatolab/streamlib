@@ -104,7 +104,7 @@ petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
 anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
 cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
 uuid = { version = "1.11", features = ["v4", "v5", "serde"] }  # UUIDs: a node's in its graph document, a pixel buffer pool's
-libloading = "0.8"  # Dynamic library loading for Rust dylib plugins
+libloading = "0.8"  # Opens the Slang compiler and Rust dylib plugins at run time
 sha2.workspace = true  # SHA-256 hashing (escalate content hashing)
 # A project's files — its project file and its stream assets' graph documents — read and written
 # without its history, so the engine links no libgit2.
@@ -156,7 +156,6 @@ mach2 = "0.7"  # Mach kernel API: thread priorities, timing, and the surface-sha
 vulkanalia = { workspace = true }
 vulkanalia-vma = { workspace = true }
 rspirv-reflect = { workspace = true }
-shaderc = { workspace = true }
 # Consumer-side carve-out — defines the trait machinery
 # (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
 # Consumer* RHI types, and the format/error primitives shared with the

@@ -36,10 +36,11 @@ if [ "${1:-}" != "--inside-manylinux" ]; then
 		echo "the workspace has uncommitted changes: the tarball would not be $streamlib_commit" >&2
 		exit 1
 	}
-	# In a container of its own, so the pinned LLVM it installs never meets the
-	# toolchain this build installs below; inside, build-runtime's staging is
-	# then a cache hit.
+	# Each in a container of its own, so the pinned LLVM the driver installs
+	# never meets the toolchain this build installs below; inside,
+	# build-runtime's staging is then a cache hit.
 	bash "$workspace_root/scripts/stage_linux_bundled_vulkan_driver.sh"
+	bash "$workspace_root/scripts/stage_slang_compiler_libraries.sh" --fill-the-cache-only
 	exec docker run --rm \
 		--volume "$workspace_root:/workspace" \
 		--volume "$output_directory:/output" \
@@ -68,7 +69,7 @@ install_build_dependencies_with_bounded_retry() {
 	return 1
 }
 
-# libclang for iceoryx2's bindgen; cmake and ninja for the vendored shaderc.
+# libclang for iceoryx2's bindgen; cmake and ninja for aws-lc-sys and the shader compilers.
 install_build_dependencies_with_bounded_retry clang-devel cmake ninja-build pkgconfig
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
@@ -80,7 +81,7 @@ cargo fetch --locked
 
 # The engine's build script compiles its shaders with glslc, which AlmaLinux 8
 # does not package.
-bash "$workspace_root/scripts/install_shader_compilers_from_the_locked_shaderc_sources.sh" /opt/shader-compilers
+bash "$workspace_root/scripts/install_shader_compilers_from_the_pinned_shaderc_sources.sh" /opt/shader-compilers
 export PATH="/opt/shader-compilers/bin:$PATH"
 
 uv venv --python 3.12 /tmp/runtime-unit-build-venv

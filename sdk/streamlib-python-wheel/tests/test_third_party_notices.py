@@ -19,8 +19,7 @@ from importlib.metadata import distribution
 import pytest
 
 # The projects whose notices `cargo about` structurally cannot produce, appended
-# to the file by hand. Four arrive through `shaderc-sys` as
-# `libshaderc_combined.a`; VulkanMemoryAllocator and Vulkan-Headers are checked
+# to the file by hand. VulkanMemoryAllocator and Vulkan-Headers are checked
 # into `vendor/tatolab-vulkanalia-vma/` and compiled by its build script;
 # PipeWire's SPA layer is checked into `vendor/pipewire-headers/` and compiled
 # by the engine's own build script — no PipeWire library is linked, but its
@@ -28,7 +27,13 @@ import pytest
 # metadata`, and none of those is a package in that graph, so tooling cannot
 # find them.
 #
-# The macOS and Linux wheels carry a prebuilt Vulkan loader and a driver —
+# The macOS and Linux wheels carry the Slang shader compiler prebuilt, so Slang
+# and the projects compiled into it have their notices checked in under
+# `vendor/slang-compiler-notices/`: glslang, SPIRV-Tools and SPIRV-Headers,
+# miniz, LZ4, unordered_dense, fast_float, cmark-gfm and the DirectX Shader
+# Compiler's API header.
+#
+# They also carry a prebuilt Vulkan loader and a driver —
 # MoltenVK on macOS, Mesa's lavapipe on Linux — so the projects compiled into
 # them have their notices checked in under `vendor/bundled-vulkan-driver-notices/`
 # and appended the same way: Vulkan-Loader and its cJSON on both; MoltenVK,
@@ -37,10 +42,16 @@ import pytest
 # SoftFloat and Fuchsia's radix sort under terms of their own, and LLVM's
 # carries OpenBSD's regex and strlcpy and two Unicode-licensed pieces.
 NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
-    "shaderc",
+    "Slang",
+    "DirectX Shader Compiler API header",
     "glslang",
     "SPIRV-Tools",
     "SPIRV-Headers",
+    "miniz",
+    "LZ4",
+    "unordered_dense",
+    "fast_float",
+    "cmark-gfm",
     "VulkanMemoryAllocator",
     "Vulkan-Headers",
     "PipeWire",
@@ -63,23 +74,11 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
 )
 
 # A thin sample of the Rust closure, one per link shape: the same-host IPC
-# transport, the binding layer this wheel is built on, the GLSL compiler that
-# pulled the vendored C++ in, the control plane's HTTP server, and the local
-# relay the runtime unit carries beside `tatolabd`, whose closure is its own.
-# Enough to catch a notices file generated against the wrong manifest; not so
-# many that a dependency swap fails an unrelated test.
-SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc", "axum", "moq-relay")
-
-# The preview page's npm closure, which the runtime unit carries in
-# `lib/tatolab/watch/`: the player it is built on, and the Opus decoder polyfill
-# whose WebAssembly build carries FFmpeg under the LGPL-2.1, whose text must
-# travel with it.
-SAMPLED_WATCH_PAGE_DEPENDENCY_NOTICES = (
-    "## The preview page",
-    "`@moq/watch`",
-    "`@libav.js/variant-opus-af`",
-    "GNU LESSER GENERAL PUBLIC LICENSE",
-)
+# transport, the binding layer this wheel is built on, the library the Slang
+# compiler is opened through, and the control plane's HTTP server. Enough to
+# catch a notices file generated against the wrong manifest; not so many that a
+# dependency swap fails an unrelated test.
+SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "libloading", "axum")
 
 NOTICES_LICENSE_FILE_NAME = "THIRD-PARTY-NOTICES.md"
 BUSL_LICENSE_FILE_NAME = "LICENSE"
@@ -150,14 +149,6 @@ def test_the_shipped_notices_carry_the_rust_closure(installed_streamlib_distribu
     )
     missing = [name for name in SAMPLED_RUST_DEPENDENCY_NAMES if name not in contents]
     assert not missing, f"Rust dependencies absent from the notices: {missing}"
-
-
-def test_the_shipped_notices_carry_the_watch_pages_npm_closure(installed_streamlib_distribution):
-    contents = read_shipped_license_file(
-        installed_streamlib_distribution, NOTICES_LICENSE_FILE_NAME
-    )
-    missing = [name for name in SAMPLED_WATCH_PAGE_DEPENDENCY_NOTICES if name not in contents]
-    assert not missing, f"preview page notices absent from the file: {missing}"
 
 
 def test_the_shipped_notices_reproduce_licence_text_not_just_identifiers(

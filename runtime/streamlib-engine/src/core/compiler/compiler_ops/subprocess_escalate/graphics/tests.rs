@@ -52,7 +52,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
 };
 use crate::core::context::{GpuContext, GpuContextLimitedAccess, TexturePoolDescriptor};
 use crate::core::rhi::{
-    GlslCompilationTargetStage, GraphicsBindingKind, PixelFormat, SurfaceBoundKernelBindingKind,
+    GraphicsBindingKind, PixelFormat, ShaderCompilationTargetStage, SurfaceBoundKernelBindingKind,
     TextureFormat, TextureUsages,
 };
 
@@ -71,39 +71,34 @@ fn refusal_message(response: EscalateResponse) -> String {
     }
 }
 
-/// Fabricates a full-screen triangle out of `gl_VertexIndex` alone —
+/// Fabricates a full-screen triangle out of the vertex index alone —
 /// the only vertex source a draw over this op can have, since no
 /// escalate op mints a vertex buffer.
-const FULL_SCREEN_TRIANGLE_VERTEX_GLSL: &str = "\
-#version 450
-void main() {
-    vec2 corner = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-    gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+const FULL_SCREEN_TRIANGLE_VERTEX_SLANG: &str = "\
+float4 main(uint vertex_index : SV_VulkanVertexID) : SV_Position {
+    float2 corner = float2((vertex_index << 1) & 2, vertex_index & 2);
+    return float4(corner * 2.0 - 1.0, 0.0, 1.0);
 }
 ";
 
 /// Inverts the sampled input's colour and keeps its alpha, so the
 /// rendered pixels prove which surface the named binding resolved to.
-const INVERT_SAMPLED_INPUT_FRAGMENT_GLSL: &str = "\
-#version 450
-layout(set = 0, binding = 0) uniform sampler2D source_image;
-layout(location = 0) out vec4 painted_colour;
-void main() {
-    vec4 source = texelFetch(source_image, ivec2(gl_FragCoord.xy), 0);
-    painted_colour = vec4(vec3(1.0) - source.rgb, source.a);
+const INVERT_SAMPLED_INPUT_FRAGMENT_SLANG: &str = "\
+[[vk::binding(0, 0)]] Sampler2D source_image;
+float4 main(float4 fragment_position : SV_Position) : SV_Target {
+    float4 source = source_image.Load(int3(int2(fragment_position.xy), 0));
+    return float4(float3(1.0) - source.rgb, source.a);
 }
 ";
 
 /// The same pass with the fragment constant folded in, so registering
 /// it produces a different pipeline — and therefore a different kernel
-/// id — from [`INVERT_SAMPLED_INPUT_FRAGMENT_GLSL`].
-const HALVE_SAMPLED_INPUT_FRAGMENT_GLSL: &str = "\
-#version 450
-layout(set = 0, binding = 0) uniform sampler2D source_image;
-layout(location = 0) out vec4 painted_colour;
-void main() {
-    vec4 source = texelFetch(source_image, ivec2(gl_FragCoord.xy), 0);
-    painted_colour = vec4(source.rgb * 0.5, source.a);
+/// id — from [`INVERT_SAMPLED_INPUT_FRAGMENT_SLANG`].
+const HALVE_SAMPLED_INPUT_FRAGMENT_SLANG: &str = "\
+[[vk::binding(0, 0)]] Sampler2D source_image;
+float4 main(float4 fragment_position : SV_Position) : SV_Target {
+    float4 source = source_image.Load(int3(int2(fragment_position.xy), 0));
+    return float4(source.rgb * 0.5, source.a);
 }
 ";
 
@@ -184,14 +179,13 @@ fn make_register_req(
     }
 }
 
-/// The same request built from GLSL, which is what the wire carries
-/// now that the engine owns compilation.
-fn register_from_glsl(
+/// The same request built from Slang, which is what the wire carries.
+fn register_from_slang(
     request_id: &str,
     fragment_source: &str,
 ) -> EscalateRequestRegisterGraphicsKernel {
     let mut req = make_register_req(request_id, "", "");
-    req.vertex_source = FULL_SCREEN_TRIANGLE_VERTEX_GLSL.to_string();
+    req.vertex_source = FULL_SCREEN_TRIANGLE_VERTEX_SLANG.to_string();
     req.fragment_source = fragment_source.to_string();
     req
 }
@@ -1116,7 +1110,7 @@ fn a_binding_declared_for_a_stage_no_graphics_pipeline_has_is_refused() {
         return;
     };
     let registry = EscalateHandleRegistry::new();
-    let mut req = register_from_glsl("req-stage", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL);
+    let mut req = register_from_slang("req-stage", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG);
     req.bindings = vec![EscalateRequestRegisterGraphicsKernelBinding {
         kind: EscalateGraphicsBindingKind::SampledTexture,
         name: "source_image".to_string(),
@@ -1137,28 +1131,28 @@ fn a_binding_declared_for_a_stage_no_graphics_pipeline_has_is_refused() {
     );
 }
 
-/// GLSL where bytes used to go: the engine compiles each stage itself,
+/// Slang where bytes used to go: the engine compiles each stage itself,
 /// and what it hands the pipeline is a module rather than the text.
 #[test]
-fn glsl_for_each_stage_reaches_the_engine_as_compiled_spirv() {
+fn slang_for_each_stage_reaches_the_engine_as_compiled_spirv() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
-        println!("glsl_for_each_stage_reaches_the_engine: no GPU — skipping");
+        println!("slang_for_each_stage_reaches_the_engine: no GPU — skipping");
         return;
     };
     for (field_prefix, source, stage) in [
         (
             "vertex_",
-            FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
-            GlslCompilationTargetStage::Vertex,
+            FULL_SCREEN_TRIANGLE_VERTEX_SLANG,
+            ShaderCompilationTargetStage::Vertex,
         ),
         (
             "fragment_",
-            INVERT_SAMPLED_INPUT_FRAGMENT_GLSL,
-            GlslCompilationTargetStage::Fragment,
+            INVERT_SAMPLED_INPUT_FRAGMENT_SLANG,
+            ShaderCompilationTargetStage::Fragment,
         ),
     ] {
         let compiled = registered_shader_stage_source(field_prefix, source, "", stage, "")
-            .expect("GLSL alone is one of the two alternatives")
+            .expect("Slang alone is one of the two alternatives")
             .spirv(&sandbox)
             .expect("the engine compiles it");
         assert_eq!(
@@ -1182,7 +1176,7 @@ fn registration_answers_with_the_shaders_binding_names_and_kinds() {
     let ok = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("reg", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("reg", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     );
     let bindings = ok.bindings.expect("a register response carries the shape");
     assert_eq!(
@@ -1207,13 +1201,13 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
     let first = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("a", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("a", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
     let second = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("b", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("b", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
     assert_eq!(
@@ -1224,7 +1218,7 @@ fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_ow
     let other = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("c", HALVE_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("c", HALVE_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
     assert_ne!(
@@ -1272,10 +1266,10 @@ fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
     register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("warm", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("warm", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     );
 
-    let mut req = register_from_glsl("reg-wrong", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL);
+    let mut req = register_from_slang("reg-wrong", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG);
     req.bindings = vec![EscalateRequestRegisterGraphicsKernelBinding {
         kind: EscalateGraphicsBindingKind::StorageBuffer,
         name: "sharpen_amount".to_string(),
@@ -1319,7 +1313,7 @@ fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout()
     let kernel_id = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("reg-draw", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("reg-draw", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
 
@@ -1482,7 +1476,7 @@ fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
     let kernel_id = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("reg-scissored", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("reg-scissored", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
 
@@ -1596,7 +1590,7 @@ fn a_draw_binding_its_own_colour_target_is_refused() {
     let kernel_id = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("reg-alias", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("reg-alias", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
     let held = sandbox
@@ -1693,7 +1687,7 @@ fn a_draw_every_frame_never_enters_the_escalate_gate() {
     let kernel_id = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("reg-gateless-draw", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("reg-gateless-draw", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
     let held =
@@ -1730,7 +1724,7 @@ fn a_draw_waits_while_another_holder_stages_bindings_on_its_kernel() {
     let kernel_id = register_graphics_kernel_or_panic(
         &sandbox,
         &registry,
-        register_from_glsl("reg-held-draw", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+        register_from_slang("reg-held-draw", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
     )
     .handle_id;
     let held_textures =

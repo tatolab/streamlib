@@ -28,7 +28,7 @@ from tatolab.testpattern import (
     caption_panel_top_left,
     pack_push_constants_for_frame,
     potato_sprite_top_left_at_frame,
-    compute_kernel_glsl_rendering_a_test_pattern_frame,
+    compute_kernel_slang_rendering_a_test_pattern_frame,
 )
 
 
@@ -163,13 +163,13 @@ def test_the_push_constant_block_is_the_shaders_ten_words_in_its_order():
 
 
 def test_the_kernel_declares_the_bindings_the_node_dispatches_by_name():
-    kernel_source = compute_kernel_glsl_rendering_a_test_pattern_frame()
+    kernel_source = compute_kernel_slang_rendering_a_test_pattern_frame()
 
     for binding_declaration in (
-        "uniform sampler2D potato_sprite_texture;",
-        "uniform sampler2D caption_panel_texture;",
-        "rgba8) uniform writeonly image2D test_pattern_frame;",
-        "local_size_x = 16, local_size_y = 16",
+        "[[vk::binding(0, 0)]] Sampler2D potato_sprite_texture;",
+        "[[vk::binding(1, 0)]] Sampler2D caption_panel_texture;",
+        '[[vk::binding(2, 0)]] [format("rgba8")] RWTexture2D<float4> test_pattern_frame;',
+        "[numthreads(16, 16, 1)]",
     ):
         assert binding_declaration in kernel_source
 

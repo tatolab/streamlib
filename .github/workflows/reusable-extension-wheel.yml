@@ -120,7 +120,7 @@ jobs:
             install_build_dependencies_with_bounded_retry \
               pkgconfig clang-devel cmake ninja-build ${{ inputs.extension_build_extra_dnf_packages }}
             if [ "${{ inputs.extension_build_needs_the_shader_compilers }}" = true ]; then
-              bash "$GITHUB_WORKSPACE/scripts/install_shader_compilers_from_the_locked_shaderc_sources.sh" /opt/shader-compilers
+              bash "$GITHUB_WORKSPACE/scripts/install_shader_compilers_from_the_pinned_shaderc_sources.sh" /opt/shader-compilers
               export PATH="/opt/shader-compilers/bin:$PATH"
             fi
 

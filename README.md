@@ -27,7 +27,7 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 - **Every Python node runs in its own process**, with its own interpreter started from your stream's
   venv. A node that hangs or crashes is one node, named in the log; it cannot stall the others.
 - **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
-  CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
+  CPU copy, and a pixel effect is one Slang kernel. Reading pixels on the CPU is an explicit
   `frame.cpu()`.
 - **Media nodes are modules, built the way you would build one.** The camera, microphone,
   speaker, H.264 / H.265 and Opus codecs, the test pattern and the Linux virtual camera are
@@ -233,35 +233,52 @@ declares a track of it, and a `MoqTrackSend` writes a port's messages to that tr
 stream, on this machine or another, reads the track through a `MoqTrackReceive` node naming a
 gateway on the same relay; a link's two ends are always in one stream.
 
-Pixels stay on the GPU. `nodes/halftone_lens_effect.py` is one shader function, with a lens that
-drifts around the frame and turns what it covers into dots:
+Pixels stay on the GPU. `nodes/halftone_lens_effect.py` is one Slang compute kernel, with a lens
+that drifts around the frame and turns what it covers into dots:
 
 ```python
+import struct
+
 from tatolab.stream import (
-    GlslPixelEffect,
     Image,
+    ImageFrameToWrite,
     Input,
+    NodeOutputTextureRing,
     Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     node,
 )
 
-# The whole effect: the output pixel for the source pixel at `at`, with each
-# channel in 0.0-1.0. A lens drifts around the frame and turns what it covers
-# into dots. `dials` are the values `process()` hands it each frame. Edit it
-# while `tatolab dev` runs to see the change.
-HALFTONE_LENS_GLSL = """
-// How big the drifting lens is, as a share of the frame's height.
-const float LENS_RADIUS = 0.3;
-// How many pixels apart the dots sit under the lens.
-const float DOT_CELL_SIZE = 8.0;
-// How far the gaps between the dots fade toward grey.
-const float GAP_FADE = 0.35;
+# The whole effect, as a Slang compute kernel: one invocation per output pixel.
+# A lens drifts around the frame and turns what it covers into dots. `dials`
+# are the values `process()` pushes each frame. Edit it while `tatolab dev`
+# runs to see the change.
+HALFTONE_LENS_SLANG = """
+[[vk::binding(0, 0)]] Sampler2D source_frame;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> halftone_frame;
 
-vec4 effect(vec4 source, ivec2 at) {
-    vec2 pixel = vec2(at) + 0.5;
-    vec2 lens_centre = dials.frame_size * vec2(
+struct HalftoneLensDials {
+    float2 frame_size;
+    float seconds;
+};
+[[vk::push_constant]] ConstantBuffer<HalftoneLensDials> dials;
+
+// How big the drifting lens is, as a share of the frame's height.
+static const float LENS_RADIUS = 0.3;
+// How many pixels apart the dots sit under the lens.
+static const float DOT_CELL_SIZE = 8.0;
+// How far the gaps between the dots fade toward grey.
+static const float GAP_FADE = 0.35;
+
+[numthreads(8, 8, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    if (any(float2(invocation.xy) >= dials.frame_size)) {
+        return;
+    }
+    float4 source = source_frame.Load(int3(invocation.xy, 0));
+    float2 pixel = float2(invocation.xy) + 0.5;
+    float2 lens_centre = dials.frame_size * float2(
         0.5 + 0.3 * sin(dials.seconds * 0.4),
         0.5 + 0.25 * sin(dials.seconds * 0.55)
     );
@@ -271,17 +288,26 @@ vec4 effect(vec4 source, ivec2 at) {
 
     // Each cell keeps a round dot of the picture and fades the gap around it
     // toward grey, so the dots show on every colour, black included.
-    vec2 cell_centre = (floor(pixel / DOT_CELL_SIZE) + 0.5) * DOT_CELL_SIZE;
+    float2 cell_centre = (floor(pixel / DOT_CELL_SIZE) + 0.5) * DOT_CELL_SIZE;
     float dot_radius = DOT_CELL_SIZE * 0.42;
     float in_the_dot = 1.0 - smoothstep(dot_radius - 1.0, dot_radius, length(pixel - cell_centre));
-    vec3 gap = mix(source.rgb, vec3(0.5), GAP_FADE);
-    vec3 dotted = mix(gap, source.rgb, in_the_dot);
+    float3 gap = lerp(source.rgb, float3(0.5), GAP_FADE);
+    float3 dotted = lerp(gap, source.rgb, in_the_dot);
 
-    return vec4(mix(source.rgb, dotted, under_the_lens), source.a);
+    halftone_frame[invocation.xy] = float4(lerp(source.rgb, dotted, under_the_lens), source.a);
 }
 """
 
+# `HalftoneLensDials` as the push constants lay it out: two floats, then one.
+HALFTONE_LENS_DIALS = struct.Struct("<fff")
+
+WORKGROUP_TILE_SIZE_IN_PIXELS = 8
+
 NANOSECONDS_PER_SECOND = 1_000_000_000
+
+
+def workgroups_covering(pixels: int) -> int:
+    return (pixels + WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // WORKGROUP_TILE_SIZE_IN_PIXELS
 
 
 @node
@@ -292,10 +318,21 @@ class HalftoneLensEffect:
     video_to_downstream = Output(Image)
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.halftone_lens_pixel_effect = GlslPixelEffect.compile(
-            ctx.gpu_full_access,
-            effect_glsl=HALFTONE_LENS_GLSL,
-            dials={"seconds": "float", "frame_size": "vec2"},
+        self.halftone_lens_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=HALFTONE_LENS_SLANG,
+            push_constant_size=HALFTONE_LENS_DIALS.size,
+            bindings={
+                "source_frame": "sampled_texture",
+                "halftone_frame": "storage_image",
+            },
+        )
+        # A frame arrives as a pixel buffer, which a kernel cannot sample, so
+        # each one is copied into a texture first.
+        self.source_frame_textures = NodeOutputTextureRing(
+            "rgba8_unorm", ["texture_binding"], depth=1
+        )
+        self.halftone_frame_textures = NodeOutputTextureRing(
+            "rgba8_unorm", ["storage_binding", "texture_binding"]
         )
         self.first_frame_at_ns: int | None = None
 
@@ -306,16 +343,29 @@ class HalftoneLensEffect:
         # `ctx.time` is stream time in ns, on the clock the stream runs on.
         if self.first_frame_at_ns is None:
             self.first_frame_at_ns = ctx.time
-        halftone_frame = self.halftone_lens_pixel_effect.apply_to_frame(
-            ctx.gpu_limited_access,
-            frame,
-            dials={
-                "seconds": (ctx.time - self.first_frame_at_ns) / NANOSECONDS_PER_SECOND,
-                "frame_size": (frame.width, frame.height),
-            },
+        seconds = (ctx.time - self.first_frame_at_ns) / NANOSECONDS_PER_SECOND
+
+        gpu = ctx.gpu_limited_access
+        source_frame = self.source_frame_textures.next_texture_for_this_frame(
+            gpu, frame.width, frame.height
+        )
+        gpu.copy_surface_to_surface(frame.surface_id, source_frame)
+        halftone_frame = self.halftone_frame_textures.next_texture_for_this_frame(
+            gpu, frame.width, frame.height
+        )
+        self.halftone_lens_kernel.dispatch(
+            bindings={"source_frame": source_frame, "halftone_frame": halftone_frame},
+            group_count=(
+                workgroups_covering(frame.width),
+                workgroups_covering(frame.height),
+                1,
+            ),
+            push_constants=HALFTONE_LENS_DIALS.pack(frame.width, frame.height, seconds),
         )
         ctx.outputs.write(
-            self.video_to_downstream, halftone_frame, timestamp_ns=frame.timestamp_ns
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(halftone_frame, frame.colour),
+            timestamp_ns=frame.timestamp_ns,
         )
 ```
 
@@ -668,8 +718,8 @@ Every GPU operation in the runtime goes through Vulkan. CUDA appears only at the
 a frame hands to torch. On Linux, `libcuda` and the Vulkan loader are opened at run time, never
 linked, so one build runs on any system that has them; the runtime also carries its
 own Vulkan loader and Mesa's lavapipe, a CPU Vulkan driver, for a machine with no GPU driver. On
-macOS the runtime carries its own Vulkan loader and MoltenVK and links only the system. It also carries its own GLSL compiler,
-so writing a pixel effect or a kernel needs no shader toolchain.
+macOS the runtime carries its own Vulkan loader and MoltenVK and links only the system. It also carries the Slang shader
+compiler, so writing a pixel effect or a kernel needs no shader toolchain.
 
 **It costs you** any CUDA-specific fast path inside the runtime, permanently — a vendor trick that
 would help is expressed through Vulkan interop or not at all. And portability in the design is not
@@ -702,7 +752,7 @@ the helper owns on Linux, VideoToolbox on macOS. A scaffolded project depends on
 Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
 libopus linked statically into the wheel.
 
-From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
+From Python you also get compute, graphics and ray-tracing kernels written in Slang, a
 model-input tensor kernel, and the stream clock every node reads as `ctx.time`.
 
 **Platforms.** Two floors, the same API on both:

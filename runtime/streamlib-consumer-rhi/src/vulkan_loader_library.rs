@@ -178,7 +178,7 @@ fn vulkan_loader_library_in_the_app_bundle_holding_the_image_directory(
 /// Canonical because `tatolabd` finds its lend from its own canonical path: a
 /// `tatolabd` started through a symlink must find the lent loader in the same
 /// runtime unit. A path that cannot be canonicalized is taken as given.
-fn directory_of_the_image_this_code_is_in() -> Option<std::path::PathBuf> {
+pub(crate) fn directory_of_the_image_this_code_is_in() -> Option<std::path::PathBuf> {
     let image_path = path_of_the_image_this_code_is_in()?;
     let canonical_image_path = std::fs::canonicalize(&image_path).unwrap_or(image_path);
     canonical_image_path

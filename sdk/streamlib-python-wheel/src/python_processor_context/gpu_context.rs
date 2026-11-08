@@ -625,7 +625,7 @@ impl PythonGpuContextFullAccess {
         )
     }
 
-    /// Build a compute kernel from GLSL source, or from pre-compiled SPIR-V.
+    /// Build a compute kernel from Slang source, or from pre-compiled SPIR-V.
     ///
     /// Constructed once in `setup()`, dispatched per frame in `process()`.
     /// The engine compiles `source` and reflects the shader at construction,
@@ -675,7 +675,7 @@ impl PythonGpuContextFullAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
-    /// Build a graphics kernel from GLSL source, or from pre-compiled SPIR-V.
+    /// Build a graphics kernel from Slang source, or from pre-compiled SPIR-V.
     ///
     /// Constructed once in `setup()`, drawn per frame in `process()`. The
     /// engine compiles both stages and reflects them at construction, taking
@@ -684,7 +684,7 @@ impl PythonGpuContextFullAccess {
     ///
     /// The vertices are the shaders' own: no escalate op mints a vertex or
     /// index buffer, so a vertex stage fabricates its positions from
-    /// `gl_VertexIndex`, and the pipeline carries no vertex input state. The
+    /// `SV_VulkanVertexID`, and the pipeline carries no vertex input state. The
     /// pass attaches colour targets only, so there is no depth state either.
     #[pyo3(signature = (
         color_attachment_formats,
@@ -807,7 +807,7 @@ impl PythonGpuContextFullAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
-    /// Build a ray-tracing kernel from GLSL sources, or from pre-compiled
+    /// Build a ray-tracing kernel from Slang sources, or from pre-compiled
     /// SPIR-V.
     ///
     /// `stages` is one mapping per shader module — `{"stage": "ray_gen",

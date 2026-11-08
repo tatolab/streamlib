@@ -11,9 +11,8 @@ pool, so a tensor a consumer still holds is never rewritten, and
 `torch.from_dlpack` reads it with no copy. The fit's geometry maps the model's
 boxes back to the frame's own coordinates.
 
-Wheel grammar over `create_compute_kernel`, the landing copy
-`GlslPixelEffect` shares, `acquire_storage_buffer_from_node_output_pool`
-and `dispatch`; the engine sees nothing but a copy, a kernel and a tensor.
+Wheel grammar over `create_compute_kernel`, the engine's landing copy,
+`acquire_storage_buffer_from_node_output_pool` and `dispatch`; the engine sees nothing but a copy, a kernel and a tensor.
 No colour conversion: a YUV frame is converted before it is published.
 """
 
@@ -133,7 +132,7 @@ def _rounded_up_to_multiple(value: int, multiple: int) -> int:
     return _divided_rounding_up(value, multiple) * multiple
 
 
-def _glsl_float(value: float) -> str:
+def _slang_float(value: float) -> str:
     return f"float({value!r})"
 
 
@@ -329,7 +328,7 @@ class _ModelInputTensorPlan:
         )
 
 
-def _compute_kernel_glsl(
+def _compute_kernel_slang(
     layout: ModelInputTensorLayout,
     dtype: ModelInputTensorDtype,
     channel_order: ModelInputTensorChannelOrder,
@@ -350,56 +349,53 @@ def _compute_kernel_glsl(
     if dtype == "float32":
         tensor_word_type = "float"
         write_word = (
-            "    streamlib_model_input_tensor.words[word_index] = "
+            f"    {_MODEL_INPUT_TENSOR_BINDING_NAME}[word_index] = "
             "model_input_element(word_index);\n"
         )
     else:
-        # packHalf2x16 puts its first argument in the low half, which a
-        # little-endian tensor reads as the earlier element.
+        # The earlier element goes in the low half, which a little-endian
+        # tensor reads first.
         tensor_word_type = "uint"
         write_word = (
-            "    streamlib_model_input_tensor.words[word_index] = packHalf2x16(vec2(\n"
-            "        model_input_element(2u * word_index),\n"
-            "        model_input_element(2u * word_index + 1u)));\n"
+            f"    {_MODEL_INPUT_TENSOR_BINDING_NAME}[word_index] =\n"
+            "        f32tof16(model_input_element(2u * word_index))\n"
+            "        | (f32tof16(model_input_element(2u * word_index + 1u)) << 16);\n"
         )
     source_channels = ", ".join(
         str(channel) for channel in _SOURCE_CHANNEL_BY_OUTPUT_CHANNEL[channel_order]
     )
     return (
-        "#version 450\n"
-        f"layout(local_size_x = {_INVOCATIONS_PER_WORKGROUP}) in;\n"
-        f"layout(set = 0, binding = 0) uniform sampler2D {SAMPLED_SOURCE_BINDING_NAME};\n"
-        "layout(set = 0, binding = 1, std430) writeonly buffer ModelInputTensorWords {\n"
-        f"    {tensor_word_type} words[];\n"
-        f"}} {_MODEL_INPUT_TENSOR_BINDING_NAME};\n"
-        "layout(push_constant) uniform ModelInputTensorFit {\n"
-        "    ivec2 resized_extent;\n"
-        "    ivec2 pad_offset;\n"
-        "    ivec2 tensor_extent;\n"
+        f"[[vk::binding(0, 0)]] Sampler2D {SAMPLED_SOURCE_BINDING_NAME};\n"
+        f"[[vk::binding(1, 0)]] RWStructuredBuffer<{tensor_word_type}> "
+        f"{_MODEL_INPUT_TENSOR_BINDING_NAME};\n"
+        "struct ModelInputTensorFit {\n"
+        "    int2 resized_extent;\n"
+        "    int2 pad_offset;\n"
+        "    int2 tensor_extent;\n"
         "    uint word_count;\n"
-        "} fit;\n"
-        f"const float SCALE = {_glsl_float(scale)};\n"
-        f"const vec3 MEAN = vec3({', '.join(_glsl_float(value) for value in mean)});\n"
-        f"const vec3 STD = vec3({', '.join(_glsl_float(value) for value in std)});\n"
-        f"const ivec3 SOURCE_CHANNEL_BY_OUTPUT_CHANNEL = ivec3({source_channels});\n"
+        "};\n"
+        "[[vk::push_constant]] ConstantBuffer<ModelInputTensorFit> fit;\n"
+        f"static const float SCALE = {_slang_float(scale)};\n"
+        f"static const float3 MEAN = float3({', '.join(_slang_float(value) for value in mean)});\n"
+        f"static const float3 STD = float3({', '.join(_slang_float(value) for value in std)});\n"
+        f"static const int3 SOURCE_CHANNEL_BY_OUTPUT_CHANNEL = int3({source_channels});\n"
         "float model_input_element(uint element_index) {\n"
         "    uint tensor_width = uint(fit.tensor_extent.x);\n"
         "    uint plane = tensor_width * uint(fit.tensor_extent.y);\n"
         f"{element_position}"
-        "    ivec2 at = ivec2(int(pixel_index % tensor_width), int(pixel_index / tensor_width));\n"
-        "    ivec2 in_resized = at - fit.pad_offset;\n"
+        "    int2 at = int2(int(pixel_index % tensor_width), int(pixel_index / tensor_width));\n"
+        "    int2 in_resized = at - fit.pad_offset;\n"
         "    float pixel_value = 0.0;\n"
-        "    if (all(greaterThanEqual(in_resized, ivec2(0)))\n"
-        "            && all(lessThan(in_resized, fit.resized_extent))) {\n"
-        "        vec2 uv = (vec2(in_resized) + 0.5) / vec2(fit.resized_extent);\n"
-        f"        pixel_value = textureLod({SAMPLED_SOURCE_BINDING_NAME}, uv, 0.0)"
+        "    if (all(in_resized >= int2(0)) && all(in_resized < fit.resized_extent)) {\n"
+        "        float2 uv = (float2(in_resized) + 0.5) / float2(fit.resized_extent);\n"
+        f"        pixel_value = {SAMPLED_SOURCE_BINDING_NAME}.SampleLevel(uv, 0.0)"
         "[SOURCE_CHANNEL_BY_OUTPUT_CHANNEL[channel]] * 255.0;\n"
         "    }\n"
         "    return (pixel_value * SCALE - MEAN[channel]) / STD[channel];\n"
         "}\n"
-        "void main() {\n"
-        f"    uint word_index = gl_GlobalInvocationID.y * {_WORDS_PER_ROW}u"
-        " + gl_GlobalInvocationID.x;\n"
+        f"[numthreads({_INVOCATIONS_PER_WORKGROUP}, 1, 1)]\n"
+        "void main(uint3 invocation : SV_DispatchThreadID) {\n"
+        f"    uint word_index = invocation.y * {_WORDS_PER_ROW}u + invocation.x;\n"
         "    if (word_index >= fit.word_count) {\n"
         "        return;\n"
         "    }\n"
@@ -486,7 +482,7 @@ class ModelInputTensorKernel:
                 f"every element of that channel would be divided by"
             )
         compute_kernel = gpu_full_access.create_compute_kernel(
-            source=_compute_kernel_glsl(
+            source=_compute_kernel_slang(
                 layout, dtype, channel_order, float(scale), mean_by_channel, std_by_channel
             ),
             push_constant_size=_FIT_PUSH_CONSTANT_BLOCK_BYTE_SIZE,
