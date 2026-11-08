@@ -287,7 +287,14 @@ mod tests {
                 rust_type.clone(),
                 "a launch-record test double",
             )
-            .with_output(PortDescriptor::new("video", "", false)),
+            .with_output(PortDescriptor::new(
+                "video",
+                "",
+                false,
+                crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
+            )),
         );
         rust_type
     }
@@ -359,7 +366,7 @@ mod tests {
             "scheduling_priority": null,
             "paced_by_real_time": false,
             "config_schema": {"type": "object"},
-            "input_ports": [{"name": input_port, "description": ""}],
+            "input_ports": [{"name": input_port, "description": "", "family": {"family": "records"}}],
             "output_ports": [],
         })
     }
@@ -721,7 +728,14 @@ mod tests {
                 display_type.clone(),
                 "a launch-record test double",
             )
-            .with_input(PortDescriptor::new("video_in", "", false)),
+            .with_input(PortDescriptor::new(
+                "video_in",
+                "",
+                false,
+                crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
+            )),
         );
 
         let project_directory = tempfile::tempdir().expect("a project directory");
@@ -737,7 +751,7 @@ mod tests {
                 "paced_by_real_time": false,
                 "config_schema": {"type": "object"},
                 "input_ports": [],
-                "output_ports": [{"name": port_name_too_long_for_a_channel, "description": ""}],
+                "output_ports": [{"name": port_name_too_long_for_a_channel, "description": "", "family": {"family": "records"}}],
             }],
             "refused_node_types": [],
         });

@@ -285,8 +285,7 @@ async fn remove_processor_impl(
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
 /// Connect compares the two ports' families, names, codec and formats and
-/// refuses a mismatch by name before any channel exists; a link with a
-/// decorator port at either end is plumbing and wires without a check.
+/// refuses a mismatch by name before any channel exists.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -701,9 +700,9 @@ mod inline_commit_thread_guard_tests {
 }
 
 #[cfg(test)]
-mod connect_wires_without_inspecting_a_port_tests {
-    //! A link between two decorator ports is plumbing: connect inspects
-    //! nothing about either port beyond its existence, and wires in silence.
+mod connect_wires_a_matching_link_in_silence_tests {
+    //! A link between two ports of one family wires in silence: connect
+    //! emits no warning.
 
     use std::sync::Arc;
 
@@ -769,9 +768,14 @@ mod connect_wires_without_inspecting_a_port_tests {
                 producer_class_path(),
                 "producer",
             );
-            producer
-                .outputs
-                .push(PortDescriptor::new("out", "output", true));
+            producer.outputs.push(PortDescriptor::new(
+                "out",
+                "output",
+                true,
+                crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
+            ));
             PROCESSOR_REGISTRY
                 .register_descriptor_only(producer)
                 .expect("register producer descriptor");
@@ -781,9 +785,17 @@ mod connect_wires_without_inspecting_a_port_tests {
                 consumer_class_path(),
                 "consumer",
             );
-            consumer
-                .inputs
-                .push(PortDescriptor::new("in", "input", true).with_delivery_profile("newest"));
+            consumer.inputs.push(
+                PortDescriptor::new(
+                    "in",
+                    "input",
+                    true,
+                    crate::core::descriptors::PortFamilyDeclaration::of_family(
+                        crate::core::descriptors::PortFamily::Image,
+                    ),
+                )
+                .with_delivery_profile("newest"),
+            );
             PROCESSOR_REGISTRY
                 .register_descriptor_only(consumer)
                 .expect("register consumer descriptor");
@@ -833,7 +845,7 @@ mod connect_wires_without_inspecting_a_port_tests {
                 .block_on(connect_impl(a_fixture_graph_change(compiler), from, to))
         });
 
-        result.expect("connect wires two decorator ports with no check");
+        result.expect("connect wires two Image ports");
         assert!(
             captured.is_empty(),
             "connect must emit no WARN when wiring a link; captured: {captured:?}"
@@ -1078,7 +1090,6 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
     const ARRAY_CONSUMER: &str = "FamilyCheckArrayConsumer";
     const CHANNELS_PRODUCER: &str = "FamilyCheckChannelsProducer";
     const CHANNELS_CONSUMER: &str = "FamilyCheckChannelsConsumer";
-    const DECORATOR_CONSUMER: &str = "FamilyCheckDecoratorConsumer";
 
     fn class_path(class_name: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -1101,16 +1112,12 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
             .expect("register the fixture descriptor");
     }
 
-    fn an_input(name: &str, family: Option<PortFamilyDeclaration>) -> PortDescriptor {
-        let port = PortDescriptor::new(name, "input", true).with_delivery_profile("newest");
-        match family {
-            Some(family) => port.with_family(family),
-            None => port,
-        }
+    fn an_input(name: &str, family: PortFamilyDeclaration) -> PortDescriptor {
+        PortDescriptor::new(name, "input", true, family).with_delivery_profile("newest")
     }
 
     fn an_output(name: &str, family: PortFamilyDeclaration) -> PortDescriptor {
-        PortDescriptor::new(name, "output", true).with_family(family)
+        PortDescriptor::new(name, "output", true, family)
     }
 
     fn register_the_family_fixture_classes() {
@@ -1131,10 +1138,10 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
                 IMAGE_CONSUMER,
                 vec![an_input(
                     "video",
-                    Some(PortFamilyDeclaration {
+                    PortFamilyDeclaration {
                         formats: vec!["rgba8_unorm".into()],
                         ..PortFamilyDeclaration::of_family(PortFamily::Image)
-                    }),
+                    },
                 )],
                 Vec::new(),
             );
@@ -1142,7 +1149,7 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
                 ARRAY_CONSUMER,
                 vec![an_input(
                     "tensor",
-                    Some(PortFamilyDeclaration::of_family(PortFamily::Array)),
+                    PortFamilyDeclaration::of_family(PortFamily::Array),
                 )],
                 Vec::new(),
             );
@@ -1163,16 +1170,11 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
                 CHANNELS_CONSUMER,
                 vec![an_input(
                     "signals",
-                    Some(PortFamilyDeclaration {
+                    PortFamilyDeclaration {
                         requires: vec!["rpm".into()],
                         ..PortFamilyDeclaration::of_family(PortFamily::Channels)
-                    }),
+                    },
                 )],
-                Vec::new(),
-            );
-            register_a_class(
-                DECORATOR_CONSUMER,
-                vec![an_input("video", None)],
                 Vec::new(),
             );
         });
@@ -1264,21 +1266,6 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
             refusal.contains("rgba16_float") && refusal.contains("rgba8_unorm"),
             "{refusal}"
         );
-    }
-
-    #[test]
-    fn a_family_port_into_a_decorator_port_wires_with_no_check() {
-        register_the_family_fixture_classes();
-        let compiler = Arc::new(Compiler::new());
-        let camera = a_node_of(&compiler, IMAGE_PRODUCER, Value::Null);
-        let legacy = a_node_of(&compiler, DECORATOR_CONSUMER, Value::Null);
-
-        connect_on_this_thread(
-            &compiler,
-            OutputLinkPortRef::new(camera, "video"),
-            InputLinkPortRef::new(legacy, "video"),
-        )
-        .expect("a decorator port at either end skips every check");
     }
 
     #[test]

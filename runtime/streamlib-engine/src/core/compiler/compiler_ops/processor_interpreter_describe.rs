@@ -708,8 +708,8 @@ mod tests {
             "scheduling_priority": null,
             "paced_by_real_time": false,
             "config_schema": {"type": "object"},
-            "input_ports": [{"name": "video", "description": "", "delivery_profile": "newest"}],
-            "output_ports": [{"name": "blurred", "description": ""}],
+            "input_ports": [{"name": "video", "family": {"family": "records"}, "description": "", "delivery_profile": "newest"}],
+            "output_ports": [{"name": "blurred", "family": {"family": "records"}, "description": ""}],
         })
     }
 

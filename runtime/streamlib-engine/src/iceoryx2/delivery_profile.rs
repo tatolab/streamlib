@@ -216,7 +216,14 @@ mod tests {
             declared_profile: Option<&str>,
         ) -> ProcessorClassImportPath {
             let import_path = class_path(type_name);
-            let mut port = PortDescriptor::new(port_name, "input", true);
+            let mut port = PortDescriptor::new(
+                port_name,
+                "input",
+                true,
+                crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
+            );
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }

@@ -193,6 +193,9 @@ No new ADR.
 - REMOVED: msgpack_typed_dict_cast
 - REMOVED: surface_id_a_msgpack_record_names
 - REMOVED: knows_any_pooled_gpu_frame
+- REMOVED: a_decorator_port_at_either_end_takes_any_link
+- REMOVED: a_family_port_into_a_decorator_port_wires_with_no_check
+- REMOVED: FamilyCheckDecoratorConsumer
 
 ## Proof
 

@@ -103,8 +103,8 @@ pub struct ParsedPort {
     /// `None` on every input and on an output that declares none.
     pub catalog_entry: Option<CatalogEntry>,
     /// The port family the port declares with `family = …` and its family's
-    /// keys; `None` on a port that declares none.
-    pub family: Option<PortFamilyDeclaration>,
+    /// keys.
+    pub family: PortFamilyDeclaration,
 }
 
 /// The fully-parsed `#[processor(...)]` attribute.
@@ -544,7 +544,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
             if let Some(refusal) = family_keys.refusal_of_its_keys(&name, declaration_direction) {
                 return Err(syn::Error::new(name_lit.span(), refusal));
             }
-            Some(family_keys)
+            family_keys
         }
         (None, Some(family_key_span)) => {
             return Err(syn::Error::new(
@@ -1675,17 +1675,14 @@ mod tests {
         });
         let schema = parsed.to_processor_schema();
 
-        let signals = schema.inputs[0].family.as_ref().expect("Channels input");
+        let signals = &schema.inputs[0].family;
         assert_eq!(signals.family, PortFamily::Channels);
         assert_eq!(signals.requires, vec!["rpm".to_string()]);
         assert_eq!(
-            schema.inputs[1]
-                .family
-                .as_ref()
-                .map(|family| &family.formats),
-            Some(&vec!["rgba8_unorm".to_string()])
+            schema.inputs[1].family.formats,
+            vec!["rgba8_unorm".to_string()]
         );
-        let telemetry = schema.outputs[0].family.as_ref().expect("Channels output");
+        let telemetry = &schema.outputs[0].family;
         assert_eq!(
             telemetry.names,
             Some(OutputPortDeclaredNames::FromConfig {
@@ -1697,18 +1694,9 @@ mod tests {
             Some(ChannelsOutputPortSampleRate::Stated(48_000))
         );
         assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F32));
+        assert_eq!(schema.outputs[1].family.codec.as_deref(), Some("h264"));
         assert_eq!(
-            schema.outputs[1]
-                .family
-                .as_ref()
-                .and_then(|family| family.codec.as_deref()),
-            Some("h264")
-        );
-        assert_eq!(
-            schema.outputs[2]
-                .family
-                .as_ref()
-                .and_then(|family| family.residency),
+            schema.outputs[2].family.residency,
             Some(ArrayOutputPortResidency::Gpu)
         );
     }

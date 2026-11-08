@@ -449,23 +449,26 @@ impl GraphInterfacePort {
         }
         .into_iter()
         .find(|port| port.name == port_cast)
-        .and_then(|port| port.family)
+        .map(|port| port.family)
         .map(|declaration| match self.direction {
             GraphInterfacePortDirection::Output => declaration,
             GraphInterfacePortDirection::Input => {
                 the_input_without_what_only_the_graphs_producer_can_meet(declaration)
             }
         });
+        let Some(linked_declaration) = linked_declaration else {
+            return Ok(());
+        };
         let declared_family = PortFamilyDeclaration::of_family(self.family);
         let interface_end = PortFamilyLinkEndpoint {
             node_name: &self.interface_node,
             port_name: GRAPH_INTERFACE_VALUE_PORT_NAME,
-            declaration: Some(&declared_family),
+            declaration: &declared_family,
         };
         let linked_end = PortFamilyLinkEndpoint {
             node_name: &linked_port.node,
             port_name: &linked_port.port,
-            declaration: linked_declaration.as_ref(),
+            declaration: &linked_declaration,
         };
         let refusal = match self.direction {
             GraphInterfacePortDirection::Output => refusal_of_a_link_between_port_families(

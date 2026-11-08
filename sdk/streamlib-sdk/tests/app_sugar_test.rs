@@ -193,8 +193,22 @@ fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorClas
         import_path.clone(),
         "app-sugar connect test",
     )
-    .with_input(PortDescriptor::new(input, "", false))
-    .with_output(PortDescriptor::new(output, "", false));
+    .with_input(PortDescriptor::new(
+        input,
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ))
+    .with_output(PortDescriptor::new(
+        output,
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

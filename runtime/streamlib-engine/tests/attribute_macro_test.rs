@@ -493,16 +493,10 @@ fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
     };
 
     let descriptor = PortFamilyTestProcessor::Processor::descriptor().expect("a descriptor");
-    let signals = descriptor.inputs[0]
-        .family
-        .as_ref()
-        .expect("a Channels input");
+    let signals = &descriptor.inputs[0].family;
     assert_eq!(signals.family, PortFamily::Channels);
     assert_eq!(signals.requires, vec!["rpm".to_string()]);
-    let telemetry = descriptor.outputs[0]
-        .family
-        .as_ref()
-        .expect("a Channels output");
+    let telemetry = &descriptor.outputs[0].family;
     assert_eq!(
         telemetry.names,
         Some(OutputPortDeclaredNames::FromConfig {
@@ -514,11 +508,5 @@ fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
         Some(ChannelsOutputPortSampleRate::Stated(48_000))
     );
     assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F64));
-    assert_eq!(
-        descriptor.outputs[1]
-            .family
-            .as_ref()
-            .and_then(|family| family.codec.as_deref()),
-        Some("h264")
-    );
+    assert_eq!(descriptor.outputs[1].family.codec.as_deref(), Some("h264"));
 }

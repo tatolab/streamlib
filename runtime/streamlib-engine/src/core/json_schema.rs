@@ -122,7 +122,8 @@ pub struct PortInfoOutput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
     /// The port family this port declares and its family's keys. Absent from
-    /// the rendering on a decorator port.
+    /// the rendering on a graph variable's value port, which keeps the family
+    /// of the setter's source port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
 }
@@ -371,10 +372,8 @@ pub struct PortDescriptorOutput {
     /// from the rendering on a port that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_entry: Option<crate::core::descriptors::CatalogEntry>,
-    /// The port family this port declares and its family's keys. Absent from
-    /// the rendering on a decorator port.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
+    /// The port family this port declares and its family's keys.
+    pub family: crate::core::descriptors::PortFamilyDeclaration,
 }
 
 /// Code examples for a processor in different languages.
@@ -482,7 +481,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             catalog_entry: port.catalog_entry.clone(),
-            family: port.family.clone(),
+            family: Some(port.family.clone()),
         }
     }
 }
@@ -780,21 +779,35 @@ mod port_rendering_tests {
 
     /// Every key a rendered port may carry. A port that grows a type field
     /// again fails here, whatever the field is named.
-    const PORT_INFO_KEYS: [&str; 4] = ["name", "description", "port_kind", "delivery_profile"];
-    const PORT_DESCRIPTOR_KEYS: [&str; 4] = ["name", "description", "required", "delivery_profile"];
-    const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 5] = [
+    const PORT_INFO_KEYS: [&str; 5] = [
+        "name",
+        "description",
+        "port_kind",
+        "delivery_profile",
+        "family",
+    ];
+    const PORT_DESCRIPTOR_KEYS: [&str; 5] = [
+        "name",
+        "description",
+        "required",
+        "delivery_profile",
+        "family",
+    ];
+    const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 6] = [
         "name",
         "description",
         "port_kind",
         "delivery_profile",
         "audio_window",
+        "family",
     ];
-    const PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS: [&str; 5] = [
+    const PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS: [&str; 6] = [
         "name",
         "description",
         "required",
         "delivery_profile",
         "audio_window",
+        "family",
     ];
     const FORBIDDEN_PORT_TYPE_KEYS: [&str; 4] = ["data_type", "schema", "type", "schema_ident"];
 
@@ -831,7 +844,9 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
-            family: None,
+            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -867,7 +882,9 @@ mod port_rendering_tests {
                 borrow_quota: None,
                 audio_window: None,
                 catalog_entry,
-                family: None,
+                family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
             }],
         )
     }
@@ -895,6 +912,7 @@ mod port_rendering_tests {
                 "port_kind",
                 "delivery_profile",
                 "catalog_entry",
+                "family",
             ],
         );
     }
@@ -929,8 +947,15 @@ mod port_rendering_tests {
 
     #[test]
     fn a_port_descriptor_renders_the_catalog_entry_it_declared() {
-        let declared = crate::core::PortDescriptor::new("video", "Frames", true)
-            .with_catalog_entry(msgpack_snapshot_catalog_entry());
+        let declared = crate::core::PortDescriptor::new(
+            "video",
+            "Frames",
+            true,
+            crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
+        )
+        .with_catalog_entry(msgpack_snapshot_catalog_entry());
         let json = serde_json::to_value(PortDescriptorOutput::from(&declared)).unwrap();
 
         assert_eq!(json["catalog_entry"]["section"], "binary");
@@ -942,6 +967,7 @@ mod port_rendering_tests {
                 "required",
                 "delivery_profile",
                 "catalog_entry",
+                "family",
             ],
         );
     }
@@ -958,7 +984,9 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: None,
             catalog_entry: None,
-            family: None,
+            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
         assert_carries_no_type_key(&json);
@@ -966,8 +994,15 @@ mod port_rendering_tests {
 
     #[test]
     fn port_descriptor_output_carries_no_type_key() {
-        let pd = crate::core::PortDescriptor::new("video", "Video output", true)
-            .with_delivery_profile("ordered");
+        let pd = crate::core::PortDescriptor::new(
+            "video",
+            "Video output",
+            true,
+            crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
+        )
+        .with_delivery_profile("ordered");
         let json = serde_json::to_value(PortDescriptorOutput::from(&pd)).unwrap();
 
         assert_eq!(json["name"], "video");
@@ -999,7 +1034,9 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: Some(declared_window_contract()),
             catalog_entry: None,
-            family: None,
+            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1039,7 +1076,9 @@ mod port_rendering_tests {
                 },
             )),
             catalog_entry: None,
-            family: None,
+            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1067,7 +1106,9 @@ mod port_rendering_tests {
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
             catalog_entry: None,
-            family: None,
+            family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -1097,7 +1138,9 @@ mod port_rendering_tests {
                 borrow_quota: None,
                 audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
                 catalog_entry: None,
-                family: None,
+                family: crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Image,
+                ),
             }],
             Vec::new(),
         );
@@ -1196,9 +1239,16 @@ mod port_rendering_tests {
     /// carrier the macro and the wheel's declaration bridge both fill.
     #[test]
     fn a_declared_contract_survives_the_descriptor_to_port_info_hop() {
-        let descriptor = crate::core::PortDescriptor::new("audio", "Samples to frame", true)
-            .with_delivery_profile("ordered")
-            .with_audio_window_contract(declared_window_contract());
+        let descriptor = crate::core::PortDescriptor::new(
+            "audio",
+            "Samples to frame",
+            true,
+            crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
+        )
+        .with_delivery_profile("ordered")
+        .with_audio_window_contract(declared_window_contract());
 
         let port = crate::core::graph::PortInfo::from(&descriptor);
 
@@ -1207,11 +1257,16 @@ mod port_rendering_tests {
 
     #[test]
     fn a_contract_bearing_descriptor_renders_its_contract_too() {
-        let descriptor = crate::core::PortDescriptor::new("audio", "Samples to frame", true)
-            .with_delivery_profile("ordered")
-            .with_audio_window_contract(
-                crate::core::descriptors::AudioWindowContract::MatchDevice {},
-            );
+        let descriptor = crate::core::PortDescriptor::new(
+            "audio",
+            "Samples to frame",
+            true,
+            crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
+        )
+        .with_delivery_profile("ordered")
+        .with_audio_window_contract(crate::core::descriptors::AudioWindowContract::MatchDevice {});
         let json = serde_json::to_value(PortDescriptorOutput::from(&descriptor)).unwrap();
 
         assert_eq!(

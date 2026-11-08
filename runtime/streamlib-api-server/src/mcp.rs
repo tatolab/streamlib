@@ -2934,8 +2934,15 @@ pub(crate) mod tests {
                         json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
                     )
                     .with_input(
-                        PortDescriptor::new("video", "frames to present", true)
-                            .with_delivery_profile("newest"),
+                        PortDescriptor::new(
+                            "video",
+                            "frames to present",
+                            true,
+                            streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+                                streamlib::sdk::descriptors::PortFamily::Image,
+                            ),
+                        )
+                        .with_delivery_profile("newest"),
                     ),
                 )
                 .expect("the virtual camera path is registered by this helper alone");
@@ -3111,8 +3118,15 @@ pub(crate) mod tests {
                 )
                 .with_config_schema(config_schema.clone())
                 .with_input(
-                    PortDescriptor::new("video_from_upstream", "", true)
-                        .with_delivery_profile("newest"),
+                    PortDescriptor::new(
+                        "video_from_upstream",
+                        "",
+                        true,
+                        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+                            streamlib::sdk::descriptors::PortFamily::Image,
+                        ),
+                    )
+                    .with_delivery_profile("newest"),
                 ),
             )
             .expect("the probe's path is registered by this test alone");
@@ -3521,13 +3535,23 @@ pub(crate) mod tests {
                         "a probe with one input",
                     )
                     .with_input(
-                        PortDescriptor::new("bags_from_upstream", "", true)
-                            .with_delivery_profile(delivery_profile),
+                        PortDescriptor::new(
+                            "bags_from_upstream",
+                            "",
+                            true,
+                            streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+                                streamlib::sdk::descriptors::PortFamily::Image,
+                            ),
+                        )
+                        .with_delivery_profile(delivery_profile),
                     )
                     .with_output(PortDescriptor::new(
                         "bags_to_downstream",
                         "",
                         true,
+                        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+                            streamlib::sdk::descriptors::PortFamily::Image,
+                        ),
                     )),
                 )
                 .expect("each probe path is registered by this helper alone");

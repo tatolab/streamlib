@@ -22,7 +22,7 @@ fn output_port_family<'node>(
         .outputs
         .iter()
         .find(|port| port.name == port_name)
-        .and_then(|port| port.family.as_ref())
+        .map(|port| &port.family)
 }
 
 fn input_port_family<'node>(
@@ -33,11 +33,11 @@ fn input_port_family<'node>(
         .inputs
         .iter()
         .find(|port| port.name == port_name)
-        .and_then(|port| port.family.as_ref())
+        .map(|port| &port.family)
 }
 
 /// Refuse a link whose two ports' families, names, codec or formats do not
-/// match, naming both endpoints; a decorator port at either end takes any link.
+/// match, naming both endpoints.
 pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     graph: &Graph,
     from: &OutputLinkPortRef,
@@ -49,17 +49,23 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     ) else {
         return Ok(());
     };
+    let (Some(output_declaration), Some(input_declaration)) = (
+        output_port_family(from_node, from.port_name()),
+        input_port_family(to_node, to.port_name()),
+    ) else {
+        return Ok(());
+    };
     let refusal = refusal_of_a_link_between_port_families(
         PortFamilyLinkEndpoint {
             node_name: &from_node.display_name,
             port_name: from.port_name(),
-            declaration: output_port_family(from_node, from.port_name()),
+            declaration: output_declaration,
         },
         from_node.config.as_ref(),
         PortFamilyLinkEndpoint {
             node_name: &to_node.display_name,
             port_name: to.port_name(),
-            declaration: input_port_family(to_node, to.port_name()),
+            declaration: input_declaration,
         },
     );
     match refusal {
@@ -89,17 +95,23 @@ pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_ref
         let Some(to_node) = graph.traversal().v(link.to_port().processor_id()).first() else {
             continue;
         };
+        let (Some(output_declaration), Some(input_declaration)) = (
+            output_port_family(from_node, link.source().port_name()),
+            input_port_family(to_node, link.to_port().port_name()),
+        ) else {
+            continue;
+        };
         let refusal = refusal_of_a_link_between_port_families(
             PortFamilyLinkEndpoint {
                 node_name: &from_node.display_name,
                 port_name: link.source().port_name(),
-                declaration: output_port_family(from_node, link.source().port_name()),
+                declaration: output_declaration,
             },
             Some(config_to_apply),
             PortFamilyLinkEndpoint {
                 node_name: &to_node.display_name,
                 port_name: link.to_port().port_name(),
-                declaration: input_port_family(to_node, link.to_port().port_name()),
+                declaration: input_declaration,
             },
         );
         if let Some(refusal) = refusal {

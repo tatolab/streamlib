@@ -4,9 +4,8 @@
 """Ports declared as class attributes by family: `video = Output(Image)`.
 
 The attribute's name is the port's name. `@node` collects every `Input` and
-`Output` on the class and its bases and stamps them beside the decorator ports;
-`connect` compares the two ends' families, names, codec and formats before a
-frame flows.
+`Output` on the class and its bases and stamps them on the class; `connect`
+compares the two ends' families, names, codec and formats before a frame flows.
 """
 
 from __future__ import annotations
