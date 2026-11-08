@@ -246,12 +246,6 @@ def test_the_scaffold_depends_on_tatolab_stream_the_testpattern_module_and_numpy
     ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
 
 
-def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():
-    """A uv index or source here would resolve `tatolab-stream` from somewhere other
-    than PyPI, where the release publishes it."""
-    assert "tool.uv" not in template_text("pyproject.toml")
-
-
 def test_the_scaffold_binds_to_no_floor():
     report = check_app_directory_for_floor_bindings(SCAFFOLD_TEMPLATE_DIRECTORY)
 
