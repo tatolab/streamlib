@@ -217,6 +217,10 @@ def string_default(x: float, label: float = "loud") -> float:  # pyright: ignore
     return x
 
 
+def none_default_on_a_pin_that_is_not_optional(x: float = None) -> float:  # pyright: ignore[reportArgumentType]
+    return x
+
+
 @pytest.mark.parametrize(
     ("not_a_function_node", "the_refusal_names"),
     [
@@ -235,6 +239,7 @@ def string_default(x: float, label: float = "loud") -> float:  # pyright: ignore
         (state_without_defaults, "gives no default for value"),
         (config_that_is_not_a_dataclass, "one dataclass"),
         (string_default, "only a number or a bool pin takes a default"),
+        (none_default_on_a_pin_that_is_not_optional, "defaults to `None` but is not typed optional"),
     ],
 )
 def test_what_is_not_a_function_node_is_refused_by_name(

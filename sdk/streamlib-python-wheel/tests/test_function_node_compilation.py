@@ -13,7 +13,8 @@ from __future__ import annotations
 import ctypes
 import math
 import struct
-from dataclasses import dataclass
+import itertools
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -88,6 +89,42 @@ def build_an_object(x: float) -> float:
     return float(len(repr(object()))) + x
 
 
+@node.function
+def square_root(x: float) -> float:
+    if x < 0.0:
+        raise ValueError("a negative number has no real square root")
+    return math.sqrt(x)
+
+
+@dataclass(frozen=True)
+class Spread:
+    centre: float
+    width: float = 1.0
+
+
+@node.function
+def spread_around(x: float) -> Spread:
+    return Spread(centre=x)
+
+
+_SEEDS_HANDED_OUT = itertools.count(7)
+
+
+@dataclass(frozen=True)
+class SeededConfig:
+    seed: int = field(default_factory=lambda: next(_SEEDS_HANDED_OUT))
+
+
+@node.function
+def offset_by_seed(x: float = 0.0, *, config: SeededConfig) -> float:
+    return x + config.seed
+
+
+@node.function
+def count_from(start: int = 2**53 + 1) -> int:
+    return start
+
+
 _EVALUATE_ENTRY_TYPE = ctypes.CFUNCTYPE(
     ctypes.c_int32,
     ctypes.POINTER(ctypes.c_double),
@@ -116,6 +153,17 @@ def call_the_evaluate_entry(
     return list(output_values), list(state_values)[: len(state)]
 
 
+def the_evaluate_entry_status(
+    compiled: FunctionNodeCompiledToItsEvaluateEntry, inputs: "list[float]"
+) -> int:
+    input_values = (ctypes.c_double * max(len(inputs), 1))(*inputs)
+    unused = (ctypes.c_double * 1)()
+    output_values = (ctypes.c_double * len(compiled.output_ports))()
+    return _EVALUATE_ENTRY_TYPE(compiled.evaluate_entry_address)(
+        input_values, unused, unused, output_values, 0
+    )
+
+
 def compiled(function_node: Any) -> FunctionNodeCompiledToItsEvaluateEntry:
     return compile_function_node_to_its_evaluate_entry(
         function_node, f"{__name__}:{function_node.__qualname__}"
@@ -131,7 +179,7 @@ def test_a_stateless_body_runs_compiled_with_its_pins_in_signature_order():
 
 def test_a_stateful_body_reads_time_and_its_state_and_writes_its_next_state():
     lfo_compiled = compiled(lfo)
-    assert lfo_compiled.initial_state_values == (0.0, 0.0)
+    assert lfo_compiled.initial_state_values_for_one_node("lfo-1") == [0.0, 0.0]
     outputs, state = call_the_evaluate_entry(lfo_compiled, [1.0], [], [0.0, 0.0], 1_000_000_000)
     assert outputs == [0.0] and state == [0.0, 1_000_000_000.0]
     outputs, state = call_the_evaluate_entry(lfo_compiled, [1.0], [], state, 1_250_000_000)
@@ -197,6 +245,21 @@ def test_a_body_that_does_not_compile_is_refused_by_name():
         compiled(build_an_object)
 
 
+def test_a_body_that_raises_answers_the_refused_status():
+    square_root_compiled = compiled(square_root)
+    assert the_evaluate_entry_status(square_root_compiled, [4.0]) == 0
+    assert the_evaluate_entry_status(square_root_compiled, [-1.0]) == -1
+
+
+def test_a_body_may_omit_a_field_its_dataclass_defaults():
+    assert call_the_evaluate_entry(compiled(spread_around), [3.0], [], [])[0] == [3.0, 1.0]
+
+
+def test_an_int_default_an_f64_cannot_hold_exactly_is_refused():
+    with pytest.raises(FunctionNodeDoesNotCompile, match="only up to 2\\*\\*53"):
+        compiled(count_from)
+
+
 def test_what_is_not_a_function_node_is_refused():
     with pytest.raises(FunctionNodeDoesNotCompile, match="not a `@node.function` function"):
         compile_function_node_to_its_evaluate_entry(math.sin, "math:sin")
@@ -254,5 +317,60 @@ def test_an_unlinked_input_with_no_default_is_refused_by_name():
         feed_each_input_port_from_its_function_node_island(
             _engine.open_node_link_data_access_for_helper_process(),
             [island],
+            _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
+        )
+
+
+def an_island_of_one_node(
+    input_port: str, import_path: str, config: Any, node_id: str = "only-node"
+) -> "dict[str, Any]":
+    return {
+        "input_port": input_port,
+        "link_id": f"L-{input_port}",
+        "output": {"node": node_id, "port": "result"},
+        "nodes": [
+            {"node": node_id, "import_path": import_path, "config": config, "links_into": []}
+        ],
+    }
+
+
+def test_a_config_field_its_class_does_not_declare_is_refused_by_name():
+    import_path = f"{__name__}:offset_by_seed"
+    with pytest.raises(FunctionNodeDoesNotCompile, match="config sets sede, which its config class"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [an_island_of_one_node("level", import_path, {"sede": 3})],
+            {import_path: offset_by_seed}.__getitem__,
+        )
+
+
+def test_a_config_field_default_factory_runs_for_each_node():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["first", "second"], [])
+    import_path = f"{__name__}:offset_by_seed"
+    feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [
+            an_island_of_one_node("first", import_path, None, "seeded-1"),
+            an_island_of_one_node("second", import_path, None, "seeded-2"),
+        ],
+        {import_path: offset_by_seed}.__getitem__,
+    )
+    seeds_read = []
+    for port in ("first", "second"):
+        payload = data_plane.read_from_input_port(port)
+        assert payload is not None
+        seeds_read.append(struct.unpack("<d", bytes(payload))[0])
+    assert seeds_read[0] != seeds_read[1]
+
+
+def test_a_stateful_node_feeding_two_inputs_of_one_reader_is_refused_by_name():
+    with pytest.raises(FunctionNodeDoesNotCompile, match="stateful function node `lfo-1` feeds both"):
+        feed_each_input_port_from_its_function_node_island(
+            _engine.open_node_link_data_access_for_helper_process(),
+            [
+                an_island_of_lfo_then_remap_feeding("brightness"),
+                an_island_of_lfo_then_remap_feeding("contrast"),
+            ],
             _FUNCTION_NODES_BY_IMPORT_PATH.__getitem__,
         )

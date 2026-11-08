@@ -287,6 +287,9 @@ def test_function_nodes_run_inside_the_read_of_the_class_they_feed_with_no_proce
         f"a control value on a wire states no regular rate; read {values_read['sample_rates']}"
     )
     values = values_read["values"]
+    assert values[0] == pytest.approx(0.5), (
+        f"the LFO starts at 0, which `Remap` maps to 0.5, and the class first read {values[0]}"
+    )
     assert all(0.0 <= value <= 1.0 for value in values), (
         f"`Remap` maps the LFO's -1..1 onto 0..1, and the class read {values}"
     )

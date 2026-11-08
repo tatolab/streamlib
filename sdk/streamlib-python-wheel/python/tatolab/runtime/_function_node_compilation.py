@@ -32,6 +32,12 @@ from tatolab.runtime._engine import feed_an_input_port_from_a_function_node_isla
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}
 
+# The largest integer magnitude an f64 holds exactly.
+_LARGEST_INTEGER_AN_F64_HOLDS_EXACTLY = 2**53
+
+# The status the evaluate entry answers when the body raises; `MODULE_HOST_TABLE_STATUS_REFUSED`.
+_EVALUATE_ENTRY_STATUS_REFUSED = -1
+
 
 class FunctionNodeDoesNotCompile(Exception):
     """A function node whose body or signature the evaluate entry cannot carry."""
@@ -47,9 +53,22 @@ class FunctionNodeCompiledToItsEvaluateEntry:
     output_ports: "tuple[str, ...]"
     config_fields: "tuple[str, ...]"
     config_field_defaults: "dict[str, float]"
-    initial_state_values: "tuple[float, ...]"
+    config_field_default_factories: "dict[str, Callable[[], Any]]"
+    state_record_class: Optional[type]
+    state_fields: "tuple[str, ...]"
+    is_stateful: bool
     body_loaded_from_numbas_cache: bool
     compiled_wrapper_kept_alive: Any
+
+    def initial_state_values_for_one_node(self, node_id: str) -> "list[float]":
+        """The state a new node of this type starts from: one record of its defaults, as f64s."""
+        if self.state_record_class is None:
+            return []
+        initial_state = self.state_record_class()
+        return [
+            _exactly_as_f64(getattr(initial_state, field), f"function node `{node_id}`'s state `{field}`")
+            for field in self.state_fields
+        ]
 
 
 def feed_each_input_port_from_its_function_node_island(
@@ -63,6 +82,7 @@ def feed_each_input_port_from_its_function_node_island(
     are read: the native evaluator calls into it.
     """
     compiled_by_import_path: "dict[str, FunctionNodeCompiledToItsEvaluateEntry]" = {}
+    input_port_of_the_island_holding_each_stateful_node: "dict[str, str]" = {}
     for island in islands:
         function_nodes_handed_over: "list[Any]" = []
         node_index_by_node_id: "dict[str, int]" = {}
@@ -75,6 +95,12 @@ def feed_each_input_port_from_its_function_node_island(
                     load_function_node(import_path), import_path
                 )
             compiled = compiled_by_import_path[import_path]
+            if compiled.is_stateful:
+                _refuse_a_stateful_node_two_islands_hold(
+                    node_id,
+                    island["input_port"],
+                    input_port_of_the_island_holding_each_stateful_node,
+                )
             function_nodes_handed_over.append(
                 (
                     node_id,
@@ -87,7 +113,7 @@ def feed_each_input_port_from_its_function_node_island(
                         output_ports_by_node_id,
                     ),
                     _config_values(compiled, node_id, island_node.get("config")),
-                    list(compiled.initial_state_values),
+                    compiled.initial_state_values_for_one_node(node_id),
                     len(compiled.output_ports),
                 )
             )
@@ -104,6 +130,23 @@ def feed_each_input_port_from_its_function_node_island(
             ),
         )
     return list(compiled_by_import_path.values())
+
+
+def _refuse_a_stateful_node_two_islands_hold(
+    node_id: str,
+    input_port: str,
+    input_port_of_the_island_holding_each_stateful_node: "dict[str, str]",
+) -> None:
+    first_input_port = input_port_of_the_island_holding_each_stateful_node.setdefault(
+        node_id, input_port
+    )
+    if first_input_port != input_port:
+        raise FunctionNodeDoesNotCompile(
+            f"stateful function node `{node_id}` feeds both `{first_input_port}` and "
+            f"`{input_port}`, and each input evaluates its own island, so the two would keep "
+            f"two state histories. A stateful node feeds one input in this release. To fix: "
+            f"give each input its own node."
+        )
 
 
 def _where_each_input_takes_its_value(
@@ -157,12 +200,24 @@ def _config_values(
     compiled: FunctionNodeCompiledToItsEvaluateEntry, node_id: str, config: Any
 ) -> "list[float]":
     config_values_by_field = dict(config) if isinstance(config, dict) else {}
+    fields_it_does_not_declare = sorted(set(config_values_by_field) - set(compiled.config_fields))
+    if fields_it_does_not_declare:
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}`'s config sets {', '.join(fields_it_does_not_declare)}, "
+            f"which its config class does not declare; its fields are "
+            f"{', '.join(compiled.config_fields) or 'none'}"
+        )
     config_values: "list[float]" = []
     for field in compiled.config_fields:
+        what_it_is = f"function node `{node_id}`'s config `{field}`"
         if field in config_values_by_field:
-            config_values.append(float(config_values_by_field[field]))
+            config_values.append(_exactly_as_f64(config_values_by_field[field], what_it_is))
         elif field in compiled.config_field_defaults:
             config_values.append(compiled.config_field_defaults[field])
+        elif field in compiled.config_field_default_factories:
+            config_values.append(
+                _exactly_as_f64(compiled.config_field_default_factories[field](), what_it_is)
+            )
         else:
             raise FunctionNodeDoesNotCompile(
                 f"function node `{node_id}`'s config sets no `{field}`, and the field declares "
@@ -226,8 +281,14 @@ def compile_function_node_to_its_evaluate_entry(
             f"depends on it."
         ) from numba_missing
 
+    constructor_by_dataclass = {
+        dataclass_lowered: numba.njit(
+            _a_constructor_keeping_the_dataclass_defaults(dataclass_lowered, named_tuple)
+        )
+        for dataclass_lowered, named_tuple in named_tuple_by_dataclass.items()
+    }
     body_with_its_dataclasses_lowered = numba.njit(cache=True, error_model="numpy")(
-        _the_body_with_its_dataclasses_lowered(body, named_tuple_by_dataclass)
+        _the_body_with_its_dataclasses_lowered(body, constructor_by_dataclass)
     )
     wrapper_source, wrapper_globals = _evaluate_entry_wrapper_source(
         body,
@@ -261,20 +322,23 @@ def compile_function_node_to_its_evaluate_entry(
         raise FunctionNodeDoesNotCompile(f"{import_path} compiled to no evaluate entry address")
 
     pin_defaults_by_input_port = {
-        each_input["port"]: float(each_input["default"])
+        each_input["port"]: _exactly_as_f64(
+            each_input["default"], f"{import_path}'s input `{each_input['parameter']}` default"
+        )
         for each_input in function_signature["inputs"]
         if each_input.get("default") is not None
     }
+    config_fields = dataclasses.fields(config_class) if config_class is not None else ()
     config_field_defaults = {
-        field.name: float(field.default)
-        for field in (dataclasses.fields(config_class) if config_class is not None else ())
+        field.name: _exactly_as_f64(field.default, f"{import_path}'s config `{field.name}` default")
+        for field in config_fields
         if field.default is not dataclasses.MISSING
     }
-    initial_state_values = (
-        tuple(float(getattr(state_record_class(), name)) for name in state_value_types)
-        if state_record_class is not None
-        else ()
-    )
+    config_field_default_factories: "dict[str, Callable[[], Any]]" = {
+        field.name: field.default_factory
+        for field in config_fields
+        if field.default_factory is not dataclasses.MISSING
+    }
     return FunctionNodeCompiledToItsEvaluateEntry(
         evaluate_entry_address=evaluate_entry_address,
         input_ports=tuple(each_input["port"] for each_input in function_signature["inputs"]),
@@ -282,7 +346,10 @@ def compile_function_node_to_its_evaluate_entry(
         output_ports=tuple(each_output["port"] for each_output in function_signature["outputs"]),
         config_fields=tuple(config_value_types),
         config_field_defaults=config_field_defaults,
-        initial_state_values=initial_state_values,
+        config_field_default_factories=config_field_default_factories,
+        state_record_class=state_record_class,
+        state_fields=tuple(state_value_types),
+        is_stateful=state_record_class is not None,
         body_loaded_from_numbas_cache=sum(body_with_its_dataclasses_lowered.stats.cache_hits.values())
         > 0,
         compiled_wrapper_kept_alive=compiled_wrapper,
@@ -327,15 +394,37 @@ def _scalar_field_value_types(
     return value_types
 
 
-def _the_body_with_its_dataclasses_lowered(
-    body: Callable[..., Any], named_tuple_by_dataclass: "dict[type, type]"
+def _a_constructor_keeping_the_dataclass_defaults(
+    dataclass_lowered: type, named_tuple: type
 ) -> Callable[..., Any]:
-    """`body` reading the named tuple in place of each dataclass its globals name,
+    """A function building `named_tuple` from `dataclass_lowered`'s fields, defaulting
+    each field its dataclass gives a plain default; Numba's named tuples take none."""
+    constructor_globals: "dict[str, Any]" = {"named_tuple": named_tuple}
+    parameters: "list[str]" = []
+    for field in dataclasses.fields(dataclass_lowered):
+        if field.default is dataclasses.MISSING:
+            parameters.append(field.name)
+        else:
+            constructor_globals[f"default_{field.name}"] = field.default
+            parameters.append(f"{field.name}=default_{field.name}")
+    field_names = ", ".join(field.name for field in dataclasses.fields(dataclass_lowered))
+    source = f"def construct({', '.join(parameters)}):\n    return named_tuple({field_names})\n"
+    exec(
+        compile(source, f"<constructor of {dataclass_lowered.__qualname__}>", "exec"),
+        constructor_globals,
+    )
+    return constructor_globals["construct"]
+
+
+def _the_body_with_its_dataclasses_lowered(
+    body: Callable[..., Any], constructor_by_dataclass: "dict[type, Any]"
+) -> Callable[..., Any]:
+    """`body` building the named tuple in place of each dataclass its globals name,
     with its keyword-only parameters made positional."""
     lowered_globals = dict(body.__globals__)
     for global_name, global_value in body.__globals__.items():
-        if isinstance(global_value, type) and global_value in named_tuple_by_dataclass:
-            lowered_globals[global_name] = named_tuple_by_dataclass[global_value]
+        if isinstance(global_value, type) and global_value in constructor_by_dataclass:
+            lowered_globals[global_name] = constructor_by_dataclass[global_value]
     code = body.__code__
     code_taking_every_parameter_positionally = code.replace(
         co_argcount=code.co_argcount + code.co_kwonlyargcount, co_kwonlyargcount=0
@@ -406,7 +495,10 @@ def _evaluate_entry_wrapper_source(
                     value_type_by_input_parameter[parameter_name],
                 )
             )
-    lines.append(f"    returned = body_with_its_dataclasses_lowered({', '.join(arguments)})")
+    lines.append("    try:")
+    lines.append(f"        returned = body_with_its_dataclasses_lowered({', '.join(arguments)})")
+    lines.append("    except Exception:")
+    lines.append(f"        return {_EVALUATE_ENTRY_STATUS_REFUSED}")
     if state_record_class is not None:
         lines.append("    output, new_state = returned")
         for index, (field_name, value_type) in enumerate(state_value_types.items()):
@@ -422,6 +514,18 @@ def _evaluate_entry_wrapper_source(
         lines.append(f"    outputs[0] = {output_value}")
     lines.append("    return 0")
     return "\n".join(lines) + "\n", wrapper_globals
+
+
+def _exactly_as_f64(value: Any, what_it_is: str) -> float:
+    """`value` as the f64 an evaluate entry carries, refusing an int it cannot hold exactly."""
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, int) and abs(value) > _LARGEST_INTEGER_AN_F64_HOLDS_EXACTLY:
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is {value}, and an evaluate entry carries each value as an f64, "
+            f"which holds an integer exactly only up to 2**53"
+        )
+    return float(value)
 
 
 def _to_f64(value_expression: str, value_type: str) -> str:

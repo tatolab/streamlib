@@ -125,8 +125,8 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
     fn evaluate_the_island_output_for_this_read(
         &self,
     ) -> Result<FunctionNodeIslandOutputForOneRead> {
-        let now_ns = (self.stream_clock_now_ns)();
         let mut evaluation = self.evaluation.lock();
+        let now_ns = (self.stream_clock_now_ns)();
         if evaluation.last_evaluated_at_ns != Some(now_ns) {
             evaluation.evaluate_every_node_at(now_ns)?;
         }

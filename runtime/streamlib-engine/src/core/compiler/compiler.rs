@@ -11,8 +11,8 @@ use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
 use crate::core::compiler::compiler_ops::function_node_island::{
-    HowALinkIsWired, how_a_link_is_wired, the_function_nodes_among,
-    unwire_a_link_from_a_function_node_island_into_its_reader,
+    HowALinkIsWired, how_a_link_is_wired, refuse_an_edit_to_an_island_a_running_reader_evaluates,
+    the_function_nodes_among, unwire_a_link_from_a_function_node_island_into_its_reader,
     wire_a_call_inside_a_function_node_island,
     wire_a_link_from_a_function_node_island_into_its_reader,
 };
@@ -183,6 +183,14 @@ impl Compiler {
             plan.drop_link_adds_into_removed_processors(&graph);
         }
         plan.hand_config_updates_to_processors_this_batch_constructs(&mut graph_arc.write());
+        refuse_an_edit_to_an_island_a_running_reader_evaluates(
+            &graph_arc.read(),
+            &plan.processors_to_add,
+            &plan.processors_to_remove,
+            &plan.links_to_add,
+            &plan.links_to_remove,
+            &plan.config_updates,
+        )?;
 
         // Early return if nothing to do
         if plan.is_empty() {

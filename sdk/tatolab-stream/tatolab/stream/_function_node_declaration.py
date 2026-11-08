@@ -298,7 +298,9 @@ class _FunctionNodeSignatureReading:
             "value_type": pin_value_type,
             "optional": optional,
         }
-        if parameter.default is not inspect.Parameter.empty:
+        if optional:
+            signature_input["default"] = None
+        elif parameter.default is not inspect.Parameter.empty:
             signature_input["default"] = self._pin_default(parameter, pin_value_type)
         self._signature_inputs.append(signature_input)
         self.input_ports.append(
@@ -313,7 +315,11 @@ class _FunctionNodeSignatureReading:
     def _pin_default(self, parameter: inspect.Parameter, pin_value_type: str) -> Any:
         default = parameter.default
         if default is None:
-            return None
+            raise TypeError(
+                f"{self._function_name}'s input `{parameter.name}` defaults to `None` but is "
+                f"not typed optional, so its pin would carry no value when nothing is wired. "
+                f"To fix: `{parameter.name}: ... | None = None`, or a default of its type."
+            )
         if pin_value_type in ("float", "int", "bool") and isinstance(default, (bool, int, float)):
             return default
         raise TypeError(

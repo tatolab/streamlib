@@ -1504,7 +1504,13 @@ impl InputMailboxesInner {
 
     /// Get the list of configured port names.
     pub fn port_names(&self) -> Vec<String> {
-        self.ports.lock().keys().cloned().collect()
+        let mut port_names: Vec<String> = self.ports.lock().keys().cloned().collect();
+        for island_fed_port_name in self.input_ports_fed_by_function_node_islands.read().keys() {
+            if !port_names.contains(island_fed_port_name) {
+                port_names.push(island_fed_port_name.clone());
+            }
+        }
+        port_names
     }
 }
 
@@ -1781,6 +1787,33 @@ mod tests {
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::test_support::CapturedTracingWarnings;
     use crate::iceoryx2::channel_sample_test_support::TestChannelSample;
+    use crate::iceoryx2::{
+        FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
+    };
+
+    struct IslandAnsweringOneHalf;
+
+    impl FunctionNodeIslandEvaluatedAtEachRead for IslandAnsweringOneHalf {
+        fn evaluate_the_island_output_for_this_read(
+            &self,
+        ) -> Result<FunctionNodeIslandOutputForOneRead> {
+            Ok(FunctionNodeIslandOutputForOneRead {
+                value: 0.5,
+                evaluated_at_ns: 0,
+            })
+        }
+    }
+
+    #[test]
+    fn a_port_an_island_feeds_is_named_among_the_ports_once() {
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.feed_an_input_port_from_a_function_node_island(
+            "brightness",
+            Arc::new(IslandAnsweringOneHalf),
+        );
+        assert!(mailboxes.has_port("brightness"));
+        assert_eq!(mailboxes.port_names(), vec!["brightness".to_string()]);
+    }
 
     fn unique_suffix(tag: &str) -> String {
         format!(

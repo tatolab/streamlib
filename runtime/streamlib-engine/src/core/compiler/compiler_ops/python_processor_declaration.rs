@@ -699,6 +699,12 @@ mod tests {
 
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("python");
+        for process_only_field in ["execution", "scheduling_priority", "paced_by_real_time"] {
+            described
+                .as_object_mut()
+                .expect("a described node type is an object")
+                .remove(process_only_field);
+        }
         let function = read(&described).expect("reads");
         assert_eq!(
             function.descriptor.node_kind,

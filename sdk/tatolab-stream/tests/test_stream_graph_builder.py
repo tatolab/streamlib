@@ -431,6 +431,26 @@ def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
     )
 
 
+def test_a_function_node_in_the_entry_file_is_refused_naming_its_reader() -> None:
+    def entry_file_ease(x: float) -> float:
+        return x
+
+    entry_file_ease.__module__ = "__main__"
+    entry_file_ease.__qualname__ = "entry_file_ease"
+    entry_file_function_node = node.function(entry_file_ease)
+
+    with pytest.raises(ValueError) as refusal:
+        StreamBuilder("rig").add(entry_file_function_node)
+
+    message = str(refusal.value)
+    assert message.startswith(
+        "function node `entry_file_ease` is defined in the entry file, so it identifies as "
+        "`__main__:entry_file_ease`"
+    )
+    assert "runs inside the read of the node it feeds" in message
+    assert "    @node.function\n    def entry_file_ease(...): ...\n" in message
+
+
 def test_a_class_both_function_local_and_in_the_entry_file_gets_the_function_local_fix() -> (
     None
 ):

@@ -492,6 +492,23 @@ def _node_class_import_path(node_class: type | FunctionNode[..., Any]) -> str:
             f"function's arguments, pass those through `stream_builder.add(..., config={{...}})` "
             f"instead — config reaches the child, a closure cannot."
         )
+    if module == _ENTRY_FILE_MODULE and isinstance(node_class, FunctionNode):
+        module_suggestion = _suggested_module_name(qualname)
+        raise ValueError(
+            f"function node `{qualname}` is defined in the entry file, so it identifies as "
+            f"`__main__:{qualname}` — a name no other interpreter can import. A function "
+            f"node runs inside the read of the node it feeds, in that node's process, which "
+            f"imports the function by this name and would get its own entry file instead.\n\n"
+            f"Move `{qualname}` into an importable module beside the entry file and "
+            f"import it from there — one import line:\n\n"
+            f"    # {module_suggestion}.py\n"
+            f"    @node.function\n"
+            f"    def {qualname}(...): ...\n\n"
+            f"    # stream.py\n"
+            f"    from {module_suggestion} import {qualname}\n\n"
+            f"The entry file itself may still run as `__main__`; only nodes may not live "
+            f"in it."
+        )
     if module == _ENTRY_FILE_MODULE:
         module_suggestion = _suggested_module_name(qualname)
         raise ValueError(
