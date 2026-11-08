@@ -84,7 +84,7 @@ Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (
 
 [`changes/graph-groups-and-nested-fragments.md`](changes/graph-groups-and-nested-fragments.md)
 rides this step: a generator placing a generator joins #3259, and labelled groups in the graph
-document follow #3258.
+document, #3308, follow #3258.
 
 ## 6. New capability: lightweight nodes, then shaders
 

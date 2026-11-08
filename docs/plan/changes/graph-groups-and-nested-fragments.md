@@ -104,10 +104,10 @@ selection, editable with the graph operations and owned by the document instead 
 
 ## Tickets (as few tracer bullets as the change needs)
 
-1. **Nested fragments** — folded into #3259 as one more Done-means line, because the fragment and
+1. **#3259 — Nested fragments** — folded into #3259 as one more Done-means line, because the fragment and
    its refresh are built there once: a generator placing a generator, the chain refusal, the
    depth refusal, the nested container in `graph`. Waits on #3257 as #3259 does.
-2. **Groups in the graph document** — `groups`, `studio.group` as a UUID, the three operations,
+2. **#3308 — Groups in the graph document** — `groups`, `studio.group` as a UUID, the three operations,
    `graph.group` in a generator, a golden document holding a group. Waits on #3258.
 
 ## Notes (not in scope)
