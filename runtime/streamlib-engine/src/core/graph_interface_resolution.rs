@@ -401,6 +401,8 @@ impl GraphInterfaceAsDrawn {
                         .map(|node_uuid| node_uuid.to_string())
                         .unwrap_or_default(),
                     processor_type: interface_node.node.processor_type.clone(),
+                    kind: None,
+                    language: None,
                     name: cast_or_as_written(&interface_node.node.name),
                     config: Some(interface_node.node.config.clone()),
                     config_checksum: compute_json_checksum(&interface_node.node.config),
@@ -813,6 +815,8 @@ mod tests {
             id: format!("{name}-id"),
             processor_type: crate::core::descriptors::ProcessorClassImportPath::new("my_app:Node")
                 .expect("import path"),
+            kind: None,
+            language: None,
             name: name.to_string(),
             config: Some(serde_json::json!({})),
             config_checksum: 0,

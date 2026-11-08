@@ -76,7 +76,7 @@ class OpusEncoderConfig:
     ] = "audio"
 
 
-@node(
+@node.process(
     scheduling="high",
     description=(
         "Encodes 20 ms windows of audio to Opus via libopus.\n\n"
@@ -184,7 +184,7 @@ class OpusEncoder:
         )
 
 
-@node(
+@node.process(
     scheduling="high",
     description=(
         "Decodes Opus media frames to audio blocks via libopus.\n\n"

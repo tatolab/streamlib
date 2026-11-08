@@ -142,7 +142,7 @@ class _LatchedRefusal(Exception):
     """A frame the camera can never carry; every later frame is dropped."""
 
 
-@node(
+@node.process(
     scheduling="high",
     description=(
         "Presents video frames as a virtual camera any Linux application can select: one "

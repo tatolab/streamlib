@@ -194,7 +194,7 @@ class _GraphicsKernelProbeBase:
         raise NotImplementedError
 
 
-@node(
+@node.process(
     execution="manual",
     description="Draws a fullscreen triangle sampling one texture into another",
 )
@@ -221,7 +221,7 @@ class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting a draw's bindings wrong, refused by name",
 )
@@ -293,7 +293,7 @@ class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A binding declared for a stage the shaders do not read it in",
 )
@@ -335,7 +335,7 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A uniform-buffer binding a draw cannot name a surface for",
 )
@@ -374,7 +374,7 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Pass shapes a Python draw cannot ask for",
 )
@@ -450,7 +450,7 @@ float4 main(float4 fragment_position : SV_Position) : SV_Target {{
 """
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class RenderedTextureFrameProducer:
     """Renders two known halves into a texture from its output pool, once,
     and sends that frame downstream on every tick — no link promises delivery,
@@ -493,7 +493,7 @@ class RenderedTextureFrameProducer:
         )
 
 
-@node(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
+@node.process(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
 class RenderedFrameCpuReader:
     """Reads the first frame it is handed through `cpu()`, in a processor
     interpreter of its own, and reports what each half holds."""

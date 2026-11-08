@@ -22,7 +22,7 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 ---
 
 - **A stream is a graph document.** `streams/<name>.graph.json` wires nodes together, and a Python
-  node is a `@node` class in a module of its own. There is no registration file and no build step
+  node is a `@node.process` class in a module of its own. There is no registration file and no build step
   between an edit and a run.
 - **Every Python node runs in its own process**, with its own interpreter started from your stream's
   venv. A node that hangs or crashes is one node, named in the log; it cannot stall the others.
@@ -310,7 +310,7 @@ def workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // WORKGROUP_TILE_SIZE_IN_PIXELS
 
 
-@node
+@node.process
 class HalftoneLensEffect:
     """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 
@@ -379,7 +379,7 @@ What a node declares:
   `Channels`, `Packets` or `Records`. The attribute name is the port name, and a read through it
   returns the family's type. Every input names its [delivery](#how-it-works), `newest` or
   `ordered`.
-- **When it runs**, with `@node(execution=…)`: `reactive` (the default once it has an input),
+- **When it runs**, with `@node.process(execution=…)`: `reactive` (the default once it has an input),
   `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source has nothing
   to react to, so it must name one. `scheduling` asks for `realtime`, `high` or `normal` priority.
 - **Its configuration**, as the annotation on `__init__`'s `config` parameter — a `TypedDict`, a

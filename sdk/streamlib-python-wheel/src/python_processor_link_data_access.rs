@@ -96,7 +96,7 @@ pub(crate) struct PythonProcessorLinkDataAccess {
 pub(crate) struct HelperProcessDataPlaneLentToNativeCode {
     pub(crate) input_mailboxes: Arc<InputMailboxesInner>,
     pub(crate) output_writer: Arc<OutputWriterInner>,
-    /// Lent port names, each cast the way `@node` casts it.
+    /// Lent port names, each cast the way `@node.process` casts it.
     pub(crate) lent_input_port_names: Vec<String>,
     pub(crate) lent_output_port_names: Vec<String>,
 }
@@ -2217,7 +2217,7 @@ fn not_a_helper_process_data_plane_error() -> PyErr {
     )
 }
 
-/// The declared port an author's spelling names: `@node` cast each declared
+/// The declared port an author's spelling names: `@node.process` cast each declared
 /// name, so a lookup casts its argument and `read("Video")` finds `video`.
 fn declared_port_name_the_spelling_names(port_name: &str) -> PyResult<Cow<'_, str>> {
     cast_exposed_name_to_url_safe(port_name)

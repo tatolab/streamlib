@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use parking_lot::RwLock;
 
 use crate::core::ProcessorDescriptor;
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::processor_instance_factory::{
@@ -125,6 +125,15 @@ impl NodeTypesOneStreamResolves {
         PROCESSOR_REGISTRY.port_info(node_type).or_else(|| {
             self.project_the_type_this_streams_interpreter_described(node_type, |described| {
                 described.input_and_output_port_info.clone()
+            })
+        })
+    }
+
+    /// How `node_type` runs, native first.
+    pub(crate) fn node_kind(&self, node_type: &ProcessorClassImportPath) -> Option<NodeKind> {
+        PROCESSOR_REGISTRY.node_kind(node_type).or_else(|| {
+            self.project_the_type_this_streams_interpreter_described(node_type, |described| {
+                described.descriptor.node_kind
             })
         })
     }
@@ -294,7 +303,7 @@ mod tests {
     }
 
     fn a_node_of(node_type: &ProcessorClassImportPath) -> ProcessorNode {
-        ProcessorNode::new(node_type.clone(), "a-node", None, vec![], vec![])
+        ProcessorNode::new(node_type.clone(), None, "a-node", None, vec![], vec![])
     }
 
     /// A later describe of a type into one stream replaces what the earlier

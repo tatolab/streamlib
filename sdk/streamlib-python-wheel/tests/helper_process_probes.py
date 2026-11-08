@@ -22,7 +22,7 @@ class PassThroughProbeConfig(TypedDict, total=False):
     tag: str
 
 
-@node
+@node.process
 class PassThroughProbe:
     """Copies every JSON record from its input to its output, tagged."""
 
@@ -45,12 +45,12 @@ class PassThroughProbe:
 class OuterProbe:
     """Holds a nested processor, so the dotted-qualname walk has a target."""
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class InnerProbe:
         frames_to_downstream = Output(Packets)
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class ImportsADmaBufOffLinuxProbe:
     """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
 
@@ -60,7 +60,7 @@ class ImportsADmaBufOffLinuxProbe:
         ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class RefusesSetupProbe:
     """Raises out of `setup`, which the parent must hear about."""
 
@@ -70,7 +70,7 @@ class RefusesSetupProbe:
         raise RuntimeError("this processor cannot set itself up")
 
 
-@node
+@node.process
 class SlowPassThroughProbe:
     """Copies every message's payload to its output, slower than a burst arrives."""
 
@@ -91,7 +91,7 @@ class SlowPassThroughProbe:
 HOOKS_THE_INTERRUPT_PROBES_REACHED: list[str] = []
 
 
-@node(execution="continuous", interval_ms=0)
+@node.process(execution="continuous", interval_ms=0)
 class InterruptedInProcessProbe:
     """Takes a `KeyboardInterrupt` inside `process()`, the way the parent's
     shutdown ladder delivers one to a callback that outran its budget."""
@@ -115,7 +115,7 @@ class InterruptedInProcessProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class InterruptedInSetupProbe:
     """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
     raises on its own, this one is still owed its `teardown()`."""
@@ -130,7 +130,7 @@ class InterruptedInSetupProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class RaisesInSetupProbe:
     """A `setup()` that raises on its own, which keeps the no-teardown rule."""
 
@@ -152,7 +152,7 @@ class RaisesInSetupProbe:
 WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []
 
 
-@node(execution="continuous", interval_ms=250)
+@node.process(execution="continuous", interval_ms=250)
 class ContinuousPacingProbe:
     """Records when each `process()` ran, so the interval the loop kept is
     measurable. The interval under test is the one the parent's `run` names."""
@@ -167,7 +167,7 @@ class ReconfigurableProbeConfig(TypedDict, total=False):
     gain: int
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class RefusesReconfigurationProbe:
     """Defines `configure` and refuses every configuration handed to it."""
 
@@ -180,7 +180,7 @@ class RefusesReconfigurationProbe:
         raise ValueError(f"a gain of {config.get('gain')} is out of range")
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TakesReconfigurationProbe:
     """Defines `configure` and takes whatever it is handed."""
 
@@ -193,7 +193,7 @@ class TakesReconfigurationProbe:
         self.gain = config.get("gain", 1)
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class ReleasesAStructureInTeardownProbe:
     """Builds an acceleration structure in `setup` and lets go of it in
     `teardown`, so the structure's release is owed while teardown answers."""

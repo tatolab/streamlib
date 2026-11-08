@@ -229,7 +229,7 @@ keys and the record there.
 5. **#3260 — Linked dependencies.** `add_dependency` from a local path or an Artifacts remote, read-only
    use of its assets, `update_dependency` and `fork_asset`. Waits on 2.
 6. **#3152 — A project's node types and generators, listed without running code** (rewritten):
-   each `@node` class, function and shader node and `@graph_generator` in a project and its
+   each `@node.process` class, function and shader node and `@graph_generator` in a project and its
    dependencies, read from source, over the local API and MCP. Waits on 1.
 
 ## Notes (not in scope)

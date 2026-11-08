@@ -245,7 +245,7 @@ class _RayTracingKernelProbeBase:
         raise NotImplementedError
 
 
-@node(
+@node.process(
     execution="manual",
     description="Builds a BLAS and a TLAS and traces them into a storage image",
 )
@@ -272,7 +272,7 @@ class TracedTriangleProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="Every way of getting a trace's bindings wrong, refused by name",
 )
@@ -340,7 +340,7 @@ class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A binding declared for a stage this kernel has no module for",
 )
@@ -383,7 +383,7 @@ class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="A uniform-buffer binding a trace cannot name a surface for",
 )
@@ -424,7 +424,7 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node(
+@node.process(
     execution="manual",
     description="An acceleration structure is named by its handle, or not at all",
 )
@@ -487,7 +487,7 @@ class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
 RAY_TRACING_TIER_ABSENT = "the ray-tracing tier is absent"
 
 
-@node(
+@node.process(
     execution="manual",
     description="Ray-tracing constructors refuse at setup() naming the absent tier",
 )

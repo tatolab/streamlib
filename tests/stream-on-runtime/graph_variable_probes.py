@@ -16,7 +16,7 @@ class ImageVariableReaderConfig(TypedDict):
     reader: str
 
 
-@node
+@node.process
 class ImageVariableReader:
     """Reports the first Image frame it reads, under a marker named for `reader`."""
 

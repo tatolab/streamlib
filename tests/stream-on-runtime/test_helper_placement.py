@@ -3,7 +3,7 @@
 
 """The behavioural gate on where a Python class node runs.
 
-Every `@node` class runs in its own child process of `tatolabd` — own
+Every `@node.process` class runs in its own child process of `tatolabd` — own
 interpreter, own GIL: `tatolabd` never imports the processor's module, and the
 pid a bag was produced in is not `tatolabd`'s.
 """

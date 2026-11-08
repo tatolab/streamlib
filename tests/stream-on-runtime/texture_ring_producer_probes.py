@@ -85,7 +85,7 @@ class TextureRingPublishingVideoSourceConfig:
     minimum_interval_between_publishes_ns: int = 0
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class TextureRingPublishingVideoSource:
     """Publishes frames from its own output ring, one slot per frame."""
 
@@ -137,7 +137,7 @@ class TextureRingPublishingVideoSource:
             )
 
 
-@node
+@node.process
 class PublishedFramePixelReadingSink:
     """Resolves each published surface id and reports the pixels behind it."""
 
@@ -168,7 +168,7 @@ class PublishedFramePixelReadingSink:
         _report("PublishedFramePixelReadingSink", read_the_frames_pixels)
 
 
-@node
+@node.process
 class PublishedFrameIdRecordingSink:
     """Records each published surface id without resolving it — the link an
     output port needs, for a scenario that reads only the producer's report."""
@@ -191,7 +191,7 @@ def _top_left_pixel_of(ctx, surface_id: str) -> "list[int]":
     return top_left_pixel
 
 
-@node
+@node.process
 class ClaimedFrameHoldingSink:
     """Claims the first frame with a typed read and holds it, re-reading its
     pixels as every later frame arrives."""
@@ -224,7 +224,7 @@ class ClaimedFrameHoldingSink:
         _report("ClaimedFrameHoldingSink", reread_the_held_frame)
 
 
-@node
+@node.process
 class UnclaimedFrameHoldingSink:
     """Keeps only the first frame's id — no claim — and tries it again as every
     later frame arrives: the negative control for the claimed sink."""

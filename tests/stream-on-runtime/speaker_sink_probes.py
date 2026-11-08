@@ -22,7 +22,7 @@ RESULT_MARKER = "MARKER:BLOCKS_COUNTED "
 BLOCKS_TO_COUNT = 100
 
 
-@node
+@node.process
 class AudioBlockCountingProbe:
     """Reports once enough blocks have crossed the link to judge a run by."""
 

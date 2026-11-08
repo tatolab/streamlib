@@ -3,7 +3,7 @@
 
 """Ports declared as class attributes by family: `video = Output(Image)`.
 
-The attribute's name is the port's name. `@node` collects every `Input` and
+The attribute's name is the port's name. `@node.process` collects every `Input` and
 `Output` on the class and its bases and stamps them on the class; `connect`
 compares the two ends' families, names, codec and formats before a frame flows.
 """

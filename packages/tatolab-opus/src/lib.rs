@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The native half of `tatolab-opus` — the module the wheel's two `@node`
+//! The native half of `tatolab-opus` — the module the wheel's two `@node.process`
 //! classes import as `tatolab.opus._native`.
 //!
 //! The engine never calls anything here: libopus runs in each node's own

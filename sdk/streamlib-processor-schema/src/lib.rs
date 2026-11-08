@@ -13,6 +13,7 @@ pub mod config_schema_document;
 pub mod descriptors;
 pub mod error;
 pub mod exposed_name_cast;
+pub mod node_kind;
 pub mod node_reference_in_config;
 pub mod port_family;
 pub mod processor_class_import_path;
@@ -39,6 +40,7 @@ pub use exposed_name_cast::{
     EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,
     is_in_exposed_name_cast_form,
 };
+pub use node_kind::{FunctionNodeLanguage, NodeKind};
 pub use node_reference_in_config::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, NODE_REFERENCE_SCHEMA_KEYWORD,
     NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY, NodeReferenceInConfig,

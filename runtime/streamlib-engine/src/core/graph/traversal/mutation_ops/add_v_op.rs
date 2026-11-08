@@ -69,7 +69,15 @@ impl<'a> TraversalSourceMut<'a> {
                 holder.display_name
             )));
         }
-        let mut node = ProcessorNode::new(spec.name, name, Some(spec.config), inputs, outputs);
+        let node_kind = node_types.node_kind(&spec.name);
+        let mut node = ProcessorNode::new(
+            spec.name,
+            node_kind,
+            name,
+            Some(spec.config),
+            inputs,
+            outputs,
+        );
         if let Some(node_uuid) = spec.node_uuid {
             node.node_uuid = node_uuid;
         }

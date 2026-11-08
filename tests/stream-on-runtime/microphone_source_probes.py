@@ -20,7 +20,7 @@ RESULT_MARKER = "MARKER:BLOCKS_SEEN "
 BLOCKS_REPORTED = 8
 
 
-@node
+@node.process
 class ChannelsBlockProbe:
     """Reports what each read saw for the first few blocks the source publishes."""
 

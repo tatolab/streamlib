@@ -17,7 +17,7 @@ def report(marker_name: str, payload: "dict[str, object]") -> None:
     log.info(f"MARKER:{marker_name} " + json.dumps(payload))
 
 
-@node(execution="continuous", interval_ms=10)
+@node.process(execution="continuous", interval_ms=10)
 class StreamTimeWriterSource:
     """Writes, with no stamp, the stream time and the machine time it wrote at."""
 
@@ -35,7 +35,7 @@ class StreamTimeWriterSource:
         )
 
 
-@node
+@node.process
 class StreamTimeStampReporterSink:
     """Reports the first and the last of a run of messages: stamps, writer times, its own."""
 
@@ -118,7 +118,7 @@ class _TicksTimedOnBothClocksAtEachScale:
         self.scales_reported.append(scale)
 
 
-@node(execution="continuous", interval_ms=CONTINUOUS_TICK_COUNTER_INTERVAL_MS)
+@node.process(execution="continuous", interval_ms=CONTINUOUS_TICK_COUNTER_INTERVAL_MS)
 class ContinuousTickCounterSource(_TicksTimedOnBothClocksAtEachScale):
     """Times its ticks on both clocks at the scale it starts on, then at the next one."""
 
@@ -128,7 +128,7 @@ class ContinuousTickCounterSource(_TicksTimedOnBothClocksAtEachScale):
 CROSSING_TICK_COUNTER_INTERVAL_MS = 100
 
 
-@node(execution="continuous", interval_ms=CROSSING_TICK_COUNTER_INTERVAL_MS)
+@node.process(execution="continuous", interval_ms=CROSSING_TICK_COUNTER_INTERVAL_MS)
 class RealTimeCrossingTickCounterSource(_TicksTimedOnBothClocksAtEachScale):
     """Times its ticks on both clocks at three scales in turn: below 1×, above
     it in steps, and below it again."""
@@ -146,7 +146,7 @@ STEPPED_STREAM_STEPS = 12
 SLOW_RELAY_HOLD_MS = 20
 
 
-@node(execution="continuous", interval_ms=STEPPED_STREAM_STEP_MS)
+@node.process(execution="continuous", interval_ms=STEPPED_STREAM_STEP_MS)
 class StepTimeWriterSource:
     """Writes, with no stamp, the step open and the stream time it wrote in."""
 
@@ -169,7 +169,7 @@ class StepTimeWriterSource:
         )
 
 
-@node
+@node.process
 class SlowStepRelay:
     """Holds each message for a while before writing it on, with no stamp."""
 
@@ -190,7 +190,7 @@ class SlowStepRelay:
         ctx.outputs.write(self.step_times_to_downstream, relayed)
 
 
-@node
+@node.process
 class StepTimeReporterSink:
     """Reports every step's message once it has read one per step of the run."""
 
@@ -233,7 +233,7 @@ REAL_TIME_PACED_WRITER_INTERVAL_MS = 50
 REAL_TIME_PACED_MESSAGES_REPORTED = 10
 
 
-@node(execution="continuous", interval_ms=REAL_TIME_PACED_WRITER_INTERVAL_MS, paced_by_real_time=True)
+@node.process(execution="continuous", interval_ms=REAL_TIME_PACED_WRITER_INTERVAL_MS, paced_by_real_time=True)
 class RealTimePacedWriterSource:
     """Writes, with no stamp, the stream time and the machine time it wrote at, paced on the machine."""
 
@@ -246,7 +246,7 @@ class RealTimePacedWriterSource:
         )
 
 
-@node
+@node.process
 class RealTimePacedReporterSink:
     """Reports a run of the real-time writer's messages: stamps, writer stream and machine times."""
 
@@ -276,7 +276,7 @@ class RealTimePacedReporterSink:
 STEP_THE_RELAY_HELPER_DIES_IN = 3
 
 
-@node(execution="continuous", interval_ms=STEPPED_STREAM_STEP_MS)
+@node.process(execution="continuous", interval_ms=STEPPED_STREAM_STEP_MS)
 class TwoWritesPerStepSource:
     """Writes two messages in every step, each naming the step."""
 
@@ -299,7 +299,7 @@ def _flag_marking_that_a_helper_of_this_stream_died() -> str:
     )
 
 
-@node
+@node.process
 class RelayWhoseFirstHelperDiesMidStep:
     """Relays each message on; its first helper ends itself mid-step, leaving one unread."""
 
@@ -320,7 +320,7 @@ class RelayWhoseFirstHelperDiesMidStep:
         ctx.outputs.write(self.step_indices_to_downstream, relayed)
 
 
-@node
+@node.process
 class LastStepReporterSink:
     """Reports the step indices it read once it reads both of the last step's."""
 

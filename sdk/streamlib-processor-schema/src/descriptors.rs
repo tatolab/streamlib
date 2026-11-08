@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioWindowContract, CatalogEntry, PortFamilyDeclaration, ProcessorClassImportPath,
+    AudioWindowContract, CatalogEntry, NodeKind, PortFamilyDeclaration, ProcessorClassImportPath,
     ProcessorClassShortName, ProcessorScheduling,
 };
 
@@ -125,6 +125,9 @@ pub struct ProcessorDescriptor {
     pub processor_class_import_path: ProcessorClassImportPath,
     pub description: String,
     pub repository: String,
+    /// The node kind: how the runtime runs this type's code.
+    #[serde(flatten)]
+    pub node_kind: NodeKind,
     /// Runtime environment (Rust, Python).
     #[serde(default)]
     pub runtime: ProcessorRuntime,
@@ -162,6 +165,7 @@ impl ProcessorDescriptor {
             processor_class_import_path,
             description: description.into(),
             repository: String::new(),
+            node_kind: NodeKind::default(),
             runtime: ProcessorRuntime::default(),
             entrypoint: None,
             config_schema: None,

@@ -99,7 +99,7 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a node",
     spec_keys: &["id", "name", "type", "config", "pins", "studio"],
-    live_keys: &["config_checksum", "ports", "components"],
+    live_keys: &["kind", "language", "config_checksum", "ports", "components"],
 };
 
 const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {

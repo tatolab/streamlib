@@ -26,7 +26,7 @@ def _the_port_named(ports: "list[dict[str, Any]]", port_name: str) -> "dict[str,
 
 
 def test_an_image_port_pair_declares_its_family_and_formats_under_the_attribute_name():
-    @node
+    @node.process
     class Tonemap:
         video_in = Input(Image, delivery="newest", formats=("rgba16_float", "rgba8_unorm"))
         video_out = Output(Image, formats=("rgba8_unorm",), description="tonemapped")
@@ -47,7 +47,7 @@ def test_an_image_port_pair_declares_its_family_and_formats_under_the_attribute_
 
 
 def test_an_array_output_declares_its_names_and_residency():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class Detector:
         boxes = Output(Array, names=("boxes", "scores"), residency="gpu")
 
@@ -60,7 +60,7 @@ def test_an_array_output_declares_its_names_and_residency():
 
 
 def test_a_channels_output_reads_its_names_and_rate_from_config():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class EngineTelemetry:
         signals = Output(
             Channels,
@@ -79,7 +79,7 @@ def test_a_channels_output_reads_its_names_and_rate_from_config():
 
 
 def test_a_channels_input_requires_names_and_takes_a_window():
-    @node
+    @node.process
     class Meter:
         audio = Input(
             Channels,
@@ -96,7 +96,7 @@ def test_a_channels_input_requires_names_and_takes_a_window():
 
 
 def test_a_packets_pair_declares_its_codec_and_the_codecs_an_input_decodes():
-    @node
+    @node.process
     class Repackager:
         packets_in = Input(Packets, delivery="ordered", requires_codec=("h264", "h265"))
         packets_out = Output(Packets, codec="h264")
@@ -111,7 +111,7 @@ def test_a_packets_pair_declares_its_codec_and_the_codecs_an_input_decodes():
 
 
 def test_a_records_pair_declares_its_keys_and_the_keys_an_input_requires():
-    @node
+    @node.process
     class Router:
         events_in = Input(Records, delivery="ordered", requires=("kind",), borrow_quota=4)
         events_out = Output(Records, names=("kind", "at"))
@@ -129,7 +129,7 @@ def test_a_subclass_inherits_the_ports_its_base_declares():
     class BaseFilter:
         video_in = Input(Image, delivery="newest")
 
-    @node
+    @node.process
     class Repackager(BaseFilter):
         packets_out = Output(Packets)
 
@@ -143,7 +143,7 @@ def test_a_port_a_subclass_shadows_with_another_attribute_is_not_declared():
         video_in = Input(Image, delivery="newest")
         packets_out = Output(Packets)
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class Generator(BaseFilter):
         video_in = None
 
@@ -173,7 +173,7 @@ def test_a_key_the_family_does_not_take_is_refused_naming_the_port_and_the_key(d
     node_class = declare_the_class()
     port_name = next(name for name in vars(node_class) if not name.startswith("__"))
     with pytest.raises(ValueError, match=rf"port '{port_name}' of family \w+ states `\w+=`"):
-        node(execution="manual")(node_class)
+        node.process(execution="manual")(node_class)
 
 
 def test_an_input_without_a_delivery_is_refused():
@@ -197,7 +197,7 @@ def test_an_image_format_that_is_no_engine_texture_name_is_refused():
 
 
 def test_an_input_taking_several_families_declares_the_others_it_takes():
-    @node
+    @node.process
     class TrackSend:
         content = Input(Packets, delivery="ordered", also_takes=(Records,))
 
@@ -209,7 +209,7 @@ def test_an_input_taking_several_families_declares_the_others_it_takes():
 
 
 def test_an_input_taking_several_families_states_the_keys_of_each():
-    @node
+    @node.process
     class TrackSend:
         content = Input(
             Packets,
@@ -225,7 +225,7 @@ def test_an_input_taking_several_families_states_the_keys_of_each():
 
 
 def test_an_output_reading_its_family_from_config_states_names():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class TrackReceive:
         content = Output(Packets, family_from=from_config("family"), names=("pts",))
 
@@ -234,7 +234,7 @@ def test_an_output_reading_its_family_from_config_states_names():
 
 
 def test_an_output_reads_its_family_and_codec_from_config():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class TrackReceive:
         content = Output(Packets, family_from=from_config("family"), codec=from_config("codec"))
 

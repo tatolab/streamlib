@@ -22,7 +22,7 @@ from tatolab.stream import (
 )
 
 
-@node
+@node.process
 class ReportsWhichLinkEachBagCameFrom:
     """One input port, any number of producers into it.
 
@@ -59,7 +59,7 @@ class FeedsOneValueSourceConfig:
     value: str = "unset"
 
 
-@node(execution="continuous", interval_ms=100)
+@node.process(execution="continuous", interval_ms=100)
 class FeedsOneValueSource:
     """Writes a message carrying its configured value, again every tick.
 
@@ -77,7 +77,7 @@ class FeedsOneValueSource:
         ctx.outputs.write(self.bags_to_downstream, {"value": self.value})
 
 
-@node
+@node.process
 class ReportsEachAttributionSink:
     """Reports every attribution it reads as `MARKER:ATTRIBUTION <json>`."""
 

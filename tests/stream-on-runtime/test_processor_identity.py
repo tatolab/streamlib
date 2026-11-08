@@ -66,7 +66,7 @@ ZERO_ARGUMENT_PROCESS_PROCESSOR_SOURCE = '''\
 from tatolab.stream import node
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class ZeroArgumentProcess:
     def process(self, ctx) -> None: ...
 '''

@@ -3,7 +3,7 @@
 
 //! The native half of `tatolab-rive`, imported as `tatolab.rive._native`.
 //!
-//! The wheel's `@node` hands this module its module host table, and a thread
+//! The wheel's `@node.process` hands this module its module host table, and a thread
 //! here draws every frame with rive-runtime straight into the node's output
 //! texture and publishes it, with no Python attached.
 

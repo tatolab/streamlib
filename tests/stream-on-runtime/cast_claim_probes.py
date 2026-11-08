@@ -251,7 +251,7 @@ class _LaggedHolderProbe:
         _report(lambda: observation)
 
 
-@node
+@node.process
 class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
     """The first `ImageFrame` is held, and holding the object is the only thing
     keeping the camera off that slot — no handle, no view, no context
@@ -260,7 +260,7 @@ class TheHeldImageFrameKeepsItsSlotProbe(_LaggedHolderProbe):
     HOLDS_THE_FIRST_FRAME = True
 
 
-@node
+@node.process
 class ADroppedImageFrameReleasesItsSlotProbe(_LaggedHolderProbe):
     """The control. Same probe, same lag, the first `ImageFrame` dropped once
     its pixels are sampled — so its claim is released and the camera is free
@@ -386,13 +386,13 @@ class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
         return observation
 
 
-@node
+@node.process
 class TheImageFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
     """The `ImageFrame` an Image read returns reaches its pixels through the
     object itself, and reaches the surface's own pixels."""
 
 
-@node
+@node.process
 class TheImageFrameReachesItsPixelsAsADeviceTensorProbe(_BareProtocolDeviceSideProbe):
     """The same on the device side, with a real GPU package taking the capsule."""
 
@@ -447,7 +447,7 @@ class _WriteDoorProbe(_BareProtocolProbe):
         }
 
 
-@node
+@node.process
 class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.writable() as t:` — a CUDA package editing a live frame in
     place, with the edit on the surface once the block ends."""
@@ -459,7 +459,7 @@ class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
             torch.from_dlpack(device_tensor)[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node
+@node.process
 class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
     """The other half of the one write rule: the raise is never suppressed on
     the way out, and the surface follows its floor's publication rule — the
@@ -499,7 +499,7 @@ class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
         }
 
 
-@node
+@node.process
 class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.cpu() as img:` — the named slow path, editing a live frame
     through plain numpy with no CUDA consumer anywhere in it."""
@@ -509,7 +509,7 @@ class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
             host_pixels[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@node
+@node.process
 class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
     """The CPU door's exception path, reported as what it is.
 

@@ -67,7 +67,7 @@ class SolidPremultipliedColourSourceConfig(TypedDict):
     premultiplied_rgba: "list[int]"
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=SOURCE_INTERVAL_MS,
     description="Publishes frames of one premultiplied RGBA colour",
@@ -108,7 +108,7 @@ class SolidPremultipliedColourSource:
         )
 
 
-@node(execution="manual", description="Declares a video output and never publishes on it")
+@node.process(execution="manual", description="Declares a video output and never publishes on it")
 class NeverPublishingVideoSource:
     """Stands for a layer that is wired and has never sent a frame."""
 
@@ -123,7 +123,7 @@ def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
     return pixels
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=10,
     description="Reports the pixels of the composite it holds once the sources have settled",

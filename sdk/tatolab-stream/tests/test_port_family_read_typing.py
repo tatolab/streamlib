@@ -63,7 +63,7 @@ class EveryFamilyIn:
 
 
 def test_every_family_port_declares_under_its_attribute_name():
-    declared = node(execution="manual")(EveryFamilyIn)
+    declared = node.process(execution="manual")(EveryFamilyIn)
     assert [port["name"] for port in declared.__tatolab_node_input_ports__] == [
         "video",
         "tensors",

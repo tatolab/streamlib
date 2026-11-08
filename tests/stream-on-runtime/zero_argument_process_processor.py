@@ -11,7 +11,7 @@ so a hook body that ran would be seen there.
 from tatolab.stream import log, node
 
 
-@node(execution="continuous", interval_ms=1)
+@node.process(execution="continuous", interval_ms=1)
 class ZeroArgumentProcess:
     def process(self) -> None:  # deliberately missing the ctx parameter
         log.info("MARKER:HOOK_BODY_RAN")

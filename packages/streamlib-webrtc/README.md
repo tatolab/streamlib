@@ -1,7 +1,7 @@
 # tatolab-webrtc
 
 WHIP publish and WHEP play for [Tatolab](https://tatolab.com) streams, as an extension wheel:
-Rust inside, two ordinary `@node` classes as the binding.
+Rust inside, two ordinary `@node.process` classes as the binding.
 
 > **New to Tatolab? Install the Tatolab app first.** This package adds two nodes to a stream
 > project; the Tatolab runtime, which comes with the app, is what runs them. See

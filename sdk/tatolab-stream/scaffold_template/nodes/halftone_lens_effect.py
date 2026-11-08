@@ -80,7 +80,7 @@ def workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // WORKGROUP_TILE_SIZE_IN_PIXELS
 
 
-@node
+@node.process
 class HalftoneLensEffect:
     """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
 

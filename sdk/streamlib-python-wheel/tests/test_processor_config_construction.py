@@ -3,7 +3,7 @@
 
 """The hosting module constructs a node's config class, and reconfigures it.
 
-What a helper process does on the compile thread: build the class `@node`
+What a helper process does on the compile thread: build the class `@node.process`
 read off `__init__` from the config mapping `stream_builder.add` recorded on
 the graph node, and hand `configure` the same kind of object later. None of it
 boots an engine. How the class is declared and documented is the stream
@@ -58,7 +58,7 @@ class BlurConfigModel(pydantic.BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class DataclassConfigured:
     def __init__(self, config: BlurConfigDataclass) -> None:
         self.config = config
@@ -67,19 +67,19 @@ class DataclassConfigured:
         self.config = config
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TypedDictConfigured:
     def __init__(self, config: BlurConfigTypedDict) -> None:
         self.config = config
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class ModelConfigured:
     def __init__(self, config: BlurConfigModel) -> None:
         self.config = config
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class Unconfigured:
     def __init__(self) -> None:
         self.seen = 0
@@ -182,7 +182,7 @@ def test_the_helper_constructs_the_processor_by_the_config_keyword():
     moment an author writes a keyword-only `config`."""
     constructed_with: "dict[str, Any]" = {}
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class KeywordOnlyConfigured:
         def __init__(self, *, config: BlurConfigDataclass) -> None:
             constructed_with["config"] = config
@@ -193,7 +193,7 @@ def test_the_helper_constructs_the_processor_by_the_config_keyword():
 
 
 def test_reconfiguring_a_processor_that_declares_no_config_refuses_the_keys():
-    @node(execution="manual")
+    @node.process(execution="manual")
     class UnconfiguredButReconfigurable:
         def __init__(self) -> None:
             self.configured_with: Any = "never"
@@ -229,7 +229,7 @@ def test_a_config_class_of_a_kind_the_deriver_cannot_read_is_accepted_and_open()
             self.width = width
             self.label = label
 
-    @node(execution="manual")
+    @node.process(execution="manual")
     class PlainlyConfigured:
         def __init__(self, config: PlainlyAnnotatedConfig) -> None:
             self.config = config
@@ -248,7 +248,7 @@ class TrackConfigNamingItsGateway:
     metadata: "dict[str, str]" = dataclasses.field(default_factory=dict)
 
 
-@node(execution="manual")
+@node.process(execution="manual")
 class TrackConfigured:
     def __init__(self, config: TrackConfigNamingItsGateway) -> None:
         self.config = config

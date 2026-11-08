@@ -46,7 +46,7 @@ DECODED_STAMPS_REPORTED = 30
 ENCODED_PORT = "encoded_video_from_upstream"
 
 
-@node
+@node.process
 class EncodedFrameProbe:
     """Reads the encoder's output as media frames and reports each one."""
 
@@ -89,7 +89,7 @@ class EncodedFrameProbe:
             log.info(ENCODED_FRAMES_COMPLETE_MARKER)
 
 
-@node
+@node.process
 class EncodedFrameTimestampProbe:
     """Reports the frame-header stamp riding each of the encoder's messages.
 
@@ -106,7 +106,7 @@ class EncodedFrameTimestampProbe:
         log.info(ENCODED_FRAME_STAMP_MARKER + json.dumps({"timestamp_ns": timestamp_ns}))
 
 
-@node
+@node.process
 class DecodedVideoFrameProbe:
     """Reports the decoder's first two Image frames whole, then every frame's stamp.
 

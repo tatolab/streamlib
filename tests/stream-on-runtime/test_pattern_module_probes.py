@@ -16,7 +16,7 @@ from tatolab.stream import Image, Input, log, node
 RESULT_MARKER = "MARKER:FRAMES_SEEN "
 
 
-@node
+@node.process
 class ImageFrameProbe:
     """Reports the first two Image frames the test pattern publishes."""
 

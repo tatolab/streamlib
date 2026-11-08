@@ -60,7 +60,7 @@ class StandInMarker:
 
 
 class UndecoratedFilter:
-    """A class that never met `@node`."""
+    """A class that never met `@node.process`."""
 
 
 class StreamBuildingFailure(Exception):
@@ -102,7 +102,7 @@ NESTED_CONFIG: "dict[str, Any]" = {
 
 @stream
 def every_kind_of_node(stream_builder: StreamBuilder) -> None:
-    """A `@node` class, a nested one and a marker-shaped class.
+    """A `@node.process` class, a nested one and a marker-shaped class.
 
     The second line of the description.
     """
@@ -377,7 +377,7 @@ def test_a_native_marker_is_the_type_its_class_carries() -> None:
 
 
 def test_a_node_class_defined_inside_a_function_is_refused_naming_stream_add() -> None:
-    @node
+    @node.process
     class FunctionLocalFilter:
         video_from_upstream = Input(Packets, delivery="newest")
 
@@ -413,7 +413,7 @@ def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
     )
     assert (
         "    # entry_file_detector.py\n"
-        "    @node(...)\n"
+        "    @node.process(...)\n"
         "    class EntryFileDetector: ...\n"
         "\n"
         "    # stream.py\n"
@@ -966,7 +966,7 @@ def test_stream_stamps_identity_name_and_description() -> None:
         "every_kind_of_node"
     )
     assert getattr(every_kind_of_node, "__streamlib_stream_description__") == (
-        "A `@node` class, a nested one and a marker-shaped class.\n\n"
+        "A `@node.process` class, a nested one and a marker-shaped class.\n\n"
         "The second line of the description."
     )
 

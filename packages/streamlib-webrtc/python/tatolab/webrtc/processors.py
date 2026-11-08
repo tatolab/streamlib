@@ -187,7 +187,7 @@ class WhipPublisherConfig:
     ] = None
 
 
-@node(
+@node.process(
     paced_by_real_time=True,
     description=(
         "Publishes encoded video and audio to a WHIP endpoint, "
@@ -391,7 +391,7 @@ class WhepPlayerConfig:
     ] = None
 
 
-@node(
+@node.process(
     execution="manual",
     description="Plays encoded video and audio back from a WHEP endpoint",
 )

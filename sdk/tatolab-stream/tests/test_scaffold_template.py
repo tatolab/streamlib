@@ -184,7 +184,7 @@ def test_each_project_node_the_document_names_is_a_node_class_of_its_module(
     node_source = template_text(module_path)
 
     assert f"{module_name}:{class_name}" in node_types_in_the_main_graph_document()
-    assert "@node" in node_source
+    assert "@node.process" in node_source
     assert f"class {class_name}" in node_source
 
 

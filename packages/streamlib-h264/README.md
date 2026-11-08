@@ -1,7 +1,7 @@
 # tatolab-h264
 
 H.264 encode and decode for [Tatolab](https://tatolab.com) streams, as an extension wheel: Rust inside, one
-ordinary `@node` class per node as the binding.
+ordinary `@node.process` class per node as the binding.
 
 > **New to Tatolab? Install the Tatolab app first.** This package adds nodes to a stream project;
 > the Tatolab runtime, which comes with the app, is what runs it. See

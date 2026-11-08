@@ -227,7 +227,7 @@ class _LayerLandingTexture:
         self.newest_frame_texture = landing_texture
 
 
-@node(description="Layers up to eight video inputs back to front, in premultiplied alpha, on the GPU")
+@node.process(description="Layers up to eight video inputs back to front, in premultiplied alpha, on the GPU")
 class AlphaOverCompositor:
     """`layer_0` to `layer_7` over one another onto transparent black, on `layer_0`'s cadence.
 

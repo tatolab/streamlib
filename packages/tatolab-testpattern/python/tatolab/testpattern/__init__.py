@@ -222,7 +222,7 @@ def _upload_overlay_into_a_texture(
     return overlay_texture
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=33,
     description=(
