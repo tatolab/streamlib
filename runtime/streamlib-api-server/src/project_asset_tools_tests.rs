@@ -23,7 +23,7 @@ use crate::mcp::tests::{
 
 struct AssetToolsServedOverAProject {
     project_parent_directory: tempfile::TempDir,
-    _served: LocalApiServedOnAFreshSocket,
+    served: LocalApiServedOnAFreshSocket,
     client: RunningService<RoleClient, ()>,
 }
 
@@ -49,7 +49,7 @@ impl AssetToolsServedOverAProject {
             .expect("the runtime answers `server/discover`");
         Self {
             project_parent_directory,
-            _served: served,
+            served,
             client,
         }
     }
@@ -358,4 +358,88 @@ async fn a_folder_with_no_project_file_and_a_relative_directory_are_refused() {
         the_error_text_of(&relative).contains("not an absolute path"),
         "{relative}"
     );
+}
+
+#[tokio::test]
+async fn a_listen_over_mcp_stdio_is_told_of_each_transaction_and_reads_it_from_the_feed() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let listed = served.answered("list_assets", json!({})).await;
+    let transactions_resource_uri = listed["transactions_resource_uri"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        transactions_resource_uri,
+        format!(
+            "streamlib://project/{}/transactions",
+            listed["project"].as_str().unwrap()
+        )
+    );
+
+    let listener =
+        crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream(&served.served).await;
+    let mut subscription = listener
+        .listen(
+            rmcp::model::SubscriptionFilter::builder()
+                .resource_subscription(transactions_resource_uri.clone())
+                .resource_subscription("streamlib://graph")
+                .build(),
+        )
+        .await
+        .expect("the runtime acknowledges a listen on a project's change feed");
+    assert_eq!(
+        subscription.acknowledged().resource_subscriptions,
+        Some(vec![transactions_resource_uri.clone()]),
+        "only a project's change feed is subscribed"
+    );
+
+    let source = served.a_file_outside_the_project("intro.mp4", b"video");
+    let imported = served
+        .answered(
+            "import_asset",
+            json!({ "source": source, "asset_path": "media/intro.mp4", "author": {"kind": "person", "name": "Jonathan"} }),
+        )
+        .await;
+
+    let update = tokio::time::timeout(std::time::Duration::from_secs(5), subscription.next())
+        .await
+        .expect("the import is announced")
+        .unwrap()
+        .expect("the listen is still open");
+    let rmcp::model::ServerNotification::ResourceUpdatedNotification(update) = update else {
+        panic!("expected notifications/resources/updated, got {update:?}");
+    };
+    assert_eq!(update.params.uri, transactions_resource_uri);
+
+    let read = listener
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            transactions_resource_uri.clone(),
+        ))
+        .await
+        .unwrap();
+    let read = serde_json::to_value(read).unwrap();
+    let feed: Value = serde_json::from_str(read["contents"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(feed["project"], listed["project"]);
+    assert_eq!(feed["transactions"].as_array().unwrap().len(), 1, "{feed}");
+    let newest = &feed["transactions"][0];
+    assert_eq!(newest["transaction"], imported["transaction"]);
+    assert_eq!(newest["commit"], imported["commit"]);
+    assert_eq!(newest["author_kind"], "person");
+    assert_eq!(newest["author_name"], "Jonathan");
+    assert_eq!(newest["operations"][0]["operation"], "import_asset");
+    assert_eq!(newest["inverse_operations"][0]["operation"], "delete_asset");
+}
+
+#[tokio::test]
+async fn the_feed_of_a_project_no_tool_has_opened_is_refused_naming_how_to_open_it() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let refused = served
+        .client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(format!(
+            "streamlib://project/{}/transactions",
+            uuid::Uuid::new_v4()
+        )))
+        .await
+        .expect_err("a project no tool opened has no feed to read");
+    assert!(refused.to_string().contains("list_assets"), "{refused}");
 }

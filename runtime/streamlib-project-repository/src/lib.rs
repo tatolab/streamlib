@@ -28,6 +28,7 @@ pub use project_history_repository::{
 };
 pub use project_repositories_open_in_this_runtime::{
     ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
+    ProjectTransactionAnnouncement,
 };
 pub use project_repository::{GRAPH_DOCUMENT_FILE_SUFFIX, ProjectRepository};
 pub use project_repository_refusal::ProjectRepositoryRefusal;

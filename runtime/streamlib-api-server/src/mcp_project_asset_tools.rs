@@ -24,6 +24,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use uuid::Uuid;
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
+use crate::mcp_project_change_feed::project_transactions_resource_uri;
 
 /// The author an asset change names when its caller's MCP client gave no name.
 const AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT: &str = "an MCP client";
@@ -184,7 +185,7 @@ struct SetAssetSettingsToolArguments {
 #[tool_router(router = project_asset_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID and name. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
+        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID and name and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
     )]
     async fn list_assets(
         &self,
@@ -210,6 +211,9 @@ impl LocalApiMcpServerHandler {
                         project: project_repository.project_file().project.to_string(),
                         project_name: project_repository.project_file().name.clone(),
                         assets,
+                        transactions_resource_uri: project_transactions_resource_uri(
+                            project_repository.project_file().project,
+                        ),
                     })
                 },
             )
@@ -414,15 +418,19 @@ impl LocalApiMcpServerHandler {
         author: ProjectTransactionAuthor,
         change: ProjectAssetChangeRequest,
     ) -> ToolCallAnswer {
+        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
         let answered = self
             .a_project_repository_call_off_the_async_runtime(
                 tool_name,
                 project_directory,
                 move |project_repository| {
+                    let applied = project_repository.apply_asset_changes(&author, vec![change])?;
+                    project_repositories
+                        .announce_applied_transaction(project_repository, applied.clone());
                     let AppliedProjectTransaction {
                         transaction,
                         commit,
-                    } = project_repository.apply_asset_changes(&author, vec![change])?;
+                    } = applied;
                     let changed_asset = match transaction.operations.first() {
                         Some(ProjectAssetOperation::ImportAsset { asset })
                         | Some(ProjectAssetOperation::DeleteAsset { asset }) => asset.clone(),

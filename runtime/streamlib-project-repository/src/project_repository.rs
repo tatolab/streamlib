@@ -123,6 +123,33 @@ impl ProjectRepository {
         &self.history
     }
 
+    /// The newest `max_transactions` transactions history records, newest first, each read
+    /// back from its commit's trailer; a commit without one, such as the first, is skipped.
+    pub fn applied_transactions_newest_first(
+        &self,
+        max_transactions: usize,
+    ) -> Result<Vec<AppliedProjectTransaction>, ProjectRepositoryRefusal> {
+        let trailer_prefix = format!("{PROJECT_TRANSACTION_COMMIT_TRAILER}: ");
+        let mut applied_transactions = Vec::new();
+        for history_commit in self.history.commits_newest_first()? {
+            if applied_transactions.len() == max_transactions {
+                break;
+            }
+            let Some(transaction_json) = history_commit
+                .message
+                .lines()
+                .find_map(|line| line.strip_prefix(&trailer_prefix))
+            else {
+                continue;
+            };
+            applied_transactions.push(AppliedProjectTransaction {
+                transaction: serde_json::from_str(transaction_json)?,
+                commit: history_commit.commit,
+            });
+        }
+        Ok(applied_transactions)
+    }
+
     /// Apply `changes` by `author` as one transaction, whole or not at all, and commit it.
     pub fn apply_asset_changes(
         &mut self,

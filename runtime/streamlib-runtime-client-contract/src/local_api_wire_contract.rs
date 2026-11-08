@@ -586,6 +586,39 @@ pub struct ListAssetsToolResult {
     pub project_name: String,
     /// The assets, narrowed to one kind when the call named one.
     pub assets: Vec<ProjectAssetOnTheWire>,
+    /// The project's change feed: the resource a client reads for its newest transactions and
+    /// names in `subscriptions/listen` to be told of each new one.
+    pub transactions_resource_uri: String,
+}
+
+/// One transaction a project's change feed holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectTransactionOnTheWire {
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+    /// The commit history stood at when it applied, absent for a project's first.
+    pub parent_commit: Option<String>,
+    /// `person`, `agent` or `runtime`.
+    pub author_kind: String,
+    /// The author's name as history shows it.
+    pub author_name: String,
+    /// What it changed, in order, each tagged by its `operation`.
+    pub operations: Vec<serde_json::Value>,
+    /// What undoes it, in order.
+    pub inverse_operations: Vec<serde_json::Value>,
+}
+
+/// What a project's transactions resource holds: its newest transactions, newest first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectTransactionsResourceContents {
+    /// The project's UUID.
+    pub project: String,
+    /// The project directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// Its newest transactions, newest first.
+    pub transactions: Vec<ProjectTransactionOnTheWire>,
 }
 
 /// The `describe_asset` tool's result.
