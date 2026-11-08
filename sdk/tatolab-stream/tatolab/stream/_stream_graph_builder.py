@@ -47,6 +47,7 @@ __all__ = [
     "StreamBuilder",
     "graph_generator",
     "is_graph_generator",
+    "place_graph_generator",
     "run_graph_generator",
 ]
 
@@ -651,6 +652,27 @@ def run_graph_generator(
     graph = stream_builder._compiled_graph()
     _refuse_a_fragment_nested_deeper_than_a_graph_document_reads(graph)
     return graph
+
+
+def place_graph_generator(
+    generator_function: Callable[..., object],
+    *,
+    name: str | None = None,
+    promoted_settings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run a `@graph_generator` function as a fragment placed under `name` (cast) or its own name, and return the fragment node a graph document stores: its `name`, its generator as `type`, its promoted settings as `config` and its `fragment`."""
+    if not is_graph_generator(generator_function):
+        raise TypeError(
+            f"{generator_function!r} is not a graph generator: decorate it with "
+            f"@graph_generator — a module-level `def` taking a `StreamBuilder`"
+        )
+    placing_builder = StreamBuilder(getattr(generator_function, _GRAPH_GENERATOR_NAME_ATTRIBUTE))
+    placed = placing_builder.add(
+        generator_function, name=name, **dict(promoted_settings or {})
+    )
+    fragment_node = placing_builder._recorded_nodes_by_name[placed.name].as_graph_document_node()
+    _refuse_a_fragment_nested_deeper_than_a_graph_document_reads({"nodes": [fragment_node]})
+    return fragment_node
 
 
 def _refuse_settings_the_generator_does_not_promote(

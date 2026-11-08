@@ -48,6 +48,7 @@ CONTROL_TOOL_NAMES = {
     "set_pin_value",
     "rename_node",
     "set_studio_fields",
+    "import_graph_generator",
     "transact",
     "undo",
     "redo",

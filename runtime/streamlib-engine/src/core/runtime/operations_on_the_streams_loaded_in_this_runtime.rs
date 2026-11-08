@@ -67,6 +67,19 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_id: &str,
     ) -> Result<Vec<(ProcessorDescriptor, InstalledModuleOfANodeType)>>;
 
+    /// Run the project's graph generator `generator` over `promoted_settings` as a fragment
+    /// named `fragment_name`, or its own name, in the own interpreter of the loaded stream
+    /// `stream_id` names, answering the fragment node it is stored as, its nodes and links by
+    /// name; refused with the project's own traceback, and as
+    /// [`Error::NotFound`](crate::core::error::Error::NotFound) for a stream not loaded.
+    fn run_a_graph_generator_in_the_interpreter_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+        generator: &str,
+        fragment_name: Option<&str>,
+        promoted_settings: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value>;
+
     /// The ids of the loaded streams, in order.
     fn ids_of_the_loaded_streams(&self) -> Vec<String>;
 
@@ -153,6 +166,29 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
                 .node_types_this_stream_resolves()
                 .node_types_installed_modules_declare()
         })
+    }
+
+    fn run_a_graph_generator_in_the_interpreter_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+        generator: &str,
+        fragment_name: Option<&str>,
+        promoted_settings: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let stream = self.loaded_stream_of_the_id(stream_id)?;
+        let stream_environment = stream.stream_environment().ok_or_else(|| {
+            crate::core::error::Error::Configuration(format!(
+                "stream `{stream_id}` belongs to no project, so it has no interpreter to run \
+                 graph generator `{generator}` in"
+            ))
+        })?;
+        let _entered_this_streams_log_route = stream.log_route().enter_on_this_thread();
+        crate::core::compiler::compiler_ops::graph_generator_run_in_the_projects_interpreter::run_a_graph_generator_in_the_projects_interpreter(
+            stream_environment,
+            generator,
+            fragment_name,
+            promoted_settings,
+        )
     }
 
     fn ids_of_the_loaded_streams(&self) -> Vec<String> {

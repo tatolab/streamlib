@@ -53,6 +53,19 @@ pub struct StreamGraphDocumentLink {
     pub target: StreamGraphDocumentLinkEnd,
 }
 
+/// What a fragment node holds of its graph generator's run: the generator, the promoted
+/// settings it ran with and the graph it built.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StreamGraphFragmentPlacement {
+    /// The graph generator's import path, the fragment node's `type`.
+    #[serde(rename = "type")]
+    pub generator: String,
+    /// The promoted settings the generator ran with, the fragment node's `config`.
+    pub config: Value,
+    /// The stored output, its nodes each holding its UUID and its links naming them by UUID.
+    pub fragment: Value,
+}
+
 /// One change to a stream's graph, recorded with everything its inverse needs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
@@ -94,6 +107,12 @@ pub enum StreamGraphOperation {
         from: Map<String, Value>,
         to: Map<String, Value>,
     },
+    /// The fragment node's generator was run again, and its stored output replaced whole.
+    RefreshFragment {
+        node: Uuid,
+        from: StreamGraphFragmentPlacement,
+        to: StreamGraphFragmentPlacement,
+    },
 }
 
 impl StreamGraphOperation {
@@ -130,6 +149,11 @@ impl StreamGraphOperation {
                 from: to,
                 to: from,
             },
+            Self::RefreshFragment { node, from, to } => Self::RefreshFragment {
+                node,
+                from: to,
+                to: from,
+            },
         }
     }
 
@@ -150,6 +174,9 @@ impl StreamGraphOperation {
             Self::SetPinValue { node, input, .. } => format!("set_pin_value {node}/{input}"),
             Self::RenameNode { node, to, .. } => format!("rename_node {node} {to}"),
             Self::SetStudioFields { node, .. } => format!("set_studio_fields {node}"),
+            Self::RefreshFragment { node, to, .. } => {
+                format!("refresh_fragment {node} {}", to.generator)
+            }
         }
     }
 
@@ -161,7 +188,8 @@ impl StreamGraphOperation {
             Self::SetNodeConfig { node, .. }
             | Self::SetPinValue { node, .. }
             | Self::RenameNode { node, .. }
-            | Self::SetStudioFields { node, .. } => *node,
+            | Self::SetStudioFields { node, .. }
+            | Self::RefreshFragment { node, .. } => *node,
         }
     }
 
@@ -170,6 +198,7 @@ impl StreamGraphOperation {
         match self {
             Self::AddNode { node, .. } => Some(&node.config),
             Self::SetNodeConfig { to, .. } => Some(to),
+            Self::RefreshFragment { to, .. } => Some(&to.config),
             _ => None,
         }
     }
@@ -212,12 +241,17 @@ impl StreamGraphDocument {
         )
     }
 
-    /// The document's bytes in canonical form.
-    pub fn canonical_bytes(&self) -> serde_json::Result<Vec<u8>> {
+    /// The document as one JSON object.
+    pub fn to_value(&self) -> Value {
         let mut document = self.every_other_key.clone();
         document.insert("nodes".to_owned(), Value::Array(self.node_values.clone()));
         document.insert("links".to_owned(), Value::Array(self.link_values.clone()));
-        canonical_project_json_bytes(&document)
+        Value::Object(document)
+    }
+
+    /// The document's bytes in canonical form.
+    pub fn canonical_bytes(&self) -> serde_json::Result<Vec<u8>> {
+        canonical_project_json_bytes(&self.to_value())
     }
 
     /// The node whose UUID is `node`, as the document holds it.
@@ -228,6 +262,13 @@ impl StreamGraphDocument {
             .ok_or_else(|| self.why_no_node_has(node))?;
         serde_json::from_value(Value::Object(node_object.clone()))
             .map_err(|not_a_node| format!("node {node} does not read: {not_a_node}"))
+    }
+
+    /// The top-level node named `name`, as the document holds it, if one is.
+    pub fn node_named(&self, name: &str) -> Option<StreamGraphDocumentNode> {
+        self.node_objects()
+            .find(|node_object| node_name_of(node_object) == Some(name))
+            .and_then(|node_object| serde_json::from_value(Value::Object(node_object.clone())).ok())
     }
 
     /// Every link with an end on the node whose UUID is `node`.
@@ -368,6 +409,20 @@ impl StreamGraphDocument {
                 }
                 Ok(())
             }
+            StreamGraphOperation::RefreshFragment { node, to, .. } => {
+                let node_object = self.node_object_mut(*node)?;
+                if !node_object.contains_key("fragment") {
+                    return Err(format!(
+                        "node {node} `{}` is no fragment, so no graph generator's run refreshes \
+                         it",
+                        node_name_of(node_object).unwrap_or_default()
+                    ));
+                }
+                node_object.insert("type".to_owned(), Value::String(to.generator.clone()));
+                node_object.insert("config".to_owned(), to.config.clone());
+                node_object.insert("fragment".to_owned(), to.fragment.clone());
+                Ok(())
+            }
         }
     }
 
@@ -472,6 +527,86 @@ fn link_end_names_the_node(end: &Value, node_text: &str, node_name: &str) -> boo
     end.get("node")
         .and_then(Value::as_str)
         .is_some_and(|named| named == node_text || named == node_name)
+}
+
+/// `fresh_fragment`, a graph generator's output naming its nodes and link ends by name, with
+/// each node given a UUID and each link end naming its node by it: the UUID the node of the
+/// same name holds in `previous_fragment`, at the same level of nested fragments, and a new
+/// one from `new_node_uuid` for a node no earlier run built.
+pub fn fragment_with_each_node_uuid_kept_by_its_name(
+    fresh_fragment: &Value,
+    previous_fragment: Option<&Value>,
+    new_node_uuid: &mut dyn FnMut() -> Uuid,
+) -> Result<Value, String> {
+    let Value::Object(fresh_level) = fresh_fragment else {
+        return Err("a fragment is a JSON object of `nodes` and `links`".to_owned());
+    };
+    let previous_node_of_the_name = |name: &str| -> Option<&Map<String, Value>> {
+        previous_fragment?
+            .get("nodes")?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_object)
+            .find(|previous_node| node_name_of(previous_node) == Some(name))
+    };
+    let mut kept_level = fresh_level.clone();
+    let mut uuid_of_the_name: Map<String, Value> = Map::new();
+    let mut nodes = Vec::new();
+    for fresh_node in fresh_level
+        .get("nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Value::Object(fresh_node) = fresh_node else {
+            return Err("a fragment's node is a JSON object".to_owned());
+        };
+        let name = node_name_of(fresh_node)
+            .ok_or("a fragment's node holds its `name`")?
+            .to_owned();
+        let previous_node = previous_node_of_the_name(&name);
+        let node_uuid = previous_node
+            .and_then(node_uuid_of)
+            .unwrap_or_else(&mut *new_node_uuid);
+        let mut kept_node = fresh_node.clone();
+        kept_node.insert("id".to_owned(), Value::String(node_uuid.to_string()));
+        if let Some(inner_fragment) = fresh_node.get("fragment") {
+            kept_node.insert(
+                "fragment".to_owned(),
+                fragment_with_each_node_uuid_kept_by_its_name(
+                    inner_fragment,
+                    previous_node.and_then(|previous_node| previous_node.get("fragment")),
+                    new_node_uuid,
+                )?,
+            );
+        }
+        uuid_of_the_name.insert(name, Value::String(node_uuid.to_string()));
+        nodes.push(Value::Object(kept_node));
+    }
+    let mut links = Vec::new();
+    for fresh_link in fresh_level
+        .get("links")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let mut kept_link = fresh_link.clone();
+        for end_key in ["source", "target"] {
+            if let Some(Value::Object(end)) = kept_link.get_mut(end_key)
+                && let Some(node_uuid) = end
+                    .get("node")
+                    .and_then(Value::as_str)
+                    .and_then(|named| uuid_of_the_name.get(named))
+                    .cloned()
+            {
+                end.insert("node".to_owned(), node_uuid);
+            }
+        }
+        links.push(kept_link);
+    }
+    kept_level.insert("nodes".to_owned(), Value::Array(nodes));
+    kept_level.insert("links".to_owned(), Value::Array(links));
+    Ok(Value::Object(kept_level))
 }
 
 /// Every asset of this project a node's config references, `{"asset": "<uuid>"}`, by UUID;
@@ -608,6 +743,164 @@ mod tests {
             before.node(sink.id).unwrap()
         );
         assert_eq!(document.links(), before.links());
+    }
+
+    fn a_look_fragment_run(blur_radius: u32, with_tint: bool) -> Value {
+        let mut nodes = vec![
+            json!({"name": "graphinput", "type": "tatolab.stream:GraphInput",
+                   "config": {"port": "video", "family": "packets"}}),
+            json!({"name": "soft", "type": "generators.soft:soft", "config": {},
+            "fragment": {
+                "nodes": [{"name": "blur", "type": "nodes.blur:Blur",
+                           "config": {"radius": blur_radius}}],
+                "links": [],
+            }}),
+        ];
+        if with_tint {
+            nodes.push(json!({"name": "tint", "type": "nodes.tint:Tint", "config": {}}));
+        }
+        json!({
+            "nodes": nodes,
+            "links": [
+                {"source": {"node": "graphinput", "port": "value"},
+                 "target": {"node": "soft", "port": "video"}},
+            ],
+        })
+    }
+
+    fn uuid_of_the_node_at(fragment: &Value, path: &[&str]) -> Uuid {
+        let (name, inner_path) = path.split_first().unwrap();
+        let node = fragment["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["name"] == *name)
+            .unwrap();
+        if inner_path.is_empty() {
+            Uuid::parse_str(node["id"].as_str().unwrap()).unwrap()
+        } else {
+            uuid_of_the_node_at(&node["fragment"], inner_path)
+        }
+    }
+
+    #[test]
+    fn a_rerun_keeps_the_uuid_of_each_node_whose_name_is_unchanged_at_every_level() {
+        let first_run = fragment_with_each_node_uuid_kept_by_its_name(
+            &a_look_fragment_run(4, false),
+            None,
+            &mut Uuid::new_v4,
+        )
+        .unwrap();
+        let second_run = fragment_with_each_node_uuid_kept_by_its_name(
+            &a_look_fragment_run(8, true),
+            Some(&first_run),
+            &mut Uuid::new_v4,
+        )
+        .unwrap();
+
+        for path in [&["graphinput"][..], &["soft"], &["soft", "blur"]] {
+            assert_eq!(
+                uuid_of_the_node_at(&second_run, path),
+                uuid_of_the_node_at(&first_run, path),
+                "{path:?}"
+            );
+        }
+        assert_eq!(
+            second_run["nodes"][1]["fragment"]["nodes"][0]["config"]["radius"],
+            8
+        );
+        let tint = uuid_of_the_node_at(&second_run, &["tint"]);
+        assert!(
+            ![&["graphinput"][..], &["soft"], &["soft", "blur"]]
+                .iter()
+                .any(|path| uuid_of_the_node_at(&first_run, path) == tint)
+        );
+        assert_eq!(
+            second_run["links"][0]["source"]["node"],
+            json!(uuid_of_the_node_at(&first_run, &["graphinput"]).to_string())
+        );
+        assert_eq!(
+            second_run["links"][0]["target"]["node"],
+            json!(uuid_of_the_node_at(&first_run, &["soft"]).to_string())
+        );
+    }
+
+    #[test]
+    fn a_fragment_refreshed_and_refreshed_back_is_the_document_it_was() {
+        let mut document = an_empty_document();
+        let first_run = fragment_with_each_node_uuid_kept_by_its_name(
+            &a_look_fragment_run(4, false),
+            None,
+            &mut Uuid::new_v4,
+        )
+        .unwrap();
+        let mut look = a_node("look");
+        look.node_type = "generators.look:look".to_owned();
+        look.fragment = Some(Box::new(first_run.clone()));
+        document
+            .apply(&StreamGraphOperation::AddNode {
+                node: look.clone(),
+                links: Vec::new(),
+            })
+            .unwrap();
+        let refresh = StreamGraphOperation::RefreshFragment {
+            node: look.id,
+            from: StreamGraphFragmentPlacement {
+                generator: look.node_type.clone(),
+                config: json!({}),
+                fragment: first_run.clone(),
+            },
+            to: StreamGraphFragmentPlacement {
+                generator: look.node_type.clone(),
+                config: json!({"radius": 8}),
+                fragment: fragment_with_each_node_uuid_kept_by_its_name(
+                    &a_look_fragment_run(8, true),
+                    Some(&first_run),
+                    &mut Uuid::new_v4,
+                )
+                .unwrap(),
+            },
+        };
+        let before = document.canonical_bytes().unwrap();
+
+        document.apply(&refresh).unwrap();
+        assert_eq!(document.node(look.id).unwrap().config, json!({"radius": 8}));
+        document.apply(&refresh.inverse()).unwrap();
+
+        assert_eq!(document.canonical_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn a_refresh_of_a_node_holding_no_fragment_is_refused_naming_it() {
+        let mut document = an_empty_document();
+        let blur = a_node("blur");
+        document
+            .apply(&StreamGraphOperation::AddNode {
+                node: blur.clone(),
+                links: Vec::new(),
+            })
+            .unwrap();
+        let placement = StreamGraphFragmentPlacement {
+            generator: "generators.look:look".to_owned(),
+            config: json!({}),
+            fragment: json!({"nodes": [], "links": []}),
+        };
+
+        let refusal = document
+            .apply(&StreamGraphOperation::RefreshFragment {
+                node: blur.id,
+                from: placement.clone(),
+                to: placement,
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            refusal,
+            format!(
+                "node {} `blur` is no fragment, so no graph generator's run refreshes it",
+                blur.id
+            )
+        );
     }
 
     #[test]

@@ -39,7 +39,7 @@ type LiveCommitContext = Option<Arc<RuntimeContext>>;
 /// What every graph change on one stream works through: the stream's
 /// compiler, the context it compiles against right away, if any, and the
 /// stream whose topic it publishes on.
-struct LiveGraphChangeOnOneStream {
+pub(super) struct LiveGraphChangeOnOneStream {
     compiler: Arc<Compiler>,
     live: LiveCommitContext,
     stream: LoadedStreamIdentity,
@@ -85,7 +85,7 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
 
 /// Whether an added node's config references are checked against the graph it joins.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ConfigReferencesOfTheAddedNode {
+pub(super) enum ConfigReferencesOfTheAddedNode {
     /// A live add: every node a reference names must already be in the graph.
     CheckedAgainstTheGraphItJoins,
     /// A graph load: the whole graph was validated before its first node was
@@ -99,7 +99,7 @@ enum ConfigReferencesOfTheAddedNode {
 /// of the one `compiler.scope` that added the node, so a caller that needs the
 /// name never has to ask a second time — and never races a concurrent removal
 /// into being told its own successful add does not exist.
-async fn add_processor_impl(
+pub(super) async fn add_processor_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
     lend_directory: Option<PathBuf>,
@@ -215,7 +215,7 @@ async fn add_processor_impl(
 }
 
 /// Core implementation for remove_processor - takes owned Arcs for 'static lifetime.
-async fn remove_processor_impl(
+pub(super) async fn remove_processor_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     processor_id: ProcessorUniqueId,
 ) -> Result<()> {
@@ -292,7 +292,7 @@ async fn remove_processor_impl(
     skip(live_graph_change),
     fields(from = %from, to = %to),
 )]
-async fn connect_impl(
+pub(super) async fn connect_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
@@ -438,7 +438,7 @@ fn refuse_a_destination_this_graph_cannot_take(
 }
 
 /// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
-async fn disconnect_impl(
+pub(super) async fn disconnect_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     link_id: LinkUniqueId,
 ) -> Result<()> {
@@ -499,7 +499,7 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// A graph change on this stream, compiled right away when it may be.
-    fn live_graph_change(&self) -> LiveGraphChangeOnOneStream {
+    pub(super) fn live_graph_change(&self) -> LiveGraphChangeOnOneStream {
         LiveGraphChangeOnOneStream {
             compiler: Arc::clone(&self.compiler),
             live: self.live_commit_context(),
@@ -513,7 +513,7 @@ impl LoadedStreamInThisRuntime {
             .tokio_runtime_variant
     }
 
-    fn lend_directory(&self) -> Option<PathBuf> {
+    pub(super) fn lend_directory(&self) -> Option<PathBuf> {
         self.engine_resources_shared_by_every_stream()
             .processor_interpreter_lend_directory
             .get()

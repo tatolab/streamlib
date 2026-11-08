@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use streamlib_project_repository::{
-    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    StreamGraphDocument, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
 };
 use uuid::Uuid;
 
@@ -15,11 +15,18 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
     /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
-    /// it as applied: an added node under the name it took.
+    /// it as applied: an added node under the name it took. An operation on a node no
+    /// processor runs as, a fragment's above all, is applied to the graph as drawn and the live
+    /// graph reconciled to it.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
         graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
+        if self.the_operation_touches_a_node_no_processor_runs_as(&graph_operation) {
+            return self
+                .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
+                .await;
+        }
         match graph_operation {
             StreamGraphOperation::AddNode { mut node, links } => {
                 let mut spec = ProcessorSpec::new(
@@ -96,7 +103,73 @@ impl LoadedStreamInThisRuntime {
                 self.set_studio_fields(&self.the_processor_of_the_node(node)?, to.clone())?;
                 Ok(StreamGraphOperation::SetStudioFields { node, from, to })
             }
+            StreamGraphOperation::RefreshFragment { .. } => {
+                self.apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
+                    .await
+            }
         }
+    }
+
+    fn the_operation_touches_a_node_no_processor_runs_as(
+        &self,
+        graph_operation: &StreamGraphOperation,
+    ) -> bool {
+        let no_processor_runs_as = |node: Uuid| self.the_processor_of_the_node(node).is_err();
+        match graph_operation {
+            StreamGraphOperation::AddNode { node, links } => {
+                node.fragment.is_some()
+                    || links
+                        .iter()
+                        .flat_map(|link| [link.source.node, link.target.node])
+                        .any(|end| end != node.id && no_processor_runs_as(end))
+            }
+            StreamGraphOperation::Connect { link } | StreamGraphOperation::Disconnect { link } => {
+                no_processor_runs_as(link.source.node) || no_processor_runs_as(link.target.node)
+            }
+            StreamGraphOperation::RefreshFragment { .. } => true,
+            other => no_processor_runs_as(other.node()),
+        }
+    }
+
+    /// Apply `graph_operation` to this stream's graph as drawn and reconcile the live graph to
+    /// the result, the live graph reconciled back to what it was drawn as when that is refused.
+    async fn apply_a_stream_graph_operation_by_reconciling_the_live_graph(
+        &self,
+        mut graph_operation: StreamGraphOperation,
+    ) -> Result<StreamGraphOperation> {
+        if let StreamGraphOperation::AddNode { node, .. } = &mut graph_operation {
+            if node.name.is_empty() {
+                return Err(Error::GraphError(format!(
+                    "node {} is added with no name, and a fragment is placed under one",
+                    node.id
+                )));
+            }
+            node.name = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
+        }
+        let graph_as_drawn = self.to_json()?;
+        let mut graph_document =
+            StreamGraphDocument::from_value(graph_as_drawn.clone()).map_err(Error::GraphError)?;
+        graph_document
+            .apply(&graph_operation)
+            .map_err(Error::GraphError)?;
+        if let Err(refusal) = self
+            .reconcile_the_live_graph_to_the_graph_document(graph_document.to_value())
+            .await
+        {
+            if let Err(not_restored) = self
+                .reconcile_the_live_graph_to_the_graph_document(graph_as_drawn)
+                .await
+            {
+                tracing::error!(
+                    stream = %self.stream_id(),
+                    %not_restored,
+                    "could not bring the live graph back to what it was drawn as after a \
+                     refused change"
+                );
+            }
+            return Err(refusal);
+        }
+        Ok(graph_operation)
     }
 
     /// The processor the node whose UUID is `node` runs as, refused naming the nodes the

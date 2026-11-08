@@ -21,7 +21,8 @@ use streamlib_project_repository::{
     ProjectOperation, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
     ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
     StreamGraphDocument, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphOperation, StreamGraphOperationOnAStream,
+    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphOperation,
+    StreamGraphOperationOnAStream, fragment_with_each_node_uuid_kept_by_its_name,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphLinkEndOnTheWire, GraphTransactionAddedNode, GraphTransactionConnectedLink,
@@ -37,6 +38,9 @@ use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 
 const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the edit is to, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
 const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.";
+const IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION: &str = "The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`.";
+const IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import.";
+const IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION: &str = "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.";
 const GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.";
 
 /// Whether a graph edit is kept.
@@ -173,6 +177,23 @@ pub(crate) enum StreamGraphOperationToolArgument {
         )]
         studio: Map<String, Value>,
     },
+    /// Run one of the project's graph generators and place what it builds as a fragment, or
+    /// refresh the fragment of that name with a fresh run.
+    ImportGraphGenerator {
+        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+        stream: String,
+        #[schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION)]
+        generator: String,
+        #[schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION)]
+        name: Option<String>,
+        #[schemars(description = IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION)]
+        config: Option<Map<String, Value>>,
+        #[serde(rename = "as")]
+        #[schemars(
+            description = "A label later operations of the same transaction name the fragment node by, before its UUID is known."
+        )]
+        label: Option<String>,
+    },
 }
 
 impl StreamGraphOperationToolArgument {
@@ -185,7 +206,8 @@ impl StreamGraphOperationToolArgument {
             | Self::SetNodeConfig { stream, .. }
             | Self::SetPinValue { stream, .. }
             | Self::RenameNode { stream, .. }
-            | Self::SetStudioFields { stream, .. } => stream,
+            | Self::SetStudioFields { stream, .. }
+            | Self::ImportGraphGenerator { stream, .. } => stream,
         }
     }
 }
@@ -195,7 +217,7 @@ impl StreamGraphOperationToolArgument {
 #[serde(deny_unknown_fields)]
 struct TransactToolArguments {
     #[schemars(
-        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node` or `set_studio_fields` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields` or `import_graph_generator` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
     operations: Vec<StreamGraphOperationToolArgument>,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -348,6 +370,24 @@ struct SetStudioFieldsToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
+struct ImportGraphGeneratorToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION)]
+    generator: String,
+    #[schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION)]
+    name: Option<String>,
+    #[schemars(description = IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION)]
+    config: Option<Map<String, Value>>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct UndoOrRedoToolArguments {
     #[schemars(
         description = "The project, by absolute path: a folder holding `tatolab-project.json`."
@@ -375,6 +415,38 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         self.one_graph_transaction("transact", operations, mode, author, &peer)
             .await
+    }
+
+    #[tool(
+        description = "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction: its generator as `type`, its promoted settings as `config`, and the nodes and links it built stored under `fragment`, each node with a UUID of its own. Run again under the name of a fragment the graph holds, it refreshes that fragment with the fresh run: each node it builds keeps the UUID of the node of the same name it built before, so links into the fragment and the graph's history hold. A generator that raises, refuses, or is not found is refused with its traceback, nothing changed. Answers as `transact` does, a new fragment node under `added_nodes`; undo restores the fragment as it was."
+    )]
+    async fn import_graph_generator(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(ImportGraphGeneratorToolArguments {
+            stream,
+            generator,
+            name,
+            config,
+            mode,
+            author,
+        }): Parameters<ImportGraphGeneratorToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphOperationToolArgument::ImportGraphGenerator {
+            stream,
+            generator,
+            name,
+            config,
+            label: None,
+        };
+        self.one_graph_transaction(
+            "import_graph_generator",
+            vec![operation],
+            mode,
+            author,
+            &peer,
+        )
+        .await
     }
 
     #[tool(
@@ -758,13 +830,30 @@ impl GraphTransactionInFlight<'_> {
                 .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))
                 .and_then(|stream| {
                     let label = match &request {
-                        StreamGraphOperationToolArgument::AddNode { label, .. } => label.clone(),
+                        StreamGraphOperationToolArgument::AddNode { label, .. }
+                        | StreamGraphOperationToolArgument::ImportGraphGenerator {
+                            label, ..
+                        } => label.clone(),
                         _ => None,
                     };
+                    let run_the_graph_generator =
+                        |generator: &str,
+                         fragment_name: Option<&str>,
+                         promoted_settings: &Map<String, Value>| {
+                            self.operations_on_the_loaded_streams
+                                .run_a_graph_generator_in_the_interpreter_of_the_stream_a_call_names(
+                                    &stream_id,
+                                    generator,
+                                    fragment_name,
+                                    promoted_settings,
+                                )
+                                .map_err(|refusal| refusal.to_string())
+                        };
                     let operation = graph_operation_for_the_request(
                         request,
                         &stream.staged_graph,
                         &mut node_by_label,
+                        &run_the_graph_generator,
                     )?;
                     let applied = self
                         .async_runtime
@@ -1102,12 +1191,18 @@ impl GraphTransactionInFlight<'_> {
     }
 }
 
+/// A run of one of a stream's graph generators, `(generator, fragment name, promoted settings)`,
+/// answering the fragment node it placed or the refusal.
+type GraphGeneratorRunOfTheStream<'stream> =
+    dyn Fn(&str, Option<&str>, &Map<String, Value>) -> Result<Value, String> + 'stream;
+
 /// The operation `request` asks of the graph `staged_graph` holds, with everything its inverse
 /// needs read from it; an added node takes a new UUID, recorded under its `as` when it has one.
 fn graph_operation_for_the_request(
     request: StreamGraphOperationToolArgument,
     staged_graph: &StreamGraphDocument,
     node_by_label: &mut HashMap<String, Uuid>,
+    run_the_graph_generator: &GraphGeneratorRunOfTheStream<'_>,
 ) -> Result<StreamGraphOperation, String> {
     let node_named = |node: &str, node_by_label: &HashMap<String, Uuid>| -> Result<Uuid, String> {
         node_by_label
@@ -1136,7 +1231,90 @@ fn graph_operation_for_the_request(
             },
         })
     };
+    let label_the_node = |label: Option<String>,
+                          node: Uuid,
+                          node_by_label: &mut HashMap<String, Uuid>|
+     -> Result<(), String> {
+        match label {
+            Some(label) if node_by_label.insert(label.clone(), node).is_some() => Err(format!(
+                "two operations of this transaction both name a node `as` `{label}`"
+            )),
+            _ => Ok(()),
+        }
+    };
     match request {
+        StreamGraphOperationToolArgument::ImportGraphGenerator {
+            generator,
+            name,
+            config,
+            label,
+            ..
+        } => {
+            let placed: StreamGraphFragmentNodeAGeneratorRunPlaced = serde_json::from_value(
+                run_the_graph_generator(&generator, name.as_deref(), &config.unwrap_or_default())?,
+            )
+            .map_err(|unread| {
+                format!("graph generator `{generator}`'s run placed no fragment node: {unread}")
+            })?;
+            let operation = match staged_graph.node_named(&placed.name) {
+                None => {
+                    let node = Uuid::new_v4();
+                    let fragment = fragment_with_each_node_uuid_kept_by_its_name(
+                        &placed.fragment,
+                        None,
+                        &mut Uuid::new_v4,
+                    )?;
+                    label_the_node(label, node, node_by_label)?;
+                    StreamGraphOperation::AddNode {
+                        node: StreamGraphDocumentNode {
+                            id: node,
+                            name: placed.name,
+                            node_type: placed.generator,
+                            config: placed.config,
+                            pins: Map::new(),
+                            studio: Map::new(),
+                            fragment: Some(Box::new(fragment)),
+                        },
+                        links: Vec::new(),
+                    }
+                }
+                Some(StreamGraphDocumentNode {
+                    id,
+                    node_type,
+                    config,
+                    fragment: Some(previous_fragment),
+                    ..
+                }) => {
+                    let fragment = fragment_with_each_node_uuid_kept_by_its_name(
+                        &placed.fragment,
+                        Some(&previous_fragment),
+                        &mut Uuid::new_v4,
+                    )?;
+                    label_the_node(label, id, node_by_label)?;
+                    StreamGraphOperation::RefreshFragment {
+                        node: id,
+                        from: StreamGraphFragmentPlacement {
+                            generator: node_type,
+                            config,
+                            fragment: *previous_fragment,
+                        },
+                        to: StreamGraphFragmentPlacement {
+                            generator: placed.generator,
+                            config: placed.config,
+                            fragment,
+                        },
+                    }
+                }
+                Some(StreamGraphDocumentNode { id, node_type, .. }) => {
+                    return Err(format!(
+                        "node {id} `{}` is a `{node_type}`, no fragment, so no graph \
+                         generator's run refreshes it; give the import another `name`",
+                        placed.name
+                    ));
+                }
+            };
+            Ok(operation)
+        }
         StreamGraphOperationToolArgument::AddNode {
             node_type,
             name,
@@ -1147,13 +1325,7 @@ fn graph_operation_for_the_request(
             ..
         } => {
             let node = Uuid::new_v4();
-            if let Some(label) = label
-                && node_by_label.insert(label.clone(), node).is_some()
-            {
-                return Err(format!(
-                    "two `add_node`s of this transaction are both `as` `{label}`"
-                ));
-            }
+            label_the_node(label, node, node_by_label)?;
             Ok(StreamGraphOperation::AddNode {
                 node: StreamGraphDocumentNode {
                     id: node,
@@ -1220,6 +1392,17 @@ fn graph_operation_for_the_request(
             })
         }
     }
+}
+
+/// The fragment node one graph generator run places, as the run entry prints it: its nodes
+/// and links by name.
+#[derive(Deserialize)]
+struct StreamGraphFragmentNodeAGeneratorRunPlaced {
+    name: String,
+    #[serde(rename = "type")]
+    generator: String,
+    config: Value,
+    fragment: Value,
 }
 
 fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWire {

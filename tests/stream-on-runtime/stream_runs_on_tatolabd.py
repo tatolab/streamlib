@@ -62,14 +62,21 @@ GRAPH_DOCUMENT_ASSET_KEY = "asset"
 #: The stream a hand-written graph is named when it names none of its own.
 HAND_WRITTEN_STREAM_NAME_WHEN_THE_GRAPH_NAMES_NONE = "main"
 
-#: How the suite compiles every `@graph_generator` of a project's `stream.py`, in the suite venv.
+#: How the suite runs every `@graph_generator` a project's `stream.py` defines, in definition
+#: order, in the suite venv, printing one JSON list of `{"generator", "graph"}`.
 STREAM_PY_COMPILE_INVOCATION = (
     "-I",
-    "-m",
-    "tatolab.stream._project_stream_compile_entry",
-    "--verb",
-    "run",
-    "--every-stream",
+    "-c",
+    "import json, runpy, sys\n"
+    "sys.path.insert(0, '.')\n"
+    "from tatolab.stream import run_graph_generator\n"
+    "from tatolab.stream._stream_graph_builder import is_graph_generator\n"
+    "namespace = runpy.run_path('stream.py', run_name='stream')\n"
+    "print(json.dumps([\n"
+    "    {'generator': name, 'graph': run_graph_generator(value)}\n"
+    "    for name, value in namespace.items()\n"
+    "    if is_graph_generator(value) and value.__module__ == 'stream'\n"
+    "]))\n",
 )
 
 #: Bounded: a compile imports a few modules and runs each `@graph_generator` once.
@@ -444,14 +451,13 @@ def write_the_graph_documents_the_stream_py_compiles_to(project_directory: Path)
         check=False,
     )
     assert finished.returncode == 0, finished.stdout + finished.stderr
-    compiled_document = json.loads(finished.stdout.splitlines()[-1])
-    assert "streams" in compiled_document, compiled_document
+    compiled_streams = json.loads(finished.stdout.splitlines()[-1])
+    assert compiled_streams, f"stream.py defines no @graph_generator: {finished.stderr}"
     write_the_project_file_unless_there(project_directory)
     stream_names: "list[str]" = []
-    for compiled_stream in compiled_document["streams"]:
-        assert "stream_graph" in compiled_stream, compiled_stream
-        stream_name = compiled_stream["stream_function"].rsplit(":", 1)[-1].rsplit(".", 1)[-1]
-        write_a_graph_document(project_directory, stream_name, compiled_stream["stream_graph"])
+    for compiled_stream in compiled_streams:
+        stream_name = compiled_stream["generator"]
+        write_a_graph_document(project_directory, stream_name, compiled_stream["graph"])
         stream_names.append(stream_name)
     graph_documents_directory = project_directory / GRAPH_DOCUMENTS_DIRECTORY_NAME
     for graph_document_path in graph_documents_directory.glob(f"*{GRAPH_DOCUMENT_FILE_SUFFIX}"):
