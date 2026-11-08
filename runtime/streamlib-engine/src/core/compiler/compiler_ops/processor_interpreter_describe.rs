@@ -13,6 +13,9 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::function_node_pool::{
+    FUNCTION_NODE_POOL_INTERVAL_MS, FUNCTION_NODE_POOL_NODE_TYPE, the_function_node_pool_descriptor,
+};
 use super::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
 use super::processor_interpreter_spawn_host::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, LoadedStreamAHelperProcessBelongsTo,
@@ -38,6 +41,7 @@ use crate::core::child_process_lifetime::{
 };
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
+use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::processors::{
     DynGeneratedProcessor, HowANodeOfADescribedTypeRuns, InstalledModuleOfANodeType,
     NodeTypesOneStreamResolves,
@@ -252,6 +256,12 @@ fn register_the_described_node_type(
                 execution_config
             }
             HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
+                register_the_function_node_pool_once(
+                    node_types_of_the_stream,
+                    &stream_environment,
+                    &lend_directory,
+                    &the_stream_its_helpers_belong_to,
+                )?;
                 return node_types_of_the_stream
                     .register_a_type_described_in_this_streams_processor_interpreter(
                         descriptor,
@@ -280,6 +290,44 @@ fn register_the_described_node_type(
                 &processor_class_import_path,
                 &descriptor_for_constructor,
                 child_execution_config,
+                node,
+                &stream_environment,
+                &lend_directory,
+                the_stream_its_helpers_belong_to.clone(),
+            )) as Box<dyn DynGeneratedProcessor + Send>)
+        })),
+    )
+}
+
+/// Register the stream's function node pool, whose helper evaluates each
+/// island no reader of it can evaluate, once the stream describes a function
+/// node type; its ports are the ones each carried island adds to its node.
+fn register_the_function_node_pool_once(
+    node_types_of_the_stream: &NodeTypesOneStreamResolves,
+    stream_environment: &StreamEnvironment,
+    lend_directory: &Arc<std::path::PathBuf>,
+    the_stream_its_helpers_belong_to: &LoadedStreamAHelperProcessBelongsTo,
+) -> Result<()> {
+    let pool_descriptor = the_function_node_pool_descriptor(None)?;
+    if node_types_of_the_stream.was_described_in_this_streams_processor_interpreter(
+        &pool_descriptor.processor_class_import_path,
+    ) {
+        return Ok(());
+    }
+    let stream_environment = stream_environment.clone();
+    let lend_directory = Arc::clone(lend_directory);
+    let the_stream_its_helpers_belong_to = the_stream_its_helpers_belong_to.clone();
+    node_types_of_the_stream.register_a_type_described_in_this_streams_processor_interpreter(
+        pool_descriptor,
+        HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(move |node| {
+            let descriptor =
+                the_function_node_pool_descriptor(Some((&node.ports.inputs, &node.ports.outputs)))?;
+            Ok(Box::new(spawn_host_for_processor_node(
+                FUNCTION_NODE_POOL_NODE_TYPE,
+                &descriptor,
+                ExecutionConfig::new(ProcessExecution::Continuous {
+                    interval_ms: FUNCTION_NODE_POOL_INTERVAL_MS,
+                }),
                 node,
                 &stream_environment,
                 &lend_directory,

@@ -1,0 +1,26 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+use serde_json::Value as JsonValue;
+
+use super::JsonSerializableComponent;
+use crate::core::graph::LinkUniqueId;
+
+/// Marks one of the two links a link from a function node island into a
+/// reader that cannot evaluate it is carried as, through the stream's function
+/// node pool; `graph` renders the carried link's id as
+/// `carried_through_the_function_node_pool`.
+pub struct LinkCarriedThroughTheFunctionNodePoolComponent {
+    /// The link as the graph was given it.
+    pub carried_link_id: LinkUniqueId,
+}
+
+impl JsonSerializableComponent for LinkCarriedThroughTheFunctionNodePoolComponent {
+    fn json_key(&self) -> &'static str {
+        "carried_through_the_function_node_pool"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        JsonValue::from(self.carried_link_id.to_string())
+    }
+}

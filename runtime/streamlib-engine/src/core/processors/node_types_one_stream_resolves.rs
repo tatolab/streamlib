@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use parking_lot::RwLock;
 
 use crate::core::ProcessorDescriptor;
+use crate::core::compiler::compiler_ops::function_node_pool::is_the_function_node_pool_type;
 use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -229,7 +230,8 @@ impl NodeTypesOneStreamResolves {
     }
 
     /// The descriptors of every type described in this stream's processor
-    /// interpreter.
+    /// interpreter, leaving out the stream's function node pool, which no
+    /// graph names.
     pub fn descriptors_described_in_this_streams_processor_interpreter(
         &self,
     ) -> Vec<ProcessorDescriptor> {
@@ -237,6 +239,9 @@ impl NodeTypesOneStreamResolves {
             .read()
             .values()
             .map(|described| described.descriptor.clone())
+            .filter(|descriptor| {
+                !is_the_function_node_pool_type(&descriptor.processor_class_import_path)
+            })
             .collect()
     }
 
