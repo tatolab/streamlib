@@ -3,7 +3,7 @@
 
 """Intermittent glitch flashes over a continuous cyberpunk grade.
 
-The look lives entirely in `shaders/cyberpunk_glitch.frag`; what stays in
+The look lives entirely in `shaders/cyberpunk_glitch_fragment.slang`; what stays in
 Python is when a flash fires, how long it lasts and how hard it hits. The
 shader gets that as three numbers a frame.
 """
@@ -13,11 +13,11 @@ from __future__ import annotations
 import random
 import struct
 
-from tatolab.stream import RuntimeContextFullAccess, VideoFrame, node
+from tatolab.stream import ImageFrame, RuntimeContextFullAccess, node
 
 from ..single_pass_video_effect import SinglePassVideoEffect
 
-# `vec2 frame_extent_in_pixels; float elapsed_seconds; float glitch_intensity;
+# `float2 frame_extent_in_pixels; float elapsed_seconds; float glitch_intensity;
 #  float glitch_seed; float dramatic_glitch;`
 GLITCH_PUSH_CONSTANT_FORMAT = "<6f"
 GLITCH_PUSH_CONSTANT_SIZE = struct.calcsize(GLITCH_PUSH_CONSTANT_FORMAT)
@@ -78,18 +78,18 @@ class GlitchFlashSchedule:
             self.intensity = random.uniform(0.3, 0.6)
 
 
-@node(description="Cyberpunk colour grade with intermittent glitch flashes")
+@node.process(description="Cyberpunk colour grade with intermittent glitch flashes")
 class CyberpunkGlitch(SinglePassVideoEffect):
     """The grade is always on; the glitch is not."""
 
-    fragment_shader_file_name = "cyberpunk_glitch.frag"
+    fragment_shader_file_name = "cyberpunk_glitch_fragment.slang"
     push_constant_size = GLITCH_PUSH_CONSTANT_SIZE
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         super().setup(ctx)
         self.flash_schedule = GlitchFlashSchedule()
 
-    def push_constants_for(self, frame: VideoFrame, elapsed_seconds: float) -> bytes:
+    def push_constants_for(self, frame: ImageFrame, elapsed_seconds: float) -> bytes:
         self.flash_schedule.advance_to(elapsed_seconds)
         return struct.pack(
             GLITCH_PUSH_CONSTANT_FORMAT,

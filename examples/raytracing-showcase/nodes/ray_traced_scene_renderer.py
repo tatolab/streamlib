@@ -4,7 +4,7 @@
 """The right-hand half: the showcase scene traced by a ray-tracing kernel.
 
 Importable as `nodes.ray_traced_scene_renderer:RayTracedSceneRenderer`, which
-is the name the engine spawns this node's child interpreter with. The kernel and
+is the name the runtime spawns this node's child interpreter with. The kernel and
 both acceleration structures are objects built once in `setup()`; a trace binds
 them by name.
 """
@@ -16,22 +16,23 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from tatolab.stream import (
+    Image,
+    ImageFrameToWrite,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     node,
 )
 
 from nodes.showcase_box_scene import (
-    SHOWCASE_SCENE_GLSL,
+    SHOWCASE_RENDERED_FRAME_COLOUR,
+    SHOWCASE_SCENE_SLANG,
     UNIT_CUBE_CORNER_POSITIONS,
     UNIT_CUBE_TRIANGLE_INDICES,
     orbit_azimuths_at,
     showcase_tlas_instances,
 )
-
-RAY_TRACED_FRAME_OUTPUT_PORT = "ray_traced_frame_to_downstream"
 
 # The shaders' own names for the two resources they bind, read off them by
 # reflection. A trace resolves against these, never against slot order.
@@ -39,8 +40,8 @@ SCENE_STRUCTURE_BINDING = "scene_structure"
 TRACED_FRAME_BINDING = "traced_frame"
 
 TEXTURE_FORMAT = "rgba8_unorm"
-# Written by the trace as a storage image, then sampled by the compositor and
-# read by an encoder, each in its own process.
+# Written by the trace as a storage image, then sampled by the compositor in
+# its own process.
 STORAGE_AND_SAMPLED_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
 # `float camera_azimuth; float light_azimuth; float aspect;`, little-endian
@@ -49,94 +50,108 @@ SCENE_PUSH_CONSTANT_FORMAT = "<fff"
 SCENE_PUSH_CONSTANT_SIZE = struct.calcsize(SCENE_PUSH_CONSTANT_FORMAT)
 
 # Miss-region indices in the shader binding table, in the order the groups
-# below declare the miss shaders. A `traceRayEXT` names which one it wants.
+# below declare the miss shaders. A `TraceRay` names which one it wants.
 SKY_MISS_INDEX = 0
 SHADOW_MISS_INDEX = 1
 
-_RAY_TRACING_PREAMBLE = (
-    "#version 460\n"
-    "#extension GL_EXT_ray_tracing : require\n"
-    f"#define SKY_MISS_INDEX {SKY_MISS_INDEX}\n"
-    f"#define SHADOW_MISS_INDEX {SHADOW_MISS_INDEX}\n"
+_RAY_TRACING_PREAMBLE_SLANG = (
+    f"static const uint SKY_MISS_INDEX = {SKY_MISS_INDEX};\n"
+    f"static const uint SHADOW_MISS_INDEX = {SHADOW_MISS_INDEX};\n"
 )
 
 # Declared identically in ray generation, the sky miss shader and the hit
-# shader, which all read or write it at payload location 0.
-_PRIMARY_RAY_PAYLOAD_GLSL = """
+# shader, which all read or write it.
+_PRIMARY_RAY_PAYLOAD_SLANG = """
 struct PrimaryRayPayload {
-    vec3 colour;
-    vec3 world_position;
-    vec3 world_normal;
+    float3 colour;
+    float3 world_position;
+    float3 world_normal;
     float mirror_strength;
 };
 """
 
-_SCENE_PUSH_CONSTANTS_GLSL = """
-layout(push_constant) uniform ScenePushConstants {
+# Declared identically in the hit shader, which casts the shadow ray, and the
+# shadow miss shader, which answers it.
+_SHADOW_RAY_PAYLOAD_SLANG = """
+struct ShadowRayPayload {
+    float lit_fraction;
+};
+"""
+
+_SCENE_PUSH_CONSTANTS_SLANG = """
+struct ScenePushConstants {
     float camera_azimuth;
     float light_azimuth;
     float aspect;
-} scene;
+};
+[[vk::push_constant]] ConstantBuffer<ScenePushConstants> scene;
 """
 
-RAY_GENERATION_GLSL = (
-    _RAY_TRACING_PREAMBLE
-    + SHOWCASE_SCENE_GLSL
-    + _PRIMARY_RAY_PAYLOAD_GLSL
-    + _SCENE_PUSH_CONSTANTS_GLSL
-    + """
-layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_structure;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D traced_frame;
+_SCENE_STRUCTURE_BINDING_SLANG = """
+[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene_structure;
+"""
 
-layout(location = 0) rayPayloadEXT PrimaryRayPayload primary;
+RAY_GENERATION_SLANG = (
+    _RAY_TRACING_PREAMBLE_SLANG
+    + SHOWCASE_SCENE_SLANG
+    + _PRIMARY_RAY_PAYLOAD_SLANG
+    + _SCENE_PUSH_CONSTANTS_SLANG
+    + _SCENE_STRUCTURE_BINDING_SLANG
+    + """
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> traced_frame;
+
+PrimaryRayPayload traced_primary_ray(float3 origin, float3 direction) {
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.TMin = 0.001;
+    ray.Direction = direction;
+    ray.TMax = 400.0;
+    PrimaryRayPayload primary;
+    TraceRay(scene_structure, RAY_FLAG_FORCE_OPAQUE, 0xff, 0, 0, SKY_MISS_INDEX, ray, primary);
+    return primary;
+}
 
 void main() {
-    vec2 pixel_centre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-    vec2 on_screen = pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
+    uint2 launch = DispatchRaysIndex().xy;
+    float2 pixel_centre = float2(launch) + float2(0.5);
+    float2 on_screen = pixel_centre / float2(DispatchRaysDimensions().xy) * 2.0 - 1.0;
     on_screen.x *= scene.aspect;
     on_screen.y = -on_screen.y;
 
-    vec3 eye, forward, right, up;
+    float3 eye, forward, right, up;
     showcase_camera_basis(scene.camera_azimuth, eye, forward, right, up);
     float half_height = tan(CAMERA_FIELD_OF_VIEW_RADIANS * 0.5);
-    vec3 direction = normalize(forward
-                               + right * (on_screen.x * half_height)
-                               + up * (on_screen.y * half_height));
+    float3 direction = normalize(forward
+                                 + right * (on_screen.x * half_height)
+                                 + up * (on_screen.y * half_height));
 
-    traceRayEXT(scene_structure, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, SKY_MISS_INDEX,
-                eye, 0.001, direction, 400.0, 0);
-    vec3 colour = primary.colour;
+    PrimaryRayPayload primary = traced_primary_ray(eye, direction);
+    float3 colour = primary.colour;
 
     // One bounce off the mirror floor, iterated here rather than recursed in
-    // the hit shader, which cannot both receive and trace at one payload
-    // location. The reflected ray runs the same hit shader, so it casts its
-    // own shadow ray.
+    // the hit shader, which would spend a level of recursion depth on it. The
+    // reflected ray runs the same hit shader, so it casts its own shadow ray.
     if (primary.mirror_strength > 0.0) {
         float strength = primary.mirror_strength;
-        vec3 surface = primary.world_position;
-        vec3 normal = primary.world_normal;
-        traceRayEXT(scene_structure, gl_RayFlagsOpaqueEXT, 0xff, 0, 0, SKY_MISS_INDEX,
-                    surface + normal * SHADOW_RAY_BIAS, 0.001,
-                    reflect(direction, normal), 400.0, 0);
-        colour = mix(colour, primary.colour, strength);
+        float3 normal = primary.world_normal;
+        PrimaryRayPayload reflected = traced_primary_ray(
+            primary.world_position + normal * SHADOW_RAY_BIAS, reflect(direction, normal));
+        colour = lerp(colour, reflected.colour, strength);
     }
 
-    imageStore(traced_frame, ivec2(gl_LaunchIDEXT.xy), vec4(colour, 1.0));
+    traced_frame[launch] = float4(colour, 1.0);
 }
 """
 )
 
-SKY_MISS_GLSL = (
-    _RAY_TRACING_PREAMBLE
-    + SHOWCASE_SCENE_GLSL
-    + _PRIMARY_RAY_PAYLOAD_GLSL
+SKY_MISS_SLANG = (
+    SHOWCASE_SCENE_SLANG
+    + _PRIMARY_RAY_PAYLOAD_SLANG
     + """
-layout(location = 0) rayPayloadInEXT PrimaryRayPayload primary;
-
-void main() {
-    primary.colour = sky_colour_towards(gl_WorldRayDirectionEXT);
-    primary.world_position = vec3(0.0);
-    primary.world_normal = vec3(0.0);
+void main(inout PrimaryRayPayload primary) {
+    primary.colour = sky_colour_towards(WorldRayDirection());
+    primary.world_position = float3(0.0);
+    primary.world_normal = float3(0.0);
     primary.mirror_strength = 0.0;
 }
 """
@@ -145,55 +160,55 @@ void main() {
 # A shadow ray skips closest-hit shaders and stops at its first hit, so
 # arriving here is the only thing that can happen to it — and it means nothing
 # was in the way.
-SHADOW_MISS_GLSL = (
-    _RAY_TRACING_PREAMBLE
+SHADOW_MISS_SLANG = (
+    _SHADOW_RAY_PAYLOAD_SLANG
     + """
-layout(location = 1) rayPayloadInEXT float lit_fraction;
-
-void main() {
-    lit_fraction = 1.0;
+void main(inout ShadowRayPayload shadow) {
+    shadow.lit_fraction = 1.0;
 }
 """
 )
 
-CLOSEST_HIT_GLSL = (
-    _RAY_TRACING_PREAMBLE
-    + SHOWCASE_SCENE_GLSL
-    + _PRIMARY_RAY_PAYLOAD_GLSL
-    + _SCENE_PUSH_CONSTANTS_GLSL
+CLOSEST_HIT_SLANG = (
+    _RAY_TRACING_PREAMBLE_SLANG
+    + SHOWCASE_SCENE_SLANG
+    + _PRIMARY_RAY_PAYLOAD_SLANG
+    + _SHADOW_RAY_PAYLOAD_SLANG
+    + _SCENE_PUSH_CONSTANTS_SLANG
+    + _SCENE_STRUCTURE_BINDING_SLANG
     + """
-layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_structure;
-
-layout(location = 0) rayPayloadInEXT PrimaryRayPayload primary;
-layout(location = 1) rayPayloadEXT float lit_fraction;
-
-void main() {
+void main(inout PrimaryRayPayload primary, BuiltInTriangleIntersectionAttributes hit) {
     // Every instance's transform maps the one unit cube onto its box, so
     // object space is unit-cube space.
-    vec3 in_unit_cube = gl_ObjectRayOriginEXT + gl_HitTEXT * gl_ObjectRayDirectionEXT;
-    vec3 world_position = gl_WorldRayOriginEXT + gl_HitTEXT * gl_WorldRayDirectionEXT;
+    float3 in_unit_cube = ObjectRayOrigin() + RayTCurrent() * ObjectRayDirection();
+    float3 world_position = WorldRayOrigin() + RayTCurrent() * WorldRayDirection();
     // The transforms are axis-aligned scale and translation only, so the
     // forward transform carries a normal without an inverse transpose.
-    vec3 world_normal = normalize(mat3(gl_ObjectToWorldEXT)
-                                  * unit_cube_face_normal(in_unit_cube));
+    float3 world_normal = normalize(
+        mul(ObjectToWorld3x4(), float4(unit_cube_face_normal(in_unit_cube), 0.0)));
 
-    int box = gl_InstanceCustomIndexEXT;
-    vec3 base_colour = SHOWCASE_BOX_COLOURS[box] * box_edge_darkening(in_unit_cube);
+    // The instance's custom index, which the node set to its box.
+    int box = int(InstanceID());
+    float3 base_colour = SHOWCASE_BOX_COLOURS[box] * box_edge_darkening(in_unit_cube);
 
     // The question a fragment shader cannot ask: is anything between this
     // point and the light? Only reaching the shadow miss shader lights it.
-    vec3 light = light_position_at(scene.light_azimuth);
-    lit_fraction = 0.0;
-    traceRayEXT(scene_structure,
-                gl_RayFlagsOpaqueEXT
-                    | gl_RayFlagsTerminateOnFirstHitEXT
-                    | gl_RayFlagsSkipClosestHitShaderEXT,
-                0xff, 0, 0, SHADOW_MISS_INDEX,
-                world_position + world_normal * SHADOW_RAY_BIAS, 0.001,
-                normalize(light - world_position), distance(light, world_position), 1);
+    float3 light = light_position_at(scene.light_azimuth);
+    RayDesc towards_light;
+    towards_light.Origin = world_position + world_normal * SHADOW_RAY_BIAS;
+    towards_light.TMin = 0.001;
+    towards_light.Direction = normalize(light - world_position);
+    towards_light.TMax = distance(light, world_position);
+    ShadowRayPayload shadow;
+    shadow.lit_fraction = 0.0;
+    TraceRay(scene_structure,
+             RAY_FLAG_FORCE_OPAQUE
+                 | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH
+                 | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+             0xff, 0, 0, SHADOW_MISS_INDEX, towards_light, shadow);
 
     primary.colour = directly_lit_colour(base_colour, world_position, world_normal,
-                                         scene.light_azimuth, lit_fraction);
+                                         scene.light_azimuth, shadow.lit_fraction);
     primary.world_position = world_position;
     primary.world_normal = world_normal;
     primary.mirror_strength = (box == FLOOR_BOX_INDEX) ? FLOOR_MIRROR_STRENGTH : 0.0;
@@ -205,10 +220,10 @@ void main() {
 # names its modules by index into `stages`, which is how two modules fill the
 # miss stage.
 RAY_TRACING_STAGES = [
-    {"stage": "ray_gen", "source": RAY_GENERATION_GLSL},
-    {"stage": "miss", "source": SKY_MISS_GLSL},
-    {"stage": "miss", "source": SHADOW_MISS_GLSL},
-    {"stage": "closest_hit", "source": CLOSEST_HIT_GLSL},
+    {"stage": "ray_gen", "source": RAY_GENERATION_SLANG},
+    {"stage": "miss", "source": SKY_MISS_SLANG},
+    {"stage": "miss", "source": SHADOW_MISS_SLANG},
+    {"stage": "closest_hit", "source": CLOSEST_HIT_SLANG},
 ]
 RAY_TRACING_GROUPS = [
     {"kind": "general", "general_stage": 0},
@@ -237,7 +252,7 @@ class RayTracedSceneRendererConfig:
     height: int = 720
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=16,
     description="The showcase scene with ray-traced shadows and a mirror floor",
@@ -249,8 +264,9 @@ class RayTracedSceneRenderer:
         self.frame_width = config.width
         self.frame_height = config.height
 
-    @node.output(description="The scene with ray-traced shadows and a mirror floor")
-    def ray_traced_frame_to_downstream(self) -> VideoFrame: ...
+    ray_traced_frame_to_downstream = Output(
+        Image, description="The scene with ray-traced shadows and a mirror floor"
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu_full_access = ctx.gpu_full_access
@@ -299,14 +315,8 @@ class RayTracedSceneRenderer:
             ),
         )
 
-        ray_traced_frame = VideoFrame(
-            surface_id=traced_frame_texture.surface_id,
-            width=self.frame_width,
-            height=self.frame_height,
-            timestamp_ns=frame_time_ns,
-        )
         ctx.outputs.write(
-            RAY_TRACED_FRAME_OUTPUT_PORT,
-            ray_traced_frame.to_bytes(),
+            self.ray_traced_frame_to_downstream,
+            ImageFrameToWrite.of_texture(traced_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR),
             timestamp_ns=frame_time_ns,
         )

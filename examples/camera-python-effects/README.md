@@ -1,7 +1,7 @@
 # camera-python-effects
 
 Camera → six Python nodes, seen in Tato Studio's viewer. A cyberpunk broadcast
-look built out of GLSL kernels, MediaPipe pose tracking, a ModernGL avatar and
+look built out of Slang kernels, MediaPipe pose tracking, a ModernGL avatar and
 a skia overlay, all authored in Python.
 
 ```
@@ -22,7 +22,7 @@ share and their shaders live in an ordinary installable package,
 - `CameraSource` comes from the **`tatolab-camera` module**, a dependency in
   `pyproject.toml`. It runs in its own child process, and its per-frame path is
   the module's Rust, never Python.
-- The six between them are this project's own `@node` classes, one module each
+- The six between them are this project's own `@node.process` classes, one module each
   under `camera_python_effects/nodes/`. **Every one runs in its own child
   process with its own interpreter**, so pose tracking at whatever rate the CPU
   allows never slows the effect chain down.
@@ -73,7 +73,7 @@ and leaves the stream loaded; `tatolab stop <stream>` stops it.
 | `NeonOverlaySource` | Lower third, ticker and watermark, drawn with skia, redrawn every 33 ms |
 | `BreakingNewsCompositor` | Blends the three layers with a sliding picture-in-picture |
 
-The effects live in `src/camera_python_effects/shaders/` as ordinary `.frag`
+The effects live in `src/camera_python_effects/shaders/` as ordinary `.slang`
 files. The `dev` watch follows `.py` files only, so after editing a shader save
 any `.py` file (or restart `tatolab dev`) to load it.
 
@@ -88,7 +88,9 @@ The avatar is three third-party worlds in one child process — numpy reads the
 camera frame's host side through `numpy.from_dlpack(frame, device="cpu")`,
 MediaPipe lifts a 3D pose out of it on the CPU, ModernGL renders the posed
 android on its own stage — and the engine sees only a frame in and a frame
-out. If tracking cannot run, the android holds its idle sway, the warning is
+out. The pose itself rides `pose_to_downstream`, a Records port carrying
+`timestamp_ns`, `provenance`, `joints` and `visibility`, stamped with the camera
+frame it was lifted from. If tracking cannot run, the android holds its idle sway, the warning is
 logged once, and the other five layers carry on.
 
 ## Two things worth knowing before you write a node here
@@ -98,8 +100,8 @@ frames and a kernel binding resolves texture-backed surfaces only, so a draw
 handed a camera surface id is refused by name. That is what
 `CameraFrameToTexture` is for: `ctx.gpu_limited_access.copy_surface_to_surface`
 copies the frame into a texture this node owns, device to device, with no GPU
-array package involved. The frame read as `into=VideoFrame` holds its surface
-still for the length of the copy.
+array package involved. The `ImageFrame` its `Input(Image)` port hands back
+holds its surface still for the length of the copy.
 
 It is also the *only* reason the chain opens that way. A camera frame is
 writable in place — `with frame.writable() as t:` hands a third-party GPU
@@ -125,7 +127,7 @@ uv run pytest
 No camera, no runtime, no graph: they cover the push-constant blocks each node
 packs against the ones its shader declares, the avatar rig and smoother, the
 LeRobot join and format, and the skia overlay. Shaders are compiled by
-`glslangValidator` where one is installed, skipped where not; the avatar's GL
+`slangc` where one is installed, skipped where not; the avatar's GL
 smoke test is skipped where no GL context can be created.
 
 ## The physical-AI story: this graph is a data-collection rig

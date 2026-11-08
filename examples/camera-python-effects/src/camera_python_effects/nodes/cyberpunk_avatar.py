@@ -16,12 +16,16 @@ from dataclasses import dataclass
 
 import numpy
 from tatolab.stream import (
+    Image,
+    ImageFrame,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
+    Records,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
-    msgpack,
     node,
 )
 
@@ -38,12 +42,13 @@ from ..elapsed_seconds_since_first_process import (
     ElapsedSecondsSinceFirstProcess,
 )
 from ..gpu_surface_conventions import (
+    HOST_DRAWN_FRAME_COLOUR,
     SAMPLED_ONLY_TEXTURE_USAGE,
     TEXTURE_FORMAT,
     copy_host_pixels_into_ring_texture,
 )
 from ..pose_tracking import PoseSample, PoseTracker
-from ..solved_pose_record import PoseProvenance, SolvedPoseRecord
+from ..solved_pose_record import SOLVED_POSE_RECORD_NAMES, PoseProvenance, SolvedPoseRecord
 
 # Every second pixel of a 1080p frame — 960x540. The detector resizes
 # internally, but a desk-framed torso at 640 wide was marginal for it; the
@@ -56,7 +61,7 @@ TRACKING_ACCOUNTING_EVERY_FRAMES = 300
 
 @dataclass
 class CyberpunkAvatarConfig:
-    """CyberpunkAvatar's settings, as `stream_builder.add(..., config={...})` spells them."""
+    """CyberpunkAvatar's settings, as its node's config in the graph document spells them."""
 
     scene_width: int = 960
     scene_height: int = 675
@@ -64,7 +69,7 @@ class CyberpunkAvatarConfig:
     pose_model_path: str | None = None
 
 
-@node(description="3D android on a neon stage, dancing your pose")
+@node.process(description="3D android on a neon stage, dancing your pose")
 class CyberpunkAvatar:
     """Camera frame in, rendered avatar stage out."""
 
@@ -74,16 +79,13 @@ class CyberpunkAvatar:
         self.detection_confidence = config.detection_confidence
         self.pose_model_path = config.pose_model_path
 
-    @node.input(delivery_profile="newest")
-    def video_from_camera(self) -> VideoFrame: ...
-
-    @node.output()
-    def scene_to_downstream(self) -> VideoFrame: ...
-
-    @node.output(
-        description="The resolved pose as data: joints, visibility, provenance"
+    video_from_camera = Input(Image, delivery="newest", description="Frames from the camera")
+    scene_to_downstream = Output(Image, description="The android's rendered stage")
+    pose_to_downstream = Output(
+        Records,
+        names=SOLVED_POSE_RECORD_NAMES,
+        description="The resolved pose as data: joints, visibility, provenance",
     )
-    def pose_to_downstream(self) -> SolvedPoseRecord: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # The one setup step that can touch the network (the model fetch, on
@@ -114,7 +116,7 @@ class CyberpunkAvatar:
         self.a_tracker_failure_has_been_reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_camera", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_camera)
         if frame is None:
             return
         elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
@@ -172,8 +174,8 @@ class CyberpunkAvatar:
             ),
         }
         ctx.outputs.write(
-            "pose_to_downstream",
-            msgpack.pack(solved_pose_record),
+            self.pose_to_downstream,
+            dict(solved_pose_record),
             timestamp_ns=frame.timestamp_ns,
         )
 
@@ -187,17 +189,12 @@ class CyberpunkAvatar:
         copy_host_pixels_into_ring_texture(scene_texture, scene_pixels)
 
         ctx.outputs.write(
-            "scene_to_downstream",
-            VideoFrame(
-                surface_id=scene_texture.surface_id,
-                width=self.scene_width,
-                height=self.scene_height,
-                timestamp_ns=frame.timestamp_ns,
-            ).to_bytes(),
+            self.scene_to_downstream,
+            ImageFrameToWrite.of_texture(scene_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=frame.timestamp_ns,
         )
 
-    def detect_joints_in(self, frame: VideoFrame) -> PoseSample | None:
+    def detect_joints_in(self, frame: ImageFrame) -> PoseSample | None:
         """The tracker's answer, with a failure degrading to the idle stage."""
         if self.pose_tracker is None:
             return None

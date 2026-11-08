@@ -14,10 +14,14 @@ from __future__ import annotations
 import struct
 
 from tatolab.stream import (
+    Image,
+    ImageFrame,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     node,
 )
 
@@ -30,7 +34,7 @@ from ..gpu_surface_conventions import (
 from ..neon_overlay_canvas import ease_out_back
 from ..single_pass_video_effect import SHARED_VERTEX_SHADER_FILE_NAME
 
-# `vec2 frame_extent_in_pixels; uint present_layer_mask;
+# `float2 frame_extent_in_pixels; uint present_layer_mask;
 #  float pip_slide_progress; float elapsed_seconds;`
 COMPOSITE_PUSH_CONSTANT_FORMAT = "<2fI2f"
 COMPOSITE_PUSH_CONSTANT_SIZE = struct.calcsize(COMPOSITE_PUSH_CONSTANT_FORMAT)
@@ -39,8 +43,8 @@ VIDEO_LAYER_BIT = 1
 OVERLAY_LAYER_BIT = 2
 POSE_LAYER_BIT = 4
 
-# One word per layer, serving both its input port and the binding the fragment
-# shader samples it at.
+# The binding the fragment shader samples each layer at, spelled as the layer's
+# input port is.
 VIDEO_FROM_UPSTREAM = "video_from_upstream"
 OVERLAY_FROM_NEON_SOURCE = "overlay_from_neon_source"
 AVATAR_FROM_POSE_SCENE = "avatar_from_pose_scene"
@@ -64,27 +68,24 @@ def pip_slide_progress_at(elapsed_seconds: float) -> float:
     return ease_out_back(clamped, overshoot=1.9)
 
 
-@node(description="Three-layer compositor with a sliding picture-in-picture")
+@node.process(description="Three-layer compositor with a sliding picture-in-picture")
 class BreakingNewsCompositor:
     """Video underneath, overlay over it, the android's stage inside the PiP."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_upstream(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest")
-    def overlay_from_neon_source(self) -> VideoFrame: ...
-
-    @node.input(delivery_profile="newest")
-    def avatar_from_pose_scene(self) -> VideoFrame: ...
-
-    @node.output()
-    def video_to_downstream(self) -> VideoFrame: ...
+    video_from_upstream = Input(Image, delivery="newest", description="The graded camera video")
+    overlay_from_neon_source = Input(
+        Image, delivery="newest", description="The premultiplied skia overlay"
+    )
+    avatar_from_pose_scene = Input(
+        Image, delivery="newest", description="The android's stage, for the picture-in-picture"
+    )
+    video_to_downstream = Output(Image, description="The three layers composited")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
             color_attachment_formats=[TEXTURE_FORMAT],
             vertex_source=read_shader_source(SHARED_VERTEX_SHADER_FILE_NAME),
-            fragment_source=read_shader_source("breaking_news_composite.frag"),
+            fragment_source=read_shader_source("breaking_news_composite_fragment.slang"),
             bindings={
                 VIDEO_FROM_UPSTREAM: ("sampled_texture", ["fragment"]),
                 OVERLAY_FROM_NEON_SOURCE: ("sampled_texture", ["fragment"]),
@@ -95,23 +96,23 @@ class BreakingNewsCompositor:
         )
         # Held across ticks: the two side layers pace themselves, and a frame
         # that has not been replaced is still the newest one there is.
-        self.latest_overlay: VideoFrame | None = None
-        self.latest_avatar_scene: VideoFrame | None = None
+        self.latest_overlay: ImageFrame | None = None
+        self.latest_avatar_scene: ImageFrame | None = None
         self.elapsed_seconds_since_first_process = ElapsedSecondsSinceFirstProcess()
         self.output_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        video = ctx.inputs.read(VIDEO_FROM_UPSTREAM, into=VideoFrame)
+        video = ctx.inputs.read(self.video_from_upstream)
         if video is None:
             return
         elapsed_seconds = self.elapsed_seconds_since_first_process.seconds_at(ctx.time)
 
-        newer_overlay = ctx.inputs.read(OVERLAY_FROM_NEON_SOURCE, into=VideoFrame)
+        newer_overlay = ctx.inputs.read(self.overlay_from_neon_source)
         if newer_overlay is not None:
             self.latest_overlay = newer_overlay
-        newer_avatar_scene = ctx.inputs.read(AVATAR_FROM_POSE_SCENE, into=VideoFrame)
+        newer_avatar_scene = ctx.inputs.read(self.avatar_from_pose_scene)
         if newer_avatar_scene is not None:
             self.latest_avatar_scene = newer_avatar_scene
 
@@ -150,13 +151,7 @@ class BreakingNewsCompositor:
             ),
         )
         ctx.outputs.write(
-            "video_to_downstream",
-            VideoFrame(
-                surface_id=composited.surface_id,
-                width=video.width,
-                height=video.height,
-                timestamp_ns=video.timestamp_ns,
-                color_info=video.color_info,
-            ).to_bytes(),
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(composited, video.colour),
             timestamp_ns=video.timestamp_ns,
         )

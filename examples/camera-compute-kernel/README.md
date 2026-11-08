@@ -1,6 +1,6 @@
 # camera-compute-kernel
 
-Camera → a GLSL compute kernel, seen in Tato Studio's viewer. Your webcam in
+Camera → a Slang compute kernel, seen in Tato Studio's viewer. Your webcam in
 black and white, graded on the GPU by a shader that lives in this project as a
 string.
 
@@ -12,7 +12,7 @@ timeline or slot number ever reaches Python — the object is the handle:
 
 ```python
 self.grayscale_kernel = ctx.gpu_full_access.create_compute_kernel(
-    source=GRAYSCALE_COMPUTE_GLSL,
+    source=GRAYSCALE_COMPUTE_SLANG,
     push_constant_size=GRAYSCALE_STRENGTH_SIZE,
     bindings={"camera_frame": "sampled_texture", "grayscale_frame": "storage_image"},
 )
@@ -31,15 +31,15 @@ self.grayscale_kernel.dispatch(
 
 Four things fall out of that pair, and they are the whole lesson:
 
-- **The GLSL is a string, and there is no toolchain.** The runtime carries the
-  GLSL compiler, so `source=` is compiled at construction on the machine that
-  runs the stream. There is no `glslc` to install, no `.spv` to build and no
+- **The Slang is a string, and there is no toolchain.** The runtime carries the
+  Slang compiler, so `source=` is compiled at construction on the machine that
+  runs the stream. There is no `slangc` to install, no `.spv` to build and no
   build step between editing the shader and running it again. Re-creating an
   identical kernel costs no compilation.
 - **Bindings are passed at dispatch, by name, and never persist.** The names
   are the shader's own, read off it by reflection; the `bindings=` mapping at
   construction merely *asserts* that reflection, so renaming `camera_frame` in
-  the GLSL and forgetting the Python is refused at `setup()` rather than
+  the Slang and forgetting the Python is refused at `setup()` rather than
   producing a wrong picture. Every dispatch supplies every binding — there is
   no implicit default and no value carried over from the previous frame — and
   an unknown or omitted name raises before any GPU work is submitted.
@@ -49,8 +49,9 @@ Four things fall out of that pair, and they are the whole lesson:
   the **Full** capability, the one `setup()` is handed, not on the limited
   context `process()` gets. This effect is one pass, so it needs neither.
 - **The kernel's output is an engine-owned texture named by surface id.** The
-  record this node writes carries that id, an extent and a timestamp, and is
-  the same size whatever the resolution. Pixels never ride a link.
+  node writes it with `ImageFrameToWrite.of_texture(texture, frame.colour)`, so
+  the frame downstream carries that id, an extent, the camera's colour and its
+  timestamp. Pixels never ride a link.
 
 ### The landing copy, and why it is here
 
@@ -65,7 +66,7 @@ ctx.gpu_limited_access.copy_surface_to_surface(
 ```
 
 The engine does the copy, so it is worth reading closely. `frame` — the object
-`ctx.inputs.read(port, into=VideoFrame)` handed back — holds a claim on the
+`ctx.inputs.read(self.camera_frame_from_upstream)` handed back, an `ImageFrame`, — holds a claim on the
 camera's surface, and that claim is what keeps the camera's pixels still for
 the length of the copy. The call picks the copy a buffer-to-texture pair needs,
 converts nothing, and returns once the kernel's read of the texture would see
@@ -85,7 +86,7 @@ differ, and the difference is the contract:
 | Ring | Depth | Why |
 | --- | --- | --- |
 | the landing texture | 1 | `dispatch` returns with the GPU work retired, and nothing outside this node ever names this texture |
-| the kernel's output | 2 | the encoder reads it after this node has moved on to the next frame |
+| the kernel's output | 2 | the viewer, or any node downstream, reads it after this node has moved on to the next frame |
 
 When every slot the pool may grow to is held, `next_texture_for_this_frame`
 raises: this node drops its own frame and never waits on a consumer.
@@ -95,7 +96,7 @@ raises: this node drops its own frame and never waits on a consumer.
 `GrayscaleCompute` runs in its own child interpreter with its own GIL, like
 every Python node. `CameraSource` comes from the `tatolab-camera` module, and its per-frame path is
 the module's Rust, never Python. The input
-port declares `newest`, the profile for a stream where a stale frame has no
+port is `Input(Image, delivery="newest")`, the profile for a stream where a stale frame has no
 value once a fresher one exists. The runtime opens no windows: any port of the running
 stream is seen in Tato Studio's viewer.
 
@@ -126,17 +127,17 @@ would have no pixels to hand back.
 
 ## Editing it
 
-The shader is `GRAYSCALE_COMPUTE_GLSL` in `nodes/grayscale_compute.py`. Change
+The shader is `GRAYSCALE_COMPUTE_SLANG` in `nodes/grayscale_compute.py`. Change
 the luma weights, or the whole effect, and save while `tatolab dev` runs — the
 stream loads again and the runtime compiles the new text.
 
 `WORKGROUP_TILE_SIZE` is safe to change on its own: it reaches the shader as a
-`#define`, so the tile size and the group count cannot disagree. Everything
+`static const` the Python writes into it, so the tile size and the group count cannot disagree. Everything
 else the shader and the Python share is a name, and names are checked.
 
 Two edits worth making on purpose, because each fails in an instructive way:
 
-- Rename a binding in the GLSL but not in the Python. The refusal lands at
+- Rename a binding in the Slang but not in the Python. The refusal lands at
   `setup()`, before a single frame, and names the shader's own bindings.
 - Bind the camera's own surface id — `frame.surface_id` in place of
   `camera_frame_landing_texture` — and skip the landing copy. The dispatch

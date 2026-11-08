@@ -4,7 +4,7 @@
 """A Schroeder-Moorer reverb, authored as an ordinary Python node.
 
 Importable as `nodes.reverb_effect:ReverbEffect`, which is the name the engine
-spawns this node's child interpreter with. Its input port declares one window
+spawns this node's child interpreter with. Its Channels input declares one window
 contract, so every block `process()` reads is exactly 128 mono f32 samples at
 48 kHz, whatever the capture device opened at: the filter lengths are fixed at
 construction, and there is no resampler or rechunker in this file.
@@ -15,15 +15,14 @@ from typing import Final
 
 import numpy
 from tatolab.stream import (
-    AudioBlock,
     AudioWindowContract,
+    Channels,
+    ChannelsBlock,
+    Input,
+    Output,
     RuntimeContextLimitedAccess,
-    catalog,
     node,
 )
-
-DRY_AUDIO_INPUT_PORT = "dry_audio_from_upstream"
-REVERBERATED_AUDIO_OUTPUT_PORT = "reverberated_audio_to_downstream"
 
 # 128 samples is 2.67 ms at 48 kHz: the framing latency this node adds to a
 # live monitoring loop. Every delay line must be at least one window long, so
@@ -167,22 +166,22 @@ class ReverbEffectConfig:
     dry_level: float = 0.7
 
 
-@node
+@node.process(description="Adds a reverb tail to the audio it is given, mixed under the original")
 class ReverbEffect:
-    """Adds a reverb tail to the audio it is given, mixed under the original."""
+    """Mono audio in, the same audio with its own reverb tail mixed under it out."""
 
-    @node.input(
-        delivery_profile="ordered",
-        audio_window=REVERB_WINDOW,
+    dry_audio_from_upstream = Input(
+        Channels,
+        delivery="ordered",
+        window=REVERB_WINDOW,
         description="Whatever the microphone captured, converted to the reverb's window",
     )
-    def dry_audio_from_upstream(self) -> AudioBlock: ...
-
-    @node.output(
+    reverberated_audio_to_downstream = Output(
+        Channels,
+        rate=REVERB_WINDOW.sample_rate,
+        dtype=REVERB_WINDOW_DTYPE,
         description="The input with its own tail mixed under it",
-        catalog=catalog.BinaryEntry(mode="snapshot", mime="application/msgpack"),
     )
-    def reverberated_audio_to_downstream(self) -> AudioBlock: ...
 
     def __init__(self, config: ReverbEffectConfig) -> None:
         for dial_name, value in (
@@ -225,18 +224,18 @@ class ReverbEffect:
         # waits behind the next device quantum, and falling behind costs latency
         # once rather than forever.
         while True:
-            dry_block = ctx.inputs.read(DRY_AUDIO_INPUT_PORT, into=AudioBlock)
+            dry_block = ctx.inputs.read(self.dry_audio_from_upstream)
             if dry_block is None:
                 return
             self.reverberate_one_window(ctx, dry_block)
 
     def reverberate_one_window(
-        self, ctx: RuntimeContextLimitedAccess, dry_block: AudioBlock
+        self, ctx: RuntimeContextLimitedAccess, dry_block: ChannelsBlock
     ) -> None:
         """Mix one window's tail under it and write the result downstream."""
-        # The contract guarantees mono. `samples` is a read-only view over the
-        # message's bytes, which the arithmetic below only ever reads.
-        dry = dry_block.samples[:, 0].astype("<f4", copy=False)
+        # The contract guarantees mono f32, `[channel][sample]`. The view borrows
+        # the message's samples, which the arithmetic below only ever reads.
+        dry = numpy.from_dlpack(dry_block)[0]
 
         into_the_comb_bank = dry * GAIN_INTO_THE_COMB_BANK
         wet = numpy.zeros_like(dry)
@@ -251,17 +250,10 @@ class ReverbEffect:
         numpy.clip(mixed, -1.0, 1.0, out=mixed)
 
         # The tail rides later windows; these samples cover the instants the
-        # incoming ones did, so the block keeps the stamp it arrived with.
-        reverberated_block = AudioBlock(
-            samples=mixed.astype("<f4", copy=False).tobytes(),
-            sample_rate=REVERB_WINDOW.sample_rate,
-            channels=REVERB_WINDOW_CHANNELS,
-            sample_count=REVERB_WINDOW.window_size,
-            dtype=REVERB_WINDOW_DTYPE,
-            first_sample_timestamp_ns=dry_block.first_sample_timestamp_ns,
-        )
+        # incoming ones did, so the block keeps the stamp and index it arrived with.
         ctx.outputs.write(
-            REVERBERATED_AUDIO_OUTPUT_PORT,
-            reverberated_block.to_bytes(),
-            timestamp_ns=dry_block.first_sample_timestamp_ns,
+            self.reverberated_audio_to_downstream,
+            numpy.ascontiguousarray(mixed.astype(numpy.float32, copy=False)[numpy.newaxis, :]),
+            timestamp_ns=dry_block.timestamp_ns,
+            start_sample=dry_block.start_sample,
         )

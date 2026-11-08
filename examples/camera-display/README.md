@@ -60,8 +60,9 @@ tatolab graph --stream <stream>  # nodes, ports, links and counters, as JSON
 tatolab logs -f                  # the project's records, Rust and Python alike
 ```
 
-The camera's `video` port carries a frame's record, not its picture:
-`surface_id`, `width`, `height`, `timestamp_ns` and `color_info`. The pixels
+The camera's `video` port is an `Image` port, and a frame on it names its
+picture rather than carrying it: `surface_id`, `width`, `height`, `format`,
+`colour` and `timestamp_ns`. The pixels
 stay in engine-owned GPU memory that the surface id names.
 
 ## Knobs

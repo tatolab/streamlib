@@ -15,7 +15,11 @@ import numpy
 import pytest
 
 from camera_python_effects.avatar_rig import JOINT_NAMES, idle_joints
-from camera_python_effects.solved_pose_record import SolvedPoseRecord
+from camera_python_effects.solved_pose_record import (
+    SOLVED_POSE_RECORD_NAMES,
+    SolvedPoseRecord,
+    solved_pose_record_from_records_message,
+)
 from camera_python_effects.timestamp_stream_join import TimestampStreamJoin
 
 
@@ -66,6 +70,22 @@ def _solved_pose_record(timestamp_ns: int) -> SolvedPoseRecord:
         "joints": {name: [float(a) for a in joint] for name, joint in joints.items()},
         "visibility": {name: 0.9 for name in JOINT_NAMES},
     }
+
+
+def test_a_records_message_reads_back_as_the_record_it_was_written_from() -> None:
+    solved_pose_record = _solved_pose_record(7)
+    records_message = dict(solved_pose_record)
+
+    assert tuple(records_message) == SOLVED_POSE_RECORD_NAMES
+    assert solved_pose_record_from_records_message(records_message) == solved_pose_record
+
+
+def test_a_records_message_with_an_unknown_provenance_is_refused() -> None:
+    records_message = dict(_solved_pose_record(7))
+    records_message["provenance"] = "guessed"
+
+    with pytest.raises(ValueError, match="provenance is one of"):
+        solved_pose_record_from_records_message(records_message)
 
 
 def test_pose_vectors_keep_the_promised_layout() -> None:

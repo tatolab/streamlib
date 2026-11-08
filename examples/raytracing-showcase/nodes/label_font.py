@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A 5×7 bitmap font, and the label bitmaps the compositor generates into its GLSL.
+"""A 5×7 bitmap font, and the label bitmaps the compositor generates into its Slang.
 
 Uppercase only. A character the font has no glyph for is refused by name rather
 than drawn as a blank.

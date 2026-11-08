@@ -4,7 +4,7 @@
 """The left-hand half: the showcase scene rasterized by a graphics kernel.
 
 Importable as `nodes.rasterized_scene_renderer:RasterizedSceneRenderer`, which
-is the name the engine spawns this node's child interpreter with. It reads the
+is the name the runtime spawns this node's child interpreter with. It reads the
 same generated scene table, camera and shading function as the ray tracer, so
 what differs across the divider is only what a ray buys.
 """
@@ -15,27 +15,28 @@ import struct
 from dataclasses import dataclass
 
 from tatolab.stream import (
+    Image,
+    ImageFrameToWrite,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     node,
 )
 
 from nodes.showcase_box_scene import (
     SHOWCASE_BOXES,
-    SHOWCASE_CUBE_MESH_GLSL,
-    SHOWCASE_SCENE_GLSL,
+    SHOWCASE_CUBE_MESH_SLANG,
+    SHOWCASE_RENDERED_FRAME_COLOUR,
+    SHOWCASE_SCENE_SLANG,
     UNIT_CUBE_VERTEX_COUNT,
     orbit_azimuths_at,
     packed_ring_draw_order_furthest_first,
 )
 
-RASTERIZED_FRAME_OUTPUT_PORT = "rasterized_frame_to_downstream"
-
 TEXTURE_FORMAT = "rgba8_unorm"
-# Drawn into as a colour attachment, then sampled by the compositor and read by
-# an encoder, each in its own process.
+# Drawn into as a colour attachment, then sampled by the compositor in its own
+# process.
 RENDER_ATTACHMENT_AND_SAMPLED_TEXTURE_USAGE = ["render_attachment", "texture_binding"]
 
 # `float camera_azimuth; float light_azimuth; float aspect; uint ring_draw_order;`
@@ -48,50 +49,60 @@ SHOWCASE_BOX_COUNT = len(SHOWCASE_BOXES)
 
 # Declared identically in both stages: reflection unions them, and a block one
 # stage spells shorter than the other is a size the declaration cannot match.
-_RASTER_PUSH_CONSTANTS_GLSL = """
-layout(push_constant) uniform RasterPushConstants {
+_RASTER_PUSH_CONSTANTS_SLANG = """
+struct RasterPushConstants {
     float camera_azimuth;
     float light_azimuth;
     float aspect;
     uint ring_draw_order;
-} raster;
+};
+[[vk::push_constant]] ConstantBuffer<RasterPushConstants> raster;
 """
 
-RASTER_VERTEX_GLSL = (
-    "#version 450\n"
-    + SHOWCASE_SCENE_GLSL
-    + SHOWCASE_CUBE_MESH_GLSL
-    + _RASTER_PUSH_CONSTANTS_GLSL
-    + """
-layout(location = 0) out vec3 fragment_in_unit_cube;
-layout(location = 1) out vec3 fragment_world_position;
-layout(location = 2) out vec3 fragment_world_normal;
-layout(location = 3) flat out int fragment_box;
+# What the vertex stage hands the fragment stage, declared identically in both.
+_RASTER_VERTEX_TO_FRAGMENT_SLANG = """
+struct RasterVertexToFragment {
+    float4 clip_position : SV_Position;
+    float3 fragment_in_unit_cube : UNIT_CUBE_POSITION;
+    float3 fragment_world_position : WORLD_POSITION;
+    float3 fragment_world_normal : WORLD_NORMAL;
+    nointerpolation int fragment_box : BOX_INDEX;
+};
+"""
 
-void main() {
+RASTER_VERTEX_SLANG = (
+    SHOWCASE_SCENE_SLANG
+    + SHOWCASE_CUBE_MESH_SLANG
+    + _RASTER_PUSH_CONSTANTS_SLANG
+    + _RASTER_VERTEX_TO_FRAGMENT_SLANG
+    + """
+RasterVertexToFragment main(uint vertex_index : SV_VulkanVertexID,
+                            uint instance_index : SV_VulkanInstanceID) {
     // Instance 0 is the sky box and instance 1 the floor; the rest are the
     // ring, in the furthest-first order the node packed.
-    int box = gl_InstanceIndex < FIRST_RING_CUBE_BOX_INDEX
-        ? gl_InstanceIndex
+    int instance = int(instance_index);
+    int box = instance < FIRST_RING_CUBE_BOX_INDEX
+        ? instance
         : FIRST_RING_CUBE_BOX_INDEX
           + int((raster.ring_draw_order
                  >> uint(DRAW_ORDER_BITS_PER_CUBE
-                         * (gl_InstanceIndex - FIRST_RING_CUBE_BOX_INDEX)))
+                         * (instance - FIRST_RING_CUBE_BOX_INDEX)))
                 & 0xFu);
 
-    vec3 in_unit_cube = UNIT_CUBE_CORNERS[UNIT_CUBE_TRIANGLE_INDICES[gl_VertexIndex]];
-    vec3 face_normal = UNIT_CUBE_FACE_NORMALS[gl_VertexIndex / 6];
+    float3 in_unit_cube = UNIT_CUBE_CORNERS[UNIT_CUBE_TRIANGLE_INDICES[vertex_index]];
+    float3 face_normal = UNIT_CUBE_FACE_NORMALS[vertex_index / 6];
 
-    vec3 centre = SHOWCASE_BOX_CENTRES[box];
-    vec3 size = SHOWCASE_BOX_SIZES[box];
-    vec3 world_position = centre + in_unit_cube * size;
+    float3 centre = SHOWCASE_BOX_CENTRES[box];
+    float3 size = SHOWCASE_BOX_SIZES[box];
+    float3 world_position = centre + in_unit_cube * size;
 
-    fragment_in_unit_cube = in_unit_cube;
-    fragment_world_position = world_position;
-    fragment_world_normal = face_normal;
-    fragment_box = box;
+    RasterVertexToFragment output;
+    output.fragment_in_unit_cube = in_unit_cube;
+    output.fragment_world_position = world_position;
+    output.fragment_world_normal = face_normal;
+    output.fragment_box = box;
 
-    vec3 eye, forward, right, up;
+    float3 eye, forward, right, up;
     showcase_camera_basis(raster.camera_azimuth, eye, forward, right, up);
 
     // Back-face culling against the face's own centre, so all six of its
@@ -101,54 +112,47 @@ void main() {
     float facing = dot(face_normal, eye - (centre + face_normal * 0.5 * size));
     if ((box == SKY_BOX_INDEX) ? (facing >= 0.0) : (facing <= 0.0)) {
         // Behind the near plane for every vertex of the face: clipped away.
-        gl_Position = vec4(0.0, 0.0, -1.0, 1.0);
-        return;
+        output.clip_position = float4(0.0, 0.0, -1.0, 1.0);
+        return output;
     }
 
     // The inverse of the ray generator's pixel-to-ray mapping over the same
     // basis. The y negation is Vulkan's clip space having its origin at the top.
-    vec3 from_eye = world_position - eye;
-    vec3 in_view = vec3(dot(from_eye, right), dot(from_eye, up), dot(from_eye, forward));
+    float3 from_eye = world_position - eye;
+    float3 in_view = float3(dot(from_eye, right), dot(from_eye, up), dot(from_eye, forward));
     float half_height = tan(CAMERA_FIELD_OF_VIEW_RADIANS * 0.5);
-    gl_Position = vec4(in_view.x / (half_height * raster.aspect),
-                       -in_view.y / half_height,
-                       FAR_PLANE * (in_view.z - NEAR_PLANE) / (FAR_PLANE - NEAR_PLANE),
-                       in_view.z);
+    output.clip_position = float4(in_view.x / (half_height * raster.aspect),
+                                  -in_view.y / half_height,
+                                  FAR_PLANE * (in_view.z - NEAR_PLANE) / (FAR_PLANE - NEAR_PLANE),
+                                  in_view.z);
+    return output;
 }
 """
 )
 
-RASTER_FRAGMENT_GLSL = (
-    "#version 450\n"
-    + SHOWCASE_SCENE_GLSL
-    + _RASTER_PUSH_CONSTANTS_GLSL
+RASTER_FRAGMENT_SLANG = (
+    SHOWCASE_SCENE_SLANG
+    + _RASTER_PUSH_CONSTANTS_SLANG
+    + _RASTER_VERTEX_TO_FRAGMENT_SLANG
     + """
-layout(location = 0) in vec3 fragment_in_unit_cube;
-layout(location = 1) in vec3 fragment_world_position;
-layout(location = 2) in vec3 fragment_world_normal;
-layout(location = 3) flat in int fragment_box;
-
-layout(location = 0) out vec4 out_colour;
-
-void main() {
-    if (fragment_box == SKY_BOX_INDEX) {
+float4 main(RasterVertexToFragment fragment) : SV_Target0 {
+    if (fragment.fragment_box == SKY_BOX_INDEX) {
         // The same gradient the ray tracer's miss shader answers with, so the
         // divider draws no seam of its own.
-        vec3 eye = camera_position_at(raster.camera_azimuth);
-        out_colour = vec4(sky_colour_towards(normalize(fragment_world_position - eye)), 1.0);
-        return;
+        float3 eye = camera_position_at(raster.camera_azimuth);
+        return float4(sky_colour_towards(normalize(fragment.fragment_world_position - eye)), 1.0);
     }
 
-    vec3 base_colour = SHOWCASE_BOX_COLOURS[fragment_box]
-                       * box_edge_darkening(fragment_in_unit_cube);
+    float3 base_colour = SHOWCASE_BOX_COLOURS[fragment.fragment_box]
+                         * box_edge_darkening(fragment.fragment_in_unit_cube);
     // Fully lit, always: whether the light reaches this point, and what the
     // floor reflects, are questions only a ray can ask.
-    out_colour = vec4(directly_lit_colour(base_colour,
-                                          fragment_world_position,
-                                          fragment_world_normal,
-                                          raster.light_azimuth,
-                                          1.0),
-                      1.0);
+    return float4(directly_lit_colour(base_colour,
+                                      fragment.fragment_world_position,
+                                      fragment.fragment_world_normal,
+                                      raster.light_azimuth,
+                                      1.0),
+                  1.0);
 }
 """
 )
@@ -162,7 +166,7 @@ class RasterizedSceneRendererConfig:
     height: int = 720
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=16,
     description="The showcase scene rasterized — direct lighting and nothing else",
@@ -174,8 +178,9 @@ class RasterizedSceneRenderer:
         self.frame_width = config.width
         self.frame_height = config.height
 
-    @node.output(description="The scene with direct lighting only — no rays cast")
-    def rasterized_frame_to_downstream(self) -> VideoFrame: ...
+    rasterized_frame_to_downstream = Output(
+        Image, description="The scene with direct lighting only — no rays cast"
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(
@@ -183,8 +188,8 @@ class RasterizedSceneRenderer:
         )
         self.raster_kernel = ctx.gpu_full_access.create_graphics_kernel(
             color_attachment_formats=[TEXTURE_FORMAT],
-            vertex_source=RASTER_VERTEX_GLSL,
-            fragment_source=RASTER_FRAGMENT_GLSL,
+            vertex_source=RASTER_VERTEX_SLANG,
+            fragment_source=RASTER_FRAGMENT_SLANG,
             push_constant_size=RASTER_PUSH_CONSTANT_SIZE,
             # The vertex stage collapses hidden faces itself.
             cull_mode="none",
@@ -213,14 +218,10 @@ class RasterizedSceneRenderer:
             ),
         )
 
-        rasterized_frame = VideoFrame(
-            surface_id=rasterized_frame_texture.surface_id,
-            width=self.frame_width,
-            height=self.frame_height,
-            timestamp_ns=frame_time_ns,
-        )
         ctx.outputs.write(
-            RASTERIZED_FRAME_OUTPUT_PORT,
-            rasterized_frame.to_bytes(),
+            self.rasterized_frame_to_downstream,
+            ImageFrameToWrite.of_texture(
+                rasterized_frame_texture, SHOWCASE_RENDERED_FRAME_COLOUR
+            ),
             timestamp_ns=frame_time_ns,
         )

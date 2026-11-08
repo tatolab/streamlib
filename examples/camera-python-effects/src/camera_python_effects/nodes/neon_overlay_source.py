@@ -16,15 +16,18 @@ from dataclasses import dataclass
 import numpy
 import skia
 from tatolab.stream import (
+    Image,
+    ImageFrameToWrite,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     node,
 )
 
 from ..elapsed_seconds_since_first_process import ElapsedSecondsSinceFirstProcess
 from ..gpu_surface_conventions import (
+    HOST_DRAWN_FRAME_COLOUR,
     SAMPLED_ONLY_TEXTURE_USAGE,
     TEXTURE_FORMAT,
     copy_host_pixels_into_ring_texture,
@@ -40,13 +43,13 @@ OVERLAY_REDRAW_INTERVAL_MS = 33
 
 @dataclass
 class NeonOverlaySourceConfig:
-    """NeonOverlaySource's settings, as `stream_builder.add(..., config={...})` spells them."""
+    """NeonOverlaySource's settings, as its node's config in the graph document spells them."""
 
     width: int = 1920
     height: int = 1080
 
 
-@node(
+@node.process(
     execution="continuous",
     interval_ms=OVERLAY_REDRAW_INTERVAL_MS,
     description="Cyberpunk lower third and spray-paint watermark, drawn with skia",
@@ -58,8 +61,9 @@ class NeonOverlaySource:
         self.overlay_width = config.width
         self.overlay_height = config.height
 
-    @node.output()
-    def overlay_to_downstream(self) -> VideoFrame: ...
+    overlay_to_downstream = Output(
+        Image, description="The overlay, premultiplied RGBA over a transparent frame"
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # skia draws straight into this one host buffer; the surface borrows it
@@ -92,12 +96,7 @@ class NeonOverlaySource:
         copy_host_pixels_into_ring_texture(overlay_texture, self.overlay_host_pixels)
 
         ctx.outputs.write(
-            "overlay_to_downstream",
-            VideoFrame(
-                surface_id=overlay_texture.surface_id,
-                width=self.overlay_width,
-                height=self.overlay_height,
-                timestamp_ns=tick_time_ns,
-            ).to_bytes(),
+            self.overlay_to_downstream,
+            ImageFrameToWrite.of_texture(overlay_texture, HOST_DRAWN_FRAME_COLOUR),
             timestamp_ns=tick_time_ns,
         )

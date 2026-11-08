@@ -4,11 +4,11 @@
 """The two halves, cut down the middle by a compute kernel, and labelled.
 
 Importable as `nodes.split_screen_compositor:SplitScreenCompositor`, which is
-the name the engine spawns this node's child interpreter with. Two producers
+the name the runtime spawns this node's child interpreter with. Two producers
 fan into it, and the dispatch binds both upstream surface ids straight into the
 shader: each is a kernel output, texture-backed, so it needs no landing copy.
 
-The labels are generated into the GLSL as a `const` bitmap, so the kernel
+The labels are generated into the Slang as a `static const` bitmap, so the kernel
 source is a function of `left_label` and `right_label`.
 """
 
@@ -18,10 +18,14 @@ import struct
 from dataclasses import dataclass
 
 from tatolab.stream import (
+    Image,
+    ImageFrame,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     node,
 )
 
@@ -30,10 +34,6 @@ from nodes.label_font import (
     label_pixel_rows,
     label_width_in_pixels,
 )
-
-RASTERIZED_FRAME_INPUT_PORT = "rasterized_frame_from_upstream"
-RAY_TRACED_FRAME_INPUT_PORT = "ray_traced_frame_from_upstream"
-SPLIT_SCREEN_FRAME_OUTPUT_PORT = "split_screen_frame_to_downstream"
 
 # The shader's own names for its three bindings, read off it by reflection.
 RASTERIZED_FRAME_BINDING = "rasterized_frame"
@@ -79,39 +79,36 @@ def _packed_label_bitmap(labels: tuple[str, str]) -> tuple[int, int, list[int]]:
     return width, words_per_row, words
 
 
-def _split_screen_compute_glsl(left_label: str, right_label: str) -> str:
+def _split_screen_compute_slang(left_label: str, right_label: str) -> str:
     """The kernel source for one compositor, its labels generated into it."""
     _, words_per_row, words = _packed_label_bitmap((left_label, right_label))
     label_widths = ", ".join(
         str(label_width_in_pixels(label)) for label in (left_label, right_label)
     )
     packed_words = ", ".join(f"{word}u" for word in words)
-    # Only the `#define`s and the two arrays are interpolated; the body stays a
+    # Only the constants and the two arrays are interpolated; the body stays a
     # plain string, so the shader's braces need no doubling.
     return (
-        f"#version 450\n"
-        f"#define WORKGROUP_TILE_SIZE {WORKGROUP_TILE_SIZE}\n"
-        f"#define DIVIDER_HALF_WIDTH_IN_PIXELS 2\n"
-        f"#define DIVIDER_COLOUR vec4(0.92, 0.94, 0.98, 1.0)\n"
-        f"#define LABEL_INK_COLOUR vec4(1.0, 1.0, 1.0, 1.0)\n"
-        f"#define LABEL_OUTLINE_COLOUR vec4(0.0, 0.0, 0.0, 1.0)\n"
-        f"#define LABEL_HEIGHT {GLYPH_HEIGHT}\n"
-        f"#define LABEL_BITMAP_WORDS_PER_ROW {words_per_row}\n"
-        f"#define FRAME_PIXELS_PER_FONT_PIXEL {FRAME_PIXELS_PER_FONT_PIXEL}\n"
-        f"#define FRAME_PIXELS_PER_TOP_MARGIN {FRAME_PIXELS_PER_TOP_MARGIN}\n"
-        f"const int LABEL_WIDTHS[2] = int[2]({label_widths});\n"
-        f"const uint LABEL_BITMAP[{len(words)}] = "
-        f"uint[{len(words)}]({packed_words});\n"
+        f"static const uint WORKGROUP_TILE_SIZE = {WORKGROUP_TILE_SIZE};\n"
+        f"static const int DIVIDER_HALF_WIDTH_IN_PIXELS = 2;\n"
+        f"static const float4 DIVIDER_COLOUR = float4(0.92, 0.94, 0.98, 1.0);\n"
+        f"static const float4 LABEL_INK_COLOUR = float4(1.0, 1.0, 1.0, 1.0);\n"
+        f"static const float4 LABEL_OUTLINE_COLOUR = float4(0.0, 0.0, 0.0, 1.0);\n"
+        f"static const int LABEL_HEIGHT = {GLYPH_HEIGHT};\n"
+        f"static const int LABEL_BITMAP_WORDS_PER_ROW = {words_per_row};\n"
+        f"static const int FRAME_PIXELS_PER_FONT_PIXEL = {FRAME_PIXELS_PER_FONT_PIXEL};\n"
+        f"static const int FRAME_PIXELS_PER_TOP_MARGIN = {FRAME_PIXELS_PER_TOP_MARGIN};\n"
+        f"static const int LABEL_WIDTHS[2] = {{ {label_widths} }};\n"
+        f"static const uint LABEL_BITMAP[{len(words)}] = {{ {packed_words} }};\n"
         """
-layout(local_size_x = WORKGROUP_TILE_SIZE, local_size_y = WORKGROUP_TILE_SIZE) in;
+[[vk::binding(0, 0)]] Sampler2D rasterized_frame;
+[[vk::binding(1, 0)]] Sampler2D ray_traced_frame;
+[[vk::binding(2, 0)]] [format("rgba8")] RWTexture2D<float4> split_screen_frame;
 
-layout(set = 0, binding = 0) uniform sampler2D rasterized_frame;
-layout(set = 0, binding = 1) uniform sampler2D ray_traced_frame;
-layout(set = 0, binding = 2, rgba8) uniform writeonly image2D split_screen_frame;
-
-layout(push_constant) uniform SplitDial {
+struct SplitDial {
     float split_fraction;
-} dial;
+};
+[[vk::push_constant]] ConstantBuffer<SplitDial> dial;
 
 // Whether font pixel (x, y) of `label` is ink. Bit 0 of a word is its
 // leftmost pixel, the order Python packed them in.
@@ -127,8 +124,8 @@ bool label_ink(int label, int x, int y) {
 // The same test in frame pixels. Negatives are rejected before the division,
 // which truncates towards zero and would fold the column left of a label onto
 // its column 0.
-bool label_ink_at(int label, ivec2 origin, int scale, ivec2 at) {
-    ivec2 within = at - origin;
+bool label_ink_at(int label, int2 origin, int scale, int2 at) {
+    int2 within = at - origin;
     if (within.x < 0 || within.y < 0) {
         return false;
     }
@@ -136,16 +133,19 @@ bool label_ink_at(int label, ivec2 origin, int scale, ivec2 at) {
 }
 
 // Centred over its own half of the frame, near the top.
-ivec2 label_origin(int label, ivec2 extent, int divide_at, int scale) {
+int2 label_origin(int label, int2 extent, int divide_at, int scale) {
     int half_start = (label == 0) ? 0 : divide_at;
     int half_width = (label == 0) ? divide_at : (extent.x - divide_at);
-    return ivec2(half_start + (half_width - LABEL_WIDTHS[label] * scale) / 2,
-                 extent.y / FRAME_PIXELS_PER_TOP_MARGIN);
+    return int2(half_start + (half_width - LABEL_WIDTHS[label] * scale) / 2,
+                extent.y / FRAME_PIXELS_PER_TOP_MARGIN);
 }
 
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(split_screen_frame);
+[numthreads(WORKGROUP_TILE_SIZE, WORKGROUP_TILE_SIZE, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    int2 at = int2(invocation.xy);
+    uint2 extent_unsigned;
+    split_screen_frame.GetDimensions(extent_unsigned.x, extent_unsigned.y);
+    int2 extent = int2(extent_unsigned);
     // The dispatch rounds up to whole workgroups, so the edge tiles run past a
     // frame whose extent is not a multiple of the tile.
     if (at.x >= extent.x || at.y >= extent.y) {
@@ -153,10 +153,10 @@ void main() {
     }
 
     int divide_at = int(float(extent.x) * dial.split_fraction);
-    // All three surfaces share one extent, so the fetch reads the exact texel.
-    vec4 colour = at.x < divide_at
-        ? texelFetch(rasterized_frame, at, 0)
-        : texelFetch(ray_traced_frame, at, 0);
+    // All three surfaces share one extent, so the load reads the exact texel.
+    float4 colour = at.x < divide_at
+        ? rasterized_frame.Load(int3(at, 0))
+        : ray_traced_frame.Load(int3(at, 0));
     if (abs(at.x - divide_at) <= DIVIDER_HALF_WIDTH_IN_PIXELS) {
         colour = DIVIDER_COLOUR;
     }
@@ -166,7 +166,7 @@ void main() {
     int scale = max(2, extent.x / FRAME_PIXELS_PER_FONT_PIXEL);
     int outline = max(1, scale / 3);
     for (int label = 0; label < 2; label++) {
-        ivec2 origin = label_origin(label, extent, divide_at, scale);
+        int2 origin = label_origin(label, extent, divide_at, scale);
         if (label_ink_at(label, origin, scale, at)) {
             colour = LABEL_INK_COLOUR;
             break;
@@ -176,7 +176,7 @@ void main() {
             for (int across = -1; across <= 1; across++) {
                 touching_ink = touching_ink
                     || label_ink_at(label, origin, scale,
-                                    at + ivec2(across, down) * outline);
+                                    at + int2(across, down) * outline);
             }
         }
         if (touching_ink) {
@@ -185,7 +185,7 @@ void main() {
         }
     }
 
-    imageStore(split_screen_frame, at, colour);
+    split_screen_frame[invocation.xy] = colour;
 }
 """
     )
@@ -205,7 +205,7 @@ class SplitScreenCompositorConfig:
     right_label: str = DEFAULT_RIGHT_LABEL
 
 
-@node(description="Cuts the rasterized and ray-traced frames together")
+@node.process(description="Cuts the rasterized and ray-traced frames together")
 class SplitScreenCompositor:
     """Rasterized on the left, ray traced on the right, one labelled frame out."""
 
@@ -224,29 +224,26 @@ class SplitScreenCompositor:
         self.split_push_constants = struct.pack(
             SPLIT_PUSH_CONSTANT_FORMAT, split_fraction
         )
-        self.newest_rasterized_frame: VideoFrame | None = None
+        self.newest_rasterized_frame: ImageFrame | None = None
 
-    @node.input(
-        delivery_profile="newest",
-        description="The rasterized half — direct lighting only",
+    rasterized_frame_from_upstream = Input(
+        Image, delivery="newest", description="The rasterized half — direct lighting only"
     )
-    def rasterized_frame_from_upstream(self) -> VideoFrame: ...
-
-    @node.input(
-        delivery_profile="newest",
+    ray_traced_frame_from_upstream = Input(
+        Image,
+        delivery="newest",
         description="The ray-traced half — shadows and a mirror floor",
     )
-    def ray_traced_frame_from_upstream(self) -> VideoFrame: ...
-
-    @node.output(description="Rasterized left, ray traced right, labelled and cut")
-    def split_screen_frame_to_downstream(self) -> VideoFrame: ...
+    split_screen_frame_to_downstream = Output(
+        Image, description="Rasterized left, ray traced right, labelled and cut"
+    )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(
             TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
         self.split_screen_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=_split_screen_compute_glsl(self.left_label, self.right_label),
+            source=_split_screen_compute_slang(self.left_label, self.right_label),
             push_constant_size=SPLIT_PUSH_CONSTANT_SIZE,
             bindings={
                 RASTERIZED_FRAME_BINDING: "sampled_texture",
@@ -256,9 +253,9 @@ class SplitScreenCompositor:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        # Held as a typed frame, so its surface stays claimed against the
-        # rasterizer reusing it until a newer one replaces it.
-        rasterized_frame = ctx.inputs.read(RASTERIZED_FRAME_INPUT_PORT, into=VideoFrame)
+        # Held as the frame the read returned, so its surface stays claimed
+        # against the rasterizer reusing it until a newer one replaces it.
+        rasterized_frame = ctx.inputs.read(self.rasterized_frame_from_upstream)
         if rasterized_frame is not None:
             self.newest_rasterized_frame = rasterized_frame
 
@@ -266,7 +263,7 @@ class SplitScreenCompositor:
         # rasterized frame holds it for the next traced one, which costs one
         # dispatch per composite and leaves the left half at most one frame
         # interval behind the right.
-        ray_traced_frame = ctx.inputs.read(RAY_TRACED_FRAME_INPUT_PORT, into=VideoFrame)
+        ray_traced_frame = ctx.inputs.read(self.ray_traced_frame_from_upstream)
         if ray_traced_frame is None or self.newest_rasterized_frame is None:
             return
 
@@ -291,14 +288,8 @@ class SplitScreenCompositor:
 
         # Stamped with the traced frame's render instant, not the moment of
         # the cut: downstream orders by it.
-        split_screen_frame = VideoFrame(
-            surface_id=split_screen_frame_texture.surface_id,
-            width=width,
-            height=height,
-            timestamp_ns=ray_traced_frame.timestamp_ns,
-        )
         ctx.outputs.write(
-            SPLIT_SCREEN_FRAME_OUTPUT_PORT,
-            split_screen_frame.to_bytes(),
-            timestamp_ns=split_screen_frame.timestamp_ns,
+            self.split_screen_frame_to_downstream,
+            ImageFrameToWrite.of_texture(split_screen_frame_texture, ray_traced_frame.colour),
+            timestamp_ns=ray_traced_frame.timestamp_ns,
         )

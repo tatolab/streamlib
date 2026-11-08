@@ -14,10 +14,13 @@ involved.
 from __future__ import annotations
 
 from tatolab.stream import (
+    Image,
+    ImageFrameToWrite,
+    Input,
     NodeOutputTextureRing,
+    Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     node,
 )
 
@@ -27,15 +30,12 @@ from ..gpu_surface_conventions import (
 )
 
 
-@node(description="Copies the camera's frame into a bindable device texture")
+@node.process(description="Copies the camera's frame into a bindable device texture")
 class CameraFrameToTexture:
     """Buffer-backed camera frame in, texture-backed frame out."""
 
-    @node.input(delivery_profile="newest")
-    def video_from_camera(self) -> VideoFrame: ...
-
-    @node.output()
-    def video_to_downstream(self) -> VideoFrame: ...
+    video_from_camera = Input(Image, delivery="newest", description="Frames from the camera")
+    video_to_downstream = Output(Image, description="The same frames, in textures a kernel can bind")
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.output_ring = NodeOutputTextureRing(
@@ -43,26 +43,20 @@ class CameraFrameToTexture:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("video_from_camera", into=VideoFrame)
+        frame = ctx.inputs.read(self.video_from_camera)
         if frame is None:
             return
 
         texture = self.output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
-        # The typed read's claim is what holds the camera's pixels still for
+        # The read frame's claim is what holds the camera's pixels still for
         # the length of the copy, which returns once the next reader of the
         # texture would see them.
         ctx.gpu_limited_access.copy_surface_to_surface(frame.surface_id, texture)
 
         ctx.outputs.write(
-            "video_to_downstream",
-            VideoFrame(
-                surface_id=texture.surface_id,
-                width=frame.width,
-                height=frame.height,
-                timestamp_ns=frame.timestamp_ns,
-                color_info=frame.color_info,
-            ).to_bytes(),
+            self.video_to_downstream,
+            ImageFrameToWrite.of_texture(texture, frame.colour),
             timestamp_ns=frame.timestamp_ns,
         )
