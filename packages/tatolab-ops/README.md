@@ -1,6 +1,6 @@
 # tatolab-ops
 
-The small function nodes every Tatolab stream can wire, built the way a third
+The small nodes every Tatolab stream can wire, built the way a third
 party builds a module: `@node.function` functions in an ordinary Python package
 that depends on `tatolab-stream` and on no engine crate. Each body is compiled to
 native code by Numba when the helper that reads it loads, and runs inside that
@@ -21,6 +21,9 @@ helper's read, with no process of its own.
   or reset; `Lag`, which follows its input smoothly; `Trigger`, on for the one evaluation its
   input turns on; `Counter`; and `SampleAndHold`.
 - `Feedback`, the one node a loop of function nodes closes through.
+- `ImageFile`, a class node rather than a function node, publishes the PNG or JPEG
+  project asset its `asset` config names by UUID as an Image: once at start, and
+  again on each config change.
 
 ```python
 from tatolab.ops import Lfo, Remap

@@ -1,9 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The small function nodes every stream can wire, each a `@node.function` compiled to native code.
+"""The small nodes every stream can wire.
 
-Each runs inside the read of the node it feeds, with no process of its own.
+Each is a `@node.function` compiled to native code that runs inside the read of
+the node it feeds, with no process of its own, but `ImageFile`, a class node,
+which reads a project image asset.
 """
 
 from __future__ import annotations
@@ -12,6 +14,8 @@ import math
 from dataclasses import dataclass
 
 from tatolab.stream import State, Stateful, Time, UnreadMessage, node
+
+from .image_file import ImageFile, ImageFileConfig
 
 __all__ = [
     "Absolute",
@@ -25,6 +29,8 @@ __all__ = [
     "Divide",
     "Feedback",
     "Gate",
+    "ImageFile",
+    "ImageFileConfig",
     "Lag",
     "LagValue",
     "Lerp",
