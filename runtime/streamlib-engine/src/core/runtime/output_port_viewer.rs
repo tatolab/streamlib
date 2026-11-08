@@ -574,6 +574,96 @@ mod tests {
         assert!(reader.read_the_latest_message().unwrap().is_none());
     }
 
+    /// A viewer reads a Channels block and a Records message whole: each one's
+    /// descriptor kind and body, its payload as written, and a keyframe-less
+    /// group flag, with no GPU.
+    #[test]
+    #[serial]
+    fn a_viewer_reads_a_channels_block_and_a_records_message_with_their_descriptors() {
+        use streamlib_ipc_types::{
+            ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
+            DataChannelPayloadDescriptorKind, MessageGroupBoundary as ReadGroupBoundary,
+        };
+
+        let camera = ARunningCameraWithNoLinks::load();
+        let viewer = camera.open_a_viewer("out1").unwrap();
+        let hand_off = viewer.hand_off().clone();
+        let mut reader = OutputPortViewerReader::subscribe(
+            &hand_off.iceoryx2_domain_root,
+            &hand_off.channel_service_name,
+            "a-viewer",
+        )
+        .unwrap();
+
+        let block = ChannelsBlockDescriptorBody {
+            start_sample: 480,
+            sample_rate: 48_000,
+            channel_count: 2,
+            samples_per_channel: 3,
+            sample_type: ChannelsBlockSampleType::F32 as u32,
+        };
+        let planar_samples: Vec<u8> = [0.0f32, 0.5, -0.5, 1.0, -1.0, 0.25]
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        camera
+            .camera_output
+            .write_bytes_described_by(
+                "out1",
+                &planar_samples,
+                10,
+                MessageGroupBoundary::StartsGroup,
+                DataChannelPayloadDescriptor::channels_block(block),
+            )
+            .expect("the camera writes the block");
+        let message = the_next_message_read(&mut reader);
+        assert_eq!(
+            message.payload_descriptor.known_kind().ok(),
+            Some(DataChannelPayloadDescriptorKind::ChannelsBlock)
+        );
+        assert_eq!(
+            ChannelsBlockDescriptorBody::from_descriptor_body(&message.payload_descriptor.body),
+            block
+        );
+        assert_eq!(block.planar_payload_byte_len(), Some(message.payload.len()));
+        assert_eq!(
+            (message.payload, message.timestamp_ns),
+            (planar_samples, 10)
+        );
+
+        #[derive(serde::Serialize)]
+        struct DetectedFace {
+            label: &'static str,
+            score: f64,
+        }
+        let record = rmp_serde::to_vec_named(&DetectedFace {
+            label: "face",
+            score: 0.875,
+        })
+        .unwrap();
+        camera
+            .camera_output
+            .write_bytes_described_by(
+                "out1",
+                &record,
+                20,
+                MessageGroupBoundary::ContinuesGroup,
+                DataChannelPayloadDescriptor::records_message(),
+            )
+            .expect("the camera writes the record");
+        let message = the_next_message_read(&mut reader);
+        assert_eq!(
+            message.payload_descriptor.known_kind().ok(),
+            Some(DataChannelPayloadDescriptorKind::RecordsMessage)
+        );
+        assert_eq!(message.group_boundary, ReadGroupBoundary::ContinuesGroup);
+        let read_back: serde_json::Value = rmp_serde::from_slice(&message.payload).unwrap();
+        assert_eq!(
+            read_back,
+            serde_json::json!({"label": "face", "score": 0.875})
+        );
+    }
+
     /// A viewer holds the frame an Image message names through the
     /// surface-sharing socket its hand-off names, claimed in its pool's claim
     /// table until it drops, and reads the very memory the engine wrote. Needs a Vulkan device that
