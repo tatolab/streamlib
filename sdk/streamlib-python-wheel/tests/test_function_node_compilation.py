@@ -931,3 +931,130 @@ def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
     ctx.inputs.record_by_port["record"] = {"label": "low"}
     counting.process(ctx)
     assert ctx.outputs.blocks_written == [("result", [[3.0]], 0, 0)]
+
+
+@dataclass(frozen=True)
+class EvaluationsSoFar:
+    evaluations: float = 0.0
+
+
+@node.function
+def count_each_evaluation(
+    step: float = 1.0, *, previous: State[EvaluationsSoFar]
+) -> Stateful[float, EvaluationsSoFar]:
+    evaluations = previous.evaluations + step
+    return evaluations, EvaluationsSoFar(evaluations)
+
+
+_FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH = {
+    f"{__name__}:{function_node.__qualname__}": function_node
+    for function_node in (count_each_evaluation, remember_each_call_by_a_letter, remap)
+}
+
+
+def an_island_of_the_counter_feeding(input_port: str, *, then_remap_it: bool) -> "dict[str, Any]":
+    counter = {
+        "node": "counter-1",
+        "breadcrumb_number": 0,
+        "import_path": f"{__name__}:count_each_evaluation",
+        "config": None,
+        "links_into": [],
+    }
+    if not then_remap_it:
+        return {
+            "input_port": input_port,
+            "link_id": f"L-{input_port}",
+            "output": {"node": "counter-1", "port": "result"},
+            "nodes": [counter],
+        }
+    return {
+        "input_port": input_port,
+        "link_id": f"L-{input_port}",
+        "output": {"node": "remap-1", "port": "result"},
+        "nodes": [
+            counter,
+            {
+                "node": "remap-1",
+                "breadcrumb_number": 1,
+                "import_path": f"{__name__}:remap",
+                "config": None,
+                "links_into": [{"port": "x", "from": {"node": "counter-1", "port": "result"}}],
+            },
+        ],
+    }
+
+
+def the_value_read_from(data_plane: Any, input_port: str) -> float:
+    payload = data_plane.read_from_input_port(input_port)
+    assert payload is not None
+    return struct.unpack("<d", bytes(payload))[0]
+
+
+def test_an_island_fed_again_to_its_port_carries_each_compiled_stateful_nodes_state_on():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["count"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_the_counter_feeding("count", then_remap_it=False)],
+        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
+    )
+    assert fed.ran_compiled_by_node_id == {"counter-1": True}
+    assert the_value_read_from(data_plane, "count") == 1.0
+    assert the_value_read_from(data_plane, "count") == 2.0
+
+    fed.feed_an_input_port_from_its_island(an_island_of_the_counter_feeding("count", then_remap_it=True))
+
+    assert fed.ran_compiled_by_node_id == {"counter-1": True, "remap-1": True}
+    assert the_value_read_from(data_plane, "count") == 3.0, "the counter resumes, read through remap"
+
+
+def test_an_island_fed_again_keeps_the_body_of_each_node_run_as_python_and_its_state():
+    import_path = f"{__name__}:remember_each_call_by_a_letter"
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["letters"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_one_node("letters", import_path, None, "letters-1")],
+        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
+    )
+    assert fed.ran_compiled_by_node_id == {"letters-1": False}
+    assert the_value_read_from(data_plane, "letters") == 1.0
+
+    fed.feed_an_input_port_from_its_island(an_island_of_one_node("letters", import_path, None, "letters-1"))
+
+    assert the_value_read_from(data_plane, "letters") == 2.0, "a state of any record carries on"
+
+
+def test_a_port_an_island_stops_feeding_reads_nothing_and_names_no_node():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["count"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_the_counter_feeding("count", then_remap_it=False)],
+        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
+    )
+
+    assert fed.stop_feeding_an_input_port("count") is True
+
+    assert fed.ran_compiled_by_node_id == {}
+    assert data_plane.read_from_input_port("count") is None
+    assert fed.stop_feeding_an_input_port("count") is False
+
+
+def test_a_live_feed_of_a_stateful_node_another_port_reads_is_refused_and_leaves_both_ports_as_they_were():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["count", "also_count"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_of_the_counter_feeding("count", then_remap_it=False)],
+        _FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH.__getitem__,
+    )
+
+    with pytest.raises(FunctionNodeDoesNotCompile, match="stateful function node `counter-1` feeds both"):
+        fed.feed_an_input_port_from_its_island(
+            an_island_of_the_counter_feeding("also_count", then_remap_it=False)
+        )
+
+    assert fed.ran_compiled_by_node_id == {"counter-1": True}
+    assert the_value_read_from(data_plane, "count") == 1.0
+    assert data_plane.read_from_input_port("also_count") is None

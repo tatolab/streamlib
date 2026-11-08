@@ -277,6 +277,42 @@ class ReportsTheFunctionNodeValuesItReadSink:
             )
 
 
+#: How many reads a batch-reporting sink makes into each batch: past a second at
+#: its interval, so a batch of a 1 Hz `Lfo` read directly spans -1..1.
+FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH = 120
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfFunctionNodeValuesItReadSink:
+    """Reads the value an island feeds `brightness`, and reports the range of
+    each batch of reads with its own pid and when the batch started."""
+
+    def __init__(self) -> None:
+        self.values_in_this_batch: "list[float]" = []
+        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+
+    brightness = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        block = ctx.inputs.read(self.brightness)
+        if block is None:
+            return
+        if not self.values_in_this_batch:
+            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        self.values_in_this_batch.append(float(numpy.from_dlpack(block)[0][0]))
+        if len(self.values_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
+            report(
+                "FUNCTION_NODE_VALUE_BATCH_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
+                    "lowest": min(self.values_in_this_batch),
+                    "highest": max(self.values_in_this_batch),
+                },
+            )
+            self.values_in_this_batch = []
+
+
 @node.function
 def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
     """Never returns: a compiled call no thread can pre-empt, which only the watchdog ends."""

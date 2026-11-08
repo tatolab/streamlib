@@ -251,6 +251,14 @@ impl PythonProcessorLinkDataAccess {
         })
     }
 
+    /// Whether `input_port_name` is lent to the node's native code, whose
+    /// reads hold no Python interpreter lock.
+    pub(crate) fn input_port_is_lent_to_native_code(&self, input_port_name: &str) -> bool {
+        self.input_ports_lent_to_native_code
+            .lock()
+            .contains(input_port_name)
+    }
+
     fn cast_and_check_ports_to_lend(
         direction: &str,
         port_names: &[String],

@@ -42,6 +42,23 @@ pub trait OutOfProcessFarSideLinkDelivery: Send {
         link_id: &str,
     ) -> Result<()>;
 
+    /// Hand the far side the function node island feeding one of its input
+    /// ports, in place of any it evaluates there now; its answer lands on
+    /// `answer_cell` under the island's link id.
+    fn hand_over_a_function_node_island_wired_after_setup(
+        &self,
+        function_node_island: &JsonValue,
+        answer_cell: Arc<OutOfProcessLinkWireReply>,
+    ) -> Result<()>;
+
+    /// Ask the far side to stop evaluating the function node island that
+    /// link `link_id` carried into its input port `input_port`.
+    fn tell_the_far_side_a_function_node_island_was_unwired(
+        &self,
+        input_port: &str,
+        link_id: &str,
+    ) -> Result<()>;
+
     /// Refuse every link the far side still owes an answer for with `reason`,
     /// because its host gave up on it.
     fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str);
@@ -557,66 +574,96 @@ impl OutOfProcessLinkWiringEnvelope {
     }
 
     /// Record the function node island feeding one of this processor's input
-    /// ports, which only a setup command carries, numbering each node it calls
-    /// with the breadcrumb its far side writes while calling it.
+    /// ports, in place of any recorded under its link id, numbering each node it
+    /// calls with the breadcrumb its far side writes while calling it, and get
+    /// it to the far side however it reaches it now.
     ///
-    /// Refused once setup has begun: a running far side is not re-islanded.
-    pub(crate) fn record_a_function_node_island_on_the_setup_command(
+    /// `None` is an island riding the setup command, confirmed by the far side's
+    /// `ready`; `Some` is the cell the far side's own answer lands in.
+    pub(crate) fn record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
         &self,
         mut function_node_island: JsonValue,
-    ) -> Result<()> {
+    ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock();
+        if let HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason) =
+            &recorded.how_a_link_reaches_the_far_side
+        {
+            return Err(crate::core::error::Error::Runtime(reason.clone()));
+        }
+        if let Some(nodes) = function_node_island
+            .get_mut("nodes")
+            .and_then(JsonValue::as_array_mut)
+        {
+            for node in nodes {
+                let Some(node_id) = node.get("node").and_then(JsonValue::as_str) else {
+                    continue;
+                };
+                let node_name = node
+                    .get("name")
+                    .and_then(JsonValue::as_str)
+                    .unwrap_or(node_id);
+                let breadcrumb_number =
+                    recorded.the_breadcrumb_number_of_a_function_node(node_id, node_name);
+                let state_fields: Vec<String> = node
+                    .get("state_fields")
+                    .and_then(|state_fields| serde_json::from_value(state_fields.clone()).ok())
+                    .unwrap_or_default();
+                let node_name = node_name.to_string();
+                recorded.note_a_stateful_function_node(breadcrumb_number, &node_name, state_fields);
+                node["breadcrumb_number"] = JsonValue::from(breadcrumb_number);
+            }
+        }
+        let island_link_id = link_id_of(&function_node_island);
+        recorded
+            .function_node_islands_feeding_its_input_ports
+            .retain(|island| link_id_of(island) != island_link_id);
+        recorded
+            .function_node_islands_feeding_its_input_ports
+            .push(function_node_island.clone());
         match &recorded.how_a_link_reaches_the_far_side {
-            HowALinkReachesTheFarSide::RidesTheSetupCommand => {
-                if let Some(nodes) = function_node_island
+            HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
+                let answer_cell = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+                delivery.hand_over_a_function_node_island_wired_after_setup(
+                    &function_node_island,
+                    Arc::clone(&answer_cell),
+                )?;
+                Ok(Some(answer_cell))
+            }
+            HowALinkReachesTheFarSide::RidesTheSetupCommand
+            | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
+            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(None),
+        }
+    }
+
+    /// The function node island recorded under `link_id`, as it was recorded
+    /// before its nodes were numbered; `None` when none is.
+    pub(crate) fn the_function_node_island_recorded_for_a_link(
+        &self,
+        link_id: &str,
+    ) -> Option<JsonValue> {
+        let recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        recorded
+            .function_node_islands_feeding_its_input_ports
+            .iter()
+            .find(|island| link_id_of(island).as_deref() == Some(link_id))
+            .map(|island| {
+                let mut island_as_built = island.clone();
+                if let Some(nodes) = island_as_built
                     .get_mut("nodes")
                     .and_then(JsonValue::as_array_mut)
                 {
                     for node in nodes {
-                        let Some(node_id) = node.get("node").and_then(JsonValue::as_str) else {
-                            continue;
-                        };
-                        let node_name = node
-                            .get("name")
-                            .and_then(JsonValue::as_str)
-                            .unwrap_or(node_id);
-                        let breadcrumb_number =
-                            recorded.the_breadcrumb_number_of_a_function_node(node_id, node_name);
-                        let state_fields: Vec<String> = node
-                            .get("state_fields")
-                            .and_then(|state_fields| {
-                                serde_json::from_value(state_fields.clone()).ok()
-                            })
-                            .unwrap_or_default();
-                        let node_name = node_name.to_string();
-                        recorded.note_a_stateful_function_node(
-                            breadcrumb_number,
-                            &node_name,
-                            state_fields,
-                        );
-                        node["breadcrumb_number"] = JsonValue::from(breadcrumb_number);
+                        if let Some(node) = node.as_object_mut() {
+                            node.remove("breadcrumb_number");
+                        }
                     }
                 }
-                recorded
-                    .function_node_islands_feeding_its_input_ports
-                    .push(function_node_island);
-                Ok(())
-            }
-            HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
-            | HowALinkReachesTheFarSide::HandedOverTo(_) => {
-                Err(crate::core::error::Error::InvalidLink(format!(
-                    "link `{}` feeds a function node island into a node whose helper has \
-                     already begun its setup; a running node is not re-islanded in this \
-                     release, so connect function nodes before the stream starts",
-                    link_id_of(&function_node_island).unwrap_or_default()
-                )))
-            }
-            HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason) => {
-                Err(crate::core::error::Error::Runtime(reason.clone()))
-            }
-        }
+                island_as_built
+            })
     }
 
     /// Tell each of `function_nodes` how its far side ran it, once that far side
@@ -839,14 +886,35 @@ impl OutOfProcessLinkWiringEnvelope {
     /// Forget the function node island `link_id` carries, and each stateful
     /// node no island left carries, so no later setup command or board carries
     /// them and no later spawn takes their state over from the helper that
-    /// evaluates them now.
+    /// evaluates them now; a far side past its setup command is told to stop
+    /// evaluating it.
     pub(crate) fn forget_a_function_node_island(&self, link_id: &str) {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock();
+        let input_port_it_fed = recorded
+            .function_node_islands_feeding_its_input_ports
+            .iter()
+            .find(|island| link_id_of(island).as_deref() == Some(link_id))
+            .and_then(|island| island.get("input_port").and_then(JsonValue::as_str))
+            .map(str::to_string);
         recorded
             .function_node_islands_feeding_its_input_ports
             .retain(|island| link_id_of(island).as_deref() != Some(link_id));
+        if let (HowALinkReachesTheFarSide::HandedOverTo(delivery), Some(input_port)) = (
+            &recorded.how_a_link_reaches_the_far_side,
+            &input_port_it_fed,
+        ) && let Err(error) =
+            delivery.tell_the_far_side_a_function_node_island_was_unwired(input_port, link_id)
+        {
+            tracing::warn!(
+                %link_id,
+                port = %input_port,
+                %error,
+                "An out-of-process reader could not be told to stop evaluating a function node \
+                 island; it keeps evaluating it until it restarts"
+            );
+        }
         let runs_a_function_node_as_its_processor = recorded.runs_a_function_node_as_its_processor;
         let breadcrumb_numbers_still_carried: std::collections::HashSet<u64> = recorded
             .function_node_islands_feeding_its_input_ports
@@ -1355,13 +1423,15 @@ mod tests {
         let envelope =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
         envelope
-            .record_a_function_node_island_on_the_setup_command(serde_json::json!({
-                "link_id": "L-island",
-                "nodes": [
-                    {"node": "P-remap", "name": "remap"},
-                    {"node": "P-lfo", "name": "lfo", "state_fields": ["phase"]},
-                ],
-            }))
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+                serde_json::json!({
+                    "link_id": "L-island",
+                    "nodes": [
+                        {"node": "P-remap", "name": "remap"},
+                        {"node": "P-lfo", "name": "lfo", "state_fields": ["phase"]},
+                    ],
+                }),
+            )
             .expect("a far side not yet set up takes its islands");
         envelope
     }
@@ -2110,16 +2180,14 @@ mod tests {
         let envelope =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
         envelope
-            .record_a_function_node_island_on_the_setup_command(an_island_of(
-                "brightness",
-                &["lfo-1", "remap-1"],
-            ))
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+                an_island_of("brightness", &["lfo-1", "remap-1"]),
+            )
             .unwrap();
         envelope
-            .record_a_function_node_island_on_the_setup_command(an_island_of(
-                "hue",
-                &["lfo-1", "clamp-1"],
-            ))
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+                an_island_of("hue", &["lfo-1", "clamp-1"]),
+            )
             .unwrap();
 
         let islands = envelope.as_setup_command_ports()["islands"].clone();

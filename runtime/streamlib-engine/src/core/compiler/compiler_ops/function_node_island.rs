@@ -6,8 +6,9 @@
 //!
 //! A link between two function nodes is a function call, and one from a
 //! function node into a helper's input port carries the island upstream of it
-//! to that helper in its setup command. Neither opens a channel, and no
-//! function node is prepared or spawned.
+//! to that helper: in its setup command, or handed over once it runs. An edit
+//! that changes an island hands its reader the island again. Neither kind of
+//! link opens a channel, and no function node is prepared or spawned.
 
 use std::collections::HashSet;
 
@@ -18,10 +19,12 @@ use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    FunctionNodePromotedToItsOwnProcessComponent, FunctionNodeRanCompiledComponent, Graph,
-    GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight, HowItsReadersRanAFunctionNode,
-    Link, LinkState, LinkStateComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
+    FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
+    FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
+    GraphWeight, HowItsReadersRanAFunctionNode, Link, LinkState, LinkStateComponent, LinkUniqueId,
+    OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
 };
+use crate::core::processors::OutOfProcessLinkWireReply;
 
 /// How the compiler wires one link, by the kinds of its two ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,11 +95,11 @@ pub(crate) fn how_a_link_is_wired(
 }
 
 /// Wire `link_id`, from a function node into a helper's input port: record the
-/// island upstream of it on the helper's setup command and mark it wired.
+/// island upstream of it for the helper, hand it over if the helper already
+/// runs, and mark the link wired, or pending until that helper answers.
 ///
 /// Refused by name when the destination runs in the app process, which runs no
-/// node code, and when its setup command has already gone out, since a live
-/// edit does not re-island a running reader yet.
+/// node code.
 pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
@@ -125,22 +128,158 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
              `execution=\"continuous\"` with an `interval_ms`, or link it a source"
         )));
     }
-    let function_node_ids: Vec<ProcessorUniqueId> = island
-        .get("nodes")
-        .and_then(JsonValue::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|node| node.get("node").and_then(JsonValue::as_str))
-        .map(ProcessorUniqueId::from)
-        .collect();
-    reader_link_wiring.record_a_function_node_island_on_the_setup_command(island)?;
+    let function_node_ids = the_function_node_ids_an_island_calls(&island);
+    let answer_awaited_from_the_reader = reader_link_wiring
+        .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(island)?;
     reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
         function_node_ids.iter().filter_map(|function_node_id| {
             the_report_of_how_its_readers_ran_a_function_node(graph, function_node_id)
                 .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
         }),
     );
-    mark_a_link(graph, link_id, LinkState::Wired)
+    mark_an_island_link_by_whether_its_reader_owes_an_answer(
+        graph,
+        link_id,
+        answer_awaited_from_the_reader,
+    )
+}
+
+/// Hand each reader whose island a compile changed that island again, in
+/// place of the one it evaluates: an island link wired before this compile,
+/// whose island now differs from the one its reader was handed, is re-recorded
+/// and, for a reader that already runs, handed over.
+///
+/// The links `links_wired_this_compile` carried their islands as they were
+/// wired, so they are not handed again.
+pub(crate) fn hand_each_reader_the_island_a_compile_changed(
+    graph: &mut Graph,
+    links_wired_this_compile: &[LinkUniqueId],
+) -> Result<()> {
+    let island_links: Vec<LinkUniqueId> = graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| !links_wired_this_compile.contains(&link.id))
+        .filter(|link| {
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().processor_id())
+        })
+        .map(|link| link.id.clone())
+        .collect();
+    for link_id in island_links {
+        let reader_id = link_in(graph, &link_id)?.to_port().processor_id().clone();
+        let Some(reader_link_wiring) = graph
+            .traversal()
+            .v(&reader_id)
+            .first()
+            .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+            .map(|component| std::sync::Arc::clone(&component.0))
+        else {
+            continue;
+        };
+        let island_as_it_is_now = the_island_feeding_a_link(graph, &link_id)?;
+        if reader_link_wiring
+            .the_function_node_island_recorded_for_a_link(link_id.as_str())
+            .as_ref()
+            == Some(&island_as_it_is_now)
+        {
+            continue;
+        }
+        tracing::info!(
+            "Handing `{reader_id}` the function node island of {link_id} again, as this edit \
+             changed it"
+        );
+        let function_node_ids = the_function_node_ids_an_island_calls(&island_as_it_is_now);
+        let answer_awaited_from_the_reader = reader_link_wiring
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+                island_as_it_is_now,
+            )?;
+        reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
+            function_node_ids.iter().filter_map(|function_node_id| {
+                the_report_of_how_its_readers_ran_a_function_node(graph, function_node_id)
+                    .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
+            }),
+        );
+        mark_an_island_link_by_whether_its_reader_owes_an_answer(
+            graph,
+            &link_id,
+            answer_awaited_from_the_reader,
+        )?;
+    }
+    Ok(())
+}
+
+/// Note on each function node where it runs, which `graph` renders as its
+/// `host`: inside the read of each node its island feeds, or in a helper
+/// process of its own.
+pub(crate) fn note_where_each_function_node_runs(graph: &mut Graph) {
+    let hosts: Vec<(ProcessorUniqueId, FunctionNodeHostComponent)> = graph
+        .traversal()
+        .v(())
+        .ids()
+        .into_iter()
+        .filter(|node_id| is_a_function_node(graph, node_id))
+        .map(|node_id| {
+            let host = if runs_inside_the_read_of_each_node_it_feeds(graph, &node_id) {
+                let mut reader_names: Vec<String> =
+                    the_readers_a_function_node_feeds(graph, &node_id)
+                        .iter()
+                        .filter_map(|reader_id| {
+                            graph
+                                .traversal()
+                                .v(reader_id)
+                                .first()
+                                .map(|reader| reader.display_name.clone())
+                        })
+                        .collect();
+                reader_names.sort();
+                FunctionNodeHostComponent::InsideTheReadOf(reader_names)
+            } else {
+                FunctionNodeHostComponent::InAHelperProcessOfItsOwn
+            };
+            (node_id, host)
+        })
+        .collect();
+    for (function_node_id, host) in hosts {
+        if let Some(node) = graph.traversal_mut().v(&function_node_id).first_mut() {
+            node.insert(host);
+        }
+    }
+}
+
+fn the_function_node_ids_an_island_calls(island: &JsonValue) -> Vec<ProcessorUniqueId> {
+    island
+        .get("nodes")
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node.get("node").and_then(JsonValue::as_str))
+        .map(ProcessorUniqueId::from)
+        .collect()
+}
+
+/// Mark an island link wired, or pending on the answer its running reader owes
+/// for the island it was just handed, which `graph` reads as it lands.
+fn mark_an_island_link_by_whether_its_reader_owes_an_answer(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    answer_awaited_from_the_reader: Option<std::sync::Arc<OutOfProcessLinkWireReply>>,
+) -> Result<()> {
+    let link = graph
+        .traversal_mut()
+        .e(link_id)
+        .first_mut()
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    match answer_awaited_from_the_reader {
+        None => link.insert(LinkStateComponent(LinkState::Wired)),
+        Some(answer_cell) => {
+            link.insert(LinkStateComponent(LinkState::Pending));
+            link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
+                answer_cell,
+            ]));
+        }
+    }
+    Ok(())
 }
 
 /// Where `function_node_id`'s readers note how they ran it, which `graph`
@@ -344,13 +483,11 @@ pub(crate) fn the_state_fields_of_a_function_node(
         .unwrap_or_default()
 }
 
-/// Refuse, before a commit changes anything, an edit to an island a reader
-/// already evaluates, and a second link into a port an island feeds.
-///
-/// A reader is running when this commit neither adds nor removes it; its
-/// islands went out on its setup command, so a link, a removal or a config
-/// update that would change one is refused by name rather than left unseen.
-pub(crate) fn refuse_an_edit_to_an_island_a_running_reader_evaluates(
+/// Refuse, before a commit changes anything, an edit an island cannot take: a
+/// second link into a port an island feeds, an island into a port declaring an
+/// audio window, a removal that leaves a running reactive reader fed only by
+/// islands, and a live config update to a function node.
+pub(crate) fn refuse_an_edit_an_island_cannot_take(
     graph: &Graph,
     processors_to_add: &[ProcessorUniqueId],
     processors_to_remove: &[ProcessorUniqueId],
@@ -363,88 +500,87 @@ pub(crate) fn refuse_an_edit_to_an_island_a_running_reader_evaluates(
             && !processors_to_add.contains(node_id)
             && !processors_to_remove.contains(node_id)
     };
-    let the_running_reader_an_edit_reaches = |link: &Link| {
-        let destination_id = link.to_port().processor_id();
-        let readers_reached = if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
-            the_readers_a_function_node_feeds(graph, destination_id)
-        } else {
-            HashSet::from([destination_id.clone()])
-        };
-        readers_reached.into_iter().find(&is_a_running_reader)
-    };
-
     for link_id in links_to_add {
         let link = link_in(graph, link_id)?;
         refuse_a_second_link_into_a_port_an_island_feeds(graph, link)?;
         refuse_an_island_into_a_port_declaring_an_audio_window(graph, link)?;
-        let touches_an_island =
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
-                || runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().processor_id());
-        if touches_an_island
-            && let Some(running_reader_id) = the_running_reader_an_edit_reaches(link)
-        {
-            return Err(an_edit_to_a_running_readers_island(
-                &format!("linking `{link_id}`"),
-                &running_reader_id,
-            ));
-        }
+        refuse_a_link_closing_a_cycle_of_function_nodes(graph, link)?;
     }
     for link_id in links_to_remove {
         let link = link_in(graph, link_id)?;
         if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()) {
-            if let Some(running_reader_id) = the_running_reader_an_edit_reaches(link) {
-                return Err(an_edit_to_a_running_readers_island(
-                    &format!("removing `{link_id}`"),
-                    &running_reader_id,
-                ));
-            }
-        } else {
-            let reader_id = link.to_port().processor_id();
-            if is_a_running_reader(reader_id)
-                && is_reactive_and_left_fed_only_by_islands(graph, reader_id, links_to_remove)
-            {
-                return Err(Error::InvalidLink(format!(
-                    "removing `{link_id}` leaves `{reader_id}`, which runs reactively, fed \
-                     only by function node islands, which have no source to wake it, so it \
-                     would never run again. To fix: link it another source first, or remove it"
-                )));
-            }
+            continue;
         }
-    }
-    for removed_id in processors_to_remove {
-        if runs_inside_the_read_of_each_node_it_feeds(graph, removed_id)
-            && let Some(running_reader_id) = the_readers_a_function_node_feeds(graph, removed_id)
-                .into_iter()
-                .find(&is_a_running_reader)
+        let reader_id = link.to_port().processor_id();
+        if is_a_running_reader(reader_id)
+            && is_reactive_and_left_fed_only_by_islands(graph, reader_id, links_to_remove)
         {
-            return Err(an_edit_to_a_running_readers_island(
-                &format!("removing function node `{removed_id}`"),
-                &running_reader_id,
-            ));
+            return Err(Error::InvalidLink(format!(
+                "removing `{link_id}` leaves `{reader_id}`, which runs reactively, fed only by \
+                 function node islands, which have no source to wake it, so it would never run \
+                 again. To fix: link it another source first, or remove it"
+            )));
         }
     }
     for (updated_id, _) in config_updates {
         if runs_inside_the_read_of_each_node_it_feeds(graph, updated_id) {
             return Err(Error::Config(format!(
-                "function node `{updated_id}`'s config goes to each reader of its island when \
-                 that reader starts, and a running reader is not re-islanded in this release, \
-                 so a live config update to a function node is refused. To fix: stop the \
-                 stream and start it with the new config"
+                "function node `{updated_id}`'s config goes to each reader of its island with \
+                 the island, and a live config update is not carried to an island, so it is \
+                 refused. To fix: stop the stream and start it with the new config"
             )));
         }
     }
     Ok(())
 }
 
-fn an_edit_to_a_running_readers_island(
-    the_edit: &str,
-    running_reader_id: &ProcessorUniqueId,
-) -> Error {
-    Error::InvalidLink(format!(
-        "{the_edit} changes the function node island `{running_reader_id}` evaluates at each \
-         read, and `{running_reader_id}` is already running; a running reader is not \
-         re-islanded in this release. To fix: stop the stream and start it with the edit"
-    ))
+/// Refuse `link`, between two function nodes, when what it feeds already
+/// reaches what it reads through other function nodes, naming the cycle: an
+/// island evaluates each node after what it reads.
+fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -> Result<()> {
+    let source_id = link.source().processor_id();
+    let destination_id = link.to_port().processor_id();
+    if !runs_inside_the_read_of_each_node_it_feeds(graph, source_id)
+        || !runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
+    {
+        return Ok(());
+    }
+    let mut paths_to_follow = vec![vec![destination_id.clone()]];
+    let mut function_nodes_followed = HashSet::new();
+    while let Some(path) = paths_to_follow.pop() {
+        let Some(following_id) = path.last() else {
+            continue;
+        };
+        if following_id == source_id {
+            let cycle: Vec<String> = std::iter::once(source_id.to_string())
+                .chain(path.iter().map(ToString::to_string))
+                .collect();
+            return Err(Error::InvalidGraph(format!(
+                "linking `{}` closes a cycle of function nodes, {}; an island evaluates each \
+                 node after what it reads, so a cycle needs a delay node, which reads the last \
+                 evaluation",
+                link.id,
+                cycle.join(" → ")
+            )));
+        }
+        if !function_nodes_followed.insert(following_id.clone()) {
+            continue;
+        }
+        for downstream_link in graph.traversal().e(()).iter() {
+            if downstream_link.id == link.id
+                || downstream_link.source().processor_id() != following_id
+            {
+                continue;
+            }
+            let downstream_id = downstream_link.to_port().processor_id();
+            if runs_inside_the_read_of_each_node_it_feeds(graph, downstream_id) {
+                let mut longer_path = path.clone();
+                longer_path.push(downstream_id.clone());
+                paths_to_follow.push(longer_path);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Refuse `link` when it and another link both feed one input port and either
@@ -914,6 +1050,55 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn graph_names_each_function_nodes_host_as_the_readers_its_island_feeds() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let first_reader = a_helper_reader_before_its_setup(&mut graph);
+        let second_reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&lfo, "result"), (&remap, "x"));
+        link(&mut graph, (&remap, "result"), (&first_reader, "in1"));
+        link(&mut graph, (&lfo, "result"), (&second_reader, "in1"));
+
+        note_where_each_function_node_runs(&mut graph);
+
+        let host = |node_id: &ProcessorUniqueId| {
+            graph
+                .traversal()
+                .v(node_id)
+                .first()
+                .unwrap()
+                .serialize_components()
+                .get("host")
+                .cloned()
+        };
+        let name_of = |node_id: &ProcessorUniqueId| {
+            graph
+                .traversal()
+                .v(node_id)
+                .first()
+                .unwrap()
+                .display_name
+                .clone()
+        };
+        let mut both_readers = vec![name_of(&first_reader), name_of(&second_reader)];
+        both_readers.sort();
+        assert_ne!(
+            both_readers[0], both_readers[1],
+            "each reader has its own name"
+        );
+        assert_eq!(
+            host(&lfo),
+            Some(serde_json::json!({ "inside_the_read_of": both_readers }))
+        );
+        assert_eq!(
+            host(&remap),
+            Some(serde_json::json!({ "inside_the_read_of": [name_of(&first_reader)] }))
+        );
+        assert_eq!(host(&first_reader), None, "a class node names no host");
+    }
+
+    #[test]
     fn a_reactive_reader_fed_only_by_islands_is_refused_naming_continuous_execution() {
         let mut graph = a_graph_resolving_three_function_node_types();
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
@@ -935,7 +1120,7 @@ pub(crate) mod tests {
         links_to_remove: &[LinkUniqueId],
         config_updates: &[(ProcessorUniqueId, JsonValue)],
     ) -> Option<String> {
-        refuse_an_edit_to_an_island_a_running_reader_evaluates(
+        refuse_an_edit_an_island_cannot_take(
             graph,
             processors_to_add,
             processors_to_remove,
@@ -947,64 +1132,212 @@ pub(crate) mod tests {
         .map(|refusal| refusal.to_string())
     }
 
+    /// A reader whose helper is past its setup command, handing every later
+    /// link and island to `delivery`.
+    fn a_helper_reader_past_its_setup(
+        graph: &mut Graph,
+        delivery: &crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery,
+    ) -> ProcessorUniqueId {
+        let reader = a_helper_reader_before_its_setup(graph);
+        the_link_wiring_of(graph, &reader)
+            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
+            .unwrap();
+        reader
+    }
+
+    fn the_link_wiring_of(
+        graph: &Graph,
+        node_id: &ProcessorUniqueId,
+    ) -> Arc<OutOfProcessLinkWiringEnvelope> {
+        Arc::clone(
+            &graph
+                .traversal()
+                .v(node_id)
+                .first()
+                .unwrap()
+                .get::<OutOfProcessLinkWiringComponent>()
+                .unwrap()
+                .0,
+        )
+    }
+
+    fn the_node_ids_of_an_island(island: &JsonValue) -> Vec<String> {
+        island["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["node"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn link_state_of(graph: &Graph, link_id: &LinkUniqueId) -> LinkState {
+        graph
+            .traversal()
+            .e(link_id)
+            .first()
+            .unwrap()
+            .get::<LinkStateComponent>()
+            .unwrap()
+            .0
+    }
+
     #[test]
-    fn a_link_into_an_island_a_running_reader_evaluates_is_refused_as_a_live_edit() {
+    fn a_function_node_linked_live_into_a_running_reader_is_handed_over_as_its_island() {
+        let delivery =
+            crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery::default();
         let mut graph = a_graph_resolving_three_function_node_types();
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
-        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
-        let reader = a_helper_reader_before_its_setup(&mut graph);
-        link(&mut graph, (&remap, "result"), (&reader, "in1"));
-        let into_the_remap = link(&mut graph, (&lfo, "result"), (&remap, "x"));
+        let reader = a_helper_reader_past_its_setup(&mut graph, &delivery);
+        let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
 
-        let refusal = the_refusal_of_a_commit(
-            &graph,
-            std::slice::from_ref(&lfo),
-            &[],
-            std::slice::from_ref(&into_the_remap),
-            &[],
-            &[],
-        )
-        .expect("refused");
-        assert!(refusal.contains("is not re-islanded"), "{refusal}");
         assert!(
             the_refusal_of_a_commit(
                 &graph,
-                &[lfo, remap, reader],
+                std::slice::from_ref(&lfo),
                 &[],
-                &[into_the_remap],
+                std::slice::from_ref(&into_the_reader),
                 &[],
                 &[]
             )
             .is_none(),
-            "a reader this commit adds takes its island at its setup"
+            "a running reader takes a live link from a function node"
+        );
+        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
+
+        let handed_over = delivery.late_fed_function_node_islands.lock().clone();
+        assert_eq!(handed_over.len(), 1);
+        assert_eq!(handed_over[0]["input_port"], "in1");
+        assert_eq!(handed_over[0]["link_id"], into_the_reader.as_str());
+        assert_eq!(
+            the_node_ids_of_an_island(&handed_over[0]),
+            vec![lfo.to_string()]
+        );
+        assert!(
+            handed_over[0]["nodes"][0]["breadcrumb_number"].is_u64(),
+            "the reader writes each node's breadcrumb while calling it"
+        );
+        assert_eq!(
+            link_state_of(&graph, &into_the_reader),
+            LinkState::Pending,
+            "pending until the reader says it evaluates the island"
         );
     }
 
     #[test]
-    fn removing_an_island_under_a_running_reader_is_refused_unless_the_reader_goes_too() {
+    fn an_edit_inside_an_island_hands_its_running_reader_the_island_again_and_no_other() {
+        let delivery =
+            crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery::default();
         let mut graph = a_graph_resolving_three_function_node_types();
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let untouched_lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let reader = a_helper_reader_before_its_setup(&mut graph);
+        let into_the_reader = link(&mut graph, (&remap, "result"), (&reader, "in1"));
+        let untouched_into_the_reader =
+            link(&mut graph, (&untouched_lfo, "result"), (&reader, "in2"));
+        for island_link in [&into_the_reader, &untouched_into_the_reader] {
+            wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, island_link)
+                .unwrap();
+        }
+        the_link_wiring_of(&graph, &reader)
+            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
+            .unwrap();
+
+        hand_each_reader_the_island_a_compile_changed(&mut graph, &[]).unwrap();
+        assert!(
+            delivery.late_fed_function_node_islands.lock().is_empty(),
+            "an island no edit changed is not handed over again"
+        );
+
+        let into_the_remap = link(&mut graph, (&lfo, "result"), (&remap, "x"));
+        wire_a_call_inside_a_function_node_island(&mut graph, &into_the_remap).unwrap();
+        hand_each_reader_the_island_a_compile_changed(&mut graph, &[into_the_remap]).unwrap();
+
+        let handed_over = delivery.late_fed_function_node_islands.lock().clone();
+        assert_eq!(
+            handed_over.len(),
+            1,
+            "only the island the edit changed: {handed_over:?}"
+        );
+        assert_eq!(handed_over[0]["link_id"], into_the_reader.as_str());
+        assert_eq!(
+            the_node_ids_of_an_island(&handed_over[0]),
+            vec![lfo.to_string(), remap.to_string()],
+            "each node after what it reads"
+        );
+        assert_eq!(link_state_of(&graph, &into_the_reader), LinkState::Pending);
+        assert_eq!(
+            link_state_of(&graph, &untouched_into_the_reader),
+            LinkState::Wired
+        );
+    }
+
+    #[test]
+    fn unwiring_an_island_link_tells_its_running_reader_to_stop_evaluating_it() {
+        let delivery =
+            crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery::default();
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let reader = a_helper_reader_past_its_setup(&mut graph, &delivery);
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
+        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
+
+        assert!(
+            the_refusal_of_a_commit(
+                &graph,
+                &[],
+                std::slice::from_ref(&lfo),
+                &[],
+                std::slice::from_ref(&into_the_reader),
+                &[]
+            )
+            .is_none(),
+            "a running reader's island may be removed live"
+        );
+        unwire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
+        assert_eq!(
+            delivery.unfed_function_node_islands.lock().clone(),
+            vec![("in1".to_string(), into_the_reader.to_string())]
+        );
+        assert!(
+            the_link_wiring_of(&graph, &reader)
+                .the_function_node_island_recorded_for_a_link(into_the_reader.as_str())
+                .is_none(),
+            "a later setup command no longer carries it"
+        );
+    }
+
+    #[test]
+    fn a_link_closing_a_cycle_of_function_nodes_is_refused_naming_the_cycle() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        link(&mut graph, (&lfo, "result"), (&mix, "a"));
+        link(&mut graph, (&mix, "result"), (&remap, "x"));
+        let closing_the_cycle = link(&mut graph, (&remap, "result"), (&mix, "b"));
 
         let refusal = the_refusal_of_a_commit(
             &graph,
             &[],
             &[],
+            std::slice::from_ref(&closing_the_cycle),
             &[],
-            std::slice::from_ref(&into_the_reader),
             &[],
         )
         .expect("refused");
-        assert!(refusal.contains("is not re-islanded"), "{refusal}");
-        let refusal =
-            the_refusal_of_a_commit(&graph, &[], std::slice::from_ref(&lfo), &[], &[], &[])
-                .expect("refused");
-        assert!(refusal.contains("removing function node"), "{refusal}");
         assert!(
-            the_refusal_of_a_commit(&graph, &[], &[lfo, reader], &[], &[into_the_reader], &[])
-                .is_none()
+            refusal.contains("closes a cycle of function nodes"),
+            "{refusal}"
         );
+        assert!(
+            refusal.contains(&format!("{remap} → {mix} → {remap}")),
+            "{refusal}"
+        );
+        assert!(refusal.contains("delay node"), "{refusal}");
     }
 
     #[test]
@@ -1021,7 +1354,7 @@ pub(crate) mod tests {
         )
         .expect("refused");
         assert!(
-            refusal.contains("live config update to a function node"),
+            refusal.contains("a live config update is not carried to an island"),
             "{refusal}"
         );
     }
@@ -1110,24 +1443,21 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_island_into_a_helper_past_its_setup_is_refused_as_a_live_edit() {
+    fn an_island_wired_while_its_readers_setup_command_is_being_built_rides_that_command() {
         let mut graph = a_graph_resolving_three_function_node_types();
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let reader = a_helper_reader_before_its_setup(&mut graph);
-        graph
-            .traversal()
-            .v(&reader)
-            .first()
-            .unwrap()
-            .get::<OutOfProcessLinkWiringComponent>()
-            .unwrap()
-            .0
+        the_link_wiring_of(&graph, &reader)
             .hold_every_later_link_until_the_setup_command_goes_out();
         let into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        let refusal =
-            wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
-                .unwrap_err()
-                .to_string();
-        assert!(refusal.contains("not re-islanded"), "{refusal}");
+        wire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
+        assert_eq!(link_state_of(&graph, &into_the_reader), LinkState::Wired);
+        let setup_command_islands =
+            the_link_wiring_of(&graph, &reader).as_setup_command_ports()["islands"].clone();
+        assert_eq!(
+            setup_command_islands[0]["link_id"],
+            into_the_reader.as_str()
+        );
     }
 }

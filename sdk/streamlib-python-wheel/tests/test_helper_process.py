@@ -1462,6 +1462,105 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     assert not lifecycle_thread.is_alive()
 
 
+def an_island_feeding_the_probes_level(*, then_double_it: bool) -> dict:
+    held = {
+        "node": "held-1",
+        "breadcrumb_number": 0,
+        "import_path": f"{PROBE_MODULE}:hold_a_level",
+        "config": None,
+        "links_into": [],
+    }
+    nodes = [held]
+    output_node = "held-1"
+    if then_double_it:
+        nodes.append(
+            {
+                "node": "doubled-1",
+                "breadcrumb_number": 1,
+                "import_path": f"{PROBE_MODULE}:double_a_level",
+                "config": None,
+                "links_into": [{"port": "x", "from": {"node": "held-1", "port": "result"}}],
+            }
+        )
+        output_node = "doubled-1"
+    return {
+        "input_port": "level",
+        "link_id": "L-island-into-level",
+        "output": {"node": output_node, "port": "result"},
+        "nodes": nodes,
+    }
+
+
+def wait_until_the_island_reading_probe_reads(level, timeout_s: float = 10.0) -> None:
+    import helper_process_probes
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if helper_process_probes.LEVELS_THE_ISLAND_READING_PROBE_READ[-3:] == [level] * 3:
+            return
+        time.sleep(0.01)
+    raise AssertionError(
+        f"the probe never read {level!r} three times running; its last reads: "
+        f"{helper_process_probes.LEVELS_THE_ISLAND_READING_PROBE_READ[-5:]}"
+    )
+
+
+def test_an_island_fed_after_setup_is_evaluated_swapped_and_stopped_mid_run(stand_in_parent):
+    """A function node linked into a running reader reaches it as a
+    `feed_island`, answered on the island's link like a late `wire_link`; an
+    edit inside the island is the same frame again, and unlinking it is an
+    unanswered `unfeed_island`.
+
+    Fail-without-fix: drop the `feed_island` arm from `_dispatch` and the
+    parent hears no answer, the link stays pending, and the probe never reads
+    the island's value.
+    """
+    from helper_process_probes import LEVELS_THE_ISLAND_READING_PROBE_READ
+
+    LEVELS_THE_ISLAND_READING_PROBE_READ.clear()
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:IslandReadingProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
+
+    stand_in_parent.send(
+        {"cmd": "feed_island", "island": an_island_feeding_the_probes_level(then_double_it=False)}
+    )
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": "L-island-into-level"}
+    wait_until_the_island_reading_probe_reads(0.75)
+
+    stand_in_parent.send(
+        {"cmd": "feed_island", "island": an_island_feeding_the_probes_level(then_double_it=True)}
+    )
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": "L-island-into-level"}
+    wait_until_the_island_reading_probe_reads(1.5)
+
+    unloadable = an_island_feeding_the_probes_level(then_double_it=False)
+    unloadable["nodes"][0]["import_path"] = f"{PROBE_MODULE}:no_such_function_node"
+    stand_in_parent.send({"cmd": "feed_island", "island": unloadable})
+    refusal = stand_in_parent.receive()
+    assert refusal["rpc"] == "link_wire_failed"
+    assert refusal["link_id"] == "L-island-into-level"
+    assert "no_such_function_node" in refusal["reason"], refusal
+    wait_until_the_island_reading_probe_reads(1.5)
+
+    stand_in_parent.send(
+        {"cmd": "unfeed_island", "port": "level", "link_id": "L-island-into-level"}
+    )
+    wait_until_the_island_reading_probe_reads(None)
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done", (
+        "an island's answer rides its link's tag, and `unfeed_island` answers nothing"
+    )
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_parent):
     """The engine reports a link `wired` only on this answer, so a port that
     could not open has to say so rather than only logging: the reason is what

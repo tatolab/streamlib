@@ -1374,6 +1374,12 @@ class HelperProcessLifecycle:
             # its own link-scoped rpc tag so it never becomes the reply to the
             # next lifecycle command.
             self._wire_link(command)
+        elif verb == "feed_island":
+            # Answered on the island's link, like `wire_link`.
+            self._feed_island(command)
+        elif verb == "unfeed_island":
+            # Unanswered, like `unwire_link`.
+            self._unfeed_island(command)
         else:
             log.warn("the parent sent an unknown lifecycle command", cmd=verb)
 
@@ -1426,13 +1432,13 @@ class HelperProcessLifecycle:
                     )
             port_wiring = command.get("ports") or {}
             wire_link_data_access(self._link_data_access, port_wiring)
-            function_node_islands = port_wiring.get("islands") or []
-            if function_node_islands:
-                self._function_node_islands_it_reads = (
-                    feed_each_input_port_from_its_function_node_island(
-                        self._link_data_access, function_node_islands, load_processor_class
-                    )
+            self._function_node_islands_it_reads = (
+                feed_each_input_port_from_its_function_node_island(
+                    self._link_data_access,
+                    port_wiring.get("islands") or [],
+                    load_processor_class,
                 )
+            )
             self._hosted = construct_hosted_processor(
                 self._processor_class,
                 configuration,
@@ -1466,7 +1472,9 @@ class HelperProcessLifecycle:
             return
         self._set_up_succeeded = True
         ready: "dict[str, Any]" = {"rpc": "ready"}
-        if self._function_node_islands_it_reads is not None:
+        if self._function_node_islands_it_reads is not None and (
+            self._function_node_islands_it_reads.ran_compiled_by_node_id
+        ):
             ready["function_nodes_ran_compiled"] = (
                 self._function_node_islands_it_reads.ran_compiled_by_node_id
             )
@@ -1668,6 +1676,42 @@ class HelperProcessLifecycle:
             self._answer_the_parents_wire_link(link_id, str(wire_failure))
             return
         self._answer_the_parents_wire_link(link_id, None)
+
+    def _feed_island(self, command: "dict[str, Any]") -> None:
+        island = command.get("island") or {}
+        link_id = island.get("link_id")
+        input_port = island.get("input_port")
+        if not self._set_up_succeeded or self._function_node_islands_it_reads is None:
+            self._answer_the_parents_wire_link(
+                link_id, "this processor's setup did not succeed, so no island feeds its inputs"
+            )
+            return
+        try:
+            self._function_node_islands_it_reads.feed_an_input_port_from_its_island(island)
+        except Exception as feed_failure:
+            log.error(
+                "this processor could not evaluate an island the engine handed it after setup",
+                link_id=link_id,
+                input_port=input_port,
+                error=str(feed_failure),
+            )
+            self._answer_the_parents_wire_link(link_id, str(feed_failure))
+            return
+        self._answer_the_parents_wire_link(link_id, None)
+
+    def _unfeed_island(self, command: "dict[str, Any]") -> None:
+        input_port = command.get("port")
+        if self._function_node_islands_it_reads is None or not isinstance(input_port, str):
+            return
+        try:
+            self._function_node_islands_it_reads.stop_feeding_an_input_port(input_port)
+        except Exception as unfeed_failure:
+            log.error(
+                "this processor could not stop evaluating an island unlinked from it",
+                link_id=command.get("link_id"),
+                input_port=input_port,
+                error=str(unfeed_failure),
+            )
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
         """Tell the parent whether this processor's port for one link is open.

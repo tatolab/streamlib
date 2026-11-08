@@ -31,6 +31,7 @@ from helper_placement_streams import (
     function_node_run_as_python_that_crashes_into_python_sink,
     function_node_that_spins_forever_into_python_sink,
     function_nodes_read_by_two_native_converters_into_python_records_sink,
+    lfo_into_python_sink_reporting_each_batch_it_reads,
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
@@ -350,6 +351,127 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
         f"`Remap` maps the LFO onto 0..1, and the class read {levels}"
     )
     assert len(set(levels)) > 1, f"the pool evaluates the island on a moving clock: {levels}"
+
+
+def the_first_value_batch_read_after(
+    tatolabd: TatolabdUnderTest, monotonic_ns: int, *, from_occurrence: int
+) -> "tuple[dict, int]":
+    """The first batch the sink started reading after `monotonic_ns`, and its occurrence."""
+    occurrence = from_occurrence
+    while True:
+        batch = tatolabd.await_marker("FUNCTION_NODE_VALUE_BATCH_READ", occurrence=occurrence)
+        if batch["started_at_monotonic_ns"] > monotonic_ns:
+            return batch, occurrence
+        occurrence += 1
+
+
+def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_what_it_reads(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`Lfo -> <Python class>`, then `Remap` linked in between and taken out,
+    all while the class runs: each edit is handed to the running class as its
+    island, so what it reads swings -1..1, then stays in `Remap`'s 0..1, then
+    swings -1..1 again, in the one process the class started in.
+    """
+    tatolabd = start_tatolabd_running_stream(lfo_into_python_sink_reporting_each_batch_it_reads)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    direct, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    sink_pid = direct["sink_pid"]
+    assert direct["lowest"] < -0.5 and direct["highest"] > 0.5, (
+        f"a second of a 1 Hz `Lfo` swings -1..1, and the class read {direct}"
+    )
+
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    uuid_of = {node["name"]: node["id"] for node in graph["nodes"]}
+
+    def end_of(node_uuid: str, port: str) -> "dict[str, str]":
+        return {"node": node_uuid, "port": port}
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    def the_link_into_the_sink() -> str:
+        (link,) = [
+            link
+            for link in local_api.call_tool("graph", {"stream": stream_id})["links"]
+            if link["target"] == {"node": "sink", "port": "brightness"}
+        ]
+        return link["id"]
+
+    (remap,) = edit_live("add_node", {"type": "tatolab.ops:Remap", "name": "remap"})[
+        "added_nodes"
+    ]
+    edit_live(
+        "connect",
+        {"source": end_of(uuid_of["lfo"], "result"), "target": end_of(remap["node"], "x")},
+    )
+    edit_live(
+        "disconnect",
+        {
+            "source": end_of(uuid_of["lfo"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    edit_live(
+        "connect",
+        {
+            "source": end_of(remap["node"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    assert (
+        local_api.await_link_state(the_link_into_the_sink(), "wired", stream=stream_id)
+        == "wired"
+    )
+    remapped_from_ns = time.monotonic_ns()
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    hosts = {
+        node["name"]: node["components"].get("host")
+        for node in graph["nodes"]
+        if node["name"] in ("lfo", "remap")
+    }
+    assert hosts == {
+        "lfo": {"inside_the_read_of": ["sink"]},
+        "remap": {"inside_the_read_of": ["sink"]},
+    }, f"`graph` names the class each function node runs inside the read of: {hosts}"
+    remapped, occurrence = the_first_value_batch_read_after(
+        tatolabd, remapped_from_ns, from_occurrence=occurrence + 1
+    )
+    assert 0.0 <= remapped["lowest"] and remapped["highest"] <= 1.0, (
+        f"`Remap` maps the LFO's -1..1 onto 0..1, and the class read {remapped}"
+    )
+    assert remapped["highest"] - remapped["lowest"] > 0.5, (
+        f"the `Lfo` keeps swinging through `Remap`: {remapped}"
+    )
+
+    edit_live("remove_node", {"node": remap["node"]})
+    edit_live(
+        "connect",
+        {
+            "source": end_of(uuid_of["lfo"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    assert (
+        local_api.await_link_state(the_link_into_the_sink(), "wired", stream=stream_id)
+        == "wired"
+    )
+    direct_again, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert direct_again["lowest"] < -0.5 and direct_again["highest"] > 0.5, (
+        f"with `Remap` gone the class reads the `Lfo` directly again, and read {direct_again}"
+    )
+    assert {remapped["sink_pid"], direct_again["sink_pid"]} == {sink_pid}, (
+        "each edit reaches the running class; none restarts its helper"
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    assert helper_process_ids_started_in(tatolabd.stderr_text) == [sink_pid], (
+        f"the function nodes added and removed live got no process of their own:\n"
+        f"{tatolabd.recent_stderr()}"
+    )
 
 
 def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reader(

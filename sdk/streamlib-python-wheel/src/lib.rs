@@ -103,6 +103,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_function_node_island::feed_an_input_port_from_a_function_node_island,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_function_node_island::stop_feeding_an_input_port_from_a_function_node_island,
+        module
+    )?)?;
     module
         .add_class::<python_function_node_island::FunctionNodeEvaluatedAsItsHelpersProcessor>()?;
     module.add_function(wrap_pyfunction!(

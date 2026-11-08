@@ -611,6 +611,61 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
             }))
     }
 
+    /// Answered like `wire_link`, on the island's link id: the reader imports
+    /// and compiles the island's nodes before it says it evaluates them.
+    fn hand_over_a_function_node_island_wired_after_setup(
+        &self,
+        function_node_island: &serde_json::Value,
+        answer_cell: Arc<OutOfProcessLinkWireReply>,
+    ) -> Result<()> {
+        if self.parent_side.the_subprocess_was_given_up_on() {
+            return Err(Error::Runtime(
+                refusal_of_a_link_into_a_helper_process_that_failed(
+                    &self.processor_display_name,
+                    &self.parent_side.processor_id,
+                ),
+            ));
+        }
+        let Some(link_id) = function_node_island
+            .get("link_id")
+            .and_then(|id| id.as_str())
+        else {
+            return Err(Error::Configuration(format!(
+                "the function node island handed to processor '{}' ({}) names no link, so its \
+                 helper process could not answer for it",
+                self.processor_display_name, self.parent_side.processor_id
+            )));
+        };
+        self.parent_side
+            .links_awaiting_their_wire_reply
+            .await_an_answer_for_link(link_id.to_string(), answer_cell);
+        self.parent_side
+            .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
+                "cmd": "feed_island",
+                "island": function_node_island,
+            }))
+    }
+
+    /// Unanswered, like `unwire_link`.
+    fn tell_the_far_side_a_function_node_island_was_unwired(
+        &self,
+        input_port: &str,
+        link_id: &str,
+    ) -> Result<()> {
+        self.parent_side
+            .links_awaiting_their_wire_reply
+            .stop_awaiting_an_answer_for_link(link_id);
+        if self.parent_side.the_subprocess_was_given_up_on() {
+            return Ok(());
+        }
+        self.parent_side
+            .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
+                "cmd": "unfeed_island",
+                "port": input_port,
+                "link_id": link_id,
+            }))
+    }
+
     fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str) {
         self.parent_side
             .links_awaiting_their_wire_reply

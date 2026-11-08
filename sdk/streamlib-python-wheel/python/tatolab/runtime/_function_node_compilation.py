@@ -39,6 +39,7 @@ from tatolab.runtime._engine import (
     MODULE_HOST_TABLE_ABI_MAJOR,
     MODULE_HOST_TABLE_ABI_MINOR,
     feed_an_input_port_from_a_function_node_island,
+    stop_feeding_an_input_port_from_a_function_node_island,
 )
 
 # The scalar value types an evaluate entry carries, each as an f64.
@@ -99,49 +100,59 @@ FunctionNodeReadyToEvaluate = typing.Union[
 ]
 
 
-@dataclasses.dataclass(frozen=True)
 class FunctionNodeIslandsFedToTheirPorts:
-    """What feeding a helper's islands prepared, kept for as long as the ports are read, and how each node runs."""
+    """The islands a helper's input ports are fed from, kept for as long as the ports are read, and how each node runs.
 
-    function_node_types_kept_alive: "list[FunctionNodeReadyToEvaluate]"
-    ran_compiled_by_node_id: "dict[str, bool]"
-
-
-def feed_each_input_port_from_its_function_node_island(
-    link_data_access: NodeLinkDataAccess,
-    islands: "list[dict[str, Any]]",
-    load_function_node: Callable[[str], Any],
-) -> FunctionNodeIslandsFedToTheirPorts:
-    """Prepare every function node the setup command's `islands` carry and feed each to its port.
-
-    A node is compiled when its body compiles, and run as Python otherwise.
-    The caller keeps what was prepared for as long as the ports are read: the
-    native evaluator calls into it.
+    The native evaluator calls into what each feed prepared, so it is kept
+    here. A port fed again is fed the new island in place of the old one: a
+    node run as Python keeps its body object, so its state carries on, and the
+    native evaluator carries on each other stateful node's state.
     """
-    prepared_by_import_path: "dict[str, FunctionNodeReadyToEvaluate]" = {}
-    input_port_of_the_island_holding_each_stateful_node: "dict[str, str]" = {}
-    ran_compiled_by_node_id: "dict[str, bool]" = {}
-    for island in islands:
+
+    def __init__(
+        self, link_data_access: NodeLinkDataAccess, load_function_node: Callable[[str], Any]
+    ) -> None:
+        self._link_data_access = link_data_access
+        self._load_function_node = load_function_node
+        self._prepared_by_import_path: "dict[str, FunctionNodeReadyToEvaluate]" = {}
+        self._island_by_input_port: "dict[str, dict[str, Any]]" = {}
+        self._body_run_as_python_by_input_port_and_node_id: (
+            "dict[tuple[str, str], FunctionNodeBodyRunAsPython]"
+        ) = {}
+
+    @property
+    def function_node_types_kept_alive(self) -> "list[FunctionNodeReadyToEvaluate]":
+        """Every function node type a feed prepared."""
+        return list(self._prepared_by_import_path.values())
+
+    @property
+    def ran_compiled_by_node_id(self) -> "dict[str, bool]":
+        """Whether each node of a fed island runs compiled (`True`) or as Python (`False`)."""
+        return {
+            island_node["node"]: isinstance(
+                self._prepared_by_import_path[island_node["import_path"]],
+                FunctionNodeCompiledToItsEvaluateEntry,
+            )
+            for island in self._island_by_input_port.values()
+            for island_node in island["nodes"]
+        }
+
+    def feed_an_input_port_from_its_island(self, island: "dict[str, Any]") -> None:
+        """Prepare every node of `island` and feed it to its input port, in place of any island feeding it."""
+        input_port = island["input_port"]
+        self._refuse_a_stateful_node_another_port_holds(island)
         function_nodes_handed_over: "list[Any]" = []
         node_index_by_node_id: "dict[str, int]" = {}
         output_ports_by_node_id: "dict[str, tuple[str, ...]]" = {}
+        bodies_run_as_python: "dict[tuple[str, str], FunctionNodeBodyRunAsPython]" = {}
         for island_node in island["nodes"]:
             node_id = island_node["node"]
-            import_path = island_node["import_path"]
-            if import_path not in prepared_by_import_path:
-                prepared_by_import_path[import_path] = prepare_function_node_to_evaluate(
-                    load_function_node(import_path), import_path
-                )
-            prepared = prepared_by_import_path[import_path]
-            if prepared.is_stateful:
-                _refuse_a_stateful_node_two_islands_hold(
-                    node_id,
-                    island["input_port"],
-                    input_port_of_the_island_holding_each_stateful_node,
-                )
-            called_through, config_values = how_one_function_node_is_called(
-                prepared, node_id, island_node.get("config")
+            prepared = self._prepared(island_node["import_path"])
+            called_through, config_values = self._how_one_function_node_is_called(
+                prepared, input_port, node_id, island_node.get("config")
             )
+            if isinstance(called_through, FunctionNodeBodyRunAsPython):
+                bodies_run_as_python[(input_port, node_id)] = called_through
             function_nodes_handed_over.append(
                 (
                     node_id,
@@ -159,25 +170,83 @@ def feed_each_input_port_from_its_function_node_island(
                     len(prepared.output_ports),
                 )
             )
-            ran_compiled_by_node_id[node_id] = isinstance(
-                prepared, FunctionNodeCompiledToItsEvaluateEntry
-            )
             node_index_by_node_id[node_id] = len(node_index_by_node_id)
             output_ports_by_node_id[node_id] = prepared.output_ports
         island_output = island["output"]
         feed_an_input_port_from_a_function_node_island(
-            link_data_access=link_data_access,
-            input_port=island["input_port"],
+            link_data_access=self._link_data_access,
+            input_port=input_port,
             function_nodes=function_nodes_handed_over,
             island_output=(
                 node_index_by_node_id[island_output["node"]],
                 _output_index(output_ports_by_node_id, island_output["node"], island_output["port"]),
             ),
         )
-    return FunctionNodeIslandsFedToTheirPorts(
-        function_node_types_kept_alive=list(prepared_by_import_path.values()),
-        ran_compiled_by_node_id=ran_compiled_by_node_id,
-    )
+        self._forget_the_bodies_run_as_python_for(input_port)
+        self._body_run_as_python_by_input_port_and_node_id.update(bodies_run_as_python)
+        self._island_by_input_port[input_port] = island
+
+    def stop_feeding_an_input_port(self, input_port: str) -> bool:
+        """Stop feeding `input_port` from its island; whether an island fed it."""
+        self._island_by_input_port.pop(input_port, None)
+        self._forget_the_bodies_run_as_python_for(input_port)
+        return stop_feeding_an_input_port_from_a_function_node_island(
+            link_data_access=self._link_data_access, input_port=input_port
+        )
+
+    def _prepared(self, import_path: str) -> FunctionNodeReadyToEvaluate:
+        if import_path not in self._prepared_by_import_path:
+            self._prepared_by_import_path[import_path] = prepare_function_node_to_evaluate(
+                self._load_function_node(import_path), import_path
+            )
+        return self._prepared_by_import_path[import_path]
+
+    def _how_one_function_node_is_called(
+        self, prepared: FunctionNodeReadyToEvaluate, input_port: str, node_id: str, config: Any
+    ) -> "tuple[Any, list[float]]":
+        body_run_as_python = self._body_run_as_python_by_input_port_and_node_id.get(
+            (input_port, node_id)
+        )
+        if body_run_as_python is not None and body_run_as_python.runs(prepared):
+            return body_run_as_python, []
+        return how_one_function_node_is_called(prepared, node_id, config)
+
+    def _refuse_a_stateful_node_another_port_holds(self, island: "dict[str, Any]") -> None:
+        input_port_of_the_island_holding_each_stateful_node = {
+            island_node["node"]: held_input_port
+            for held_input_port, held_island in self._island_by_input_port.items()
+            if held_input_port != island["input_port"]
+            for island_node in held_island["nodes"]
+            if self._prepared(island_node["import_path"]).is_stateful
+        }
+        for island_node in island["nodes"]:
+            if self._prepared(island_node["import_path"]).is_stateful:
+                _refuse_a_stateful_node_two_islands_hold(
+                    island_node["node"],
+                    island["input_port"],
+                    input_port_of_the_island_holding_each_stateful_node,
+                )
+
+    def _forget_the_bodies_run_as_python_for(self, input_port: str) -> None:
+        for input_port_and_node_id in [
+            key for key in self._body_run_as_python_by_input_port_and_node_id if key[0] == input_port
+        ]:
+            del self._body_run_as_python_by_input_port_and_node_id[input_port_and_node_id]
+
+
+def feed_each_input_port_from_its_function_node_island(
+    link_data_access: NodeLinkDataAccess,
+    islands: "list[dict[str, Any]]",
+    load_function_node: Callable[[str], Any],
+) -> FunctionNodeIslandsFedToTheirPorts:
+    """Prepare every function node the setup command's `islands` carry and feed each to its port.
+
+    A node is compiled when its body compiles, and run as Python otherwise.
+    """
+    fed = FunctionNodeIslandsFedToTheirPorts(link_data_access, load_function_node)
+    for island in islands:
+        fed.feed_an_input_port_from_its_island(island)
+    return fed
 
 
 def how_one_function_node_is_called(
@@ -289,6 +358,10 @@ class FunctionNodeBodyRunAsPython:
             for parameter in inspect.signature(run_as_python.body).parameters.values()
             if parameter.kind is inspect.Parameter.POSITIONAL_ONLY
         ]
+
+    def runs(self, run_as_python: FunctionNodeReadyToEvaluate) -> bool:
+        """Whether this is the body of `run_as_python`, so an island fed again can call it with its state."""
+        return self._run_as_python is run_as_python
 
     def evaluate(self, input_values: "list[Any]", now_ns: int) -> "list[Any]":
         """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.

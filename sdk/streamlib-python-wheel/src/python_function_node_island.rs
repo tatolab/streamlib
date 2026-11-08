@@ -5,6 +5,7 @@
 //! called in turn, once per stream time, through its compiled evaluate entry
 //! or as Python in this helper's interpreter.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -455,6 +456,21 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
     fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
         self.first_function_node_it_runs_as_python.as_deref()
     }
+
+    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
+        self.evaluation
+            .lock()
+            .function_nodes_each_after_what_it_reads
+            .iter()
+            .filter(|function_node| !function_node.how_it_is_called.state_values().is_empty())
+            .map(|function_node| {
+                (
+                    function_node.breadcrumb_number,
+                    function_node.how_it_is_called.state_values().to_vec(),
+                )
+            })
+            .collect()
+    }
 }
 
 /// One function node as the bootstrap hands it over: its id, its breadcrumb
@@ -707,7 +723,8 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
 }
 
 /// Feed `input_port` from the island of `function_nodes`, each after what it
-/// reads, evaluated at each read of the port.
+/// reads, evaluated at each read of the port; an island already feeding the
+/// port is replaced, and each stateful node it shares resumes from its state.
 #[pyfunction]
 #[pyo3(signature = (*, link_data_access, input_port, function_nodes, island_output))]
 pub(crate) fn feed_an_input_port_from_a_function_node_island(
@@ -723,6 +740,10 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
                 "a function node island feeds only a helper process's own data plane",
             )
         })?;
+    let states_the_island_it_replaces_last_returned: HashMap<u32, Vec<f64>> = input_mailboxes
+        .the_state_each_stateful_function_node_of_the_island_feeding_last_returned(input_port)
+        .into_iter()
+        .collect();
     let island =
         FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
             function_nodes,
@@ -730,12 +751,44 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
             Box::new(helper_stream_clock_now_ns),
             link_data_access.shared_loss_count_board_writer_of_this_helper(),
             &|breadcrumb_number| {
-                link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number)
+                states_the_island_it_replaces_last_returned
+                    .get(&breadcrumb_number)
+                    .cloned()
+                    .or_else(|| {
+                        link_data_access.the_state_a_function_node_resumes_from(breadcrumb_number)
+                    })
             },
         )
         .map_err(PyValueError::new_err)?;
+    if let Some(function_node_id) = island.the_first_function_node_it_runs_as_python()
+        && link_data_access.input_port_is_lent_to_native_code(input_port)
+    {
+        return Err(PyValueError::new_err(format!(
+            "function node `{function_node_id}` cannot feed input port {input_port:?}: it runs \
+             as Python, since its body does not compile, and the port is lent to native code, \
+             whose read holds no Python interpreter lock to call it with. To fix: make \
+             `{function_node_id}` compile, or read the port from Python"
+        )));
+    }
     input_mailboxes.feed_an_input_port_from_a_function_node_island(input_port, Arc::new(island));
     Ok(())
+}
+
+/// Stop feeding `input_port` from the island feeding it; whether one did.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, input_port))]
+pub(crate) fn stop_feeding_an_input_port_from_a_function_node_island(
+    link_data_access: &PythonProcessorLinkDataAccess,
+    input_port: &str,
+) -> PyResult<bool> {
+    let input_mailboxes = link_data_access
+        .input_mailboxes_of_this_helper()
+        .ok_or_else(|| {
+            PyValueError::new_err(
+                "a function node island feeds only a helper process's own data plane",
+            )
+        })?;
+    Ok(input_mailboxes.stop_feeding_an_input_port_from_a_function_node_island(input_port))
 }
 
 #[cfg(test)]

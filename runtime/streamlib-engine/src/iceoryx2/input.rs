@@ -484,18 +484,33 @@ impl InputMailboxesInner {
     }
 
     /// Feed `port` from `island`, evaluated at each read of the port in place
-    /// of a mailbox.
+    /// of a mailbox; an island already feeding `port` is replaced, and the
+    /// port's sample positions carry on from it.
     pub fn feed_an_input_port_from_a_function_node_island(
         &self,
         port: &str,
         island: Arc<dyn FunctionNodeIslandEvaluatedAtEachRead>,
     ) {
+        let mut input_ports_fed_by_function_node_islands =
+            self.input_ports_fed_by_function_node_islands.write();
+        let island_port = match input_ports_fed_by_function_node_islands.get(port) {
+            Some(island_port_it_replaces) => {
+                InputPortFedByAFunctionNodeIsland::evaluated_by_in_place_of(
+                    island,
+                    island_port_it_replaces,
+                )
+            }
+            None => InputPortFedByAFunctionNodeIsland::evaluated_by(island),
+        };
+        input_ports_fed_by_function_node_islands.insert(port.to_string(), Arc::new(island_port));
+    }
+
+    /// Stop feeding `port` from the island feeding it; whether one did.
+    pub fn stop_feeding_an_input_port_from_a_function_node_island(&self, port: &str) -> bool {
         self.input_ports_fed_by_function_node_islands
             .write()
-            .insert(
-                port.to_string(),
-                Arc::new(InputPortFedByAFunctionNodeIsland::evaluated_by(island)),
-            );
+            .remove(port)
+            .is_some()
     }
 
     /// The function node the island feeding `port` runs as Python, which a
@@ -511,6 +526,17 @@ impl InputMailboxesInner {
                     .the_first_function_node_it_runs_as_python()
                     .map(str::to_string)
             })
+    }
+
+    /// The state each stateful node of the island feeding `port` last
+    /// returned, by its breadcrumb number; empty when no island feeds `port`.
+    pub fn the_state_each_stateful_function_node_of_the_island_feeding_last_returned(
+        &self,
+        port: &str,
+    ) -> Vec<(u32, Vec<f64>)> {
+        self.function_node_island_feeding(port)
+            .map(|island_port| island_port.the_state_each_stateful_function_node_last_returned())
+            .unwrap_or_default()
     }
 
     fn function_node_island_feeding(
@@ -1822,6 +1848,10 @@ mod tests {
         fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
             None
         }
+
+        fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
+            Vec::new()
+        }
     }
 
     struct IslandRunningOneNodeAsPython;
@@ -1838,6 +1868,10 @@ mod tests {
 
         fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
             Some("tally")
+        }
+
+        fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
+            vec![(7, vec![3.0])]
         }
     }
 
@@ -1864,6 +1898,58 @@ mod tests {
             mailboxes.the_function_node_run_as_python_by_the_island_feeding("unfed"),
             None
         );
+    }
+
+    fn start_sample_of_the_next_read(mailboxes: &InputMailboxesInner, port: &str) -> u64 {
+        let message = mailboxes.read_raw(port).unwrap().unwrap();
+        streamlib_ipc_types::ChannelsBlockDescriptorBody::from_descriptor_body(
+            &message.payload_descriptor.body,
+        )
+        .start_sample
+    }
+
+    #[test]
+    fn an_island_replacing_the_one_feeding_a_port_carries_its_sample_positions_on() {
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.feed_an_input_port_from_a_function_node_island(
+            "brightness",
+            Arc::new(IslandAnsweringOneHalf),
+        );
+        assert_eq!(start_sample_of_the_next_read(&mailboxes, "brightness"), 0);
+        assert_eq!(start_sample_of_the_next_read(&mailboxes, "brightness"), 1);
+        mailboxes.feed_an_input_port_from_a_function_node_island(
+            "brightness",
+            Arc::new(IslandRunningOneNodeAsPython),
+        );
+        assert_eq!(start_sample_of_the_next_read(&mailboxes, "brightness"), 2);
+        assert_eq!(
+            mailboxes.the_function_node_run_as_python_by_the_island_feeding("brightness"),
+            Some("tally".to_string()),
+            "the replacing island answers the port's reads"
+        );
+        assert_eq!(
+            mailboxes.the_state_each_stateful_function_node_of_the_island_feeding_last_returned(
+                "brightness"
+            ),
+            vec![(7, vec![3.0])]
+        );
+        assert!(
+            mailboxes
+                .the_state_each_stateful_function_node_of_the_island_feeding_last_returned("unfed")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_port_an_island_stops_feeding_is_no_longer_named_among_the_ports() {
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.feed_an_input_port_from_a_function_node_island(
+            "brightness",
+            Arc::new(IslandAnsweringOneHalf),
+        );
+        assert!(mailboxes.stop_feeding_an_input_port_from_a_function_node_island("brightness"));
+        assert!(!mailboxes.has_port("brightness"));
+        assert!(!mailboxes.stop_feeding_an_input_port_from_a_function_node_island("brightness"));
     }
 
     #[test]

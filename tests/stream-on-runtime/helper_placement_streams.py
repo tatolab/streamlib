@@ -16,6 +16,7 @@ from helper_placement_processors import (
     DiesAbruptlyProbe,
     LabelsTheLevel,
     ForksAWorkerThatOutlivesItProbe,
+    ReportsEachBatchOfFunctionNodeValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
@@ -150,6 +151,14 @@ def function_nodes_read_by_two_native_converters_into_python_records_sink(
     stream_builder.connect(remap.output("result"), first_converter.input("channels"))
     stream_builder.connect(second_lfo.output("result"), second_converter.input("channels"))
     stream_builder.connect(first_converter.output("records"), sink.input("level_records"))
+
+
+@stream
+def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Lfo` read directly by a Python class reporting each batch of values."""
+    lfo = stream_builder.add(Lfo, name="lfo")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(lfo.output("result"), sink.input("brightness"))
 
 
 @stream

@@ -41,6 +41,7 @@ __all__ = [
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
     "run_the_scheduling_loop_of_this_helper",
+    "stop_feeding_an_input_port_from_a_function_node_island",
 ]
 
 MODULE_HOST_TABLE_ABI_MAJOR: int
@@ -92,8 +93,17 @@ def feed_an_input_port_from_a_function_node_island(
     whose `evaluate(input_values, now_ns)` runs its body as Python,
     where each input takes its value (an earlier node's output, or `None` and its
     pin value), its config values, its initial state values and its output count.
-    `island_output` names the node and output the port reads.
+    `island_output` names the node and output the port reads. An island
+    already feeding the port is replaced, and each stateful node it shares
+    resumes from its state.
     """
+
+def stop_feeding_an_input_port_from_a_function_node_island(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    input_port: str,
+) -> bool:
+    """Stop feeding `input_port` from the island feeding it; whether one did."""
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
     """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.
