@@ -1551,21 +1551,32 @@ pub struct GpuContext {
     /// compilation, that one spares the pipeline.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     slang_shader_source_compiler: Arc<crate::core::rhi::SlangShaderSourceCompiler>,
-    /// The recorder every compute dispatch — batched or a recording of one —
-    /// records into, built on first use and kept for this context's lifetime.
+    /// The recorders no compute dispatch is using, each built on first need
+    /// and kept for this context's lifetime.
     ///
-    /// One recorder, not one per recording: its command pool, primary command
-    /// buffer and completion fence are exactly what a recording reuses, and
-    /// allocating them per frame would spend the submission the batch op
-    /// exists to save. Serial use is what the recorder requires, and this lock
-    /// is what gives it: a dispatch holds it from recording through the fence
-    /// wait, and nothing else serializes two dispatches.
+    /// A dispatch takes one for itself and returns it once its submission has
+    /// retired, so dispatches waiting on their own work at once each hold a
+    /// recorder, and the pool grows to as many as ever wait together. Reusing
+    /// them spares the command pool, command buffer and fence a recording
+    /// would otherwise allocate per frame.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    batched_compute_dispatch_recorder:
-        Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
-    /// The recorder every surface-to-surface copy reuses, for the reason
-    /// `batched_compute_dispatch_recorder` is one recorder; its lock is what
-    /// serializes two copies.
+    idle_compute_dispatch_recorders:
+        Arc<parking_lot::Mutex<Vec<crate::vulkan::rhi::RhiCommandRecorder>>>,
+    /// The latest queue submission that dispatched each compute kernel, keyed
+    /// by the kernel's handle.
+    ///
+    /// Held by a dispatch from its first recorded command through publishing
+    /// the layouts its bindings land in, and released before it waits on its
+    /// work: so recordings see each other's layouts in submission order, while
+    /// one stream's dispatch never waits for another's GPU work to finish. A
+    /// kernel owns one descriptor set, which its next dispatch rewrites only
+    /// once the submission named here has retired.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    latest_submission_per_compute_kernel: Arc<
+        parking_lot::Mutex<HashMap<usize, crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot>>,
+    >,
+    /// The recorder every surface-to-surface copy reuses, built on first use;
+    /// its lock is what serializes two copies.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) surface_to_surface_copy_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
@@ -1654,7 +1665,9 @@ impl GpuContext {
                 crate::core::rhi::SlangShaderSourceCompiler::new(),
             ),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            idle_compute_dispatch_recorders: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            latest_submission_per_compute_kernel: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             surface_to_surface_copy_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -3635,8 +3648,9 @@ impl GpuContext {
         self.device.inner.queue_submission_count()
     }
 
-    /// How many times a command recorder or a compute kernel has blocked on a
-    /// fence — the stalls a batch exists to collapse.
+    /// How many times a command recorder, a compute kernel or a compute
+    /// dispatch has blocked on its GPU work — the stalls a batch exists to
+    /// collapse.
     ///
     /// Recorder-wide, not compute-only: present, staging and the tone mapper
     /// drain recorders too, so a reading is only about a batch when nothing
@@ -3644,10 +3658,8 @@ impl GpuContext {
     /// on why this is counted, not timed.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[must_use]
-    pub fn recorder_and_compute_kernel_fence_wait_count(&self) -> usize {
-        self.device
-            .inner
-            .recorder_and_compute_kernel_fence_wait_count()
+    pub fn counted_host_waits_on_gpu_work_count(&self) -> usize {
+        self.device.inner.counted_host_waits_on_gpu_work_count()
     }
 
     /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
@@ -4026,11 +4038,15 @@ impl GpuContext {
     /// and return when that submission has retired.
     ///
     /// The cost this exists to avoid is per-dispatch: N dispatches recorded
-    /// separately cost N submissions and N fence waits — the single-dispatch
+    /// separately cost N submissions and N waits — the single-dispatch
     /// escalate op runs as a recording of one through this very method.
     /// Batched, N passes cost one submission and one wait, and a caller that
     /// leaves this call has its writes visible, exactly as after a single
     /// dispatch.
+    ///
+    /// The wait is on the queue completion timeline value this submission
+    /// signals, with nothing shared held: two streams' dispatches record and
+    /// submit one after the other, and each then waits only for its own work.
     ///
     /// Each dispatch's bindings are barriered into the layout its descriptor
     /// requires. Those barriers are also the write-then-read edge between
@@ -4066,12 +4082,64 @@ impl GpuContext {
             }
         }
 
-        let mut batched_compute_dispatch_recorder_slot =
-            self.batched_compute_dispatch_recorder.lock();
-        let recorder = match batched_compute_dispatch_recorder_slot.as_mut() {
+        let idle_recorder = self.idle_compute_dispatch_recorders.lock().pop();
+        let mut recorder = match idle_recorder {
             Some(recorder) => recorder,
-            None => batched_compute_dispatch_recorder_slot
-                .insert(self.create_command_recorder("batched_compute_dispatch")?),
+            None => self.create_command_recorder("batched_compute_dispatch")?,
+        };
+        let completed = self
+            .record_and_submit_compute_kernel_batch(&mut recorder, batch)
+            .and_then(|()| recorder.wait_for_completion_on_the_queue_completion_timeline());
+        self.idle_compute_dispatch_recorders.lock().push(recorder);
+        completed?;
+
+        tracing::debug!(
+            rhi_op = "dispatch_compute_kernel_batch",
+            dispatches = batch.len(),
+            "GpuContext::dispatch_compute_kernel_batch — one submission, one wait"
+        );
+        Ok(())
+    }
+
+    /// Record `batch` into `recorder` and submit it, holding
+    /// `latest_submission_per_compute_kernel` throughout, once every kernel
+    /// it names is free of its previous submission.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn record_and_submit_compute_kernel_batch(
+        &self,
+        recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
+        batch: &[BatchedComputeKernelDispatch],
+    ) -> Result<()> {
+        let kernel_keys: Vec<usize> = batch
+            .iter()
+            .map(|dispatch| dispatch.kernel.handle as usize)
+            .collect();
+        let mut latest_submission_per_compute_kernel = loop {
+            let latest_submission_per_compute_kernel =
+                self.latest_submission_per_compute_kernel.lock();
+            let previous_submissions_of_these_kernels = kernel_keys
+                .iter()
+                .filter_map(|kernel_key| latest_submission_per_compute_kernel.get(kernel_key))
+                .fold(
+                    crate::vulkan::rhi::HostVulkanQueueSubmissionsSnapshot::default(),
+                    |covered, previous_submission| covered.covering_both(previous_submission),
+                );
+            if self
+                .device
+                .inner
+                .every_queue_submission_in_snapshot_has_completed(
+                    &previous_submissions_of_these_kernels,
+                )?
+            {
+                break latest_submission_per_compute_kernel;
+            }
+            drop(latest_submission_per_compute_kernel);
+            self.device
+                .inner
+                .wait_for_every_queue_submission_in_snapshot(
+                    &previous_submissions_of_these_kernels,
+                    std::time::Duration::MAX,
+                )?;
         };
 
         // From here on the recorder is open, and every early return has to
@@ -4085,6 +4153,10 @@ impl GpuContext {
             }
         };
         recorder.submit()?;
+        let this_submission = recorder.latest_submission();
+        for kernel_key in kernel_keys {
+            latest_submission_per_compute_kernel.insert(kernel_key, this_submission);
+        }
 
         // Published between the submit and the wait, not after both: once the
         // queue has taken the recording the transitions belong to the GPU, so a
@@ -4109,13 +4181,6 @@ impl GpuContext {
                 registration.update_layout(*layout_landed_in);
             }
         }
-        recorder.wait_for_completion()?;
-
-        tracing::debug!(
-            rhi_op = "dispatch_compute_kernel_batch",
-            dispatches = batch.len(),
-            "GpuContext::dispatch_compute_kernel_batch — one submission, one wait"
-        );
         Ok(())
     }
 

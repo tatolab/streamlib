@@ -245,11 +245,13 @@ pub struct HostVulkanDevice {
     live_allocation_count: AtomicUsize,
     /// Every `vkQueueSubmit2` this device has made, across every queue.
     queue_submission_count: AtomicUsize,
-    /// Fence waits made through [`Self::wait_for_fences_blocking_counted`]:
-    /// every `RhiCommandRecorder` drain plus `VulkanComputeKernel::dispatch`.
-    /// Not every `vkWaitForFences` in the engine, and not compute-only — the
-    /// recorder is what present, staging and the tone mapper wait on too.
-    recorder_and_compute_kernel_fence_wait_count: AtomicUsize,
+    /// Waits made through [`Self::wait_for_fences_blocking_counted`] and
+    /// [`Self::wait_for_queue_submissions_blocking_counted`]: every
+    /// `RhiCommandRecorder` drain, `VulkanComputeKernel::dispatch`, and every
+    /// compute dispatch's wait on its own submission. Not every host wait in
+    /// the engine, and not compute-only — the recorder is what present,
+    /// staging and the tone mapper wait on too.
+    counted_host_waits_on_gpu_work_count: AtomicUsize,
     /// A completion timeline per queue, signalled by every
     /// [`Self::submit_to_queue`]. `None` only once `Drop` has destroyed them.
     queue_submission_completion_timelines: Option<HostVulkanQueueSubmissionCompletionTimelines>,
@@ -1425,7 +1427,7 @@ impl HostVulkanDevice {
             drm_modifier_table,
             live_allocation_count: AtomicUsize::new(0),
             queue_submission_count: AtomicUsize::new(0),
-            recorder_and_compute_kernel_fence_wait_count: AtomicUsize::new(0),
+            counted_host_waits_on_gpu_work_count: AtomicUsize::new(0),
             queue_submission_completion_timelines: Some(queue_submission_completion_timelines),
             graphics_queue_mutex: Mutex::new(()),
             transfer_queue_mutex: Mutex::new(()),
@@ -2821,6 +2823,18 @@ impl HostVulkanDevice {
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> Result<()> {
+        unsafe { self.submit_to_queue_naming_its_completion(queue, submits, fence) }.map(|_| ())
+    }
+
+    /// [`Self::submit_to_queue`], answering the snapshot that names this
+    /// submission alone, for a caller that waits on its own work rather than
+    /// on a fence.
+    pub(crate) unsafe fn submit_to_queue_naming_its_completion(
+        &self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo2],
+        fence: vk::Fence,
+    ) -> Result<HostVulkanQueueSubmissionsSnapshot> {
         let Some(submission_queue) = self.submission_queue_for(queue) else {
             return Err(Error::GpuError(format!(
                 "queue submission to {queue:?}, a queue this device did not hand out"
@@ -2837,7 +2851,7 @@ impl HostVulkanDevice {
             .mutex_for_queue(queue)
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        unsafe {
+        let this_submission = unsafe {
             completion_timelines.submit_signaling_completion_timeline(
                 submission_queue,
                 queue,
@@ -2846,7 +2860,7 @@ impl HostVulkanDevice {
             )
         }?;
         self.queue_submission_count.fetch_add(1, Ordering::Relaxed);
-        Ok(())
+        Ok(this_submission)
     }
 
     /// The latest submission made so far on every queue of this device.
@@ -2907,11 +2921,25 @@ impl HostVulkanDevice {
         fences: &[vk::Fence],
         waited_by: std::fmt::Arguments<'_>,
     ) -> Result<()> {
-        self.recorder_and_compute_kernel_fence_wait_count
+        self.counted_host_waits_on_gpu_work_count
             .fetch_add(1, Ordering::Relaxed);
         unsafe { self.device.wait_for_fences(fences, true, u64::MAX) }
             .map(|_| ())
             .map_err(|e| Error::GpuError(format!("{waited_by}: wait_for_fences: {e}")))
+    }
+
+    /// Block until every queue submission `snapshot` names has completed,
+    /// counting the stall as [`Self::wait_for_fences_blocking_counted`] does.
+    pub(crate) fn wait_for_queue_submissions_blocking_counted(
+        &self,
+        snapshot: &HostVulkanQueueSubmissionsSnapshot,
+        waited_by: std::fmt::Arguments<'_>,
+    ) -> Result<()> {
+        self.counted_host_waits_on_gpu_work_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.wait_for_every_queue_submission_in_snapshot(snapshot, std::time::Duration::MAX)
+            .map(|_| ())
+            .map_err(|e| Error::GpuError(format!("{waited_by}: {e}")))
     }
 
     /// Every `vkQueueSubmit2` this device has made.
@@ -2919,9 +2947,10 @@ impl HostVulkanDevice {
         self.queue_submission_count.load(Ordering::Relaxed)
     }
 
-    /// Fence waits made through [`Self::wait_for_fences_blocking_counted`].
-    pub fn recorder_and_compute_kernel_fence_wait_count(&self) -> usize {
-        self.recorder_and_compute_kernel_fence_wait_count
+    /// Waits made through [`Self::wait_for_fences_blocking_counted`] and
+    /// [`Self::wait_for_queue_submissions_blocking_counted`].
+    pub fn counted_host_waits_on_gpu_work_count(&self) -> usize {
+        self.counted_host_waits_on_gpu_work_count
             .load(Ordering::Relaxed)
     }
 
