@@ -92,6 +92,27 @@ impl ProjectRepository {
         Ok(repository)
     }
 
+    /// Open the project whose files are already written in `project_directory`, and commit them
+    /// as its first commit.
+    pub fn commit_a_written_project_as_its_first(
+        project_directory: &Path,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        refuse_an_author_without_a_name(author)?;
+        let repository = Self::open(project_directory)?;
+        if repository.history.head_commit()?.is_some() {
+            return Err(ProjectRepositoryRefusal::ProjectAlreadyCommitted {
+                project_directory: project_directory.to_path_buf(),
+            });
+        }
+        repository.history.commit_tracked_files(
+            &repository.tracked_files(&repository.assets_by_uuid)?,
+            author,
+            &format!("create_project {}", repository.project_file.name),
+        )?;
+        Ok(repository)
+    }
+
     /// Open the project in `project_directory`, its assets read from their sidecars.
     pub fn open(project_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
         refuse_a_relative_project_directory(project_directory)?;
@@ -372,7 +393,9 @@ impl ProjectRepository {
             } => {
                 let current = staged_asset(asset)?;
                 if current.kind == ProjectAssetKind::Stream {
-                    return Err(ProjectRepositoryRefusal::StreamAssetHasNoImportSettings(asset));
+                    return Err(ProjectRepositoryRefusal::StreamAssetHasNoImportSettings(
+                        asset,
+                    ));
                 }
                 self.refuse_a_path_through_a_symbolic_link(&current.path)?;
                 if current.import_settings == import_settings {

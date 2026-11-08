@@ -1,0 +1,279 @@
+{
+  "asset": "cf68ee72-cde2-5f89-97eb-7d78106c30c0",
+  "links": [
+    {
+      "source": {
+        "node": "1a9326b1-9430-5ab4-8208-d1363d1a42c3",
+        "port": "video"
+      },
+      "target": {
+        "node": "6cb95a6e-9ddf-58a3-b70f-b29c63a5ac7b",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "dab6a2e2-dbe3-5abc-b33e-2b57bbab01f4",
+        "port": "video"
+      },
+      "target": {
+        "node": "eafd1878-7b8d-588c-bc1f-74d16da876d5",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "eafd1878-7b8d-588c-bc1f-74d16da876d5",
+        "port": "encoded_video"
+      },
+      "target": {
+        "node": "7c401dc0-ad4a-5f9f-84c9-59cabba57d4f",
+        "port": "encoded_video"
+      }
+    },
+    {
+      "source": {
+        "node": "6cb95a6e-9ddf-58a3-b70f-b29c63a5ac7b",
+        "port": "encoded_video"
+      },
+      "target": {
+        "node": "b4f2dd89-fd24-58bf-82f4-a31ba6f579e2",
+        "port": "encoded_video"
+      }
+    },
+    {
+      "source": {
+        "node": "9d7d950a-8d1c-5d21-86e2-5f933098cd15",
+        "port": "audio"
+      },
+      "target": {
+        "node": "a80636de-5b3e-5cb1-b697-5373d709bc31",
+        "port": "audio"
+      }
+    },
+    {
+      "source": {
+        "node": "a80636de-5b3e-5cb1-b697-5373d709bc31",
+        "port": "encoded_audio"
+      },
+      "target": {
+        "node": "8ec897fd-a367-5244-a570-9383faeda71f",
+        "port": "encoded_audio"
+      }
+    },
+    {
+      "source": {
+        "node": "8ec897fd-a367-5244-a570-9383faeda71f",
+        "port": "audio"
+      },
+      "target": {
+        "node": "b27e1857-198d-5233-b521-72960d18ecd4",
+        "port": "audio"
+      }
+    },
+    {
+      "source": {
+        "node": "f926bf51-5150-53fb-8dc7-1ece33b45980",
+        "port": "content"
+      },
+      "target": {
+        "node": "4009f2a5-6426-53f4-8afd-a783ced2ebc6",
+        "port": "video"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "height": 720,
+        "width": 1280
+      },
+      "id": "1a9326b1-9430-5ab4-8208-d1363d1a42c3",
+      "name": "testpatternsource",
+      "studio": {
+        "colour": "#3b82f6",
+        "comment": "the pattern every encoder reads",
+        "group": "sources",
+        "position": [
+          120,
+          80
+        ]
+      },
+      "type": "tatolab.testpattern:TestPatternSource"
+    },
+    {
+      "config": {
+        "device_id": "/dev/video0",
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "dab6a2e2-dbe3-5abc-b33e-2b57bbab01f4",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {
+        "bitrate_bps": 4000000,
+        "effort_level": 1,
+        "fps": 30,
+        "height": 1080,
+        "keyframe_interval_seconds": 2,
+        "width": 1920
+      },
+      "id": "eafd1878-7b8d-588c-bc1f-74d16da876d5",
+      "name": "h264encoder",
+      "type": "tatolab.h264:H264Encoder"
+    },
+    {
+      "config": {
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "7c401dc0-ad4a-5f9f-84c9-59cabba57d4f",
+      "name": "h264decoder",
+      "type": "tatolab.h264:H264Decoder"
+    },
+    {
+      "config": {
+        "bitrate_bps": 4000000,
+        "effort_level": 1,
+        "fps": 30,
+        "height": 1080,
+        "keyframe_interval_seconds": 2,
+        "width": 1920
+      },
+      "id": "6cb95a6e-9ddf-58a3-b70f-b29c63a5ac7b",
+      "name": "h265encoder",
+      "type": "tatolab.h265:H265Encoder"
+    },
+    {
+      "config": {
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "b4f2dd89-fd24-58bf-82f4-a31ba6f579e2",
+      "name": "h265decoder",
+      "type": "tatolab.h265:H265Decoder"
+    },
+    {
+      "config": {
+        "door": "auto",
+        "name": "Golden Camera"
+      },
+      "id": "4009f2a5-6426-53f4-8afd-a783ced2ebc6",
+      "name": "virtualcamerasink",
+      "type": "tatolab.virtualcamera:VirtualCameraSink"
+    },
+    {
+      "config": {
+        "device_id": "default"
+      },
+      "id": "9d7d950a-8d1c-5d21-86e2-5f933098cd15",
+      "name": "microphonesource",
+      "type": "tatolab.microphone:MicrophoneSource"
+    },
+    {
+      "config": {
+        "application": "audio",
+        "bitrate_bps": 64000
+      },
+      "id": "a80636de-5b3e-5cb1-b697-5373d709bc31",
+      "name": "opusencoder",
+      "type": "tatolab.opus:OpusEncoder"
+    },
+    {
+      "config": {},
+      "id": "8ec897fd-a367-5244-a570-9383faeda71f",
+      "name": "opusdecoder",
+      "type": "tatolab.opus:OpusDecoder"
+    },
+    {
+      "config": {
+        "device_id": "default"
+      },
+      "id": "b27e1857-198d-5233-b521-72960d18ecd4",
+      "name": "speakersink",
+      "type": "tatolab.speaker:SpeakerSink"
+    },
+    {
+      "config": {
+        "broadcast": "golden-desk",
+        "kind": "moq-relay",
+        "relay_url": "http://127.0.0.1:4443"
+      },
+      "id": "d2a5ae2f-3265-5bce-9147-de9d746c9b22",
+      "name": "moqgateway",
+      "type": "tatolab.moq:MoqGateway"
+    },
+    {
+      "config": {
+        "broadcast": "golden-desk/camera-rig.hang",
+        "codec": "h264",
+        "family": "packets",
+        "gateway": {
+          "node": "moqgateway"
+        },
+        "max_age": 40,
+        "track": "camerasource/video"
+      },
+      "id": "f926bf51-5150-53fb-8dc7-1ece33b45980",
+      "name": "moqtrackreceive",
+      "type": "tatolab.moq:MoqTrackReceive"
+    },
+    {
+      "config": {
+        "attribute": "samples",
+        "channel_names": [
+          "left",
+          "right"
+        ],
+        "sample_rate": 48000
+      },
+      "id": "dc9af492-6853-5152-82ed-dcf3eb0ab3e5",
+      "name": "arraytochannels",
+      "type": "tatolab.stream:ArrayToChannels"
+    },
+    {
+      "config": {
+        "attribute": "image",
+        "format": "rgba8_unorm"
+      },
+      "id": "3c08a4b0-5f82-5799-8a30-491d7c60cb23",
+      "name": "arraytoimage",
+      "type": "tatolab.stream:ArrayToImage"
+    },
+    {
+      "config": {},
+      "id": "71f120d4-560b-5cd0-81fa-4e5562f1597b",
+      "name": "channelstoarray",
+      "type": "tatolab.stream:ChannelsToArray"
+    },
+    {
+      "config": {
+        "channel_names": [
+          "level"
+        ]
+      },
+      "id": "f3b84df9-59a8-5892-a40e-b8881c02d0e0",
+      "name": "channelstorecords",
+      "type": "tatolab.stream:ChannelsToRecords"
+    },
+    {
+      "config": {},
+      "id": "206c9800-a200-5c5f-be38-0f2d31fa4797",
+      "name": "imagetoarray",
+      "type": "tatolab.stream:ImageToArray"
+    },
+    {
+      "config": {
+        "channel_names": [
+          "level"
+        ],
+        "sample_rate": 60
+      },
+      "id": "ca520183-cef0-5b51-b4c7-1d54e5f985bb",
+      "name": "recordstochannels",
+      "type": "tatolab.stream:RecordsToChannels"
+    }
+  ]
+}

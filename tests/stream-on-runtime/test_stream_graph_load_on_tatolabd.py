@@ -4,15 +4,14 @@
 """What the runtime loads from a stream's graph, and what its load refuses by name.
 
 A graph reaches `tatolabd` through `run_project`, as `tatolab run` makes it: the
-runtime compiles the project's stream in the project's own interpreter and
-loads the graph that compile printed. A graph written here by hand goes
-through a project whose interpreter prints it as the compile document, so the
-runtime parses exactly the text a test wrote; a `@stream` function is compiled
-from the suite project. Every run here but the rig's is on a `tatolabd` that
-reaches no Vulkan driver: a compile the runtime refuses, or a load it records
-failed, ends `tatolab run` 1 with the reason; a load that succeeds fails at
-its start, at the GPU, before any device opens — and the runtime keeps serving
-either way.
+runtime reads each graph document of the project and loads the graph it holds. A
+graph written here by hand is written as a project's graph document, the text a
+test wrote verbatim but for its stream asset, so the runtime parses exactly that
+text; a `@stream` function is compiled in this process to its graph document. Every
+run here but the rig's is on a `tatolabd` that reaches no Vulkan driver: a document
+the runtime cannot load is a stream recorded failed with the reason; a load that
+succeeds fails at its start, at the GPU, before any device opens — and the runtime
+keeps serving either way.
 
 A Python node type is described in a processor interpreter started from the
 suite venv, which holds `tatolab-stream` and nothing of the runtime.
@@ -83,17 +82,18 @@ OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
 DESCRIBED_NODE_MODULE = "runtime_load_nodes"
 DESCRIBED_NODE_TYPE = f"{DESCRIBED_NODE_MODULE}:LoadedFrameRelay"
 
-# The compile document's parser refuses JSON nested past the depth it reads.
-COMPILE_DOCUMENT_NESTED_PAST_THE_MAXIMUM = "recursion limit exceeded"
-NOT_THE_COMPILE_DOCUMENT = "standard output is not the compile document"
+# The graph document's parser refuses JSON nested past the depth it reads.
+GRAPH_DOCUMENT_NESTED_PAST_THE_MAXIMUM = "recursion limit exceeded"
+#: How the runtime names a graph document it cannot read a graph from.
+A_GRAPH_DOCUMENT_THAT_DOES_NOT_LOAD = "does not load"
 
 RunStreamOnTatolabdWithNoVulkanDriver = Callable[..., StreamRunWithNoVulkanDriverOutcome]
 
 
-def pattern_to_encoder_graph(*, stream_function_name: str = "pattern-to-encoder") -> "dict[str, Any]":
+def pattern_to_encoder_graph(*, stream_name: str = "pattern-to-encoder") -> "dict[str, Any]":
     """A test pattern into an H.264 encoder."""
     return {
-        "stream": stream_function_name,
+        "stream": stream_name,
         "nodes": [
             {"name": "testpatternsource", "type": TEST_PATTERN_MODULE_TYPE, "config": {}},
             {
@@ -112,7 +112,7 @@ def pattern_to_encoder_graph(*, stream_function_name: str = "pattern-to-encoder"
 
 
 def empty_graph() -> "dict[str, Any]":
-    """What a stream whose function adds nothing compiles to."""
+    """A graph of no node: what a stream whose function adds nothing compiles to."""
     return {"stream": "main", "nodes": [], "links": []}
 
 
@@ -170,7 +170,9 @@ def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
 
     assert loaded_with(run_outcome) == 2
-    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(
+        graph, project_directory=run_outcome.tatolab_run.working_directory
+    )
 
 
 def test_the_deepest_config_the_builder_compiles_loads(
@@ -186,7 +188,7 @@ def test_the_deepest_config_the_builder_compiles_loads(
 def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_load(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    """The compile document's parser reads the deepest config the builder
+    """The graph document's parser reads the deepest config the builder
     compiles and no deeper, so one container past it, written by hand, is refused."""
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
         {
@@ -204,8 +206,8 @@ def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_l
     )
 
     refusal = refused_naming(run_outcome)
-    assert NOT_THE_COMPILE_DOCUMENT in refusal
-    assert COMPILE_DOCUMENT_NESTED_PAST_THE_MAXIMUM in refusal
+    assert "graph document" in refusal
+    assert GRAPH_DOCUMENT_NESTED_PAST_THE_MAXIMUM in refusal
 
 
 @pytest.mark.parametrize("not_a_number", ["NaN", "Infinity"], ids=["nan", "infinity"])
@@ -213,15 +215,15 @@ def test_nan_and_infinity_in_a_compiled_config_are_refused_as_not_json(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     not_a_number: str,
 ):
-    """JSON carries neither, so a compile document holding one is not one; the
-    builder refuses both before a document is printed."""
+    """JSON carries neither, so a graph document holding one is not one; the
+    builder refuses both before a document is written."""
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
         '{"stream": "nan", "nodes": [{"name": "openconfigsink", "type": "%s", "config": {"value": %s}}]}'
         % (OPEN_CONFIG_SINK_TYPE, not_a_number)
     )
 
     refusal = refused_naming(run_outcome)
-    assert NOT_THE_COMPILE_DOCUMENT in refusal
+    assert A_GRAPH_DOCUMENT_THAT_DOES_NOT_LOAD in refusal
     assert "expected value" in refusal
 
 
@@ -230,7 +232,7 @@ def test_a_compiled_graph_that_is_a_list_rather_than_a_graph_is_refused_naming_i
 ):
     refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver('[{"name": "x", "type": "y"}]'))
 
-    assert "the graph does not parse" in refusal
+    assert "names no stream asset" in refusal
 
 
 def test_a_lone_surrogate_escape_in_a_compiled_config_is_refused_naming_it(
@@ -242,14 +244,14 @@ def test_a_lone_surrogate_escape_in_a_compiled_config_is_refused_naming_it(
     )
 
     refusal = refused_naming(run_outcome)
-    assert NOT_THE_COMPILE_DOCUMENT in refusal
+    assert A_GRAPH_DOCUMENT_THAT_DOES_NOT_LOAD in refusal
     assert "lone leading surrogate" in refusal
 
 
 def test_a_config_integer_wider_than_64_bits_in_a_compiled_graph_is_refused_naming_it(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    """The builder refuses one before a document is printed; a compile document
+    """The builder refuses one before a document is written; a graph document
     written any other way must not reach a node carrying a different number."""
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
         '{"stream": "wide", "nodes": [{"name": "openconfigsink", "type": "%s", "config": {"value": %d}}]}'
@@ -290,14 +292,16 @@ def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
     assert DESCRIBED_NODE_MODULE not in sys.modules
 
 
-def test_the_stream_id_casts_the_function_name_of_its_location(
+def test_the_stream_id_casts_the_stream_name_of_its_graph_document(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    graph = pattern_to_encoder_graph(stream_function_name="Front Camera")
+    graph = pattern_to_encoder_graph(stream_name="Front Camera")
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
 
     assert loaded_with(run_outcome) == 2
-    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(
+        graph, project_directory=run_outcome.tatolab_run.working_directory
+    )
     assert run_outcome.loaded_stream_id is not None
     assert "-front-camera-" in run_outcome.loaded_stream_id
 
@@ -337,38 +341,46 @@ def test_an_empty_graph_is_refused_by_name(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     graph = empty_graph()
-    refusal = refused_naming(run_stream_on_tatolabd_with_no_vulkan_driver(graph))
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
+    refusal = refused_naming(run_outcome)
+    stream_id = stream_id_of_a_hand_written_graph(
+        graph, project_directory=run_outcome.tatolab_run.working_directory
+    )
 
-    assert f"the stream `{stream_id_of_a_hand_written_graph(graph)}` holds no node" in refusal
+    assert f"the stream `{stream_id}` holds no node" in refusal
     assert "stream_builder.add(" in refusal
 
 
-def test_a_graph_naming_no_stream_loads_under_the_id_of_its_location(
+def test_a_graph_naming_no_stream_loads_as_the_main_stream_of_its_project(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    """A stream is keyed by the id its location computes to, so the graph's own
-    `stream` is only the default display name and a graph may carry none."""
+    """A stream is named by its graph document's file name, so the graph's own `stream`
+    names nothing the runtime keys by and a graph may carry none."""
     graph = pattern_to_encoder_graph()
     del graph["stream"]
 
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
 
     assert loaded_with(run_outcome) == 2
-    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(
+        graph, project_directory=run_outcome.tatolab_run.working_directory
+    )
 
 
-def test_a_function_name_casting_to_nothing_is_left_out_of_the_stream_id(
+def test_a_stream_name_casting_to_nothing_is_left_out_of_the_stream_id(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    graph = pattern_to_encoder_graph(stream_function_name="..")
+    graph = pattern_to_encoder_graph(stream_name="--")
 
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
 
     assert loaded_with(run_outcome) == 2
-    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(graph)
+    assert run_outcome.loaded_stream_id == stream_id_of_a_hand_written_graph(
+        graph, project_directory=run_outcome.tatolab_run.working_directory
+    )
 
 
-def test_a_compile_document_nested_far_past_the_maximum_is_refused_rather_than_crashing(
+def test_a_graph_document_nested_far_past_the_maximum_is_refused_rather_than_crashing(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     nested_far_past_the_maximum = "[" * 100_000 + "]" * 100_000
@@ -378,8 +390,8 @@ def test_a_compile_document_nested_far_past_the_maximum_is_refused_rather_than_c
     )
 
     refusal = refused_naming(run_outcome)
-    assert NOT_THE_COMPILE_DOCUMENT in refusal
-    assert COMPILE_DOCUMENT_NESTED_PAST_THE_MAXIMUM in refusal
+    assert "graph document" in refusal
+    assert GRAPH_DOCUMENT_NESTED_PAST_THE_MAXIMUM in refusal
 
 
 def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_and_the_setting(

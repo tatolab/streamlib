@@ -1,67 +1,57 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A stream's location — where its code lives — and the stream id the runtime
-//! computes from it, which keys and addresses the stream.
+//! A stream's location — its project and its stream asset, by UUID, and the directory the
+//! project sits in — and the stream id the runtime computes for it, which keys and addresses
+//! the stream.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 use crate::core::graph::{EXPOSED_NAME_MAXIMUM_LENGTH, cast_exposed_name_to_url_safe};
 
 /// Longest a stream id is, in characters: the exposed-name cast's bound.
 pub(crate) const STREAM_ID_MAXIMUM_LENGTH: usize = EXPOSED_NAME_MAXIMUM_LENGTH;
 
-/// How many hex digits of the location's SHA-256 a stream id carries.
+/// How many hex digits of the SHA-256 over the two UUIDs a stream id carries.
 const STREAM_ID_HASH_HEX_DIGITS: usize = 6;
 
-/// What joins the folder, the function and the hash in a stream id.
+/// What joins the project's name, the stream's name and the hash in a stream id.
 const STREAM_ID_PART_SEPARATOR: char = '-';
 
-/// Where a stream's code lives: its project directory, resolved, and its
-/// stream function as `module:qualname`.
+/// Where a stream lives: its project's UUID and its stream asset's UUID, which identify it,
+/// and the directory the project sat in at its last load.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamLocation {
-    /// The project directory's absolute path, symlinks resolved.
+    /// The project directory's absolute path, symlinks resolved, as of the stream's last load.
     pub project_directory: PathBuf,
-    /// The stream function as `module:qualname`; `stream.py:main` is `stream:main`.
-    pub stream_function: String,
+    /// The project's UUID, from its `tatolab-project.json`.
+    pub project: Uuid,
+    /// The stream asset's UUID, from its graph document.
+    pub stream_asset: Uuid,
 }
 
 impl StreamLocation {
-    /// Where the project at `project_directory` is recorded while it gives no
-    /// stream — its `.venv` cannot be made, or its entry does not import or
-    /// defines no `@stream`: the
-    /// project directory with no stream function, so its stream id is
-    /// `<folder>-<hash>`.
-    pub fn of_a_project_that_gave_no_stream(project_directory: PathBuf) -> Self {
-        Self {
-            project_directory,
-            stream_function: String::new(),
-        }
+    /// Whether `other` locates the same stream: the same project and stream asset, wherever
+    /// the project sits.
+    pub fn is_the_same_stream_as(&self, other: &StreamLocation) -> bool {
+        self.project == other.project && self.stream_asset == other.stream_asset
     }
 
-    /// Whether this is where a project is recorded while it gives no stream,
-    /// holding no stream function.
-    pub fn is_a_project_that_gave_no_stream(&self) -> bool {
-        self.stream_function.is_empty()
-    }
-
-    /// The stream id of this location, `<folder>-<function>-<hash>`: the
-    /// project directory's last component and the function's name, each
-    /// cast, and the first six hex digits of SHA-256 over
-    /// `<project_directory>\n<module:qualname>`. A part that casts to nothing
-    /// is left out; folder and function are cut so the id fits the cast's 63
-    /// characters, the hash always whole.
-    pub fn stream_id(&self) -> String {
+    /// The stream id this location is first recorded under, `<project>-<stream>-<hash>`: the
+    /// project's name and the stream's name, each cast, and the first six hex digits of
+    /// SHA-256 over `<project uuid>\n<stream asset uuid>`. A part that casts to nothing is left
+    /// out; the names are cut so the id fits the cast's 63 characters, the hash always whole.
+    pub fn stream_id_named(&self, project_name: &str, stream_name: &str) -> String {
         let hash = self.location_hash_hex_prefix();
-        let cast_parts: Vec<String> = [self.project_folder_name(), self.stream_function_name()]
+        let cast_parts: Vec<String> = [project_name, stream_name]
             .into_iter()
             .filter_map(|part| {
-                cast_exposed_name_to_url_safe(&part)
+                cast_exposed_name_to_url_safe(part)
                     .ok()
                     .map(|cast| cast.into_owned())
             })
@@ -77,33 +67,13 @@ impl StreamLocation {
         stream_id
     }
 
-    /// The project directory's last component, empty when it has none.
-    pub(crate) fn project_folder_name(&self) -> String {
-        self.project_directory
-            .file_name()
-            .map(|folder_name| folder_name.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    }
-
-    /// The function's own name: the last segment of its qualname.
-    pub(crate) fn stream_function_name(&self) -> String {
-        let qualname = self
-            .stream_function
-            .rsplit_once(':')
-            .map_or(self.stream_function.as_str(), |(_module, qualname)| {
-                qualname
-            });
-        qualname
-            .rsplit_once('.')
-            .map_or(qualname, |(_enclosing, name)| name)
-            .to_string()
-    }
-
+    /// The first [`STREAM_ID_HASH_HEX_DIGITS`] hex digits of SHA-256 over
+    /// `<project uuid>\n<stream asset uuid>`.
     fn location_hash_hex_prefix(&self) -> String {
         let mut location_hash = Sha256::new();
-        location_hash.update(self.project_directory.to_string_lossy().as_bytes());
+        location_hash.update(self.project.to_string().as_bytes());
         location_hash.update(b"\n");
-        location_hash.update(self.stream_function.as_bytes());
+        location_hash.update(self.stream_asset.to_string().as_bytes());
         let digest = location_hash.finalize();
         let mut hex: String = digest[..STREAM_ID_HASH_HEX_DIGITS.div_ceil(2)]
             .iter()
@@ -114,22 +84,20 @@ impl StreamLocation {
     }
 }
 
-/// `<project directory>, <module:qualname>`, as a refusal names a location.
 impl std::fmt::Display for StreamLocation {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "{}, {}",
-            self.project_directory.display(),
-            self.stream_function
+            "the stream asset {} of the project {} in {}",
+            self.stream_asset,
+            self.project,
+            self.project_directory.display()
         )
     }
 }
 
-/// `cast_parts` — a folder and a function at most — cut so together they hold
-/// at most `characters_left` ASCII characters: an even share each, the second
-/// taking the odd one out, and a part shorter than its share leaving the rest to
-/// the other. A part cut on the separator drops it.
+/// `cast_parts` cut to share `characters_left`: a part shorter than its even share keeps it
+/// whole and leaves the rest to the other; a cut never ends a part on a separator.
 fn parts_cut_to_share(cast_parts: Vec<String>, characters_left: usize) -> Vec<String> {
     let lengths: Vec<usize> = cast_parts.iter().map(String::len).collect();
     if lengths.iter().sum::<usize>() <= characters_left {
@@ -170,10 +138,11 @@ mod tests {
     use super::*;
     use crate::core::graph::is_in_exposed_name_cast_form;
 
-    fn location(project_directory: &str, stream_function: &str) -> StreamLocation {
+    fn location() -> StreamLocation {
         StreamLocation {
-            project_directory: PathBuf::from(project_directory),
-            stream_function: stream_function.to_string(),
+            project_directory: PathBuf::from("/home/someone/hello"),
+            project: Uuid::new_v4(),
+            stream_asset: Uuid::new_v4(),
         }
     }
 
@@ -187,75 +156,58 @@ mod tests {
     }
 
     #[test]
-    fn the_id_is_the_cast_folder_and_function_and_six_hex_digits_of_the_locations_hash() {
-        let hello = location("/home/someone/Hello World", "stream:main");
+    fn the_id_is_the_cast_names_and_six_hex_digits_of_the_hash_over_the_two_uuids() {
+        let hello = location();
 
         assert_eq!(
-            hello.stream_id(),
+            hello.stream_id_named("Hello World", "main"),
             format!(
                 "hello-world-main-{}",
-                sha256_hex_prefix_of("/home/someone/Hello World\nstream:main")
+                sha256_hex_prefix_of(&format!("{}\n{}", hello.project, hello.stream_asset))
             )
         );
     }
 
     #[test]
-    fn the_function_part_is_the_last_segment_of_the_qualname() {
-        let nested = location("/srv/rover", "acme_rover.streams:Rigs.camera_rig");
+    fn a_moved_project_keeps_the_hash_and_another_stream_asset_does_not() {
+        let at_home = location();
+        let moved = StreamLocation {
+            project_directory: PathBuf::from("/srv/elsewhere"),
+            ..at_home.clone()
+        };
+        let another_stream = StreamLocation {
+            stream_asset: Uuid::new_v4(),
+            ..at_home.clone()
+        };
 
-        assert!(
-            nested.stream_id().starts_with("rover-camera_rig-"),
-            "{}",
-            nested.stream_id()
-        );
-    }
-
-    #[test]
-    fn two_worktrees_of_one_project_get_different_ids_and_one_location_always_the_same() {
-        let main_worktree = location("/home/someone/hello", "stream:main");
-        let second_worktree = location("/home/someone/worktrees/hello", "stream:main");
-        let other_function = location("/home/someone/hello", "stream:back");
-
-        assert_ne!(main_worktree.stream_id(), second_worktree.stream_id());
-        assert_ne!(main_worktree.stream_id(), other_function.stream_id());
+        assert!(moved.is_the_same_stream_as(&at_home));
         assert_eq!(
-            main_worktree.stream_id(),
-            location("/home/someone/hello", "stream:main").stream_id()
+            moved.stream_id_named("hello", "main"),
+            at_home.stream_id_named("hello", "main")
+        );
+        assert!(!another_stream.is_the_same_stream_as(&at_home));
+        assert_ne!(
+            another_stream.stream_id_named("hello", "main"),
+            at_home.stream_id_named("hello", "main")
         );
     }
 
     #[test]
     fn a_part_that_casts_to_nothing_is_left_out() {
-        let root = location("/", "stream:main");
-        let unnamed_folder = location("/srv/日本", "stream:main");
-        let nothing_left = location("/srv/日本", "stream:日本");
+        let each = location();
+        let hash = each.location_hash_hex_prefix();
 
-        let hash_of = |location: &StreamLocation| {
-            sha256_hex_prefix_of(&format!(
-                "{}\n{}",
-                location.project_directory.display(),
-                location.stream_function
-            ))
-        };
-        assert_eq!(root.stream_id(), format!("main-{}", hash_of(&root)));
-        assert_eq!(
-            unnamed_folder.stream_id(),
-            format!("main-{}", hash_of(&unnamed_folder))
-        );
-        assert_eq!(nothing_left.stream_id(), hash_of(&nothing_left));
+        assert_eq!(each.stream_id_named("", "main"), format!("main-{hash}"));
+        assert_eq!(each.stream_id_named("日本", "main"), format!("main-{hash}"));
+        assert_eq!(each.stream_id_named("日本", "日本"), hash);
     }
 
     #[test]
-    fn a_long_folder_and_function_are_cut_to_fit_63_characters_with_the_hash_whole() {
-        let long_folder = "f".repeat(80);
-        let long_function = "g".repeat(80);
-        let both_long = location(
-            &format!("/srv/{long_folder}"),
-            &format!("stream:{long_function}"),
-        );
-        let long_folder_short_function = location(&format!("/srv/{long_folder}"), "stream:main");
+    fn long_names_are_cut_to_fit_63_characters_with_the_hash_whole() {
+        let each = location();
+        let hash = each.location_hash_hex_prefix();
 
-        let both_long_id = both_long.stream_id();
+        let both_long_id = each.stream_id_named(&"f".repeat(80), &"g".repeat(80));
         assert_eq!(
             both_long_id.len(),
             STREAM_ID_MAXIMUM_LENGTH,
@@ -263,33 +215,20 @@ mod tests {
         );
         assert_eq!(
             both_long_id,
-            format!(
-                "{}-{}-{}",
-                "f".repeat(27),
-                "g".repeat(28),
-                both_long.location_hash_hex_prefix()
-            )
+            format!("{}-{}-{hash}", "f".repeat(27), "g".repeat(28))
         );
-        let short_function_id = long_folder_short_function.stream_id();
         assert_eq!(
-            short_function_id,
-            format!(
-                "{}-main-{}",
-                "f".repeat(51),
-                long_folder_short_function.location_hash_hex_prefix()
-            )
+            each.stream_id_named(&"f".repeat(80), "main"),
+            format!("{}-main-{hash}", "f".repeat(51))
         );
     }
 
     #[test]
     fn a_part_cut_at_a_separator_never_leaves_two_in_a_row() {
-        let folder_cut_at_a_dash = format!("{}-{}", "a".repeat(26), "b".repeat(40));
-        let cut = location(
-            &format!("/srv/{folder_cut_at_a_dash}"),
-            &format!("stream:{}", "g".repeat(80)),
+        let stream_id = location().stream_id_named(
+            &format!("{}-{}", "a".repeat(26), "b".repeat(40)),
+            &"g".repeat(80),
         );
-
-        let stream_id = cut.stream_id();
 
         assert!(!stream_id.contains("--"), "{stream_id}");
         assert!(
@@ -300,13 +239,14 @@ mod tests {
 
     #[test]
     fn every_id_is_already_in_cast_form() {
-        for each in [
-            location("/home/someone/Hello World", "stream:main"),
-            location("/", "stream:日本"),
-            location(&format!("/srv/{}", "x-".repeat(60)), "m:Ünïcödé"),
-            location("/srv/.hidden", "pkg.mod:Outer.inner"),
+        let each = location();
+        for (project_name, stream_name) in [
+            ("Hello World", "main"),
+            ("", "日本"),
+            (&*"x-".repeat(60), "Ünïcödé"),
+            (".hidden", "Outer.inner"),
         ] {
-            let stream_id = each.stream_id();
+            let stream_id = each.stream_id_named(project_name, stream_name);
             assert!(is_in_exposed_name_cast_form(&stream_id), "{stream_id}");
             assert!(stream_id.len() <= STREAM_ID_MAXIMUM_LENGTH, "{stream_id}");
         }

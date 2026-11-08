@@ -1,18 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A processor's identity is its class's import path — and `stream_builder.add` refuses one
-no interpreter could import.
+"""A processor's identity is its class's import path, and it does not move.
 
 Every Python processor runs in its own child process, which reaches the class by
-importing it. A class the child cannot import has no host anywhere, so the
-refusal belongs at `stream_builder.add` — where the author is naming the class — rather
-than at spawn, where it would surface as a failed child.
-
-The other half is that an accepted name does not move. Identity is what the
-registry, the control plane and the helper spawn all agree on, so one that
-varied with how the user named their stream to `tatolab run` would be three
-processors wearing one name.
+importing it. Identity is what the registry, the control plane and the helper
+spawn all agree on, so one that varied with how the user named their stream to
+`tatolab run` would be three processors wearing one name.
 
 Every arm is observed at the load, which is where identity is derived — before
 the engine would initialize a GPU context. Each runs on a `tatolabd` that
@@ -54,38 +48,6 @@ from tatolab.stream import StreamBuilder, stream
 def identity_stability(stream_builder: StreamBuilder) -> None:
     """The stream the project loads."""
     stream_builder.add(IdentityStableProcessor)
-'''
-
-ENTRY_FILE_PROCESSOR_STREAM_SOURCE = '''\
-from tatolab.stream import StreamBuilder, node, stream
-
-
-@node(execution="continuous", interval_ms=1)
-class EntryFileProcessor:
-    """Declared in the entry file, which is exactly what makes it unhostable."""
-
-    def process(self, ctx) -> None: ...
-
-
-@stream
-def a_processor_defined_in_the_entry_file(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(EntryFileProcessor)
-'''
-
-FUNCTION_LOCAL_PROCESSOR_STREAM_SOURCE = '''\
-from tatolab.stream import StreamBuilder, node, stream
-
-
-@stream
-def a_function_local_processor(stream_builder: StreamBuilder) -> None:
-    def build_processor() -> type:
-        @node(execution="continuous", interval_ms=1)
-        class FunctionLocalProcessor:
-            def process(self, ctx) -> None: ...
-
-        return FunctionLocalProcessor
-
-    stream_builder.add(build_processor())
 '''
 
 IMPORTABLE_PROCESSOR_STREAM_SOURCE = '''\
@@ -144,55 +106,11 @@ def run_the_stream_entry(
     )
 
 
-def test_a_processor_declared_in_the_entry_file_is_refused(
-    make_tatolab_project: MakeTatolabProject,
-    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
-):
-    """`__main__:Type` names the child's own entry file, not the user's class."""
-    run_outcome = run_the_stream_entry(
-        make_tatolab_project,
-        run_stream_on_tatolabd_with_no_vulkan_driver,
-        {"stream.py": ENTRY_FILE_PROCESSOR_STREAM_SOURCE},
-    )
-    refusal = run_outcome.failed_or_refused_because or ""
-
-    assert run_outcome.failed_or_refused, run_outcome.tatolabd_stderr_text_during_the_run
-    assert "__main__:EntryFileProcessor" in refusal, (
-        f"the refusal must show the unimportable identity:\n{run_outcome.tatolabd_stderr_text_during_the_run}"
-    )
-    assert "importable module" in refusal, (
-        f"the refusal must name the fix, not just the problem:\n{run_outcome.tatolabd_stderr_text_during_the_run}"
-    )
-    assert not run_outcome.loaded, run_outcome.tatolabd_stderr_text_during_the_run
-
-
-def test_a_processor_declared_inside_a_function_is_refused(
-    make_tatolab_project: MakeTatolabProject,
-    run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
-):
-    """`<locals>` marks a class that exists only for the duration of a call."""
-    run_outcome = run_the_stream_entry(
-        make_tatolab_project,
-        run_stream_on_tatolabd_with_no_vulkan_driver,
-        {"stream.py": FUNCTION_LOCAL_PROCESSOR_STREAM_SOURCE},
-    )
-    refusal = run_outcome.failed_or_refused_because or ""
-
-    assert run_outcome.failed_or_refused, run_outcome.tatolabd_stderr_text_during_the_run
-    assert "<locals>" in refusal, (
-        f"the refusal must name what makes the class unimportable:\n{run_outcome.tatolabd_stderr_text_during_the_run}"
-    )
-    assert "config=" in refusal, (
-        f"the refusal must name how to pass what the closure captured:\n"
-        f"{run_outcome.tatolabd_stderr_text_during_the_run}"
-    )
-
-
 def test_the_same_class_in_an_importable_module_is_accepted(
     make_tatolab_project: MakeTatolabProject,
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    """The fix the refusal names is the whole difference — one import line."""
+    """A class the child imports from a module of the project loads."""
     run_outcome = run_the_stream_entry(
         make_tatolab_project,
         run_stream_on_tatolabd_with_no_vulkan_driver,

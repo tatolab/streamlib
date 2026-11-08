@@ -15,6 +15,8 @@ pub enum ProjectRepositoryRefusal {
     },
     #[error("{project_directory} already holds a project")]
     AlreadyAProject { project_directory: PathBuf },
+    #[error("the project in {project_directory} already has a first commit")]
+    ProjectAlreadyCommitted { project_directory: PathBuf },
     #[error("the project directory {0} is not an absolute path")]
     ProjectDirectoryNotAbsolute(PathBuf),
     #[error("the project file {path} could not be read: {why}")]

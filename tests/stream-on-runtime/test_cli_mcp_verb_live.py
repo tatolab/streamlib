@@ -48,7 +48,6 @@ CONTROL_TOOL_NAMES = {
     "create_project",
     "describe_stream_action",
     "cancel_stream_action",
-    "list_project_streams",
     "stop_stream",
     "start_stream",
     "remove_project",

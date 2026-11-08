@@ -2680,12 +2680,6 @@ sys.exit(0)
                 Path::new(LEND_DIRECTORY_FOR_TEST),
             )
             .expect("the test directories hold no path-list separator");
-        let compile_command = super::super::stream_function_compile_in_the_projects_interpreter::stream_function_compile_command(
-            Path::new("/home/someone/my_app"),
-            None,
-            Path::new(LEND_DIRECTORY_FOR_TEST),
-        )
-        .expect("the test directories hold no path-list separator");
         for (command_kind, command) in [
             ("bootstrap", &bootstrap_command),
             ("describe", &describe_command),
@@ -2705,12 +2699,6 @@ sys.exit(0)
                 assert_eq!(entry, expected, "{name} on the {command_kind} command");
             }
         }
-        let compile_arguments: Vec<&OsStr> = compile_command.get_args().collect();
-        assert_eq!(
-            compile_arguments.first().copied(),
-            Some(OsStr::new("-I")),
-            "the compile ignores every PYTHON* variable: {compile_arguments:?}"
-        );
 
         let project_directory = tempfile::tempdir().expect("a project directory");
         let started = stream_interpreter_command_in_its_project_directory(

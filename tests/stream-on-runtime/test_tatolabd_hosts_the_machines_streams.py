@@ -51,12 +51,14 @@ from local_api_client import LocalApiClient, LocalApiRefusedTheRequest
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE
 from runtime_unit_under_test import MachineDirectoriesUnderATestRoot, RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import (
-    COMPILE_ENTRY_INVOCATION,
     TatolabRunOfAProject,
-    stream_id_of_the_location,
+    graph_document_path_of,
+    stream_asset_held_at,
+    stream_id_of_the_stream_in,
+    write_the_project_file_unless_there,
 )
 
-#: A load is the project's compile, and on the runtime's first start its GPU context.
+#: A load is the project's graph documents read, and on the runtime's first start its GPU context.
 STREAM_RUNNING_TIMEOUT_SECONDS = 90.0
 TATOLABD_EXIT_TIMEOUT_SECONDS = 60.0
 STREAM_LISTING_POLL_INTERVAL_SECONDS = 0.05
@@ -71,8 +73,8 @@ MCP_REQUEST_META = {
     CLIENT_INFO_META_KEY: {"name": "done-means-agent", "version": "0"},
 }
 
-#: The stream functions of the done-means's two projects, each the sole `@stream`
-#: of its own `stream.py` and the default display name of its stream.
+#: The streams of the done-means's two projects, each the sole graph document of its
+#: own project and the default display name of its stream.
 ALPHA_STREAM_FUNCTION = "alpha_pattern"
 BRAVO_STREAM_FUNCTION = "bravo_pattern"
 
@@ -111,7 +113,7 @@ NO_RUNTIME_REFUSAL_PREFIX = "no runtime is running on this machine: nothing answ
 NO_RUNTIME_REFUSAL_REMEDY = "Start one by opening Tato Studio, or by running `tatolabd` in a terminal."
 
 STREAM_RECORD_FILE_MODE = 0o600
-STREAM_RECORD_SCHEMA_VERSION = 5
+STREAM_RECORD_SCHEMA_VERSION = 6
 
 #: `tatolabd`'s line once it serves, naming the re-load it queued for each project.
 RELOADS_QUEUED_AT_THE_START_LOG_LINE_PATTERN = re.compile(
@@ -165,7 +167,8 @@ def stream_stopped_log_line(stream_id: str) -> str:
 def make_project_running_a_pattern_stream(
     make_tatolab_project: "Callable[..., Path]", stream_function_name: str
 ) -> Path:
-    """A project directory of its own whose `stream.py` holds the pattern stream, resolved."""
+    """A project directory of its own whose one graph document holds the pattern stream,
+    resolved."""
     return make_tatolab_project(
         {
             "stream.py": PROJECT_STREAM_SOURCE_TEMPLATE.format(
@@ -177,16 +180,18 @@ def make_project_running_a_pattern_stream(
     ).resolve()
 
 
-def stream_function_of_the_pattern_project(stream_function_name: str) -> str:
-    """The pattern stream's function as its location names it: `stream:<function>`."""
-    return f"stream:{stream_function_name}"
+def location_of_the_pattern_project(project_directory: Path, stream_name: str) -> "dict[str, Any]":
+    """The location the runtime records the project's pattern stream at."""
+    return {
+        "project_directory": str(project_directory),
+        "project": write_the_project_file_unless_there(project_directory)["project"],
+        "stream_asset": stream_asset_held_at(graph_document_path_of(project_directory, stream_name)),
+    }
 
 
-def stream_id_of_the_pattern_project(project_directory: Path, stream_function_name: str) -> str:
+def stream_id_of_the_pattern_project(project_directory: Path, stream_name: str) -> str:
     """The stream id the runtime keys and addresses the project's pattern stream by."""
-    return stream_id_of_the_location(
-        project_directory, stream_function_of_the_pattern_project(stream_function_name)
-    )
+    return stream_id_of_the_stream_in(project_directory, stream_name)
 
 
 def listed_streams_by_id(local_api: LocalApiClient) -> "dict[str, dict[str, Any]]":
@@ -206,10 +211,7 @@ def listing_of(
     return {
         "stream": stream_id,
         "display_name": stream_function_name,
-        "location": {
-            "project_directory": str(project_directory),
-            "stream_function": stream_function_of_the_pattern_project(stream_function_name),
-        },
+        "location": location_of_the_pattern_project(project_directory, stream_function_name),
         "state": state,
         "node_count": node_count,
         "failed_because": None,
@@ -565,42 +567,22 @@ def write_the_record_run_leaves(
 ) -> "dict[str, Any]":
     """Write the stream record `tatolab run` leaves for the project's
     one stream — and, `stopped`, the one a `tatolab stop` after it leaves —
-    its graph and location compiled by the project's own interpreter as the
-    runtime compiles them, under the id that location computes to; return the
-    record.
+    its location read from the project file and its graph document, under the id
+    they compute to; return the record.
 
     Starting a stream needs a GPU context, so a GPU-free test cannot have the
     runtime write it; a stopped stream is never started again by a restart, so
     from here on the runtime treats it exactly as one it stopped itself. A
     record not stopped is one a `tatolabd` start re-loads.
     """
-    project_interpreter = project_directory / ".venv" / "bin" / "python"
-    compiled = subprocess.run(
-        [str(project_interpreter), *COMPILE_ENTRY_INVOCATION, "--verb", "run"],
-        cwd=project_directory,
-        capture_output=True,
-        text=True,
-        check=True,
-        env={name: value for name, value in os.environ.items() if not name.startswith("PYTHON")},
-    )
-    every_stream_document = json.loads(compiled.stdout)
-    [only_stream] = every_stream_document["streams"]
-    compile_document = {
-        "project_directory": every_stream_document["project_directory"],
-        **only_stream,
-    }
+    [graph_document_path] = sorted((project_directory / "streams").glob("*.graph.json"))
+    stream_name = graph_document_path.name.removesuffix(".graph.json")
     record = {
         "schema_version": STREAM_RECORD_SCHEMA_VERSION,
-        "stream_id": stream_id_of_the_location(
-            Path(compile_document["project_directory"]), compile_document["stream_function"]
-        ),
-        "location": {
-            "project_directory": compile_document["project_directory"],
-            "stream_function": compile_document["stream_function"],
-        },
-        "display_name": compile_document["stream_graph"]["stream"],
-        "interpreter": str(project_interpreter),
-        "graph": compile_document["stream_graph"],
+        "stream_id": stream_id_of_the_stream_in(project_directory, stream_name),
+        "location": location_of_the_pattern_project(project_directory.resolve(), stream_name),
+        "display_name": stream_name,
+        "interpreter": str(project_directory / ".venv" / "bin" / "python"),
         "stopped": stopped,
         "failed_because": None,
         "runtime_crashes_in_a_row_implicating_it": 0,
@@ -627,7 +609,6 @@ def test_a_stopped_stream_stays_stopped_across_restarts_and_rm_forgets_it(
         private_machine_directories, project_directory, stopped=True
     )
     assert record["stream_id"] == alpha_stream_id, record
-    assert "exposed" not in record["graph"], record["graph"]
     recorded_project_directory = record["location"]["project_directory"]
     stopped_listing = listing_of(
         alpha_stream_id, ALPHA_STREAM_FUNCTION, "stopped", Path(recorded_project_directory), None
@@ -644,7 +625,7 @@ def test_a_stopped_stream_stays_stopped_across_restarts_and_rm_forgets_it(
         "STATE",
         "NODES",
         "PROJECT",
-        "FUNCTION",
+        "ASSET",
     ]
     assert listed_table.splitlines()[1].split() == [
         alpha_stream_id,
@@ -652,7 +633,7 @@ def test_a_stopped_stream_stays_stopped_across_restarts_and_rm_forgets_it(
         "stopped",
         "-",
         recorded_project_directory,
-        stream_function_of_the_pattern_project(ALPHA_STREAM_FUNCTION),
+        record["location"]["stream_asset"],
     ]
 
     tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
@@ -741,7 +722,7 @@ def test_two_projects_streams_run_come_back_after_a_restart_and_stop_start_rm_ho
             "running",
             str(PROJECT_STREAM_NODE_COUNT),
             str(alpha_project),
-            stream_function_of_the_pattern_project(ALPHA_STREAM_FUNCTION),
+            location_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)["stream_asset"],
         ],
         [
             bravo_stream_id,
@@ -749,7 +730,7 @@ def test_two_projects_streams_run_come_back_after_a_restart_and_stop_start_rm_ho
             "running",
             str(PROJECT_STREAM_NODE_COUNT),
             str(bravo_project),
-            stream_function_of_the_pattern_project(BRAVO_STREAM_FUNCTION),
+            location_of_the_pattern_project(bravo_project, BRAVO_STREAM_FUNCTION)["stream_asset"],
         ],
     ]
     for stream_id, project_directory in ((alpha_stream_id, alpha_project), (bravo_stream_id, bravo_project)):

@@ -785,7 +785,11 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     let files_at_head = repository.history().files_at_head().unwrap();
     assert!(files_at_head.contains_key("streams/cell/arm-control.graph.json"));
     assert!(!files_at_head.contains_key("streams/arm-control.graph.json"));
-    assert!(!files_at_head.keys().any(|path| path.ends_with(".graph.json.asset.json")));
+    assert!(
+        !files_at_head
+            .keys()
+            .any(|path| path.ends_with(".graph.json.asset.json"))
+    );
 
     write_stream_document(
         &fixture.project_directory,
@@ -807,12 +811,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
         }) => assert_eq!(referencing_documents, ["streams/reader.graph.json"]),
         other => panic!("expected the referenced stream to be kept, got {other:?}"),
     }
-    std::fs::remove_file(
-        fixture
-            .project_directory
-            .join("streams/reader.graph.json"),
-    )
-    .unwrap();
+    std::fs::remove_file(fixture.project_directory.join("streams/reader.graph.json")).unwrap();
 
     let deleted = repository
         .apply_asset_changes(
@@ -867,4 +866,46 @@ fn a_stream_document_whose_asset_cannot_be_read_is_still_one_stream_asset() {
             .asset,
         assets[0].asset
     );
+}
+
+#[test]
+fn a_project_whose_files_are_already_written_is_committed_whole_as_its_first_commit_once() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let project_file = streamlib_project_repository::TatolabProjectFile::of_a_new_project("rig");
+    std::fs::create_dir_all(&fixture.project_directory).unwrap();
+    std::fs::write(
+        fixture.project_directory.join(PROJECT_FILE_NAME),
+        project_file.canonical_bytes().unwrap(),
+    )
+    .unwrap();
+    let stream_asset = Uuid::new_v4();
+    write_stream_document(
+        &fixture.project_directory,
+        "streams/main.graph.json",
+        &json!({"asset": stream_asset.to_string(), "nodes": [], "links": []}),
+    );
+
+    let repository = ProjectRepository::commit_a_written_project_as_its_first(
+        &fixture.project_directory,
+        &agent(),
+    )
+    .unwrap();
+
+    let files_at_head = repository.history().files_at_head().unwrap();
+    assert_eq!(
+        files_at_head.keys().collect::<Vec<_>>(),
+        vec!["streams/main.graph.json", PROJECT_FILE_NAME]
+    );
+    assert_eq!(repository.project_file(), &project_file);
+    assert_eq!(
+        repository.history().commits_newest_first().unwrap()[0].message,
+        "create_project rig"
+    );
+    assert!(matches!(
+        ProjectRepository::commit_a_written_project_as_its_first(
+            &fixture.project_directory,
+            &agent(),
+        ),
+        Err(ProjectRepositoryRefusal::ProjectAlreadyCommitted { .. })
+    ));
 }

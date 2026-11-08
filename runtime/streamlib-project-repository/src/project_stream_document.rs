@@ -133,7 +133,10 @@ mod tests {
             .collect();
         assert_eq!(
             found,
-            ["streams/main.graph.json", "streams/nested/second.graph.json"]
+            [
+                "streams/main.graph.json",
+                "streams/nested/second.graph.json"
+            ]
         );
     }
 }
