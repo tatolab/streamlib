@@ -1,6 +1,6 @@
 ---
 name: capture-stream-evidence
-description: Freeze a verifiable record of a running StreamLib stream — a live graph snapshot, N objects read off one or more exposed ports on disk, and its log records — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a stream-code change. Wraps `tatolab graph`, `tatolab-read-track`, and `tatolab logs`.
+description: Freeze a verifiable record of a running StreamLib stream — a live graph snapshot, N objects read off one or more tracks it sends to a relay on disk, and its log records — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a stream-code change. Wraps `tatolab graph`, `tatolab-read-track`, and `tatolab logs`.
 ---
 
 # capture-stream-evidence
@@ -21,16 +21,16 @@ mkdir -p "$EVIDENCE_DIR"
 ```bash
 tatolab graph --stream <stream id> > "$EVIDENCE_DIR/graph.json"
 ```
-Read the addresses of the ports you want to read out of it — the `machine`, the `stream`, and each node's `name` and output port (see `inspect-live-graph`).
+Read the addresses of the tracks you want to read out of it — each `MoqGateway`'s `relay_url` and `broadcast`, and each `MoqTrack`'s `track` (see `read-live-track`).
 
 ### 3. Read N objects per port to disk
-Repeat per port, exposing an internal one first (`read-live-track`). `RELAY_URL` is the local relay's loopback listener of the runtime the stream runs on: `http://127.0.0.1:4443` for the machine's runtime, the `TATOLAB_TEST_LOCAL_RELAY_LOOPBACK_PORT` its `tatolabd` was given for a runtime of the session's own (`drive-running-stream`):
+Repeat per track, adding gateway nodes for a port nothing sends yet (`read-live-track`). `RELAY_URL` is the gateway's `relay_url`:
 ```bash
-RELAY_URL=http://127.0.0.1:4443
-target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream id>.hang <encoder>/encoded_video \
-  --count 30 --out "$EVIDENCE_DIR/track-<encoder>-encoded_video"
-target/release/tatolab-read-track "$RELAY_URL" <machine>/<stream id>.hang microphonesource/audio \
-  --count 30 --out "$EVIDENCE_DIR/track-microphonesource-audio"
+RELAY_URL=http://127.0.0.1:14443
+target/release/tatolab-read-track "$RELAY_URL" <broadcast>.hang <video track> \
+  --count 30 --out "$EVIDENCE_DIR/track-<video track>"
+target/release/tatolab-read-track "$RELAY_URL" <broadcast>.hang <audio track> \
+  --count 30 --out "$EVIDENCE_DIR/track-<audio track>"
 ```
 Each directory holds one file per object, `objects.jsonl` indexing each file with its group and timestamp — an object's size is its file's — and the track's catalog entry. An encoded video track decodes to PNGs with ffmpeg (`verify-live` § Reading pixels); any other holds the records as the node wrote them.
 
@@ -44,9 +44,9 @@ Reads the records the runtime holds for that loaded stream, by sequence number, 
 ```bash
 ls -l "$EVIDENCE_DIR"
 ```
-You now have `graph.json` (unless the stream carries secrets), one `track-<node>-<port>/` per port read, and `logs.txt`. Attach them to the PR / issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
+You now have `graph.json` (unless the stream carries secrets), one `track-<track>/` per track read, and `logs.txt`. Attach them to the PR / issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
 
 ## Notes
 - Every verb names the stream; there is no runtime to pick — the machine has one.
-- Capturing evidence never mutates the graph; exposing a port to read it is the one change, and `read-live-track` says how to undo it.
+- Capturing evidence never mutates the graph; adding gateway nodes to send a port is the one change, and `read-live-track` says how to undo it.
 - Do not invent an `--output` flag on `graph` or `logs`; redirection is the mechanism.

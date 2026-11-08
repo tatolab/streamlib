@@ -1,6 +1,6 @@
 ---
 name: inspect-live-graph
-description: Dump a running StreamLib stream's live graph — nodes by name, ports, links, exposed ports, the machine's name, states, and metrics — as JSON, to use as ground truth before reading one of its ports. Use when you need the current topology of a running stream: to form a track address for `read-live-track`, to learn the exact port names a node publishes on, or to diff the graph across a stream-code change. Wraps `tatolab graph`.
+description: Dump a running StreamLib stream's live graph — nodes by id and name, ports, links, the machine's name, states, and metrics — as JSON, to use as ground truth before reading one of its ports. Use when you need the current topology of a running stream: to find a node's `id` for a viewer or a track address for `read-live-track`, to learn the exact port names a node publishes on, or to diff the graph across a stream-code change. Wraps `tatolab graph`.
 ---
 
 # inspect-live-graph
@@ -15,14 +15,13 @@ tatolab graph --stream <stream id>
 # or every loaded stream at once:
 tatolab graph
 ```
-With `--stream`, the result is that stream's graph in the shape a load takes: `stream`, `clock` (only when not real time), `nodes`, `links`, `exposed`, and `machine` (this machine's name). Without it, `{machine, streams: [...]}` holds every loaded stream's graph.
+With `--stream`, the result is that stream's graph in the shape a load takes: `stream`, `clock` (only when not real time), `nodes`, `links`, and `machine` (this machine's name). Without it, `{machine, streams: [...]}` holds every loaded stream's graph.
 
 ### 2. Read what you need out of it
 - **Node names** — each node's `name`, which instances the runtime actually stood up, and under which `type`. A name is cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`; a defaulted `CameraSource` is `camerasource`, a second one `camerasource-2`).
 - **Port names** — the exact input / output port names each node declares under `ports`, as the runtime reports them rather than as the source reads.
 - **Links** — each end is rendered right-anchored: `{node, port}` in this stream, `{stream, node, port}` for a source in another stream on this machine.
-- **Port addresses** — a port is `<stream id>/<node>/<port>`: the stream id (`stream`), the source node's `name`, and its output port under `ports.outputs`; `<machine>/<stream id>/<node>/<port>` names the same port with `machine` in front. Exposed, it is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — feed that to `read-live-track`.
-- **Exposed ports** — `exposed` lists each exposed output port and its level, private or public. A port not listed is internal: no track until it is exposed.
+- **Port addresses** — a port is `<stream id>/<node>/<port>`: the stream id (`stream`), the source node's `name`, and its output port under `ports.outputs`; `<machine>/<stream id>/<node>/<port>` names the same port with `machine` in front. A viewer opens it by the node's `id` (`open_viewer`); off the machine it is a track only when a `MoqTrackSend` reads it, at the address its `MoqGateway` and `MoqTrack` configs name — feed that to `read-live-track`.
 - **States / metrics** — confirm a node is `Running` and moving data (non-zero counters) rather than merely instantiated.
 
 ### 3. Save it when it is evidence
