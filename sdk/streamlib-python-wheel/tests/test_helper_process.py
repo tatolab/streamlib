@@ -932,6 +932,44 @@ def test_a_processor_that_cannot_set_itself_up_reports_the_failure(stand_in_pare
     lifecycle_thread.join(timeout=5.0)
 
 
+def test_a_manual_processor_whose_start_raised_fails_its_node(
+    stand_in_parent, log_records_this_process_sends_its_stand_in_parent
+):
+    """`run` is unanswered, so a `start()` that raised reaches the parent as the
+    node failing itself, carrying what `start()` raised.
+
+    Fail-without-fix: the failure is only logged, no `fail_the_node` arrives,
+    and the graph shows the node `Running`.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesInStartProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+
+    stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
+    failure = stand_in_parent.receive()
+    assert failure is not None, "the helper never failed its node"
+    assert failure["rpc"] == "escalate_request"
+    assert failure["op"] == "fail_the_node"
+    assert failure["reason"] == 'start() raised: could not read "lower_third.riv"'
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": failure["request_id"], "result": "ok"}
+    )
+    assert any(
+        level == "error" and message == "start() raised"
+        for level, message, _ in log_records_this_process_sends_its_stand_in_parent
+    )
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 @pytest.mark.skipif(sys.platform == "linux", reason="Linux adopts the fd rather than refusing")
 def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
     """The method exists on every floor, so the stub is one, and off Linux it
