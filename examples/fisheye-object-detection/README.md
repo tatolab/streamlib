@@ -139,14 +139,15 @@ The warp and its inverse are only each other's inverse while they agree about
 what radius a pixel is at and what the polynomial does to it. Kept apart they
 drift silently — a rectifier a hair off its lens still produces a
 plausible-looking picture, and the only symptom is a detector that quietly
-does worse near the edges. So both kernels are built from one GLSL prelude in
+does worse near the edges. So both kernels are built from one Slang prelude in
 `nodes/radial_distortion_model.py` — `frame_centre`, `normalised_radius`,
 `radial_scale` and the texel-to-sampler coordinate convention, and nothing
 else — and each shader is that prelude plus its own bindings, push constants
 and `main()`.
 
-The same module owns the tile size, which reaches both shaders as a `#define`
-so the dispatch's group count and the shader's `local_size` cannot disagree.
+The same module owns the tile size, which reaches both shaders as a
+`static const` so the dispatch's group count and the shader's `numthreads`
+cannot disagree.
 
 ## The lens, and why the corners go black
 
@@ -227,7 +228,10 @@ and leaves the stream loaded; `tatolab stop <stream>` stops it.
 Then watch two ports in Tato Studio's viewer: `syntheticfisheyelens`'s
 `fisheye_frame_to_downstream` is the barrelled camera frame, and
 `undistortingobjectdetector`'s `annotated_frame_to_downstream` the rectified one
-with its detections outlined. Point the camera at something COCO knows (a person, a chair, a bottle, a
+with its detections outlined. The detections themselves ride
+`detections_to_downstream`, a Records port carrying `detection_count` and
+`detections` — each a class, a confidence and a box in frame pixels — stamped
+with the frame's own timestamp. Point the camera at something COCO knows (a person, a chair, a bottle, a
 laptop) and the boxes appear; a webcam aimed at a blank wall detects nothing
 and says so, once a second, in the log.
 
@@ -264,8 +268,8 @@ Any path outside `.venv` in that list is the one being mixed in.
 
 ## Editing it
 
-Both shaders are strings in their node's module, compiled by the engine when
-the node sets up, on the machine that runs the stream. There is no `glslc` to
+Both shaders are strings in their node's module, compiled by the runtime when
+the node sets up, on the machine that runs the stream. There is no `slangc` to
 install, no `.spv` to build and no build step between editing a shader and
 seeing it — saving the file while `tatolab dev` runs is the edit loop. A reload
 costs a couple of seconds here rather than the sub-second restart the lighter

@@ -12,20 +12,23 @@ boxes are drawn back into it through its DLPack view.
 from __future__ import annotations
 
 import struct
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
 import torch
 from tatolab.stream import (
+    Image,
+    ImageFrameToWrite,
+    Input,
     ModelInputTensorGeometry,
     ModelInputTensorKernel,
     NodeOutputTextureRing,
+    Output,
+    Records,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    VideoFrame,
     log,
-    msgpack,
     node,
 )
 from ultralytics import YOLO
@@ -35,14 +38,11 @@ from nodes.radial_distortion_model import (
     DEFAULT_RADIAL_DISTORTION_K1,
     DEFAULT_RADIAL_DISTORTION_K2,
     FRAME_TEXTURE_FORMAT,
-    RADIAL_DISTORTION_MODEL_GLSL,
+    RADIAL_DISTORTION_MODEL_SLANG,
     STORAGE_AND_SAMPLED_TEXTURE_USAGE,
     largest_recoverable_normalised_radius,
     workgroups_covering,
 )
-
-FISHEYE_FRAME_INPUT_PORT = "fisheye_frame_from_upstream"
-ANNOTATED_FRAME_OUTPUT_PORT = "annotated_frame_to_downstream"
 
 FISHEYE_FRAME_BINDING = "fisheye_frame"
 UNDISTORTED_FRAME_BINDING = "undistorted_frame"
@@ -69,6 +69,8 @@ DETECTOR_INPUT_STRIDE = 32
 
 DETECTION_REPORT_INTERVAL_NS = 1_000_000_000
 
+DETECTION_RECORD_NAMES = ("detection_count", "detections")
+
 # Cycled by class index; RGBA, the texture's own channel order.
 BOX_COLOUR_PALETTE_RGBA = (
     (0, 255, 128, 255),
@@ -79,22 +81,24 @@ BOX_COLOUR_PALETTE_RGBA = (
     (160, 255, 64, 255),
 )
 
-FISHEYE_RECTIFY_GLSL = (
-    RADIAL_DISTORTION_MODEL_GLSL
-    + f"#define NEWTON_ITERATIONS {NEWTON_ITERATIONS}\n"
+FISHEYE_RECTIFY_SLANG = (
+    RADIAL_DISTORTION_MODEL_SLANG
+    + f"static const int NEWTON_ITERATIONS = {NEWTON_ITERATIONS};\n"
     + """
-layout(set = 0, binding = 0) uniform sampler2D fisheye_frame;
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D undistorted_frame;
+[[vk::binding(0, 0)]] Sampler2D fisheye_frame;
+[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> undistorted_frame;
 
-layout(push_constant) uniform LensCoefficients {
+struct LensCoefficients {
     float k1;
     float k2;
     float largest_recoverable_radius;
-} lens;
+};
+[[vk::push_constant]] ConstantBuffer<LensCoefficients> lens;
 
-void main() {
-    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 extent = imageSize(undistorted_frame);
+[numthreads(WORKGROUP_TILE_SIZE, WORKGROUP_TILE_SIZE, 1)]
+void main(uint3 invocation : SV_DispatchThreadID) {
+    int2 at = int2(invocation.xy);
+    int2 extent = frame_extent_of(undistorted_frame);
     if (at.x >= extent.x || at.y >= extent.y) {
         return;
     }
@@ -105,7 +109,7 @@ void main() {
     // root, and sampling at it paints the corners with a mirrored, stretched
     // copy of content from elsewhere in the frame.
     if (recovered_radius > lens.largest_recoverable_radius) {
-        imageStore(undistorted_frame, at, vec4(0.0, 0.0, 0.0, 1.0));
+        undistorted_frame[invocation.xy] = float4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
@@ -126,32 +130,32 @@ void main() {
         distorted_radius -= residual / derivative;
     }
 
-    vec2 centre = frame_centre(extent);
+    float2 centre = frame_centre(extent);
     float radius_correction =
         recovered_radius > 1e-6 ? distorted_radius / recovered_radius : 1.0;
-    vec2 source_texel = centre + (vec2(at) - centre) * radius_correction;
+    float2 source_texel = centre + (float2(at) - centre) * radius_correction;
 
     // The radius test asks whether a circle holds anything; the frame is a
     // rectangle. A texel straight above the centre can reach past the top edge,
     // where the sampler would clamp it into a smeared band.
-    vec2 last_texel = vec2(extent) - 1.0;
-    if (any(lessThan(source_texel, vec2(0.0)))
-        || any(greaterThan(source_texel, last_texel))) {
-        imageStore(undistorted_frame, at, vec4(0.0, 0.0, 0.0, 1.0));
+    float2 last_texel = float2(extent) - 1.0;
+    if (any(source_texel < float2(0.0)) || any(source_texel > last_texel)) {
+        undistorted_frame[invocation.xy] = float4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
-    vec3 sampled = texture(
-        fisheye_frame, texel_to_sampler_coordinates(source_texel, extent)
+    // Level 0 named: a compute stage has no derivatives to choose one by.
+    float3 sampled = fisheye_frame.SampleLevel(
+        texel_to_sampler_coordinates(source_texel, extent), 0.0
     ).rgb;
-    imageStore(undistorted_frame, at, vec4(sampled, 1.0));
+    undistorted_frame[invocation.xy] = float4(sampled, 1.0);
 }
 """
 )
 
 
 class DetectedObject(TypedDict):
-    """One detection as the annotated frame's record carries it, its box in frame pixels."""
+    """One detection as a `detections_to_downstream` record carries it, its box in frame pixels."""
 
     class_index: int
     class_name: str
@@ -161,7 +165,7 @@ class DetectedObject(TypedDict):
 
 @dataclass
 class UndistortingObjectDetectorConfig:
-    """UndistortingObjectDetector's settings, as `stream_builder.add(..., config={...})` spells them."""
+    """UndistortingObjectDetector's settings, as its node's config in the graph document spells them."""
 
     radial_distortion_k1: float = DEFAULT_RADIAL_DISTORTION_K1
     radial_distortion_k2: float = DEFAULT_RADIAL_DISTORTION_K2
@@ -170,17 +174,23 @@ class UndistortingObjectDetectorConfig:
     """An ultralytics detection checkpoint; a relative path resolves against the project directory, where a missing known checkpoint is downloaded."""
 
 
-@node
+@node.process(
+    description="Rectifies the fisheye frame, detects objects in it, and draws their boxes on"
+)
 class UndistortingObjectDetector:
-    """Rectifies the fisheye frame, detects objects in it, and draws their boxes on."""
+    """Fisheye frame in; the rectified frame with its boxes drawn on, and the detections, out."""
 
-    @node.input(delivery_profile="newest", description="Barrelled frames from the lens")
-    def fisheye_frame_from_upstream(self) -> VideoFrame: ...
-
-    @node.output(
-        description="The rectified frames with their boxes drawn on, the detections in the record"
+    fisheye_frame_from_upstream = Input(
+        Image, delivery="newest", description="Barrelled frames from the lens"
     )
-    def annotated_frame_to_downstream(self) -> VideoFrame: ...
+    annotated_frame_to_downstream = Output(
+        Image, description="The rectified frames with their boxes drawn on"
+    )
+    detections_to_downstream = Output(
+        Records,
+        names=DETECTION_RECORD_NAMES,
+        description="One record per annotated frame: its detections, boxes in frame pixels",
+    )
 
     def __init__(self, config: UndistortingObjectDetectorConfig) -> None:
         radial_distortion_k1 = float(config.radial_distortion_k1)
@@ -207,7 +217,7 @@ class UndistortingObjectDetector:
             FRAME_TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
         self.fisheye_rectify_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=FISHEYE_RECTIFY_GLSL,
+            source=FISHEYE_RECTIFY_SLANG,
             push_constant_size=LENS_COEFFICIENT_AND_RECOVERY_LIMIT_SIZE,
             bindings={
                 FISHEYE_FRAME_BINDING: "sampled_texture",
@@ -248,7 +258,7 @@ class UndistortingObjectDetector:
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(FISHEYE_FRAME_INPUT_PORT, into=VideoFrame)
+        frame = ctx.inputs.read(self.fisheye_frame_from_upstream)
         if frame is None:
             return
 
@@ -285,22 +295,16 @@ class UndistortingObjectDetector:
             self._draw_boxes_into(torch.from_dlpack(rectified_pixels), detections)
 
         self._report_detections(ctx.time, detections)
-        # A dict, not `VideoFrame.to_bytes()`: the record carries the detections
-        # beside the frame's keys, which a `VideoFrame` reader ignores.
-        annotated_frame_record = {
-            "surface_id": undistorted_frame_texture.surface_id,
-            "width": frame.width,
-            "height": frame.height,
-            "timestamp_ns": frame.timestamp_ns,
-            "color_info": (
-                asdict(frame.color_info) if frame.color_info is not None else None
-            ),
-            "detection_count": len(detections),
-            "detections": detections,
-        }
+        # Both stamped with the capture's timestamp, which is how a consumer
+        # pairs a frame with its detections.
         ctx.outputs.write(
-            ANNOTATED_FRAME_OUTPUT_PORT,
-            msgpack.pack(annotated_frame_record),
+            self.annotated_frame_to_downstream,
+            ImageFrameToWrite.of_texture(undistorted_frame_texture, frame.colour),
+            timestamp_ns=frame.timestamp_ns,
+        )
+        ctx.outputs.write(
+            self.detections_to_downstream,
+            {"detection_count": len(detections), "detections": detections},
             timestamp_ns=frame.timestamp_ns,
         )
 
@@ -354,8 +358,8 @@ class UndistortingObjectDetector:
     ) -> None:
         """Outline each detection in the frame itself, on the GPU, four slice assignments an edge."""
         height, _, _ = rectified_frame.shape
-        # Scaled with the frame, with a floor so an edge stays visible after
-        # the encode at small capture sizes.
+        # Scaled with the frame, with a floor so an edge stays visible at small
+        # capture sizes.
         edge = max(2, height // 240)
         for detection in detections:
             left, top, right, bottom = detection["box_xyxy"]
