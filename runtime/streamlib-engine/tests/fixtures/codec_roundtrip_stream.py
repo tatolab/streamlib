@@ -11,11 +11,11 @@ writes. `e2e_fixture_psnr_test_pattern.sh` reads the sender's track with
 `tatolab-read-track`, decodes it with ffmpeg and scores the pictures, and reads
 the receiver's decoded-frame count off `graph`.
 
-`e2e_fixture_psnr_test_pattern.sh` loads each as a project of its own with
-`tatolab run --dir` into a `tatolabd` it starts with the streams' settings in
-its environment, which the compile inherits: `STREAMLIB_FIXTURE_VIDEO_CODEC`
-picks the codec (`h264` by default), and `STREAMLIB_FIXTURE_RELAY_URL` names
-the relay the fixture started.
+`e2e_fixture_psnr_test_pattern.sh` builds each graph into a project of its own
+and loads it with `tatolab run --dir`; the generators read their settings from
+the environment the graph is built in: `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the
+codec (`h264` by default), and `STREAMLIB_FIXTURE_RELAY_URL` names the relay the
+fixture started.
 """
 
 import os

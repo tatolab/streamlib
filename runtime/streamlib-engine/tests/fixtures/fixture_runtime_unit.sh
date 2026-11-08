@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # Sourced by the fixture drivers: the runtime unit a fixture stream runs on,
-# the venv it compiles in, the runtime a fixture starts and stops itself, the
+# the venv its graph is built in, the runtime a fixture starts and stops itself, the
 # runtime unit's `tatolab` verbs that load and observe a stream, the stream runs
 # a driver starts and stops, the `moq-relay` a stream's gateway nodes send to,
 # and `tatolab-read-track`, which reads a track there as any user reads it, with
@@ -29,9 +29,10 @@
 # id the runtime gives it, and removes the project and then stops the runtime.
 #
 # The fixture venv is `<this directory>/.venv`, which a fixture project's
-# `.venv` links to, because the runtime compiles a stream in its project's
-# `.venv`. It holds `tatolab-stream` from this checkout, editable, and numpy,
-# which the fixture nodes import; never the runtime, which a processor interpreter borrows from
+# `.venv` links to, because the runtime runs a project's Python nodes in its
+# `.venv`, and in which the fixture builds each stream's graph. It holds
+# `tatolab-stream` from this checkout, editable, and numpy, which the fixture
+# nodes import; never the runtime, which a processor interpreter borrows from
 # the lend. It is made with uv the first time a driver needs it; delete the
 # directory to have it made again. To use a venv prepared elsewhere instead,
 # name it with STREAMLIB_FIXTURE_VENV: it is checked the same way and
@@ -77,8 +78,8 @@ require_the_runtime_unit() {
     fi
 }
 
-# Makes the fixture venv when it is absent, then exits 77 unless it can compile
-# a fixture stream, and 1 if it carries a runtime of its own.
+# Makes the fixture venv when it is absent, then exits 77 unless it can build
+# a fixture stream's graph, and 1 if it carries a runtime of its own.
 require_the_fixture_venv() {
     if [ -n "${STREAMLIB_FIXTURE_VENV:-}" ]; then
         local prepared_fixture_venv_directory
@@ -306,9 +307,10 @@ FIXTURE_RUNTIME_EXIT_STATUS=""
 # Starts the runtime unit's `tatolabd` in the background as
 # FIXTURE_RUNTIME_PID, its output — the engine's log mirror, every stream's
 # records among it — in <log file>, and returns once its local API answers.
-# Every stream setting a fixture passes in the environment goes here: the
-# runtime compiles a stream and starts its processor interpreters with its own
-# environment, never `tatolab run`'s.
+# Every setting a fixture node reads from the environment while it runs goes
+# here: the runtime starts its processor interpreters with its own environment,
+# never `tatolab run`'s. A setting its graph generator reads goes to
+# `write_a_one_stream_fixture_project` instead.
 #
 # Its state directory sits under <state home>: XDG_STATE_HOME names it on
 # Linux, and HOME on macOS, where the state directory is `$HOME/Library/
@@ -515,20 +517,24 @@ name_of_the_stream_a_rig_serves_once_it_runs() {
 }
 
 # Writes at <project directory> a project of one stream, the way a user's
-# project is laid out: a `stream.py` whose one `@stream`, <stream function name>,
-# builds its graph by calling <graph function> of <module file>; that module and
-# every module beside it linked in, so a node it imports resolves in its
-# processor interpreter as it does beside it; a `pyproject.toml`; and `.venv`
-# linked to <venv directory>, the venv the runtime compiles the stream in.
+# project is laid out: a `tatolab-project.json` naming the project after its
+# folder; `streams/<stream name>.graph.json`, the graph the `@graph_generator`
+# <graph function> of <module file> builds, run in <venv directory>'s Python
+# and in the caller's environment, so a setting the generator reads from the
+# environment must be in it at this call; every module beside <module file>
+# linked in, so a node type the graph names resolves in its processor
+# interpreter; a `pyproject.toml`; and `.venv` linked to <venv directory>, the
+# venv the runtime runs the project's Python nodes in. Written owner-only: a
+# generator may put a credential from the environment into a node's config.
 write_a_one_stream_fixture_project() {
     local project_directory="$1" module_file="$2" graph_function="$3"
-    local stream_function_name="$4" venv_directory="$5"
+    local stream_name="$4" venv_directory="$5"
     local module_directory module_name module_beside
     module_directory="$(cd "$(dirname "$module_file")" && pwd)"
     module_name="$(basename "$module_file" .py)"
     mkdir -p "$project_directory"
+    chmod 700 "$project_directory"
     for module_beside in "$module_directory"/*.py; do
-        [ "$(basename "$module_beside")" = stream.py ] && continue
         ln -sfn "$module_beside" "$project_directory/$(basename "$module_beside")"
     done
     ln -sfn "$venv_directory" "$project_directory/.venv"
@@ -538,65 +544,61 @@ name = "$(basename "$project_directory")"
 version = "0.0.0"
 requires-python = ">=3.12"
 TOML
-    cat >"$project_directory/stream.py" <<PYTHON
-from tatolab.stream import StreamBuilder, stream
+    "$venv_directory/bin/python" -I -c '
+import importlib, json, pathlib, sys, uuid
+from tatolab.stream._stream_graph_builder import run_graph_generator
 
-from $module_name import $graph_function
+module_directory, module_name, graph_function_name, project_directory, stream_name = sys.argv[1:]
+project_directory = pathlib.Path(project_directory)
+sys.path.insert(0, module_directory)
+graph = run_graph_generator(getattr(importlib.import_module(module_name), graph_function_name))
 
+def nodes_holding_a_uuid_each(level, asset_namespace, path_of_names):
+    nodes = level.get("nodes")
+    if not isinstance(nodes, list):
+        return level
+    nodes_with_a_uuid = []
+    for node in nodes:
+        node_path = path_of_names + str(node.get("name", ""))
+        node = node if "id" in node else {"id": str(uuid.uuid5(asset_namespace, node_path)), **node}
+        if isinstance(node.get("fragment"), dict):
+            node = {**node, "fragment": nodes_holding_a_uuid_each(
+                node["fragment"], asset_namespace, node_path + "/")}
+        nodes_with_a_uuid.append(node)
+    return {**level, "nodes": nodes_with_a_uuid}
 
-@stream
-def $stream_function_name(stream_builder: StreamBuilder) -> None:
-    $graph_function(stream_builder)
-PYTHON
+stream_asset = uuid.uuid4()
+project_file = {"project": str(uuid.uuid4()), "name": project_directory.name, "dependencies": []}
+(project_directory / "tatolab-project.json").write_text(json.dumps(project_file, indent=2))
+graph_documents_directory = project_directory / "streams"
+graph_documents_directory.mkdir(exist_ok=True)
+graph_document = {
+    "asset": str(stream_asset),
+    **nodes_holding_a_uuid_each(graph, stream_asset, ""),
+    "stream": stream_name,
+}
+(graph_documents_directory / (stream_name + ".graph.json")).write_text(
+    json.dumps(graph_document, indent=2, allow_nan=False))
+' "$module_directory" "$module_name" "$graph_function" "$project_directory" "$stream_name"
 }
 
-# Prints the stream id the runtime loads <stream function name> of the
-# `stream.py` at <project directory> under: `<folder>-<function>-<hash>`, the
-# folder and the function each cast as an exposed name, a part casting to
-# nothing left out, the two cut to share what 63 characters leave beside the
-# hash, and six hex digits of SHA-256 over `<project directory, resolved>\n
-# stream:<function>`. The rule is `StreamLocation::stream_id`'s.
-stream_id_of_the_fixture_project_stream() {
+# Prints the stream asset UUID the one graph document of the project at
+# <project directory> holds.
+stream_asset_of_the_fixture_project() {
     "$FIXTURE_PYTHON" -c '
-import hashlib, pathlib, sys
-from tatolab.stream._exposed_name_cast import (
-    EXPOSED_NAME_MAXIMUM_LENGTH,
-    ExposedNameCastsToNothingError,
-    cast_exposed_name_to_url_safe,
-)
-STREAM_ID_HASH_HEX_DIGITS = 6
-project_directory = pathlib.Path(sys.argv[1]).resolve()
-stream_function_name = sys.argv[2]
-location_hash = hashlib.sha256(
-    f"{project_directory}\nstream:{stream_function_name}".encode()
-).hexdigest()[:STREAM_ID_HASH_HEX_DIGITS]
-cast_parts = []
-for part in (project_directory.name, stream_function_name):
-    try:
-        cast_parts.append(cast_exposed_name_to_url_safe(part))
-    except ExposedNameCastsToNothingError:
-        continue
-characters_left = EXPOSED_NAME_MAXIMUM_LENGTH - STREAM_ID_HASH_HEX_DIGITS - len(cast_parts)
-if sum(map(len, cast_parts)) > characters_left:
-    if len(cast_parts) == 1:
-        shares = [characters_left]
-    else:
-        first_even_share = characters_left // 2
-        second_even_share = characters_left - first_even_share
-        first_length, second_length = map(len, cast_parts)
-        if first_length <= first_even_share:
-            shares = [first_length, characters_left - first_length]
-        elif second_length <= second_even_share:
-            shares = [characters_left - second_length, second_length]
-        else:
-            shares = [first_even_share, second_even_share]
-    cast_parts = [
-        cut_part
-        for cut_part in (part[:share].rstrip("-") for part, share in zip(cast_parts, shares))
-        if cut_part
-    ]
-print("-".join([*cast_parts, location_hash]))
-' "$1" "$2"
+import json, pathlib, sys
+graph_documents = list((pathlib.Path(sys.argv[1]) / "streams").glob("*.graph.json"))
+if len(graph_documents) != 1:
+    sys.exit(f"{sys.argv[1]} holds {len(graph_documents)} graph documents, not one")
+print(json.loads(graph_documents[0].read_text())["asset"])
+' "$1"
+}
+
+# Prints the stream id the runtime gave the stream asset <stream asset>, read
+# off the ID and ASSET columns of `tatolab streams`; fails when it lists none.
+stream_id_the_runtime_gave_the_stream_asset() {
+    "$TATOLAB_EXECUTABLE" streams 2>/dev/null \
+        | awk -v stream_asset="$1" '$NF == stream_asset { print $1; found = 1; exit } END { exit !found }'
 }
 
 FIXTURE_PROJECT_DIRECTORIES=()
@@ -604,16 +606,25 @@ FIXTURE_PROJECT_STREAM_IDS=()
 FIXTURE_PROJECT_REMOVAL_TIMED_OUT=0
 
 # Queues a load of the project at <project directory> with `tatolab run --dir`,
-# its output in <run log>, and returns once its stream <stream id> runs; 1 when
-# the load is refused or the stream has not run within 60 s, with the runtime's
-# stream listing and the project's log appended to <run log>.
+# its output in <run log>, and returns once the runtime lists its stream and
+# that stream runs, the stream id the runtime gave it in FIXTURE_PROJECT_STREAM_ID;
+# 1 when the load is refused or the stream has not run within 60 s, with the
+# runtime's stream listing and the project's log appended to <run log>.
 start_the_fixture_project() {
-    local project_directory="$1" stream_id="$2" run_log_file="$3"
+    local project_directory="$1" run_log_file="$2" stream_asset
+    FIXTURE_PROJECT_STREAM_ID=""
     FIXTURE_PROJECT_DIRECTORIES+=("$project_directory")
-    FIXTURE_PROJECT_STREAM_IDS+=("$stream_id")
-    if "$TATOLAB_EXECUTABLE" run --dir "$project_directory" >"$run_log_file" 2>&1 \
-        && wait_until_the_stream_is_running "$stream_id" 60; then
-        return 0
+    if stream_asset="$(stream_asset_of_the_fixture_project "$project_directory")" \
+        && "$TATOLAB_EXECUTABLE" run --dir "$project_directory" >"$run_log_file" 2>&1; then
+        for _ in $(seq 1 120); do
+            FIXTURE_PROJECT_STREAM_ID="$(stream_id_the_runtime_gave_the_stream_asset "$stream_asset")" \
+                && break
+            sleep 0.5
+        done
+        if [ -n "$FIXTURE_PROJECT_STREAM_ID" ]; then
+            FIXTURE_PROJECT_STREAM_IDS+=("$FIXTURE_PROJECT_STREAM_ID")
+            wait_until_the_stream_is_running "$FIXTURE_PROJECT_STREAM_ID" 60 && return 0
+        fi
     fi
     {
         "$TATOLAB_EXECUTABLE" streams
