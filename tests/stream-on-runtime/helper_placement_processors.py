@@ -386,3 +386,28 @@ class ReportsTheCountsItReadInOrderSink:
             self.counts_read.append(float(numpy.from_dlpack(block)[0][0]))
             if len(self.counts_read) == COUNTS_READ_IN_ORDER_BEFORE_REPORTING:
                 report("COUNTS_READ_IN_ORDER", {"pid": os.getpid(), "counts": self.counts_read})
+
+
+#: How many records of a pooled island's level a sink reads before it reports them.
+LEVEL_RECORDS_READ_BEFORE_REPORTING = 10
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheLevelRecordsItReadSink:
+    """Reads the records a native converter makes of a pooled island's value,
+    and reports its first records with its own pid."""
+
+    def __init__(self) -> None:
+        self.records_read: "list[dict]" = []
+
+    level_records = Input(Records, delivery="newest")
+
+    def process(self, ctx) -> None:
+        if len(self.records_read) >= LEVEL_RECORDS_READ_BEFORE_REPORTING:
+            return
+        record = ctx.inputs.read(self.level_records)
+        if record is None:
+            return
+        self.records_read.append(record)
+        if len(self.records_read) == LEVEL_RECORDS_READ_BEFORE_REPORTING:
+            report("LEVEL_RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})

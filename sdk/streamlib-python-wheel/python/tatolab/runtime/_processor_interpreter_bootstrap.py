@@ -172,6 +172,10 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeCompiledToItsEvaluateEntry,
     feed_each_input_port_from_its_function_node_island,
 )
+from tatolab.runtime._function_node_pool import (
+    FunctionNodePool,
+    the_processor_class_the_function_node_pool_runs_as,
+)
 from tatolab.runtime._function_node_run_as_its_helpers_processor import (
     the_processor_class_a_promoted_function_node_runs_as,
 )
@@ -1377,6 +1381,12 @@ class HelperProcessLifecycle:
 
     def _setup(self, command: "dict[str, Any]") -> None:
         try:
+            configuration = command.get("config")
+            if self._processor_class is FunctionNodePool:
+                self._processor_class = the_processor_class_the_function_node_pool_runs_as(
+                    configuration or {}
+                )
+                configuration = None
             # Declared ahead of any wiring: a processor added to a running
             # graph has ports before it has links, and reads and writes on
             # them must not raise in between.
@@ -1427,7 +1437,7 @@ class HelperProcessLifecycle:
                 )
             self._hosted = construct_hosted_processor(
                 self._processor_class,
-                command.get("config"),
+                configuration,
                 self._link_data_access,
                 self._runtime_id,
                 self._processor_id,
