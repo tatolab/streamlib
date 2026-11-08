@@ -1510,9 +1510,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Measured on an RTX 3090 at 1080p: a frame's check-out to release fell from about 940 µs to
   36 µs. [linux-pool-slot-import-once — SHIPPED #3151; zero-copy-data-plane — SHIPPED
   #3174, #3191]
-- **DECIDED** — Every port in the tree declares a family: every built-in, the test fixtures,
-  the stream package, the scaffold `tatolab new` writes and each first-party module in
-  `packages/`. A frame rides `ImageFrame` and audio `ChannelsBlock`, and no msgpack cast type
+- **DECIDED** — Every port in the engine tree declares a family: every built-in, the test
+  fixtures, the stream package, the scaffold `tatolab new` writes and each first-party module in
+  `packages/`. `examples/` are consumers outside it (§Consumers). A frame rides `ImageFrame` and audio `ChannelsBlock`, and no msgpack cast type
   remains in user code. Owner, 2026-11-03. [strict-port-families — SHIPPED
   #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
 - **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
