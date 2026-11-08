@@ -14,7 +14,7 @@ use super::*;
 enum WhatThePortsRecorded {
     Write {
         port: WhepPlayerOutputPort,
-        media_frame: Vec<u8>,
+        packets_unit_bytes: Vec<u8>,
         timestamp_ns: i64,
         starts_group: bool,
     },
@@ -35,7 +35,7 @@ impl WhepPlayerOutputPorts for RecordedOutputPorts {
     fn write(
         &self,
         port: WhepPlayerOutputPort,
-        media_frame: &[u8],
+        packets_unit_bytes: &[u8],
         timestamp_ns: i64,
         starts_group: bool,
     ) -> Result<(), String> {
@@ -46,7 +46,7 @@ impl WhepPlayerOutputPorts for RecordedOutputPorts {
             .borrow_mut()
             .push(WhatThePortsRecorded::Write {
                 port,
-                media_frame: media_frame.to_vec(),
+                packets_unit_bytes: packets_unit_bytes.to_vec(),
                 timestamp_ns,
                 starts_group,
             });
@@ -157,7 +157,7 @@ fn access_unit(
 ) -> MessageTheWhepPlayerWrites {
     MessageTheWhepPlayerWrites {
         port: WhepPlayerOutputPort::EncodedVideo,
-        media_frame: vec![0x25, 0, 0, 0, 1, 0x65],
+        packets_unit_bytes: vec![0, 0, 0, 1, 0x65],
         timestamp_ns,
         starts_group,
         stream_facts: WhepPlayerPacketsStreamFacts::Video {
@@ -171,7 +171,7 @@ fn access_unit(
 fn opus_packet(timestamp_ns: i64) -> MessageTheWhepPlayerWrites {
     MessageTheWhepPlayerWrites {
         port: WhepPlayerOutputPort::EncodedAudio,
-        media_frame: vec![0x25, 0x78, 1, 2, 3],
+        packets_unit_bytes: vec![0x78, 1, 2, 3],
         timestamp_ns,
         starts_group: true,
         stream_facts: WhepPlayerPacketsStreamFacts::Audio {
@@ -372,7 +372,7 @@ fn each_entry_is_stated_in_hangs_names_before_the_first_frame_and_again_only_on_
     };
     let write = |message: MessageTheWhepPlayerWrites| WhatThePortsRecorded::Write {
         port: message.port,
-        media_frame: message.media_frame,
+        packets_unit_bytes: message.packets_unit_bytes,
         timestamp_ns: message.timestamp_ns,
         starts_group: message.starts_group,
     };
@@ -396,10 +396,10 @@ fn each_entry_is_stated_in_hangs_names_before_the_first_frame_and_again_only_on_
 }
 
 #[test]
-fn an_oversized_media_frame_is_reported_once_rather_than_silently_dropped() {
+fn an_oversized_unit_is_reported_once_rather_than_silently_dropped() {
     let stop_signal = a_stop_signal();
     let mut oversized = access_unit(true, 1_000, 320);
-    oversized.media_frame = vec![0; HELPER_LINK_PAYLOAD_CEILING_BYTES + 1];
+    oversized.packets_unit_bytes = vec![0; HELPER_LINK_PAYLOAD_CEILING_BYTES + 1];
     let dialer = ScriptedDialer::new(
         vec![None],
         vec![oversized.clone(), oversized],
