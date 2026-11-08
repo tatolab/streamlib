@@ -50,9 +50,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, PrivacyGatedCaptureDevice, Result as StreamlibResult};
-use streamlib::sdk::graph::{
-    InputLinkPortRef, LinkUniqueId, OutputLinkPortRef,
-};
+use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, OutputPortViewerHeldOpen,
@@ -65,10 +63,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     CreateProjectToolResult, DescribeStreamActionToolResult, DescribeStreamActionToolResultStream,
     ListProjectStreamsToolResult, ListProjectStreamsToolResultStream, ListStreamsToolResult,
     ListStreamsToolResultStream, ListedStreamState, LogsToolResult, OpenViewerToolResult,
-    RemoveProjectToolResult,
-    RenameStreamToolResult, RunProjectToolResult, SetStreamClockScaleToolResult,
-    StartStreamToolResult, StopStreamToolResult, StreamActionKindOnTheWire,
-    StreamActionStateOnTheWire, StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    RemoveProjectToolResult, RenameStreamToolResult, RunProjectToolResult,
+    SetStreamClockScaleToolResult, StartStreamToolResult, StopStreamToolResult,
+    StreamActionKindOnTheWire, StreamActionStateOnTheWire, StreamActionStepOnTheWire,
+    StreamLocationOnTheWire,
 };
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
@@ -1214,12 +1212,9 @@ impl ServerHandler for LocalApiMcpServerHandler {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        crate::mcp_resources::read_resource(
-            &self.operations_on_the_loaded_streams,
-            &request.uri,
-        )
-        .await
-        .map(Into::into)
+        crate::mcp_resources::read_resource(&self.operations_on_the_loaded_streams, &request.uri)
+            .await
+            .map(Into::into)
     }
 }
 
@@ -3017,10 +3012,7 @@ pub(crate) mod tests {
             .iter()
             .map(|resource| resource["uri"].as_str().unwrap())
             .collect();
-        assert_eq!(
-            uris,
-            ["streamlib://node-catalog", "streamlib://graph"]
-        );
+        assert_eq!(uris, ["streamlib://node-catalog", "streamlib://graph"]);
         for resource in result["resources"].as_array().unwrap() {
             assert_eq!(resource["mimeType"], "application/json", "{resource}");
             assert!(

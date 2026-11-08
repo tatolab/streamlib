@@ -13,7 +13,6 @@ use crate::control_plane_stub_support::http_get_over_the_local_api_socket;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::graph::OutputPortExposureLevel;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OperationsOnTheStreamsLoadedInThisRuntime,
@@ -32,23 +31,6 @@ use crate::mcp::tests::{
 pub struct TwoStreamsTestIdleNode;
 
 impl ManualProcessor for TwoStreamsTestIdleNode::Processor {
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// A native node with nothing to do whose one output declares a catalog entry.
-#[streamlib::sdk::processor(
-    execution = manual,
-    output(
-        "blocks",
-        catalog = BinaryEntry { mode: Snapshot, mime: "application/msgpack" },
-        family = Records
-    ),
-)]
-pub struct TwoStreamsTestCataloguedNode;
-
-impl ManualProcessor for TwoStreamsTestCataloguedNode::Processor {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -351,12 +333,12 @@ async fn the_connect_schema_takes_the_stream_and_the_four_ends_and_nothing_else(
 /// link are in the stream `connect` names, and how a stream reads another
 /// stream's port.
 #[test]
-fn the_instructions_say_both_ends_of_a_connect_are_in_its_stream_and_name_relay_track_source() {
+fn the_instructions_say_both_ends_of_a_connect_are_in_its_stream_and_name_the_track_receive() {
     let instructions = crate::mcp::LOCAL_API_MCP_SERVER_INSTRUCTIONS;
     for said in [
         "Both ends of a `connect` are ports in the one stream it names",
-        "a stream reads another stream's port, on this machine or another, through a \
-         `RelayTrackSource` node",
+        "a stream reads another stream's track at a relay, on this machine or another, through \
+         a `MoqTrackReceive` node",
     ] {
         assert!(
             instructions.contains(said),
@@ -385,11 +367,8 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
         local_api_socket_path
     );
 
-    let served = crate::serve_the_local_api_for_an_engine(
-        &loaded.engine,
-        crate::control_plane_stub_support::RelayInstancesOfThisMachineStub::shared(),
-    )
-    .expect("the local API binds the fixed socket under this run's test machine root");
+    let served = crate::serve_the_local_api_for_an_engine(&loaded.engine)
+        .expect("the local API binds the fixed socket under this run's test machine root");
 
     let (status_line, body) =
         http_get_over_the_local_api_socket(&local_api_socket_path, "/api/graph?stream=second")
@@ -429,93 +408,4 @@ async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test
     drop(served);
 
     assert!(!local_api_socket_path.exists());
-}
-
-/// The loopback listing names the machine and every loaded stream, each with
-/// the ports it exposes at their levels and catalog entries; a stream exposing
-/// nothing is listed with none, and an internal port is not listed.
-#[tokio::test(flavor = "multi_thread")]
-#[serial_test::serial(tcp_listeners_of_this_test_process)]
-async fn the_loopback_listing_names_every_stream_and_the_ports_each_exposes() {
-    let loaded = AnEngineLoadingTwoStreams::load();
-    PROCESSOR_REGISTRY.register::<TwoStreamsTestCataloguedNode::Processor>();
-    let mut catalogued_node = ProcessorSpec::new(
-        TwoStreamsTestCataloguedNode::processor_class_import_path(),
-        json!({}),
-    );
-    catalogued_node.display_name = Some("catalogued".to_string());
-    loaded
-        .first
-        .add_processor_reporting_its_name(catalogued_node)
-        .expect("the catalogued node is added");
-    let served = crate::serve_the_loopback_http_listener(
-        loaded.operations_on_the_loaded_streams(),
-        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .expect("a free loopback port binds"),
-        tempfile::tempdir().unwrap().path().to_path_buf(),
-        &tokio::runtime::Handle::current(),
-    )
-    .expect("a bound loopback listener is served");
-
-    let (_, nothing_exposed) =
-        crate::loopback_http_listener::tests::http_get(served.bound_address(), "/").await;
-    let nothing_exposed: Value = serde_json::from_str(&nothing_exposed).unwrap();
-    assert_eq!(
-        nothing_exposed["streams"],
-        json!([
-            { "stream": "first", "display_name": "first", "exposed_output_ports": [] },
-            { "stream": "second", "display_name": "second", "exposed_output_ports": [] },
-        ])
-    );
-
-    loaded
-        .first
-        .set_output_port_exposure_level("catalogued", "blocks", OutputPortExposureLevel::Public)
-        .unwrap();
-    loaded
-        .first
-        .set_output_port_exposure_level("idle-in-first", "video", OutputPortExposureLevel::Private)
-        .unwrap();
-    loaded.engine.rename_stream("first", "Desk camera").unwrap();
-    let (status_code, listing) =
-        crate::loopback_http_listener::tests::http_get(served.bound_address(), "/").await;
-
-    assert_eq!(status_code, 200, "{listing}");
-    let listing: Value = serde_json::from_str(&listing).unwrap();
-    assert_eq!(listing["machine"], loaded.engine.machine_name().name());
-    let [first, second] = [0, 1].map(|stream| listing["streams"][stream].clone());
-    assert_eq!(
-        second,
-        json!({ "stream": "second", "display_name": "second", "exposed_output_ports": [] })
-    );
-    assert_eq!(first["stream"], "first");
-    assert_eq!(
-        first["display_name"], "Desk camera",
-        "a rename shows in the listing under the same id"
-    );
-    let mut exposed_output_ports = first["exposed_output_ports"]
-        .as_array()
-        .expect("a stream lists its exposed ports")
-        .clone();
-    exposed_output_ports.sort_by_key(|exposed_output_port| exposed_output_port["node"].to_string());
-    assert_eq!(
-        exposed_output_ports,
-        [
-            json!({
-                "node": "catalogued",
-                "port": "blocks",
-                "level": "public",
-                "catalog_entry": {
-                    "section": "binary",
-                    "entry": { "mode": "snapshot", "mime": "application/msgpack" },
-                },
-            }),
-            json!({
-                "node": "idle-in-first",
-                "port": "video",
-                "level": "private",
-                "catalog_entry": null,
-            }),
-        ]
-    );
 }

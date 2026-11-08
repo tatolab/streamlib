@@ -210,7 +210,10 @@ pub(crate) mod tests {
                 "{host}"
             );
         }
-        for host in [format!("attacker.example:{port}"), "attacker.example".to_string()] {
+        for host in [
+            format!("attacker.example:{port}"),
+            "attacker.example".to_string(),
+        ] {
             assert_eq!(
                 http_get_naming_the_host(
                     served.bound_address(),
@@ -233,7 +236,14 @@ pub(crate) mod tests {
         let served = served_on_a_free_loopback_port();
         let host = served.bound_address().to_string();
 
-        for path in ["/", "/watch/desk/camera", "/api/graph", "/mcp", "/health", "/ws/events"] {
+        for path in [
+            "/",
+            "/watch/desk/camera",
+            "/api/graph",
+            "/mcp",
+            "/health",
+            "/ws/events",
+        ] {
             assert_eq!(
                 http_get_naming_the_host(served.bound_address(), &host, path)
                     .await
