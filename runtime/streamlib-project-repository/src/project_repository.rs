@@ -7,10 +7,11 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_asset::{
-    ASSET_SIDECAR_FILE_SUFFIX, ProjectAsset, ProjectAssetKind, ProjectAssetSidecar,
-    ProjectRelativeAssetPath,
+    ASSET_SIDECAR_FILE_SUFFIX, DIRECTORIES_A_PROJECT_SCAN_SKIPS, GRAPH_DOCUMENT_FILE_SUFFIX,
+    ProjectAsset, ProjectAssetKind, ProjectAssetSidecar, ProjectRelativeAssetPath,
 };
 use crate::project_content_store::ProjectContentStore;
 use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
@@ -22,11 +23,6 @@ use crate::project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetOperation, ProjectTransaction, ProjectTransactionAuthor,
 };
-
-/// What ends a stream asset's graph document: `streams/main.graph.json`.
-pub const GRAPH_DOCUMENT_FILE_SUFFIX: &str = ".graph.json";
-
-const DIRECTORIES_A_PROJECT_SCAN_SKIPS: &[&str] = &["node_modules", "__pycache__"];
 
 /// A project the runtime opened: the one writer of its files, its content store and its history.
 pub struct ProjectRepository {
@@ -57,6 +53,23 @@ impl ProjectRepository {
             });
         }
         std::fs::create_dir_all(project_directory)?;
+        let runtime_directory = project_directory.join(PROJECT_RUNTIME_DIRECTORY);
+        let runtime_directory_existed = runtime_directory.exists();
+        let created = Self::write_a_new_project(project_directory, name, author);
+        if created.is_err() {
+            let _ = std::fs::remove_file(project_directory.join(PROJECT_FILE_NAME));
+            if !runtime_directory_existed {
+                let _ = std::fs::remove_dir_all(&runtime_directory);
+            }
+        }
+        created
+    }
+
+    fn write_a_new_project(
+        project_directory: &Path,
+        name: &str,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
         let project_file = TatolabProjectFile::of_a_new_project(name);
         write_file_whole(
             &project_directory.join(PROJECT_FILE_NAME),
@@ -213,11 +226,13 @@ impl ProjectRepository {
                 import_settings,
             } => {
                 let path = ProjectRelativeAssetPath::parse(&asset_path)?;
+                self.refuse_a_path_through_a_symbolic_link(&path)?;
                 let kind = kind
                     .unwrap_or_else(|| ProjectAssetKind::inferred_from_file_name(path.file_name()));
                 if kind == ProjectAssetKind::Stream {
                     return Err(ProjectRepositoryRefusal::StreamAssetsAreNotImported);
                 }
+                refuse_a_graph_document_path(&path)?;
                 refuse_a_path_another_asset_holds(staged_assets, &path, None)?;
                 let destination = path.on_disk_under(&self.project_directory);
                 let stored = match &source {
@@ -270,6 +285,7 @@ impl ProjectRepository {
             }
             ProjectAssetChangeRequest::DeleteAsset { asset } => {
                 let current = staged_asset(asset)?;
+                self.refuse_a_path_through_a_symbolic_link(&current.path)?;
                 let referencing_documents = self.graph_documents_referencing(asset)?;
                 if !referencing_documents.is_empty() {
                     return Err(ProjectRepositoryRefusal::AssetStillReferenced {
@@ -286,6 +302,7 @@ impl ProjectRepository {
                 import_settings,
             } => {
                 let current = staged_asset(asset)?;
+                self.refuse_a_path_through_a_symbolic_link(&current.path)?;
                 if current.import_settings == import_settings {
                     return Ok(None);
                 }
@@ -308,6 +325,9 @@ impl ProjectRepository {
         if to == current.path {
             return Ok(None);
         }
+        self.refuse_a_path_through_a_symbolic_link(&current.path)?;
+        self.refuse_a_path_through_a_symbolic_link(&to)?;
+        refuse_a_graph_document_path(&to)?;
         refuse_a_path_another_asset_holds(staged_assets, &to, Some(current.asset))?;
         if to.on_disk_under(&self.project_directory).exists() {
             return Err(ProjectRepositoryRefusal::AssetPathHoldsAnotherFile {
@@ -348,8 +368,11 @@ impl ProjectRepository {
             ProjectAssetOperation::DeleteAsset { asset } => {
                 std::fs::remove_file(self.sidecar_on_disk(&asset.path))?;
                 let file = asset.path.on_disk_under(&self.project_directory);
-                if file.exists() {
-                    std::fs::remove_file(file)?;
+                if file.exists()
+                    && let Err(not_removed) = std::fs::remove_file(file)
+                {
+                    self.restore_the_sidecar_of(asset);
+                    return Err(not_removed.into());
                 }
                 Ok(PerformedAssetEffect::Operation(operation.clone()))
             }
@@ -392,6 +415,16 @@ impl ProjectRepository {
                 PerformedAssetEffect::Operation(ProjectAssetOperation::ImportAsset { asset }) => {
                     std::fs::remove_file(self.sidecar_on_disk(&asset.path)).map_err(Into::into)
                 }
+                PerformedAssetEffect::Operation(ProjectAssetOperation::DeleteAsset { asset }) => {
+                    self.restore_the_sidecar_of(&asset);
+                    let file = asset.path.on_disk_under(&self.project_directory);
+                    if file.exists() {
+                        Ok(())
+                    } else {
+                        self.content_store
+                            .place_content_at(&asset.content_sha256, &file)
+                    }
+                }
                 PerformedAssetEffect::Operation(operation) => {
                     self.perform_effect(&operation.inverse()).map(|_| ())
                 }
@@ -404,6 +437,40 @@ impl ProjectRepository {
                 );
             }
         }
+    }
+
+    fn restore_the_sidecar_of(&self, asset: &ProjectAsset) {
+        if let Err(refusal) = self.write_sidecar(asset) {
+            tracing::error!(
+                project = %self.project_directory.display(),
+                asset = %asset.asset,
+                %refusal,
+                "could not restore an asset's sidecar"
+            );
+        }
+    }
+
+    /// Refuse a path whose folders pass through a symbolic link, which could lead a change
+    /// outside the project.
+    fn refuse_a_path_through_a_symbolic_link(
+        &self,
+        path: &ProjectRelativeAssetPath,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let mut folder = self.project_directory.clone();
+        for segment in path
+            .directory()
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+        {
+            folder.push(segment);
+            if std::fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.is_symlink()) {
+                return Err(ProjectRepositoryRefusal::AssetPathRefused {
+                    path: path.to_string(),
+                    why: "a folder on its way is a symbolic link, which could lead outside the project",
+                });
+            }
+        }
+        Ok(())
     }
 
     fn write_sidecar(&self, asset: &ProjectAsset) -> Result<(), ProjectRepositoryRefusal> {
@@ -445,9 +512,12 @@ impl ProjectRepository {
             project_files_ending_with(&self.project_directory, GRAPH_DOCUMENT_FILE_SUFFIX)?
         {
             let bytes = std::fs::read(self.project_directory.join(&graph_document))?;
-            let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
-                continue;
-            };
+            let document = serde_json::from_slice::<Value>(&bytes).map_err(|not_parsed| {
+                ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                    path: graph_document.clone(),
+                    why: not_parsed.to_string(),
+                }
+            })?;
             if value_references_the_asset(&document, &asset_text) {
                 referencing.push(graph_document);
             }
@@ -495,15 +565,27 @@ fn apply_operation_to_assets(
     }
 }
 
+fn refuse_a_graph_document_path(
+    path: &ProjectRelativeAssetPath,
+) -> Result<(), ProjectRepositoryRefusal> {
+    if path.as_str().ends_with(GRAPH_DOCUMENT_FILE_SUFFIX) {
+        return Err(ProjectRepositoryRefusal::AssetPathRefused {
+            path: path.to_string(),
+            why: "it names a stream's graph document, which only the stream verbs write",
+        });
+    }
+    Ok(())
+}
+
 fn refuse_a_path_another_asset_holds(
     assets: &BTreeMap<Uuid, ProjectAsset>,
     path: &ProjectRelativeAssetPath,
     except: Option<Uuid>,
 ) -> Result<(), ProjectRepositoryRefusal> {
-    match assets
-        .values()
-        .find(|asset| &asset.path == path && Some(asset.asset) != except)
-    {
+    match assets.values().find(|asset| {
+        asset.path.as_str().to_lowercase() == path.as_str().to_lowercase()
+            && Some(asset.asset) != except
+    }) {
         Some(holder) => Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset {
             path: path.to_string(),
             holder: holder.asset,

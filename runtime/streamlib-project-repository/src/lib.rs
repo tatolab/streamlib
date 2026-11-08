@@ -14,8 +14,8 @@ mod project_transaction;
 
 pub use canonical_project_json::canonical_project_json_bytes;
 pub use project_asset::{
-    ASSET_SIDECAR_FILE_SUFFIX, ProjectAsset, ProjectAssetKind, ProjectAssetSidecar,
-    ProjectRelativeAssetPath,
+    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind,
+    ProjectAssetSidecar, ProjectRelativeAssetPath,
 };
 pub use project_content_store::{
     PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,
@@ -25,7 +25,7 @@ pub use project_history_repository::{
     PROJECT_HISTORY_BRANCH, PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER,
     ProjectHistoryCommit, ProjectHistoryRepository,
 };
-pub use project_repository::{GRAPH_DOCUMENT_FILE_SUFFIX, ProjectRepository};
+pub use project_repository::ProjectRepository;
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,

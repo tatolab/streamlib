@@ -527,3 +527,118 @@ fn a_stream_asset_is_never_imported_and_a_project_is_never_created_twice() {
         Err(ProjectRepositoryRefusal::ProjectDirectoryNotAbsolute(_))
     ));
 }
+
+#[test]
+fn a_path_differing_only_in_case_from_another_assets_is_refused() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let first = fixture.import_source("a.png", b"a");
+    let second = fixture.import_source("b.png", b"b");
+    repository
+        .apply_asset_changes(&agent(), vec![import_from(&first, "images/Logo.png")])
+        .unwrap();
+    assert!(matches!(
+        repository.apply_asset_changes(&agent(), vec![import_from(&second, "images/logo.png")]),
+        Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset { .. })
+    ));
+}
+
+#[test]
+fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let data = fixture.import_source("table.json", b"{}");
+    assert!(matches!(
+        repository.apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::ImportAsset {
+                source: ProjectAssetImportSource::FileOnThisMachine(data.clone()),
+                asset_path: "data/table.graph.json".to_owned(),
+                kind: Some(ProjectAssetKind::Data),
+                import_settings: Map::new(),
+            }],
+        ),
+        Err(ProjectRepositoryRefusal::AssetPathRefused { .. })
+    ));
+    let asset = imported_asset(
+        &repository
+            .apply_asset_changes(&agent(), vec![import_from(&data, "data/table.json")])
+            .unwrap(),
+    );
+    repository
+        .apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::MoveAsset {
+                asset,
+                into_directory: "streams".to_owned(),
+            }],
+        )
+        .unwrap();
+    assert!(matches!(
+        repository.apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::RenameAsset {
+                asset,
+                file_name: "main.graph.json".to_owned(),
+            }],
+        ),
+        Err(ProjectRepositoryRefusal::AssetPathRefused { .. })
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_path_through_a_symbolic_link_is_refused() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    std::os::unix::fs::symlink(
+        &fixture.import_sources_directory,
+        fixture.project_directory.join("linked"),
+    )
+    .unwrap();
+    let image = fixture.import_source("logo.png", b"png");
+    assert!(matches!(
+        repository.apply_asset_changes(&agent(), vec![import_from(&image, "linked/logo.png")]),
+        Err(ProjectRepositoryRefusal::AssetPathRefused { .. })
+    ));
+}
+
+#[test]
+fn an_unreadable_graph_document_refuses_every_delete() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let image = fixture.import_source("logo.png", b"png");
+    let image_asset = imported_asset(
+        &repository
+            .apply_asset_changes(&agent(), vec![import_from(&image, "images/logo.png")])
+            .unwrap(),
+    );
+    std::fs::create_dir_all(fixture.project_directory.join("streams")).unwrap();
+    std::fs::write(
+        fixture.project_directory.join("streams/main.graph.json"),
+        b"{ half written",
+    )
+    .unwrap();
+    assert!(matches!(
+        repository.apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::DeleteAsset { asset: image_asset }],
+        ),
+        Err(ProjectRepositoryRefusal::GraphDocumentUnreadable { .. })
+    ));
+    assert!(fixture.project_directory.join("images/logo.png").exists());
+}
+
+#[test]
+fn a_create_that_fails_leaves_no_project_behind() {
+    let fixture = ProjectBesideItsImportSources::new();
+    std::fs::create_dir_all(&fixture.project_directory).unwrap();
+    std::fs::write(fixture.project_directory.join(".tatolab"), b"in the way").unwrap();
+    assert!(ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).is_err());
+    assert!(!fixture.project_directory.join(PROJECT_FILE_NAME).exists());
+    assert!(fixture.project_directory.join(".tatolab").is_file());
+}
