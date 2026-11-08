@@ -12,7 +12,7 @@ description = "Shared iceoryx2 payload types for StreamLib IPC"
 
 [dependencies]
 iceoryx2 = "0.10.0"
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.34" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.35" }
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -22,7 +22,7 @@ libc.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 # The claim table's Mach memory entry mapping, and the send right that hands it over.
 mach2 = "0.7"
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.34" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.35" }
 
 [lints]
 workspace = true
