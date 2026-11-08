@@ -237,6 +237,23 @@ impl JsonSerializableComponent for HelperProcessRestartsComponent {
     }
 }
 
+/// Why a processor in `Error` failed, rendered beside its state as
+/// `failed_because`: the failure's own words, or `null` while it has not failed.
+pub struct ProcessorFailureReasonComponent(pub Arc<ObservableProcessorState>);
+
+impl JsonSerializableComponent for ProcessorFailureReasonComponent {
+    fn json_key(&self) -> &'static str {
+        "failed_because"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        if self.0.current() != ProcessorState::Error {
+            return JsonValue::Null;
+        }
+        serde_json::json!(self.0.failure_reason())
+    }
+}
+
 impl JsonSerializableComponent for StateComponent {
     fn json_key(&self) -> &'static str {
         "state"
@@ -459,6 +476,23 @@ mod tests {
         assert_eq!(
             StateComponent(state).to_json(),
             serde_json::json!("Restarting")
+        );
+    }
+
+    /// `graph` renders why a processor failed beside its state, and nothing
+    /// while it has not failed.
+    #[test]
+    fn the_failure_reason_renders_only_once_the_processor_has_failed() {
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
+        let rendered = ProcessorFailureReasonComponent(Arc::clone(&state));
+        assert_eq!(rendered.to_json(), JsonValue::Null);
+
+        state.fail_with("start() raised: no such file \"lower_third.riv\"");
+        state.transition_to_unless_already_failed(ProcessorState::Stopped);
+
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!("start() raised: no such file \"lower_third.riv\"")
         );
     }
 }
