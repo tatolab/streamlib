@@ -1,0 +1,125 @@
+{
+  "asset": "19fd4023-3f4d-4f98-8b55-09bcca6c527d",
+  "links": [
+    {
+      "source": {
+        "node": "089e81f2-90e2-4b26-8737-164c479cdc3e",
+        "port": "video"
+      },
+      "target": {
+        "node": "7f25a7ca-e61b-49a9-8eee-44c28a06866a",
+        "port": "video_from_camera"
+      }
+    },
+    {
+      "source": {
+        "node": "7f25a7ca-e61b-49a9-8eee-44c28a06866a",
+        "port": "video_to_downstream"
+      },
+      "target": {
+        "node": "89730870-c158-47a8-96ce-173a46a30cc3",
+        "port": "video_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "89730870-c158-47a8-96ce-173a46a30cc3",
+        "port": "video_to_downstream"
+      },
+      "target": {
+        "node": "2ec1bc26-9f49-4248-acbd-bfb99ef027bf",
+        "port": "video_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "2ec1bc26-9f49-4248-acbd-bfb99ef027bf",
+        "port": "video_to_downstream"
+      },
+      "target": {
+        "node": "9b2767c6-736b-4200-ba04-7ec6ad777f4e",
+        "port": "video_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "089e81f2-90e2-4b26-8737-164c479cdc3e",
+        "port": "video"
+      },
+      "target": {
+        "node": "2209dd01-611c-4658-9a94-e97a0fa742eb",
+        "port": "video_from_camera"
+      }
+    },
+    {
+      "source": {
+        "node": "2209dd01-611c-4658-9a94-e97a0fa742eb",
+        "port": "scene_to_downstream"
+      },
+      "target": {
+        "node": "9b2767c6-736b-4200-ba04-7ec6ad777f4e",
+        "port": "avatar_from_pose_scene"
+      }
+    },
+    {
+      "source": {
+        "node": "cafb7c56-dde3-4c11-9ffe-699b04f9e9aa",
+        "port": "overlay_to_downstream"
+      },
+      "target": {
+        "node": "9b2767c6-736b-4200-ba04-7ec6ad777f4e",
+        "port": "overlay_from_neon_source"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "089e81f2-90e2-4b26-8737-164c479cdc3e",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {},
+      "id": "7f25a7ca-e61b-49a9-8eee-44c28a06866a",
+      "name": "cameraframetotexture",
+      "type": "camera_python_effects.nodes.camera_frame_to_texture:CameraFrameToTexture"
+    },
+    {
+      "config": {},
+      "id": "89730870-c158-47a8-96ce-173a46a30cc3",
+      "name": "cyberpunkglitch",
+      "type": "camera_python_effects.nodes.cyberpunk_glitch:CyberpunkGlitch"
+    },
+    {
+      "config": {},
+      "id": "2ec1bc26-9f49-4248-acbd-bfb99ef027bf",
+      "name": "crtfilmgrain",
+      "type": "camera_python_effects.nodes.crt_film_grain:CrtFilmGrain"
+    },
+    {
+      "config": {},
+      "id": "2209dd01-611c-4658-9a94-e97a0fa742eb",
+      "name": "cyberpunkavatar",
+      "type": "camera_python_effects.nodes.cyberpunk_avatar:CyberpunkAvatar"
+    },
+    {
+      "config": {
+        "height": 1080,
+        "width": 1920
+      },
+      "id": "cafb7c56-dde3-4c11-9ffe-699b04f9e9aa",
+      "name": "neonoverlaysource",
+      "type": "camera_python_effects.nodes.neon_overlay_source:NeonOverlaySource"
+    },
+    {
+      "config": {},
+      "id": "9b2767c6-736b-4200-ba04-7ec6ad777f4e",
+      "name": "breakingnewscompositor",
+      "type": "camera_python_effects.nodes.breaking_news_compositor:BreakingNewsCompositor"
+    }
+  ]
+}

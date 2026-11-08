@@ -1,0 +1,104 @@
+{
+  "asset": "e6f57156-2439-44d2-95de-37554597cc97",
+  "links": [
+    {
+      "source": {
+        "node": "6dd3d91b-2d49-4cf4-a004-7e550a28dc7a",
+        "port": "video"
+      },
+      "target": {
+        "node": "44fa15ca-4a91-437d-a5b3-cf89351951a7",
+        "port": "layer_0"
+      }
+    },
+    {
+      "source": {
+        "node": "c3aff667-f76c-43d5-8c32-53f4753bf7d2",
+        "port": "video"
+      },
+      "target": {
+        "node": "44fa15ca-4a91-437d-a5b3-cf89351951a7",
+        "port": "layer_1"
+      }
+    },
+    {
+      "source": {
+        "node": "cd58fa46-42b1-4aed-9d23-e324e65cd2fe",
+        "port": "video"
+      },
+      "target": {
+        "node": "44fa15ca-4a91-437d-a5b3-cf89351951a7",
+        "port": "layer_2"
+      }
+    },
+    {
+      "source": {
+        "node": "44fa15ca-4a91-437d-a5b3-cf89351951a7",
+        "port": "video"
+      },
+      "target": {
+        "node": "c97a5776-573b-4a90-9a8f-5d7c251bafd0",
+        "port": "video_from_upstream"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "6dd3d91b-2d49-4cf4-a004-7e550a28dc7a",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    },
+    {
+      "config": {
+        "height": 360,
+        "width": 640
+      },
+      "id": "c3aff667-f76c-43d5-8c32-53f4753bf7d2",
+      "name": "picture-in-picture",
+      "type": "tatolab.testpattern:TestPatternSource"
+    },
+    {
+      "config": {
+        "height": 160,
+        "width": 1280
+      },
+      "id": "cd58fa46-42b1-4aed-9d23-e324e65cd2fe",
+      "name": "lower-third-band",
+      "type": "tatolab.testpattern:TestPatternSource"
+    },
+    {
+      "config": {
+        "height": 1080,
+        "layers": [
+          {},
+          {
+            "opacity": 1.0,
+            "x": 1240,
+            "y": 40
+          },
+          {
+            "opacity": 0.75,
+            "x": 80,
+            "y": 860
+          }
+        ],
+        "width": 1920
+      },
+      "id": "44fa15ca-4a91-437d-a5b3-cf89351951a7",
+      "name": "alphaovercompositor",
+      "type": "tatolab.compositor:AlphaOverCompositor"
+    },
+    {
+      "config": {
+        "camera_label": "composited"
+      },
+      "id": "c97a5776-573b-4a90-9a8f-5d7c251bafd0",
+      "name": "capturetodownstreamlatencyprobe",
+      "type": "tatolab.camera:CaptureToDownstreamLatencyProbe"
+    }
+  ]
+}

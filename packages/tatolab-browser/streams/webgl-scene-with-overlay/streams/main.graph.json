@@ -1,0 +1,112 @@
+{
+  "asset": "3615faee-947e-428c-951b-a0071bde5bea",
+  "links": [
+    {
+      "source": {
+        "node": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
+        "port": "video"
+      },
+      "target": {
+        "node": "2c51e17f-efa1-4ee5-a615-1dd217babd4f",
+        "port": "layer_0"
+      }
+    },
+    {
+      "source": {
+        "node": "43275df6-0ede-4889-9e87-22932a299a39",
+        "port": "video"
+      },
+      "target": {
+        "node": "2c51e17f-efa1-4ee5-a615-1dd217babd4f",
+        "port": "layer_1"
+      }
+    },
+    {
+      "source": {
+        "node": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
+        "port": "video"
+      },
+      "target": {
+        "node": "b67873bd-ee1e-4573-bef8-0af1c4ec4fe4",
+        "port": "video_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
+        "port": "audio"
+      },
+      "target": {
+        "node": "b67873bd-ee1e-4573-bef8-0af1c4ec4fe4",
+        "port": "audio_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
+        "port": "events"
+      },
+      "target": {
+        "node": "b67873bd-ee1e-4573-bef8-0af1c4ec4fe4",
+        "port": "events_from_browser"
+      }
+    },
+    {
+      "source": {
+        "node": "b67873bd-ee1e-4573-bef8-0af1c4ec4fe4",
+        "port": "data_to_browser"
+      },
+      "target": {
+        "node": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
+        "port": "data"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "frame_rate": 60,
+        "height": 1080,
+        "url": "scene_page.html",
+        "width": 1920
+      },
+      "id": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
+      "name": "scene-page",
+      "type": "tatolab.browser:BrowserSource"
+    },
+    {
+      "config": {
+        "frame_rate": 60,
+        "height": 240,
+        "transparent_background": true,
+        "url": "overlay_page.html",
+        "width": 1760
+      },
+      "id": "43275df6-0ede-4889-9e87-22932a299a39",
+      "name": "overlay-page",
+      "type": "tatolab.browser:BrowserSource"
+    },
+    {
+      "config": {
+        "height": 1080,
+        "layers": [
+          {},
+          {
+            "x": 80,
+            "y": 800
+          }
+        ],
+        "width": 1920
+      },
+      "id": "2c51e17f-efa1-4ee5-a615-1dd217babd4f",
+      "name": "alphaovercompositor",
+      "type": "tatolab.compositor:AlphaOverCompositor"
+    },
+    {
+      "config": {},
+      "id": "b67873bd-ee1e-4573-bef8-0af1c4ec4fe4",
+      "name": "browsersourceoutputprobe",
+      "type": "tatolab.browser:BrowserSourceOutputProbe"
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "asset": "4636d23b-ed54-4540-bdd0-23c0bedb2b26",
+  "links": [
+    {
+      "source": {
+        "node": "1f73195c-4c49-4e87-869d-49a3e246d3d8",
+        "port": "voice_to_downstream"
+      },
+      "target": {
+        "node": "e0fbbd8b-2108-453d-9595-46002948f708",
+        "port": "root_voice_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "94ca8768-27d2-480f-a603-17606e16617e",
+        "port": "voice_to_downstream"
+      },
+      "target": {
+        "node": "e0fbbd8b-2108-453d-9595-46002948f708",
+        "port": "third_voice_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "ddcae7ea-4763-41e4-a7c3-d518e0e7c78f",
+        "port": "voice_to_downstream"
+      },
+      "target": {
+        "node": "e0fbbd8b-2108-453d-9595-46002948f708",
+        "port": "fifth_voice_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "e0fbbd8b-2108-453d-9595-46002948f708",
+        "port": "mixed_chord_to_downstream"
+      },
+      "target": {
+        "node": "4eb2f090-329f-4cff-a4f0-9ef4fd7e9bd0",
+        "port": "audio"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "amplitude": 0.3,
+        "block_size": 512,
+        "channels": 1,
+        "frequency_hz": 261.63,
+        "sample_rate": 48000
+      },
+      "id": "1f73195c-4c49-4e87-869d-49a3e246d3d8",
+      "name": "c4voice",
+      "type": "nodes.tone_source:ToneSource"
+    },
+    {
+      "config": {
+        "amplitude": 0.3,
+        "block_size": 441,
+        "channels": 1,
+        "frequency_hz": 329.63,
+        "sample_rate": 44100
+      },
+      "id": "94ca8768-27d2-480f-a603-17606e16617e",
+      "name": "e4voice",
+      "type": "nodes.tone_source:ToneSource"
+    },
+    {
+      "config": {
+        "amplitude": 0.3,
+        "block_size": 256,
+        "channels": 2,
+        "frequency_hz": 392.0,
+        "sample_rate": 16000
+      },
+      "id": "ddcae7ea-4763-41e4-a7c3-d518e0e7c78f",
+      "name": "g4voice",
+      "type": "nodes.tone_source:ToneSource"
+    },
+    {
+      "config": {},
+      "id": "e0fbbd8b-2108-453d-9595-46002948f708",
+      "name": "chordmixer",
+      "type": "nodes.chord_mixer:ChordMixer"
+    },
+    {
+      "config": {},
+      "id": "4eb2f090-329f-4cff-a4f0-9ef4fd7e9bd0",
+      "name": "speakersink",
+      "type": "tatolab.speaker:SpeakerSink"
+    }
+  ]
+}

@@ -33,8 +33,9 @@ headers (`uuid-dev`) for premake. Set
 `streams/rive-lower-third` is a camera with the lower third composited over it
 by `tatolab-compositor`'s `AlphaOverCompositor`, seen in a viewer. With this
 machine's runtime running and a camera attached, put a lower third at
-`streams/rive-lower-third/lower_third.riv` (or set `RIV_PATH`), and set
-`TITLE_PROPERTY_PATH` and `ENTRANCE_TRIGGER_PATHS` in `stream.py` to match its
+`streams/rive-lower-third/lower_third.riv` (or set `rivesource`'s `riv_path`,
+relative to the project or absolute), and set `lowerthirdtitleticker`'s
+`property_path` and `entrance_trigger_paths` in its graph document to match its
 view model and state machine, then:
 
 ```bash

@@ -1,0 +1,55 @@
+{
+  "asset": "cb53a053-4fdf-4e4a-a041-e39747e86baa",
+  "links": [
+    {
+      "source": {
+        "node": "37ecb7b9-d604-4735-a227-46c491f81031",
+        "port": "rasterized_frame_to_downstream"
+      },
+      "target": {
+        "node": "bc157ad8-36ac-4bf8-bdd4-4195972b6221",
+        "port": "rasterized_frame_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "1b53fc80-4db4-4be4-8c3b-dcfe4ac3dca9",
+        "port": "ray_traced_frame_to_downstream"
+      },
+      "target": {
+        "node": "bc157ad8-36ac-4bf8-bdd4-4195972b6221",
+        "port": "ray_traced_frame_from_upstream"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "height": 720,
+        "width": 1280
+      },
+      "id": "37ecb7b9-d604-4735-a227-46c491f81031",
+      "name": "rasterizedscenerenderer",
+      "type": "nodes.rasterized_scene_renderer:RasterizedSceneRenderer"
+    },
+    {
+      "config": {
+        "height": 720,
+        "width": 1280
+      },
+      "id": "1b53fc80-4db4-4be4-8c3b-dcfe4ac3dca9",
+      "name": "raytracedscenerenderer",
+      "type": "nodes.ray_traced_scene_renderer:RayTracedSceneRenderer"
+    },
+    {
+      "config": {
+        "left_label": "RTX OFF",
+        "right_label": "RTX ON",
+        "split_fraction": 0.5
+      },
+      "id": "bc157ad8-36ac-4bf8-bdd4-4195972b6221",
+      "name": "splitscreencompositor",
+      "type": "nodes.split_screen_compositor:SplitScreenCompositor"
+    }
+  ]
+}

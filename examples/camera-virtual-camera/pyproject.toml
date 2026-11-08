@@ -2,7 +2,8 @@
 name = "camera-virtual-camera"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.54.3", "tatolab-camera", "numpy>=2.1"]
+dependencies = ["tatolab-stream>=0.54.3", "tatolab-camera", "tatolab-virtualcamera", "numpy>=2.1"]
 
 [tool.uv.sources]
 tatolab-camera = { path = "../../packages/tatolab-camera", editable = true }
+tatolab-virtualcamera = { path = "../../packages/tatolab-virtualcamera", editable = true }

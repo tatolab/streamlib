@@ -8,7 +8,6 @@ dependencies = [
     "tatolab-browser",
     "tatolab-rive",
     "tatolab-compositor",
-    "tatolab-h264",
 ]
 
 # The nodes live in an installable package, so `uv sync` installs it into the
@@ -36,4 +35,3 @@ tatolab-camera = { path = "../../packages/tatolab-camera", editable = false }
 tatolab-browser = { path = "../../packages/tatolab-browser", editable = false }
 tatolab-rive = { path = "../../packages/tatolab-rive", editable = false }
 tatolab-compositor = { path = "../../packages/tatolab-compositor", editable = false }
-tatolab-h264 = { path = "../../packages/streamlib-h264", editable = false }

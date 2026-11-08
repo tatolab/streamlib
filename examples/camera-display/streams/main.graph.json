@@ -1,0 +1,12 @@
+{
+  "asset": "e435a180-e15a-4eeb-bcc3-b1ef94f489ef",
+  "links": [],
+  "nodes": [
+    {
+      "config": {},
+      "id": "311f0800-4440-4ede-8b76-c3e5b221f58a",
+      "name": "camerasource",
+      "type": "tatolab.camera:CameraSource"
+    }
+  ]
+}
