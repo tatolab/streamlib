@@ -10,19 +10,17 @@ use streamlib::sdk::rhi::PixelFormat;
 use streamlib_consumer_rhi::{ConsumerVulkanBuffer, VulkanLayout};
 use streamlib_surface_client::{
     OwnedMachSendRight, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
-    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, SurfaceShareMachServiceConnection,
-    refusal_the_surface_share_service_answered,
+    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, refusal_the_surface_share_service_answered,
 };
 
-use super::pool_slot_import_cache::{
-    pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
-};
 use super::{
-    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperGpuPoolSlotFrameClaim,
+    GpuPoolSlotFrameClaimOfThisImporter, HelperCheckedOutPixelSurface, HelperCheckedOutSurface,
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST,
-    SURFACE_SHARE_RESPONSE_TIMEOUT, SurfaceShareAnswer, SurfaceShareTransferredHandle,
+    HelperSurfaceHeldAgainstProducerReuse, SurfaceShareAnswer, SurfaceShareTransferredHandle,
     refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
+};
+use streamlib_gpu_frame_import_client::{
+    pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
 };
 
 mod foreign_iosurface;
@@ -330,74 +328,9 @@ impl Drop for HelperCheckedOutPixelSurface {
 }
 
 impl HelperProcessGpuExchangeClient {
-    /// Open a connection to the parent's surface-share Mach service, together
-    /// with the thread that drops every pool slot import when the service goes
-    /// away — an IOSurface this helper still holds stays readable after the
-    /// engine dies, so nothing else would release it.
-    fn open_surface_share_mach_connection(
-        &self,
-    ) -> PyResult<Arc<SurfaceShareMachServiceConnection>> {
-        let service_name = self
-            .surface_share_mach_service_name
-            .to_str()
-            .ok_or_else(|| {
-                PyRuntimeError::new_err(format!(
-                    "the surface-share Mach service name {:?} is not UTF-8, so it names no \
-                     bootstrap service",
-                    self.surface_share_mach_service_name
-                ))
-            })?;
-        let opened = Arc::new(
-            SurfaceShareMachServiceConnection::connect(
-                service_name,
-                SURFACE_SHARE_RESPONSE_TIMEOUT,
-            )
-            .map_err(|connect_failure| {
-                PyRuntimeError::new_err(format!(
-                    "could not reach the surface-share Mach service '{service_name}': \
-                     {connect_failure}. The parent runtime owns that service; if it is gone, \
-                     this helper is orphaned",
-                ))
-            })?,
-        );
-        let watched_connection = Arc::clone(&opened);
-        let pool_slot_imports_by_pool_slot = Arc::clone(&self.pool_slot_imports_by_pool_slot);
-        std::thread::Builder::new()
-            .name("surface-share-service-watch".into())
-            .spawn(
-                move || match watched_connection.wait_for_the_service_to_go_away(None) {
-                    Ok(_) => {
-                        pool_slot_imports_by_pool_slot.drop_every_import();
-                        tracing::info!(
-                            "the surface-share service went away; released every pool slot this \
-                             helper had imported"
-                        );
-                    }
-                    Err(watch_failure) => tracing::warn!(
-                        "could not watch the surface-share service for its going away \
-                         ({watch_failure}); this helper keeps its imported pool slots until its \
-                         connection is replaced"
-                    ),
-                },
-            )
-            .map_err(|spawn_failure| {
-                PyRuntimeError::new_err(format!(
-                    "could not start the thread that watches the surface-share service: \
-                     {spawn_failure}"
-                ))
-            })?;
-        Ok(opened)
-    }
-
-    /// The one exchange every surface-share request makes, over this helper's
-    /// connection, opened on first use. `while_the_connection_is_held` runs on
-    /// the answer before another request can be sent, so what it records is
-    /// ordered against the retirement notice of every later reply.
-    ///
-    /// Every pool slot import is dropped whenever the connection is replaced:
-    /// the service lists a retired slot only on the connection it handed the
-    /// slot's IOSurface to. A connection whose request failed is set aside,
-    /// never used again, and kept open so the frames claimed on it stay held.
+    /// The one exchange every surface-share request makes, over this
+    /// helper's connection; see
+    /// [`SurfaceShareConnectionOfThisImporter::exchange`](streamlib_gpu_frame_import_client::SurfaceShareConnectionOfThisImporter::exchange).
     pub(super) fn surface_share_exchange<DecidedWhileTheConnectionIsHeld>(
         &self,
         request: &serde_json::Value,
@@ -408,47 +341,9 @@ impl HelperProcessGpuExchangeClient {
         Vec<SurfaceShareTransferredHandle>,
         DecidedWhileTheConnectionIsHeld,
     )> {
-        let mut connection = self.surface_share_mach_connection.lock();
-        let open_connection = match connection.as_ref() {
-            Some(open_connection) => Arc::clone(open_connection),
-            None => {
-                let connections_set_aside = self
-                    .surface_share_mach_connections_set_aside_after_a_failure
-                    .lock()
-                    .len();
-                if connections_set_aside >= SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
-                    return Err(PyRuntimeError::new_err(format!(
-                        "the surface-share service has failed {connections_set_aside} requests, \
-                         so this helper asks it nothing more; the connections it set aside stay \
-                         open, keeping the frames claimed on them held, until this helper stops"
-                    )));
-                }
-                let opened = self.open_surface_share_mach_connection()?;
-                self.pool_slot_imports_by_pool_slot.drop_every_import();
-                *connection = Some(Arc::clone(&opened));
-                opened
-            }
-        };
-        match open_connection.send_request_with_ports(request, outbound_ports) {
-            Ok((reply, received_ports)) => {
-                self.pool_slot_imports_by_pool_slot
-                    .drop_the_pool_slots_a_reply_lists_as_retired(&reply);
-                let decided_while_the_connection_is_held = while_the_connection_is_held(&reply);
-                Ok((reply, received_ports, decided_while_the_connection_is_held))
-            }
-            Err(request_failure) => {
-                if let Some(failed_connection) = connection.take() {
-                    self.surface_share_mach_connections_set_aside_after_a_failure
-                        .lock()
-                        .push(failed_connection);
-                }
-                self.pool_slot_imports_by_pool_slot.drop_every_import();
-                Err(PyRuntimeError::new_err(format!(
-                    "the surface-share request failed: {request_failure}; this helper set that \
-                     connection aside and opens a new one on its next request"
-                )))
-            }
-        }
+        self.surface_share_connection
+            .exchange(request, outbound_ports, while_the_connection_is_held)
+            .map_err(PyRuntimeError::new_err)
     }
 
     pub(super) fn surface_share_request(
@@ -518,7 +413,8 @@ impl HelperProcessGpuExchangeClient {
         }
         let published_pool_slot = pool_slot_of_a_published_frame_id(surface_id);
         let held_pool_slot_import = published_pool_slot.and_then(|published_pool_slot| {
-            self.pool_slot_imports_by_pool_slot
+            self.surface_share_connection
+                .pool_slot_imports_by_pool_slot()
                 .import_held_for(published_pool_slot)
         });
         let holds_pool_slot_import = held_pool_slot_import.is_some();
@@ -537,7 +433,8 @@ impl HelperProcessGpuExchangeClient {
                             .any(|retired_pool_slot| retired_pool_slot == published_pool_slot) =>
                 {
                     Some(
-                        self.pool_slot_imports_by_pool_slot
+                        self.surface_share_connection
+                            .pool_slot_imports_by_pool_slot()
                             .reserve_for_a_fresh_import(published_pool_slot),
                     )
                 }
@@ -580,7 +477,7 @@ impl HelperProcessGpuExchangeClient {
     fn import_a_frame_claimed_in_its_pool_claim_table(
         self: &Arc<Self>,
         surface_id: &str,
-        claimed: Arc<HelperGpuPoolSlotFrameClaim>,
+        claimed: Arc<GpuPoolSlotFrameClaimOfThisImporter>,
     ) -> PyResult<HelperCheckedOutSurface> {
         let pool_slot_key = pool_slot_of_a_published_frame_id(surface_id).ok_or_else(|| {
             PyRuntimeError::new_err(format!(
@@ -588,7 +485,8 @@ impl HelperProcessGpuExchangeClient {
             ))
         })?;
         let pool_slot_import = match self
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .import_held_for(pool_slot_key)
         {
             Some(held_pool_slot_import) => held_pool_slot_import,
@@ -605,7 +503,8 @@ impl HelperProcessGpuExchangeClient {
                                 && !pool_slots_a_reply_lists_as_retired(reply)
                                     .any(|retired_pool_slot| retired_pool_slot == pool_slot_key))
                             .then(|| {
-                                self.pool_slot_imports_by_pool_slot
+                                self.surface_share_connection
+                                    .pool_slot_imports_by_pool_slot()
                                     .reserve_for_a_fresh_import(pool_slot_key)
                             })
                         },

@@ -5,9 +5,9 @@
 # Sourced by the fixture drivers: the runtime unit a fixture stream runs on,
 # the venv it compiles in, the runtime a fixture starts and stops itself, the
 # runtime unit's `tatolab` verbs that load and observe a stream, the stream runs
-# a driver starts and stops, and `tatolab-read-track`, which reads a stream's
-# exposed port as a track at the machine's local relay, as any user reads it,
-# with the decode of what it wrote.
+# a driver starts and stops, the `moq-relay` a stream's gateway nodes send to,
+# and `tatolab-read-track`, which reads a track there as any user reads it, with
+# the decode of what it wrote.
 #
 # The runtime unit is what `cargo xtask build-runtime` lays out —
 # `bin/tatolab`, `bin/tatolabd` and `lib/tatolab/lend/` — at
@@ -21,8 +21,8 @@
 # another runtime holds the machine. From a unit built with
 # `--machine-directories-under-a-test-root`, each start gets a scratch
 # TATOLAB_TEST_MACHINE_ROOT for its lock, state and local API socket, and its
-# local relay and loopback listing take the test ports below, so it runs beside
-# the machine's runtime without touching it. The devices are the machine's
+# loopback HTTP takes the test port below, so it runs beside the machine's
+# runtime without touching it. The devices are the machine's
 # either way: an exclusive one (a camera, a microphone, a speaker) still takes
 # one run at a time. It writes each stream it runs as a project
 # of one stream, loads it with `tatolab run --dir`, addresses it by the stream
@@ -56,11 +56,8 @@ the_runtime_unit_runs_under_a_test_machine_root() {
     [ -e "$TEST_MACHINE_ROOT_RUNTIME_UNIT_MARKER" ]
 }
 
-# The ports a test-root unit's runtime serves its local relay and loopback
-# listing on: never the machine runtime's 4443, 4445 and 4446. Override them
-# when another session's runtime holds these.
-FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT="${STREAMLIB_FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT:-14443}"
-FIXTURE_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT="${STREAMLIB_FIXTURE_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT:-14445}"
+# The port a test-root unit's runtime serves its loopback HTTP on: never the
+# machine runtime's 4446. Override it when another session's runtime holds it.
 FIXTURE_TEST_LOOPBACK_HTTP_PORT="${STREAMLIB_FIXTURE_TEST_LOOPBACK_HTTP_PORT:-14446}"
 
 # Exits 77, naming what is missing, unless the runtime unit can start a stream.
@@ -140,38 +137,118 @@ require_the_audio_modules_in_the_fixture_venv() {
     fi
 }
 
-# Builds the H.264 and H.265 modules from this checkout into the fixture venv
-# when it cannot import them, exiting 1 when they do not build. A fixture stream
-# that encodes or decodes video imports them, as any stream would.
+# Builds the H.264, H.265, test-pattern and MoQ gateway modules from this
+# checkout into the fixture venv when it cannot import them, exiting 1 when they
+# do not build. A fixture stream that encodes, decodes or sends video imports
+# them, as any stream would.
 require_the_codec_modules_in_the_fixture_venv() {
-    if "$FIXTURE_PYTHON" -c 'import tatolab.h264, tatolab.h265, tatolab.testpattern' >/dev/null 2>&1; then
+    if "$FIXTURE_PYTHON" -c 'import tatolab.h264, tatolab.h265, tatolab.testpattern, tatolab.moq' >/dev/null 2>&1; then
         return 0
     fi
-    echo "building tatolab-h264, tatolab-h265 and tatolab-testpattern into $FIXTURE_VENV_DIRECTORY" >&2
+    echo "building tatolab-h264, tatolab-h265, tatolab-testpattern and tatolab-moq into $FIXTURE_VENV_DIRECTORY" >&2
     if ! VIRTUAL_ENV="$FIXTURE_VENV_DIRECTORY" uv pip install --quiet \
         "$FIXTURE_REPOSITORY_ROOT/packages/streamlib-h264" \
         "$FIXTURE_REPOSITORY_ROOT/packages/streamlib-h265" \
+        "$FIXTURE_REPOSITORY_ROOT/packages/tatolab-moq" \
         "$FIXTURE_REPOSITORY_ROOT/packages/tatolab-testpattern" >&2; then
         echo "ERROR: the codec modules did not build into $FIXTURE_VENV_DIRECTORY" >&2
         exit 1
     fi
 }
 
-# Runs a verb of the runtime unit's `tatolab` (`graph`, `logs`, `streams`,
-# `expose`).
+# Runs a verb of the runtime unit's `tatolab` (`graph`, `logs`, `streams`).
 tatolab_observation_verb() {
     "$TATOLAB_EXECUTABLE" "$@"
 }
 
-# The fixture runtime's local relay at its loopback listener, which serves
-# every private and public port; and its loopback HTTP listing.
-if the_runtime_unit_runs_under_a_test_machine_root; then
-    LOCAL_RELAY_LOOPBACK_URL="http://127.0.0.1:$FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT"
-    LOOPBACK_HTTP_LISTING_URL="http://127.0.0.1:$FIXTURE_TEST_LOOPBACK_HTTP_PORT/"
-else
-    LOCAL_RELAY_LOOPBACK_URL="http://127.0.0.1:4443"
-    LOOPBACK_HTTP_LISTING_URL="http://127.0.0.1:4446/"
-fi
+# The relay a fixture stream's `MoqGateway` dials and `tatolab-read-track`
+# reads at: a `moq-relay` of the version `packages/tatolab-moq` tests against,
+# built into the workspace's `target/`, which the fixture starts on loopback,
+# open to anonymous publish and subscribe, its QUIC and its certificate's
+# fingerprint on one port. Override the port when another session's relay
+# holds it.
+FIXTURE_RELAY_CRATE_VERSION="0.17.7"
+FIXTURE_RELAY_INSTALL_ROOT="$FIXTURE_REPOSITORY_ROOT/target/fixture-relay"
+FIXTURE_RELAY_EXECUTABLE="$FIXTURE_RELAY_INSTALL_ROOT/bin/moq-relay"
+FIXTURE_RELAY_PORT="${STREAMLIB_FIXTURE_RELAY_PORT:-14443}"
+FIXTURE_RELAY_URL="http://127.0.0.1:$FIXTURE_RELAY_PORT"
+FIXTURE_RELAY_PID=""
+
+# Builds the fixture relay into its install root when it is absent, exiting 1
+# when it does not build. `cargo install` leaves a second run of the same
+# version alone.
+require_the_fixture_relay() {
+    [ -x "$FIXTURE_RELAY_EXECUTABLE" ] && return 0
+    echo "building moq-relay $FIXTURE_RELAY_CRATE_VERSION into $FIXTURE_RELAY_INSTALL_ROOT" >&2
+    if ! cargo install moq-relay --version "=$FIXTURE_RELAY_CRATE_VERSION" --locked \
+        --no-default-features --features noq --root "$FIXTURE_RELAY_INSTALL_ROOT" >&2; then
+        echo "ERROR: moq-relay $FIXTURE_RELAY_CRATE_VERSION does not build" >&2
+        exit 1
+    fi
+}
+
+# Starts the fixture relay in the background as FIXTURE_RELAY_PID, its
+# configuration in <directory> and its output in <log file>, and returns once
+# it serves its certificate's fingerprint; 1, with the log's tail, otherwise.
+start_the_fixture_relay() {
+    local relay_log_file="$1" relay_configuration_directory="$2"
+    mkdir -p "$relay_configuration_directory"
+    cat >"$relay_configuration_directory/moq-relay.toml" <<TOML
+drain_timeout = "0s"
+
+[listen]
+bind = "127.0.0.1:$FIXTURE_RELAY_PORT"
+
+[listen.tls]
+generate = ["localhost"]
+
+[web.http]
+listen = "127.0.0.1:$FIXTURE_RELAY_PORT"
+
+# The relay's own dial socket, on IPv4 too, for a host with no IPv6.
+[connect]
+bind = "127.0.0.1:0"
+
+[auth]
+public = ["**"]
+TOML
+    "$FIXTURE_RELAY_EXECUTABLE" "$relay_configuration_directory/moq-relay.toml" \
+        >"$relay_log_file" 2>&1 &
+    FIXTURE_RELAY_PID=$!
+    for _ in $(seq 1 120); do
+        if ! kill -0 "$FIXTURE_RELAY_PID" 2>/dev/null; then
+            FIXTURE_RELAY_PID=""
+            echo "REFUSED: the fixture relay exited before it served on port $FIXTURE_RELAY_PORT:" >&2
+            tail -20 "$relay_log_file" >&2
+            return 1
+        fi
+        if "$FIXTURE_PYTHON" -c '
+import sys, urllib.request
+urllib.request.urlopen(sys.argv[1] + "/certificate.sha256", timeout=1).read()
+' "$FIXTURE_RELAY_URL" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    echo "REFUSED: the fixture relay did not serve on port $FIXTURE_RELAY_PORT within 30 s:" >&2
+    tail -20 "$relay_log_file" >&2
+    stop_the_fixture_relay
+    return 1
+}
+
+# SIGINT to the fixture relay, then SIGKILL after 5 s.
+stop_the_fixture_relay() {
+    [ -n "$FIXTURE_RELAY_PID" ] || return 0
+    kill -INT "$FIXTURE_RELAY_PID" 2>/dev/null || true
+    for _ in $(seq 1 25); do
+        kill -0 "$FIXTURE_RELAY_PID" 2>/dev/null || break
+        sleep 0.2
+    done
+    kill -KILL "$FIXTURE_RELAY_PID" 2>/dev/null || true
+    wait "$FIXTURE_RELAY_PID" 2>/dev/null || true
+    FIXTURE_RELAY_PID=""
+}
+
 TATOLAB_READ_TRACK_EXECUTABLE="$FIXTURE_REPOSITORY_ROOT/target/release/tatolab-read-track"
 
 # Builds `tatolab-read-track` from this checkout, exiting 1 when it does not
@@ -187,39 +264,11 @@ require_tatolab_read_track() {
     export TATOLAB_READ_TRACK_IS_BUILT=1
 }
 
-# Prints the machine's name as the runtime's loopback listing names it.
-the_machine_name_the_loopback_listing_names() {
-    "$FIXTURE_PYTHON" -c '
-import json, sys, urllib.request
-with urllib.request.urlopen(sys.argv[1], timeout=5) as listing:
-    print(json.load(listing)["machine"])
-' "$LOOPBACK_HTTP_LISTING_URL"
-}
-
-# Whether the runtime's loopback listing names <stream>'s port <node>/<port>
-# among those it exposes.
-the_loopback_listing_exposes() {
-    "$FIXTURE_PYTHON" -c '
-import json, sys, urllib.request
-listing_url, stream_name, node_name, port_name = sys.argv[1:]
-with urllib.request.urlopen(listing_url, timeout=5) as listing:
-    streams = json.load(listing)["streams"]
-sys.exit(0 if any(
-    stream["name"] == stream_name
-    and any(
-        exposed["node"] == node_name and exposed["port"] == port_name
-        for exposed in stream["exposed_output_ports"]
-    )
-    for stream in streams
-) else 1)
-' "$LOOPBACK_HTTP_LISTING_URL" "$1" "$2" "$3"
-}
-
-# Reads <count> objects of <track> in <broadcast> at the local relay's loopback
-# listener into <directory>, as `tatolab-read-track` writes them.
-read_the_track_at_the_local_relay() {
+# Reads <count> objects of <track> in <broadcast> at the fixture relay into
+# <directory>, as `tatolab-read-track` writes them.
+read_the_track_at_the_fixture_relay() {
     local broadcast="$1" track="$2" object_count="$3" dump_directory="$4"
-    "$TATOLAB_READ_TRACK_EXECUTABLE" "$LOCAL_RELAY_LOOPBACK_URL" "$broadcast" "$track" \
+    "$TATOLAB_READ_TRACK_EXECUTABLE" "$FIXTURE_RELAY_URL" "$broadcast" "$track" \
         --count "$object_count" --out "$dump_directory"
 }
 
@@ -283,8 +332,6 @@ start_the_fixture_runtime() {
         FIXTURE_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-fx-XXXXXX)"
         export TATOLAB_TEST_MACHINE_ROOT="$FIXTURE_TEST_MACHINE_ROOT"
         state_directory_environment+=(
-            "TATOLAB_TEST_LOCAL_RELAY_LOOPBACK_PORT=$FIXTURE_TEST_LOCAL_RELAY_LOOPBACK_PORT"
-            "TATOLAB_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT=$FIXTURE_TEST_LOCAL_RELAY_EVERY_INTERFACE_PORT"
             "TATOLAB_TEST_LOOPBACK_HTTP_PORT=$FIXTURE_TEST_LOOPBACK_HTTP_PORT"
         )
     fi

@@ -16,7 +16,7 @@ from typing import Annotated, Any, Literal, Optional, TypedDict
 import pydantic
 import pytest
 
-from tatolab.stream import node
+from tatolab.stream import NodeReference, node
 from tatolab.runtime._processor_hosting import (
     apply_configuration,
     construct_processor_instance,
@@ -237,3 +237,40 @@ def test_a_config_class_of_a_kind_the_deriver_cannot_read_is_accepted_and_open()
     assert PlainlyConfigured.__tatolab_node_config_schema__ == {"type": "object"}
     built = construct_processor_instance(PlainlyConfigured, {"width": 9}, None)
     assert built.config.width == 9, "it constructs; only the description is missing"
+
+
+@dataclasses.dataclass
+class TrackConfigNamingItsGateway:
+    """Holds a reference to another node, and a plain mapping beside it."""
+
+    gateway: "NodeReference"
+    fallback_gateway: "Optional[NodeReference]" = None
+    metadata: "dict[str, str]" = dataclasses.field(default_factory=dict)
+
+
+@node(execution="manual")
+class TrackConfigured:
+    def __init__(self, config: TrackConfigNamingItsGateway) -> None:
+        self.config = config
+
+    def configure(self, config: TrackConfigNamingItsGateway) -> None:
+        self.config = config
+
+
+def test_a_node_reference_field_reaches_the_processor_as_a_node_reference():
+    built = construct_processor_instance(
+        TrackConfigured,
+        {"gateway": {"node": "cloudflare"}, "metadata": {"node": "kept as written"}},
+        None,
+    )
+
+    assert built.config.gateway == NodeReference("cloudflare")
+    assert built.config.fallback_gateway is None
+    assert built.config.metadata == {"node": "kept as written"}
+
+    apply_configuration(
+        built,
+        {"gateway": {"node": "cloudflare"}, "fallback_gateway": {"node": "backup"}},
+    )
+
+    assert built.config.fallback_gateway == NodeReference("backup")

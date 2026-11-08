@@ -129,7 +129,7 @@ class LiveAddedEffect:
 
 # A native built-in is named over the control plane by the type `graph`
 # reports for one, its class in `tatolab.stream`.
-LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:RelayTrackSource"
+LIVE_ADDED_NATIVE_BUILT_IN_TYPE = "tatolab.stream:ChannelsToRecords"
 
 
 def test_the_live_added_effect_written_as_a_source_string_still_declares():
@@ -267,7 +267,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     connect wires a link into a source that was already publishing; the second
     consumer of that same source port proves the channel was sized for a late
     subscriber; the downstream effect proves a helper's output can be wired
-    after its setup; the live-added relay track proves a native built-in can
+    after its setup; the live-added converter proves a native built-in can
     be added live; the disconnect stops the flow
     the tap was seeing; the remove takes the processor and its links away.
     """
@@ -389,17 +389,17 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 
     # A native built-in added live, by the type `graph` reports for one: its
     # class in `tatolab.stream`, resolved apart from a project's processors.
-    live_added_relay_track = local_api.call_tool(
+    live_added_channels_to_records = local_api.call_tool(
         "add_node",
         {
             "stream": stream_id,
             "type": LIVE_ADDED_NATIVE_BUILT_IN_TYPE,
-            "config": {"broadcast": "desk/live-added.hang", "track": "pattern/video"},
-            "name": "live-added-relay-track",
+            "config": {"channel_names": ["level"]},
+            "name": "live-added-channels-to-records",
         },
     )
     assert (
-        await_node_state(local_api, stream_id, live_added_relay_track["name"], "Running")
+        await_node_state(local_api, stream_id, live_added_channels_to_records["name"], "Running")
         == "Running"
     )
 

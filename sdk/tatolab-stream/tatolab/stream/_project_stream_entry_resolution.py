@@ -40,8 +40,8 @@ STREAM_TARGET_FUNCTION_SEPARATOR = ":"
 PROCESS_MAIN_MODULE_NAME = "__main__"
 
 STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE = (
-    "A stream is a module-level function decorated `@stream` that adds, links and "
-    "exposes its nodes on the `StreamBuilder` it is given:\n"
+    "A stream is a module-level function decorated `@stream` that adds and links "
+    "its nodes on the `StreamBuilder` it is given:\n"
     "\n"
     "    from tatolab.h264 import H264Encoder\n"
     "    from tatolab.stream import StreamBuilder, stream\n"
@@ -52,7 +52,6 @@ STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE = (
     "        source = stream_builder.add(TestPatternSource)\n"
     "        encoder = stream_builder.add(H264Encoder)\n"
     '        stream_builder.connect(source.output("video"), encoder.input("video"))\n'
-    '        stream_builder.expose(encoder.output("encoded_video"))\n'
 )
 
 

@@ -4,28 +4,28 @@
 //! Shared test scaffolding for the control plane's two front ends and for
 //! the tests that assert on what it logs.
 
-/// The exposed-port subscription a control-plane stub never reaches: the
-/// control plane does not read an exposed port's channel.
-macro_rules! the_exposed_port_subscription_is_unreachable {
+/// The viewer a control-plane stub never opens.
+macro_rules! every_reserved_slot_reader_is_unreachable {
     ($surface:literal) => {
-        fn subscribe_to_an_exposed_output_port(
+        fn open_a_viewer_of_an_output_port(
             &self,
-            _node_name: String,
-            _port_name: String,
+            node_id: ::streamlib::sdk::graph::ProcessorUniqueId,
+            port_name: String,
+            _process_id_of_the_viewer: Option<u32>,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            ::streamlib::sdk::error::Result<
-                ::streamlib::sdk::runtime::ExposedOutputPortSubscription,
-            >,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::OutputPortViewerHeldOpen>,
         > {
-            unreachable!(concat!(
-                "the control plane serves no exposed-port subscription ",
-                $surface
-            ))
+            Box::pin(async move {
+                Err(::streamlib::sdk::error::Error::Link(format!(
+                    "the stub stream runs no node `{node_id}`, so port `{port_name}` has \
+                     nothing to view"
+                )))
+            })
         }
     };
 }
-pub(crate) use the_exposed_port_subscription_is_unreachable;
+pub(crate) use every_reserved_slot_reader_is_unreachable;
 
 /// Implement every graph-mutating [`RuntimeOperations`] method, and the one
 /// stream's own shutdown request, as `unreachable!`, naming `$surface`
@@ -374,19 +374,6 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     stream_action_under_way: None,
                 }]
             }
-            fn expose_port(
-                &self,
-                _stream_id: &str,
-                _node: &str,
-                _port: &str,
-                _level: ::streamlib::sdk::graph::OutputPortExposureLevel,
-            ) -> ::streamlib::sdk::error::Result<
-                ::streamlib::sdk::runtime::OutputPortExposureOutcome,
-            > {
-                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "expose_port",
-                ))
-            }
             fn set_stream_clock_scale(
                 &self,
                 _stream_id: &str,
@@ -395,11 +382,6 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "set_stream_clock_scale",
                 ))
-            }
-            fn every_loaded_stream_and_the_output_ports_it_exposes(
-                &self,
-            ) -> Vec<::streamlib::sdk::runtime::LoadedStreamAndTheOutputPortsItExposes> {
-                Vec::new()
             }
         }
     };
@@ -615,15 +597,12 @@ impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for Capture
     }
 }
 
-/// The real router over `operations_on_the_loaded_streams` and
-/// `relay_instances`, served on a local API socket at `local_api_socket_path`
-/// until the returned server is dropped.
+/// The real router over `operations_on_the_loaded_streams`, served on a
+/// local API socket at `local_api_socket_path` until the returned server is
+/// dropped.
 pub(crate) fn serve_the_control_plane_router_at(
     operations_on_the_loaded_streams: ::std::sync::Arc<
         dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
-    >,
-    relay_instances: ::std::sync::Arc<
-        dyn ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine,
     >,
     local_api_socket_path: &::std::path::Path,
 ) -> crate::local_api_socket::RunningLocalApiSocketServer {
@@ -633,7 +612,6 @@ pub(crate) fn serve_the_control_plane_router_at(
             |local_api_stopping_token| {
                 crate::handlers::build_router(
                     operations_on_the_loaded_streams,
-                    relay_instances,
                     local_api_stopping_token,
                 )
             },
@@ -651,26 +629,10 @@ pub(crate) struct LocalApiServedOnAFreshSocket {
 }
 
 impl LocalApiServedOnAFreshSocket {
-    /// Over `operations_on_the_loaded_streams`, its relays a
-    /// [`RelayInstancesOfThisMachineStub`].
+    /// Over `operations_on_the_loaded_streams`.
     pub(crate) fn over(
         operations_on_the_loaded_streams: ::std::sync::Arc<
             dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
-        >,
-    ) -> Self {
-        Self::over_with_relay_instances(
-            operations_on_the_loaded_streams,
-            RelayInstancesOfThisMachineStub::shared(),
-        )
-    }
-
-    /// Over `operations_on_the_loaded_streams` and `relay_instances`.
-    pub(crate) fn over_with_relay_instances(
-        operations_on_the_loaded_streams: ::std::sync::Arc<
-            dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
-        >,
-        relay_instances: ::std::sync::Arc<
-            dyn ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine,
         >,
     ) -> Self {
         let socket_directory = ::tempfile::tempdir().expect("a temp directory");
@@ -678,7 +640,6 @@ impl LocalApiServedOnAFreshSocket {
         Self {
             running_server: Some(serve_the_control_plane_router_at(
                 operations_on_the_loaded_streams,
-                relay_instances,
                 &local_api_socket_path,
             )),
             local_api_socket_path,
@@ -710,196 +671,9 @@ pub(crate) async fn response_head_over_the_socket(
     String::from_utf8(head).unwrap()
 }
 
-/// The adapter kind the relay stub catalogs beside the local one.
-pub(crate) const STUB_RELAY_ADAPTER_KIND: &str = "stub-provider";
-
-/// The name people read for the stub's hosted adapter.
-pub(crate) const STUB_RELAY_ADAPTER_DISPLAY_NAME: &str = "Stub Provider";
-
-/// The icon both stub adapters carry: a one-rectangle SVG.
-const STUB_RELAY_ADAPTER_DISPLAY_ICON_SVG: &str =
-    r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#;
-
-/// The `data:` URI the relay stub catalogs for each adapter's icon.
-pub(crate) fn stub_relay_adapter_display_icon_data_uri() -> String {
-    ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry::display_icon_data_uri_of_the_svg(
-        STUB_RELAY_ADAPTER_DISPLAY_ICON_SVG,
-    )
-}
-
-/// One call the relay stub took, in its own words, secrets and all.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum RelayInstancesStubCall {
-    Added {
-        adapter: String,
-        settings: ::serde_json::Map<String, ::serde_json::Value>,
-    },
-    Configured {
-        relay_id: String,
-        settings: ::serde_json::Map<String, ::serde_json::Value>,
-    },
-    Removed {
-        relay_id: String,
-    },
-}
-
-/// A machine's relays as the tools' tests need them: the local relay's two
-/// built-in instances and a `stub-provider` adapter whose `token` is a secret,
-/// each call recorded.
-#[derive(Default)]
-pub(crate) struct RelayInstancesOfThisMachineStub {
-    pub(crate) calls: ::parking_lot::Mutex<Vec<RelayInstancesStubCall>>,
-}
-
-impl RelayInstancesOfThisMachineStub {
-    /// A fresh stub, shared as the router takes it.
-    pub(crate) fn shared()
-    -> ::std::sync::Arc<dyn ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine> {
-        ::std::sync::Arc::new(Self::default())
-    }
-}
-
-const STUB_BUILT_IN_RELAY_IDS: [&str; 2] = ["local-loopback", "local-every-interface"];
-
-impl ::streamlib_relay_adapter_sdk::RelayInstancesOfThisMachine
-    for RelayInstancesOfThisMachineStub
-{
-    fn relay_adapter_catalog(
-        &self,
-    ) -> Vec<::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry> {
-        vec![
-            ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
-                kind: "local".to_string(),
-                display_name: "Local relay".to_string(),
-                display_icon_data_uri: stub_relay_adapter_display_icon_data_uri(),
-                doc: "The machine's own relay, built in.".to_string(),
-                settings: vec![::streamlib_relay_adapter_sdk::RelayAdapterSettingField {
-                    name: "port".to_string(),
-                    field_type: ::streamlib_relay_adapter_sdk::RelaySettingFieldType::Number,
-                    secret: false,
-                    required: false,
-                    doc: "The port the listener takes.".to_string(),
-                    default: None,
-                }],
-            },
-            ::streamlib_relay_adapter_sdk::RelayAdapterCatalogEntry {
-                kind: STUB_RELAY_ADAPTER_KIND.to_string(),
-                display_name: STUB_RELAY_ADAPTER_DISPLAY_NAME.to_string(),
-                display_icon_data_uri: stub_relay_adapter_display_icon_data_uri(),
-                doc: "A hosted relay standing in for a provider.".to_string(),
-                settings: vec![
-                    ::streamlib_relay_adapter_sdk::RelayAdapterSettingField {
-                        name: "region".to_string(),
-                        field_type: ::streamlib_relay_adapter_sdk::RelaySettingFieldType::Select {
-                            options: vec!["us".to_string(), "eu".to_string()],
-                        },
-                        secret: false,
-                        required: false,
-                        doc: "The region the relay runs in.".to_string(),
-                        default: None,
-                    },
-                    ::streamlib_relay_adapter_sdk::RelayAdapterSettingField {
-                        name: "token".to_string(),
-                        field_type: ::streamlib_relay_adapter_sdk::RelaySettingFieldType::String,
-                        secret: true,
-                        required: true,
-                        doc: "The provider's API token.".to_string(),
-                        default: None,
-                    },
-                ],
-            },
-        ]
-    }
-
-    fn add_relay(
-        &self,
-        adapter: &str,
-        settings: ::serde_json::Map<String, ::serde_json::Value>,
-    ) -> Result<
-        ::streamlib_relay_adapter_sdk::RelayInstanceId,
-        ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal,
-    > {
-        if adapter != STUB_RELAY_ADAPTER_KIND {
-            return Err(
-                ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal::UnknownAdapter {
-                    adapter: adapter.to_string(),
-                    known: format!("`local`, `{STUB_RELAY_ADAPTER_KIND}`"),
-                },
-            );
-        }
-        self.calls.lock().push(RelayInstancesStubCall::Added {
-            adapter: adapter.to_string(),
-            settings,
-        });
-        Ok(::streamlib_relay_adapter_sdk::RelayInstanceId(format!(
-            "{STUB_RELAY_ADAPTER_KIND}-1"
-        )))
-    }
-
-    fn configure_relay(
-        &self,
-        relay_id: &str,
-        settings: ::serde_json::Map<String, ::serde_json::Value>,
-    ) -> Result<(), ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal> {
-        self.calls.lock().push(RelayInstancesStubCall::Configured {
-            relay_id: relay_id.to_string(),
-            settings,
-        });
-        Ok(())
-    }
-
-    fn remove_relay(
-        &self,
-        relay_id: &str,
-    ) -> Result<(), ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal> {
-        if STUB_BUILT_IN_RELAY_IDS.contains(&relay_id) {
-            return Err(
-                ::streamlib_relay_adapter_sdk::RelayInstanceControlRefusal::BuiltInRelayIsNeverRemoved {
-                    relay_id: relay_id.to_string(),
-                },
-            );
-        }
-        self.calls.lock().push(RelayInstancesStubCall::Removed {
-            relay_id: relay_id.to_string(),
-        });
-        Ok(())
-    }
-
-    fn list_relays(
-        &self,
-    ) -> Vec<::streamlib_runtime_client_contract::local_api_wire_contract::ListedRelayInstance>
-    {
-        use ::streamlib_runtime_client_contract::local_api_wire_contract::{
-            ListedRelayConnectionState, ListedRelayInstance, ListedRelaySecretPresence,
-        };
-        let mut listed: Vec<ListedRelayInstance> = STUB_BUILT_IN_RELAY_IDS
-            .iter()
-            .map(|relay_id| ListedRelayInstance {
-                relay_id: relay_id.to_string(),
-                adapter: "local".to_string(),
-                built_in: true,
-                settings: ::serde_json::Map::new(),
-                secrets: Default::default(),
-                connection_state: ListedRelayConnectionState::Joined,
-            })
-            .collect();
-        listed.push(ListedRelayInstance {
-            relay_id: format!("{STUB_RELAY_ADAPTER_KIND}-1"),
-            adapter: STUB_RELAY_ADAPTER_KIND.to_string(),
-            built_in: false,
-            settings: ::serde_json::json!({"region": "us"})
-                .as_object()
-                .expect("an object")
-                .clone(),
-            secrets: [("token".to_string(), ListedRelaySecretPresence::Set)].into(),
-            connection_state: ListedRelayConnectionState::Joining,
-        });
-        listed
-    }
-}
-
 /// One HTTP/1.1 GET over the socket at `local_api_socket_path`: its status
 /// line and body.
+#[cfg(feature = "machine-directories-under-a-test-root")]
 pub(crate) async fn http_get_over_the_local_api_socket(
     local_api_socket_path: &std::path::Path,
     request_target: &str,

@@ -899,6 +899,9 @@ fn port_family_declaration_tokens(
             dtype: #dtype,
             formats: #formats,
             residency: #residency,
+            also_takes_families: ::std::vec::Vec::new(),
+            family_from_config_key: ::std::option::Option::None,
+            codec_from_config_key: ::std::option::Option::None,
         })
     }
 }

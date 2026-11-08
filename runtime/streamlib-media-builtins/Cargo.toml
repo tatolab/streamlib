@@ -15,24 +15,13 @@ name = "streamlib_media_builtins"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.32", default-features = false }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.34", default-features = false }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 rmp-serde = { workspace = true }
 # A Records message is a msgpack map the conversion nodes read and write as values.
 rmpv = { workspace = true }
 tracing = { workspace = true }
-# `RelayTrackSource`: a MoQ subscriber of one track at a relay, reading the
-# broadcast's catalog in the stack's layout. Pinned exactly as the publisher in
-# `tatolabd` pins them.
-moq-net = { version = "=0.3.15" }
-moq-tokio = { version = "=0.19.28" }
-moq-json = { version = "=0.5.13" }
-hang = { version = "=0.21.16" }
-# The one relay-track reader, which `tatolab-read-track` shares.
-streamlib-relay-track-reader = { path = "../streamlib-relay-track-reader" }
-tokio = { workspace = true }
-url = "2"
 
 [features]
 # Forwarded so a hardware-tier test in this crate gates the same way the engine's
@@ -40,9 +29,7 @@ url = "2"
 hardware-tests = ["streamlib/hardware-tests"]
 
 [dev-dependencies]
-# The relay source's tests run its output into input mailboxes over a channel in
-# the test process's own iceoryx2 domain.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.32", default-features = false, features = ["test-support"] }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.34", default-features = false, features = ["test-support"] }
 serde_json = { workspace = true }
 # Pins each golden graph's bytes, so a golden is added beside the others and never edited.
 sha2 = { workspace = true }

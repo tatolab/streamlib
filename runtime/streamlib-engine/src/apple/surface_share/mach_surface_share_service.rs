@@ -19,14 +19,14 @@ use mach2::port::mach_port_name_t;
 use objc2_io_surface::IOSurfaceRef;
 use parking_lot::Mutex;
 use streamlib_surface_client::{
-    OwnedMachPortSet, OwnedMachReceiveRight, OwnedMachSendRight, ReceivedSurfaceShareMachMessage,
-    ReceivedSurfaceShareMachTraffic, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-    SURFACE_SHARE_CLAIMANT_COLUMN_FIELD, SURFACE_SHARE_GPU_POOL_FIELD,
-    SURFACE_SHARE_HAS_CONSUME_DONE_PORT, SURFACE_SHARE_HAS_PRODUCE_DONE_PORT,
-    SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
-    SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID, SURFACE_SHARE_MACH_REPLY_MESSAGE_ID,
-    SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID, SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE,
-    SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED, SURFACE_SHARE_POOL_SLOT_ROW_FIELD,
+    GpuPoolClaimTableRowLeasedToASlot, OwnedMachPortSet, OwnedMachReceiveRight, OwnedMachSendRight,
+    ReceivedSurfaceShareMachMessage, ReceivedSurfaceShareMachTraffic,
+    SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP, SURFACE_SHARE_CLAIMANT_COLUMN_FIELD,
+    SURFACE_SHARE_GPU_POOL_FIELD, SURFACE_SHARE_HAS_CONSUME_DONE_PORT,
+    SURFACE_SHARE_HAS_PRODUCE_DONE_PORT, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID,
+    SURFACE_SHARE_MACH_REPLY_MESSAGE_ID, SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID,
+    SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE, SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED,
     SURFACE_SHARE_POOL_SLOTS_FIELD, SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD,
     SurfaceShareMachMessageReceiveBuffer, SurfaceShareMachSenderAuditIdentity,
     check_in_surface_share_mach_service, gpu_pool_uuid_of_its_wire_name, gpu_pool_uuid_wire_name,
@@ -890,14 +890,9 @@ fn handle_claim_table_of_gpu_pool(
         }
     };
     let pool_slots: Vec<serde_json::Value> = table
-        .pool_slot_keys_by_row()
-        .into_iter()
-        .map(|(row_index, pool_slot_key)| {
-            serde_json::json!({
-                SURFACE_SHARE_POOL_SLOT_ROW_FIELD: row_index,
-                "surface_id": pool_slot_key,
-            })
-        })
+        .rows_leased_to_slots()
+        .iter()
+        .map(GpuPoolClaimTableRowLeasedToASlot::pool_slots_entry)
         .collect();
     (
         serde_json::json!({

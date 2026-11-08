@@ -139,7 +139,8 @@ fn five_frames_over_a_two_slot_pool_import_each_slot_once() {
     assert!(!Arc::ptr_eq(slot_a_import, slot_b_import));
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         2,
         "five frames over two slots import twice"
@@ -158,20 +159,26 @@ fn five_frames_over_a_two_slot_pool_import_each_slot_once() {
     ));
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         1,
         "the retired slot leaves the cache on the connection's next reply"
     );
     drop(after_the_retirement);
 
-    drop(exchange_client.surface_share_connection.lock().take());
+    drop(
+        exchange_client
+            .surface_share_connection
+            .take_the_open_connection(),
+    );
     exchange_client
         .surface_share_request(&serde_json::json!({"op": "lookup", "surface_id": "absent"}))
         .expect("a new connection answers");
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         0,
         "no import outlives the connection the service would retire it on"
@@ -277,7 +284,8 @@ fn five_texture_frames_over_a_two_slot_pool_import_each_slot_once() {
     assert!(!Arc::ptr_eq(&imports[0], &imports[1]));
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         2,
         "five texture frames over two slots import twice"
@@ -351,7 +359,8 @@ fn five_storage_buffer_frames_over_a_two_slot_pool_import_each_slot_once() {
     assert!(!Arc::ptr_eq(&imports[0], &imports[1]));
     assert_eq!(
         exchange_client
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .held_pool_slot_count(),
         2,
         "five storage buffer frames over two slots import twice"

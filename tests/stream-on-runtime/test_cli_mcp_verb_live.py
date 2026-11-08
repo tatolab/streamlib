@@ -54,17 +54,13 @@ CONTROL_TOOL_NAMES = {
     "remove_project",
     "rename_stream",
     "list_streams",
-    "expose_port",
-    "add_relay",
-    "configure_relay",
-    "remove_relay",
-    "list_relays",
     "describe_runtime",
     "set_stream_clock_scale",
+    "open_viewer",
+    "close_viewer",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
-RELAY_ADAPTER_CATALOG_RESOURCE_URI = "streamlib://relay-adapter-catalog"
 
 
 def mcp_verb_command(runtime_unit: RuntimeUnitUnderTest) -> "list[str]":
@@ -128,7 +124,6 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
                 for uri in (
                     NODE_CATALOG_RESOURCE_URI,
                     LIVE_GRAPH_RESOURCE_URI,
-                    RELAY_ADAPTER_CATALOG_RESOURCE_URI,
                 )
             }
             prompt = await client.get_prompt(

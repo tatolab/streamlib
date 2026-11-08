@@ -5,8 +5,8 @@
 //! renders.
 //!
 //! A [`GraphSnapshot`] is the spec keys of a `graph` document — `stream`, `clock`,
-//! `nodes[].name` / `type` / `config`, `links[].source` / `target` and
-//! `exposed` — and nothing else, so `graph`'s own output reads into one with
+//! `nodes[].name` / `type` / `config` and `links[].source` / `target` — and
+//! nothing else, so `graph`'s own output reads into one with
 //! its live keys skipped, and any other key is refused by name. Loading one is
 //! [`Runner::load_stream_from_graph_snapshot`](crate::core::runtime::Runner::load_stream_from_graph_snapshot);
 //! there is no saver, because the render is the export.
@@ -19,15 +19,22 @@ use serde::{Deserialize, Serialize};
 use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    OutputPortExposureLevel, cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
-    port_names_listed_for_a_refusal,
+    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
+    config_node_reference_edges_of_one_node, node_names_listed_for_a_refusal,
+    port_names_listed_for_a_refusal, refuse_a_reference_to_a_node_of_the_wrong_type,
+    refuse_a_second_referrer_of_a_node_that_takes_one,
 };
-use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
+use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
+use crate::core::graph_variable_resolution::{
+    GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
+};
+use crate::core::json_schema::GraphResponse;
+use crate::core::json_schema::LinkPortRefOutput;
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
 /// A graph a runtime runs: its nodes by class import path, config and name,
-/// the links between their ports, and the output ports the stream exposes.
+/// and the links between their ports.
 ///
 /// Read only through [`Self::from_json_str`] and [`Self::from_graph_document`],
 /// which refuse a key the runtime does not read.
@@ -41,14 +48,11 @@ pub struct GraphSnapshot {
     #[serde(skip_serializing_if = "StreamClockSpec::is_real")]
     pub clock: StreamClockSpec,
 
-    /// Every node, each under the name links and exposures name it by.
+    /// Every node, each under the name links name it by.
     pub nodes: Vec<GraphSnapshotNode>,
 
     /// Every link, each end a node's port.
     pub links: Vec<GraphSnapshotLink>,
-
-    /// The output ports the stream exposes, each at its level.
-    pub exposed: Vec<ExposedOutputPortOutput>,
 }
 
 /// The spec keys a graph document is read through, before its keys are checked.
@@ -61,12 +65,10 @@ struct GraphSnapshotAsWritten {
     nodes: Vec<GraphSnapshotNode>,
     #[serde(default)]
     links: Vec<GraphSnapshotLink>,
-    #[serde(default)]
-    exposed: Vec<ExposedOutputPortOutput>,
 }
 
-/// One JSON object of a graph document: the graph, a node, a link, a link end
-/// or an exposure.
+/// One JSON object of a graph document: the graph, a node, a link or a link
+/// end.
 type GraphDocumentObject = serde_json::Map<String, serde_json::Value>;
 
 /// The keys one kind of object in a graph document is written with: the spec
@@ -82,9 +84,9 @@ struct GraphDocumentObjectKeys {
 
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
-    spec_keys: &["stream", "clock", "nodes", "links", "exposed"],
+    spec_keys: &["stream", "clock", "nodes", "links"],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
-    live_keys: &["extensions", "machine", "runtime_name"],
+    live_keys: &["extensions", "machine", "references", "runtime_name"],
 };
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
@@ -106,20 +108,14 @@ const GRAPH_LINK_END_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 };
 
 /// The keys a link end naming another stream's or another machine's port
-/// would carry, each refused naming [`RELAY_TRACK_SOURCE_READS_ANOTHER_STREAMS_PORT`].
+/// would carry, each refused naming [`TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT`].
 const LINK_END_KEYS_NAMING_A_PORT_OUTSIDE_THIS_STREAM: [&str; 2] = ["machine", "stream"];
 
 /// How a stream reads a port outside it, as a refusal of a link end naming
 /// one says.
-const RELAY_TRACK_SOURCE_READS_ANOTHER_STREAMS_PORT: &str = "a link's ends are both in this \
-     stream; read another stream's port, on this machine or another, through a \
-     `RelayTrackSource` node";
-
-const GRAPH_EXPOSURE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
-    object_kind: "an exposure",
-    spec_keys: &["node", "port", "level"],
-    live_keys: &[],
-};
+const TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT: &str = "a link's ends are both in this \
+     stream; read another stream's track at a relay, on this machine or another, through a \
+     `MoqTrackReceive` node";
 
 /// One node of a [`GraphSnapshot`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -171,7 +167,6 @@ impl GraphSnapshot {
             clock,
             nodes,
             links,
-            exposed,
         } = GraphSnapshotAsWritten::deserialize(&graph_document)
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
         Ok(Self {
@@ -179,7 +174,6 @@ impl GraphSnapshot {
             clock,
             nodes,
             links,
-            exposed,
         })
     }
 
@@ -192,9 +186,41 @@ impl GraphSnapshot {
     /// Check the graph without loading it: every `type` one the stream
     /// resolves on this floor, every config one its type takes, names unique
     /// once cast, every link end a port of the right direction on a node the
-    /// graph holds, and every exposure an output port a node has, named once,
-    /// at a level beyond internal.
+    /// graph holds, and every reference edge a node of the type its config key
+    /// takes.
+    ///
+    /// Its variables and interface nodes are resolved first: the graph the
+    /// runtime would run is checked, and each setter's value and each
+    /// interface port with it.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
+        self.with_graph_only_nodes_resolved()?.validate(node_types)
+    }
+
+    /// Resolve the nodes that run nothing out of this graph: its variables,
+    /// then its interface nodes.
+    pub fn with_graph_only_nodes_resolved(
+        &self,
+    ) -> Result<GraphSnapshotWithGraphOnlyNodesResolved> {
+        let variables = self.with_graph_variables_resolved()?;
+        let interface = variables
+            .graph_the_runtime_runs
+            .with_graph_interface_resolved()?;
+        Ok(GraphSnapshotWithGraphOnlyNodesResolved {
+            graph_the_runtime_runs: interface.graph_the_runtime_runs,
+            graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn {
+                variables_as_drawn: variables.variables_as_drawn,
+                interface_as_drawn: interface.interface_as_drawn,
+            },
+            values_the_set_variables_hold: variables.values_the_set_variables_hold,
+        })
+    }
+
+    /// [`Self::validate`] of a graph whose variables and interface nodes are
+    /// already resolved.
+    pub fn validate_a_graph_holding_no_graph_only_node(
+        &self,
+        node_types: &NodeTypesOneStreamResolves,
+    ) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
             node_types.refuse_a_node_this_stream_cannot_add(
@@ -244,48 +270,187 @@ impl GraphSnapshot {
             }
         }
 
-        let mut exposures_seen: HashSet<(String, String)> = HashSet::new();
-        for exposed in &self.exposed {
-            let node_cast = cast_exposed_name_to_url_safe(&exposed.node)?.into_owned();
-            let port_cast = cast_exposed_name_to_url_safe(&exposed.port)?.into_owned();
-            let Some(node) = nodes_by_cast_name.get(&node_cast) else {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}`, and holds no node `{}`. The graph holds: {}",
-                    exposed.node,
-                    exposed.port,
-                    exposed.node,
-                    the_names_the_graph_holds()
-                )));
-            };
-            refuse_a_port_the_node_does_not_have(
-                node_types,
-                &exposed.node,
-                node,
-                &exposed.port,
-                PortDirection::Output,
-            )?;
-            if exposed.level == OutputPortExposureLevel::Internal {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}` at the level `internal`, and an internal port \
-                     is one the graph leaves out of `exposed`. A port is exposed `private` \
-                     or `public`",
-                    exposed.node, exposed.port
-                )));
-            }
-            if !exposures_seen.insert((node_cast, port_cast)) {
-                return Err(Error::GraphError(format!(
-                    "the graph exposes `{}/{}` twice",
-                    exposed.node, exposed.port
-                )));
+        let mut references_of_every_node = Vec::new();
+        for node in &self.nodes {
+            for reference in config_node_reference_edges_of_one_node(
+                &node.name,
+                &node.config,
+                config_keys_of_a_node_type_holding_a_node_reference(
+                    node_types,
+                    &node.processor_type,
+                ),
+            )? {
+                let referenced_node_name = &reference.edge.referenced_node;
+                let Some(referenced_node) = nodes_by_cast_name
+                    .get(cast_exposed_name_to_url_safe(referenced_node_name)?.as_ref())
+                else {
+                    return Err(Error::GraphError(format!(
+                        "node `{}`'s config key `{}` names node `{referenced_node_name}`, which \
+                         the graph does not hold. The graph holds: {}",
+                        node.name,
+                        reference.edge.config_key,
+                        the_names_the_graph_holds()
+                    )));
+                };
+                refuse_a_reference_to_a_node_of_the_wrong_type(
+                    &reference,
+                    &referenced_node.processor_type,
+                )?;
+                references_of_every_node.push(reference);
             }
         }
+        refuse_a_second_referrer_of_a_node_that_takes_one(&references_of_every_node)?;
 
         Ok(())
     }
 }
 
+/// What the nodes that run nothing were drawn as: variables and interface
+/// nodes, so `graph` renders them back.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GraphOnlyNodesAsDrawn {
+    pub variables_as_drawn: GraphVariablesAsDrawn,
+    pub interface_as_drawn: GraphInterfaceAsDrawn,
+}
+
+impl GraphOnlyNodesAsDrawn {
+    /// Refuse removing the node named `node_name` while a drawn link between it
+    /// and a variable or interface node names it, which would leave that link
+    /// dangling in the graph `graph` renders.
+    pub fn refuse_removing_a_node_a_drawn_link_names(&self, node_name: &str) -> Result<()> {
+        let node_cast = cast_exposed_name_to_url_safe(node_name)?;
+        let names_the_node = |end: &LinkPortRefOutput| {
+            cast_exposed_name_to_url_safe(&end.node).is_ok_and(|end_cast| end_cast == node_cast)
+        };
+        let links_drawn_to_a_graph_only_node = self
+            .variables_as_drawn
+            .links_touching_a_variable_node
+            .iter()
+            .chain(
+                self.interface_as_drawn
+                    .links_touching_an_interface_node
+                    .iter()
+                    .map(|drawn| &drawn.link),
+            );
+        for link in links_drawn_to_a_graph_only_node {
+            if names_the_node(&link.source) || names_the_node(&link.target) {
+                return Err(Error::GraphError(format!(
+                    "node `{node_name}` cannot be removed: the graph links `{}/{}` to `{}/{}`, \
+                     an end of which is a variable or interface node, and that link would \
+                     name a node the graph no longer holds",
+                    link.source.node, link.source.port, link.target.node, link.target.port
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The cast name of every variable and interface node drawn.
+    pub fn node_names_cast(&self) -> HashSet<String> {
+        self.variables_as_drawn
+            .variable_nodes
+            .iter()
+            .chain(
+                self.interface_as_drawn
+                    .interface_nodes
+                    .iter()
+                    .map(|interface_node| &interface_node.node),
+            )
+            .filter_map(|node| {
+                cast_exposed_name_to_url_safe(&node.name)
+                    .ok()
+                    .map(std::borrow::Cow::into_owned)
+            })
+            .collect()
+    }
+
+    /// Render the graph-only nodes into `graph_response`, a render of the graph
+    /// the runtime runs: the interface first, which was resolved out of the
+    /// graph its variables resolved to, then the variables.
+    pub fn render_into(&self, graph_response: &mut GraphResponse) {
+        self.interface_as_drawn.render_into(graph_response);
+        self.variables_as_drawn.render_into(graph_response);
+    }
+}
+
+/// A graph with its variables and interface nodes resolved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphSnapshotWithGraphOnlyNodesResolved {
+    /// The graph the runtime runs: no variable or interface node.
+    pub graph_the_runtime_runs: GraphSnapshot,
+    pub graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn,
+    /// Every `SetVariable` and its value, by the setter's name.
+    pub values_the_set_variables_hold: Vec<SetVariableAndTheValueItHolds>,
+}
+
+impl GraphSnapshotWithGraphOnlyNodesResolved {
+    /// Check the graph the runtime runs, that each `SetVariable` holds a node
+    /// of that graph, or an output port one of its nodes has, whether or not
+    /// a get reads it, and that each interface port is linked to ports of its
+    /// family.
+    pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
+        let graph = &self.graph_the_runtime_runs;
+        graph.validate_a_graph_holding_no_graph_only_node(node_types)?;
+        self.graph_only_nodes_as_drawn
+            .interface_as_drawn
+            .validate(graph, node_types)?;
+        let node_named = |node_name: &str| -> Result<Option<&GraphSnapshotNode>> {
+            let cast = cast_exposed_name_to_url_safe(node_name)?;
+            Ok(graph.nodes.iter().find(|node| {
+                cast_exposed_name_to_url_safe(&node.name).is_ok_and(|node_cast| node_cast == cast)
+            }))
+        };
+        let the_names_the_graph_holds =
+            || node_names_listed_for_a_refusal(graph.nodes.iter().map(|node| node.name.as_str()));
+        for SetVariableAndTheValueItHolds {
+            set_variable_node,
+            value,
+        } in &self.values_the_set_variables_hold
+        {
+            let held_node_name = match value {
+                ValueASetVariableHolds::PortOutput(source) => &source.node,
+                ValueASetVariableHolds::NodeReference(referenced_node) => referenced_node,
+            };
+            let Some(held_node) = node_named(held_node_name)? else {
+                if let Some(interface_node) = self
+                    .graph_only_nodes_as_drawn
+                    .interface_as_drawn
+                    .interface_node_named(held_node_name)
+                {
+                    if let ValueASetVariableHolds::PortOutput(source) = value
+                        && let Some(refusal) = interface_node
+                            .declared_port
+                            .refusal_of_an_output_it_does_not_have(source)
+                    {
+                        return Err(Error::GraphError(format!(
+                            "`SetVariable` node `{set_variable_node}` holds a port the graph \
+                             does not hold: {refusal}"
+                        )));
+                    }
+                    continue;
+                }
+                return Err(Error::GraphError(format!(
+                    "`SetVariable` node `{set_variable_node}` holds node `{held_node_name}`, \
+                     which the graph does not hold. The graph holds: {}",
+                    the_names_the_graph_holds()
+                )));
+            };
+            if let ValueASetVariableHolds::PortOutput(source) = value {
+                refuse_a_port_the_node_does_not_have(
+                    node_types,
+                    &source.node,
+                    held_node,
+                    &source.port,
+                    PortDirection::Output,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Refuse the first key of `graph_document` the runtime does not read — at the
-/// top, on a node, a link, a link end or an exposure — naming it and where it
+/// top, on a node, a link or a link end — naming it and where it
 /// sits, before the spec is read, so a misspelled key is named rather than
 /// reported as the key it stands in for being missing. A link end naming a
 /// machine or a stream is refused naming how a stream reads a port outside it.
@@ -355,11 +520,6 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
             refuse_a_key_no_such_object_holds(link_end, &GRAPH_LINK_END_KEYS, link_end_named)?;
         }
     }
-    for exposure in objects_of("exposed") {
-        refuse_a_key_no_such_object_holds(exposure, &GRAPH_EXPOSURE_KEYS, || {
-            format!("the exposure `{}`", port_address_of(exposure))
-        })?;
-    }
     Ok(())
 }
 
@@ -384,7 +544,7 @@ fn refuse_a_link_end_naming_a_port_outside_this_stream(
         return Ok(());
     }
     Err(Error::GraphError(format!(
-        "{} names {}: {RELAY_TRACK_SOURCE_READS_ANOTHER_STREAMS_PORT}",
+        "{} names {}: {TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT}",
         link_end_named(),
         what_it_names.join(" and ")
     )))
@@ -431,7 +591,7 @@ fn keys_listed_for_a_refusal(keys: &[&str]) -> String {
 
 /// Refuse `port` unless `node`'s type declares it in `direction`, listing the
 /// ports it does declare there.
-fn refuse_a_port_the_node_does_not_have(
+pub(crate) fn refuse_a_port_the_node_does_not_have(
     node_types: &NodeTypesOneStreamResolves,
     node_name: &str,
     node: &GraphSnapshotNode,
@@ -549,7 +709,6 @@ mod tests {
                  "source": {"node": "camera", "port": "video"},
                  "target": {"node": "display", "port": "video"}}
             ],
-            "exposed": [{"node": "camera", "port": "video"}],
             "extensions": [],
             "machine": "desk"
         });
@@ -567,14 +726,6 @@ mod tests {
                 port: "video".into()
             }
         );
-        assert_eq!(
-            graph.exposed,
-            vec![ExposedOutputPortOutput {
-                node: "camera".into(),
-                port: "video".into(),
-                level: OutputPortExposureLevel::Private,
-            }]
-        );
     }
 
     #[test]
@@ -588,7 +739,6 @@ mod tests {
                 config: serde_json::json!({}),
             }],
             links: vec![],
-            exposed: vec![],
         };
 
         let serialized = serde_json::to_value(&graph).unwrap();
@@ -597,8 +747,7 @@ mod tests {
             serialized,
             serde_json::json!({
                 "nodes": [{"name": "camera", "type": A_CAMERA_CLASS, "config": {}}],
-                "links": [],
-                "exposed": []
+                "links": []
             })
         );
         assert_eq!(
@@ -652,78 +801,6 @@ mod tests {
 
         assert!(refusal.contains("`display`"), "{refusal}");
         assert!(refusal.contains("camera"), "{refusal}");
-    }
-
-    #[test]
-    fn an_exposure_naming_a_node_the_graph_does_not_hold_is_refused() {
-        let camera_class = a_registered_camera_class();
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": camera_class}],
-            "exposed": [{"node": "display", "port": "video"}]
-        }))
-        .unwrap();
-
-        let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
-            .unwrap_err()
-            .to_string();
-
-        assert!(refusal.contains("holds no node `display`"), "{refusal}");
-    }
-
-    #[test]
-    fn an_exposure_reads_its_level_and_one_written_without_a_level_reads_as_private() {
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
-            "exposed": [
-                {"node": "camera", "port": "video", "level": "public"},
-                {"node": "camera", "port": "preview"}
-            ]
-        }))
-        .unwrap();
-
-        assert_eq!(
-            graph
-                .exposed
-                .iter()
-                .map(|exposed| (exposed.port.as_str(), exposed.level))
-                .collect::<Vec<_>>(),
-            [
-                ("video", OutputPortExposureLevel::Public),
-                ("preview", OutputPortExposureLevel::Private)
-            ]
-        );
-    }
-
-    #[test]
-    fn an_exposure_at_the_level_internal_is_refused_naming_the_levels_an_exposure_takes() {
-        let camera_class = a_registered_camera_class();
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": camera_class}],
-            "exposed": [{"node": "camera", "port": "video", "level": "internal"}]
-        }))
-        .unwrap();
-
-        let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
-            .unwrap_err()
-            .to_string();
-
-        for named in ["`camera/video`", "`internal`", "`private`", "`public`"] {
-            assert!(refusal.contains(named), "{named:?} not in: {refusal}");
-        }
-    }
-
-    #[test]
-    fn an_exposure_at_a_level_no_runtime_knows_does_not_parse() {
-        let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
-            "exposed": [{"node": "camera", "port": "video", "level": "everyone"}]
-        }))
-        .unwrap_err()
-        .to_string();
-
-        assert!(refusal.contains("everyone"), "{refusal}");
     }
 
     #[test]
@@ -885,7 +962,7 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`stream`, `clock`, `nodes`, `links` and `exposed`",
+                    "`stream`, `clock`, `nodes` and `links`",
                 ],
             ),
             (
@@ -916,14 +993,6 @@ mod tests {
                 [
                     "the source end of the link `camera/video` → `display/video` carries the key `prot`",
                     "`node` and `port`",
-                ],
-            ),
-            (
-                serde_json::json!({"nodes": [a_node.clone()],
-                                   "exposed": [{"node": "camera", "port": "video", "levle": "public"}]}),
-                [
-                    "the exposure `camera/video` carries the key `levle`",
-                    "`node`, `port` and `level`",
                 ],
             ),
         ] {
@@ -972,10 +1041,6 @@ mod tests {
             (&definitions["ProcessorNodeOutput"], &GRAPH_NODE_KEYS),
             (&definitions["LinkOutput"], &GRAPH_LINK_KEYS),
             (&definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
-            (
-                &definitions["ExposedOutputPortOutput"],
-                &GRAPH_EXPOSURE_KEYS,
-            ),
         ] {
             let rendered = keys_rendered_on(object_schema);
             for key in &rendered {
@@ -1017,8 +1082,7 @@ mod tests {
             )
             .expect("the type is described into the stream");
         let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "described", "type": described_class}],
-            "exposed": [{"node": "described", "port": "video"}]
+            "nodes": [{"name": "described", "type": described_class}]
         }))
         .unwrap();
 
@@ -1034,11 +1098,235 @@ mod tests {
         );
     }
 
+    const GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Gateway";
+    const TRACK_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_tests.nodes:Track";
+    const SEND_CLASS_FOR_THE_REFERENCE_TESTS: &str = "graph_snapshot_reference_tests:Send";
+
+    /// A stream that described a gateway type and a track type whose config
+    /// key `gateway` takes a reference to a gateway.
+    fn node_types_with_a_track_naming_its_gateway_by_reference() -> NodeTypesOneStreamResolves {
+        let node_types = NodeTypesOneStreamResolves::new();
+        for (short_name, import_path, config_schema) in [
+            ("Gateway", GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS, None),
+            (
+                "Track",
+                TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "gateway": {
+                            streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD:
+                                {"node_type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS}
+                        },
+                        "track": {"type": "string"},
+                        "gateway_or_its_name": {"anyOf": [
+                            {streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
+                            {"type": "string"}
+                        ]}
+                    }
+                })),
+            ),
+            (
+                "Send",
+                SEND_CLASS_FOR_THE_REFERENCE_TESTS,
+                Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "track": {
+                            streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {
+                                "node_type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                                streamlib_processor_schema::NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: true,
+                            }
+                        }
+                    }
+                })),
+            ),
+        ] {
+            let mut descriptor = crate::core::descriptors::ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new(short_name).unwrap(),
+                ProcessorClassImportPath::new(import_path).unwrap(),
+                "graph snapshot reference test",
+            );
+            if let Some(config_schema) = config_schema {
+                descriptor = descriptor.with_config_schema(config_schema);
+            }
+            node_types
+                .register_a_type_described_in_this_streams_processor_interpreter(
+                    descriptor,
+                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                )
+                .expect("the type is described into the stream");
+        }
+        node_types
+    }
+
+    fn a_graph_whose_track_names_in_its_gateway_key(
+        gateway_config_value: serde_json::Value,
+    ) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
+                {"name": "other-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS},
+                {
+                    "name": "camera-track",
+                    "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                    "config": {"gateway": gateway_config_value, "track": "camera"}
+                }
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_reference_to_a_node_of_the_type_its_key_takes_validates_and_round_trips() {
+        let graph =
+            a_graph_whose_track_names_in_its_gateway_key(serde_json::json!({"node": "cloudflare"}));
+        graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .expect("a track naming a gateway validates");
+        let reread = GraphSnapshot::from_json_str(&graph.to_json_string().unwrap()).unwrap();
+        assert_eq!(reread, graph);
+        assert_eq!(
+            reread.nodes[2].config["gateway"],
+            serde_json::json!({"node": "cloudflare"})
+        );
+    }
+
+    #[test]
+    fn a_second_node_naming_a_node_under_a_key_taking_one_referrer_is_refused_naming_both() {
+        let graph_with_senders_naming = |second_send_track: &str| {
+            GraphSnapshot::from_graph_document(serde_json::json!({
+                "nodes": [
+                    {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
+                    {"name": "camera-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"gateway": {"node": "cloudflare"}}},
+                    {"name": "screen-track", "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"gateway": {"node": "cloudflare"}}},
+                    {"name": "camera-send", "type": SEND_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"track": {"node": "camera-track"}}},
+                    {"name": "second-send", "type": SEND_CLASS_FOR_THE_REFERENCE_TESTS,
+                     "config": {"track": {"node": second_send_track}}}
+                ]
+            }))
+            .unwrap()
+        };
+        let node_types = node_types_with_a_track_naming_its_gateway_by_reference();
+        graph_with_senders_naming("screen-track")
+            .validate(&node_types)
+            .expect("two senders on two tracks validate");
+        let refusal = graph_with_senders_naming("Camera Track")
+            .validate(&node_types)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("node `second-send`'s config key `track` names node `Camera Track`")
+                && refusal.contains("node `camera-send` already names under `track`"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_node_the_graph_does_not_hold_is_refused_naming_it() {
+        let refusal =
+            a_graph_whose_track_names_in_its_gateway_key(serde_json::json!({"node": "nowhere"}))
+                .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+                .unwrap_err()
+                .to_string();
+        assert!(
+            refusal.contains("node `camera-track`'s config key `gateway` names node `nowhere`")
+                && refusal.contains("cloudflare"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_reference_to_a_node_of_the_wrong_type_is_refused_naming_both_types() {
+        let refusal = a_graph_whose_track_names_in_its_gateway_key(
+            serde_json::json!({"node": "other-track"}),
+        )
+        .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+        .unwrap_err()
+        .to_string();
+        assert!(
+            refusal.contains(TRACK_CLASS_FOR_THE_REFERENCE_TESTS)
+                && refusal.contains(&format!(
+                    "takes a `{GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS}`"
+                )),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_reference_key_holding_anything_but_a_node_object_is_refused_naming_the_key() {
+        let refusal = a_graph_whose_track_names_in_its_gateway_key(serde_json::json!("cloudflare"))
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("config key `gateway` holds \"cloudflare\""),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_key_taking_a_reference_or_a_string_validates_a_string() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{
+                "name": "camera-track",
+                "type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
+                "config": {"gateway_or_its_name": "cloudflare"}
+            }]
+        }))
+        .unwrap();
+        graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .expect("a string is the key's other value");
+    }
+
+    #[test]
+    fn a_setter_no_get_reads_still_holds_a_node_the_graph_holds() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "cloudflare", "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS},
+                {
+                    "name": "set-gateway",
+                    "type": "tatolab.stream:SetVariable",
+                    "config": {"variable": "gateway", "node_reference": {"node": "nowhere"}}
+                }
+            ]
+        }))
+        .unwrap();
+        let refusal = graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("`SetVariable` node `set-gateway` holds node `nowhere`")
+                && refusal.contains("cloudflare"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_node_object_under_a_key_no_schema_marks_is_plain_config() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{
+                "name": "cloudflare",
+                "type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS,
+                "config": {"anything": {"node": "nowhere"}}
+            }]
+        }))
+        .unwrap();
+        graph
+            .validate(&node_types_with_a_track_naming_its_gateway_by_reference())
+            .expect("a key no schema marks is never read as a reference");
+    }
+
     /// A link's ends are both in the stream that loads the graph, so an end
     /// naming a stream — this one or another — or a machine is refused naming
-    /// the key and `RelayTrackSource` as how a stream reads a port outside it.
+    /// the key and `MoqTrackReceive` as how a stream reads a port outside it.
     #[test]
-    fn a_link_end_naming_a_stream_or_a_machine_is_refused_naming_relay_track_source() {
+    fn a_link_end_naming_a_stream_or_a_machine_is_refused_naming_the_track_receive() {
         for (source, target, the_end_and_what_it_names) in [
             (
                 serde_json::json!({"stream": "camera-rig", "node": "camerasource", "port": "video"}),
@@ -1075,9 +1363,8 @@ mod tests {
             assert_eq!(
                 refusal,
                 format!(
-                    "Stream graph error: {the_end_and_what_it_names}: a link's ends are both in this \
-                     stream; read another stream's port, on this machine or another, through a \
-                     `RelayTrackSource` node"
+                    "Stream graph error: {the_end_and_what_it_names}: \
+                     {TRACK_RECEIVE_READS_ANOTHER_STREAMS_PORT}"
                 )
             );
         }
@@ -1087,7 +1374,7 @@ mod tests {
     /// the state that runtime gave it, is refused naming how to read that
     /// stream's port, not for the key it rendered on the link.
     #[test]
-    fn a_link_to_another_stream_as_an_older_runtime_rendered_it_is_refused_naming_relay_track_source()
+    fn a_link_to_another_stream_as_an_older_runtime_rendered_it_is_refused_naming_the_track_receive()
      {
         let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
             "nodes": [{"name": "camera", "type": a_registered_camera_class()}],
@@ -1102,7 +1389,7 @@ mod tests {
         .to_string();
         assert!(
             refusal.contains("names the stream `camera-rig`")
-                && refusal.contains("`RelayTrackSource` node"),
+                && refusal.contains("`MoqTrackReceive` node"),
             "{refusal}"
         );
     }
@@ -1133,7 +1420,7 @@ mod tests {
         let graph = GraphSnapshot::from_json_str(r#"{"nodes": []}"#).unwrap();
 
         assert!(graph.validate(&NodeTypesOneStreamResolves::new()).is_ok());
-        assert!(graph.links.is_empty() && graph.exposed.is_empty());
+        assert!(graph.links.is_empty());
     }
     #[test]
     fn an_integer_wider_than_64_bits_is_refused_naming_it_rather_than_read_as_a_float() {
@@ -1173,5 +1460,205 @@ mod tests {
         assert_eq!(config["largest"], serde_json::json!(u64::MAX));
         assert_eq!(config["smallest"], serde_json::json!(i64::MIN));
         assert_eq!(config["digits"], "18446744073709551616");
+    }
+
+    const IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:ImageSource";
+    const PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS: &str = "graph_snapshot_tests:PacketsSink";
+
+    fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamResolves {
+        use crate::core::descriptors::{PortDescriptor, PortFamily, PortFamilyDeclaration};
+        let node_types = NodeTypesOneStreamResolves::new();
+        for (short_name, import_path, port) in [
+            (
+                "ImageSource",
+                IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS,
+                PortDescriptor::new("video", "", false)
+                    .with_family(PortFamilyDeclaration::of_family(PortFamily::Image)),
+            ),
+            (
+                "PacketsSink",
+                PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS,
+                PortDescriptor::new("encoded", "", false).with_family(PortFamilyDeclaration {
+                    requires_codec: vec!["h264".into()],
+                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                }),
+            ),
+        ] {
+            let descriptor = crate::core::descriptors::ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new(short_name).unwrap(),
+                ProcessorClassImportPath::new(import_path).unwrap(),
+                "graph snapshot interface test",
+            );
+            let descriptor = if import_path == IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS {
+                descriptor.with_output(port)
+            } else {
+                descriptor.with_input(port)
+            };
+            node_types
+                .register_a_type_described_in_this_streams_processor_interpreter(
+                    descriptor,
+                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                )
+                .expect("the type is described into the stream");
+        }
+        node_types
+    }
+
+    fn a_graph_offering_the_source_and_feeding_the_sink(
+        output_family: &str,
+        input_family: &str,
+    ) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
+                {"name": "video", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "video", "family": output_family}},
+                {"name": "encoded", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "encoded", "family": input_family}},
+                {"name": "sink", "type": PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS},
+            ],
+            "links": [
+                {"source": {"node": "source", "port": "video"},
+                 "target": {"node": "video", "port": "value"}},
+                {"source": {"node": "encoded", "port": "value"},
+                 "target": {"node": "sink", "port": "encoded"}},
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn interface_ports_of_the_family_their_linked_ports_carry_validate() {
+        a_graph_offering_the_source_and_feeding_the_sink("image", "packets")
+            .validate(&node_types_with_an_image_source_and_a_packets_sink())
+            .expect("an Image Output, and a Packets Input into a sink requiring a codec, validate");
+    }
+
+    #[test]
+    fn an_interface_port_of_another_family_than_its_linked_port_is_refused_naming_both() {
+        let node_types = node_types_with_an_image_source_and_a_packets_sink();
+        let output_refusal = a_graph_offering_the_source_and_feeding_the_sink("array", "packets")
+            .validate(&node_types)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            output_refusal.contains("`GraphOutput` node `video` declares `video` as Array")
+                && output_refusal.contains("source.video (Image)"),
+            "{output_refusal}"
+        );
+        let input_refusal = a_graph_offering_the_source_and_feeding_the_sink("image", "records")
+            .validate(&node_types)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            input_refusal.contains("`GraphInput` node `encoded` declares `encoded` as Records")
+                && input_refusal.contains("sink.encoded (Packets)"),
+            "{input_refusal}"
+        );
+    }
+
+    #[test]
+    fn an_interface_node_linked_to_a_port_its_node_does_not_have_is_refused_naming_the_ports() {
+        let mut graph = serde_json::to_value(a_graph_offering_the_source_and_feeding_the_sink(
+            "image", "packets",
+        ))
+        .unwrap();
+        graph["links"][0]["source"]["port"] = serde_json::json!("vidoe");
+        let refusal = GraphSnapshot::from_graph_document(graph)
+            .unwrap()
+            .validate(&node_types_with_an_image_source_and_a_packets_sink())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("node `source` has no output port `vidoe`")
+                && refusal.contains("video"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_variable_set_from_a_graph_input_validates() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "encoded", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "encoded", "family": "packets"}},
+                {"name": "set-encoded", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "encoded"}},
+                {"name": "get-encoded", "type": "tatolab.stream:GetVariable",
+                 "config": {"variable": "encoded"}},
+                {"name": "sink", "type": PACKETS_SINK_CLASS_FOR_THE_INTERFACE_TESTS},
+            ],
+            "links": [
+                {"source": {"node": "encoded", "port": "value"},
+                 "target": {"node": "set-encoded", "port": "value"}},
+                {"source": {"node": "get-encoded", "port": "value"},
+                 "target": {"node": "sink", "port": "encoded"}},
+            ]
+        }))
+        .unwrap();
+        graph
+            .validate(&node_types_with_an_image_source_and_a_packets_sink())
+            .expect("a GraphInput held in a variable and read by the sink validates");
+    }
+
+    fn a_variable_set_from(held_node: &str, held_port: &str) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "source", "type": IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS},
+                {"name": "video", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "video", "family": "image"}},
+                {"name": "encoded", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "encoded", "family": "packets"}},
+                {"name": "set-unread", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "unread"}},
+            ],
+            "links": [
+                {"source": {"node": "source", "port": "video"},
+                 "target": {"node": "video", "port": "value"}},
+                {"source": {"node": held_node, "port": held_port},
+                 "target": {"node": "set-unread", "port": "value"}},
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_variable_set_from_an_interface_port_other_than_a_graph_inputs_value_is_refused() {
+        let node_types = node_types_with_an_image_source_and_a_packets_sink();
+        a_variable_set_from("encoded", "value")
+            .validate(&node_types)
+            .expect("an unread variable set from a GraphInput's value validates");
+        for (held_node, held_port) in [("encoded", "typo"), ("video", "value")] {
+            let refusal = a_variable_set_from(held_node, held_port)
+                .validate(&node_types)
+                .expect_err("the setter holds no port the graph holds")
+                .to_string();
+            assert!(
+                refusal.contains("`SetVariable` node `set-unread`")
+                    && refusal.contains(&format!("`{held_node}/{held_port}`")),
+                "{refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn removing_a_node_a_link_to_an_interface_or_variable_node_names_is_refused_naming_the_link() {
+        let resolution = a_variable_set_from("encoded", "value")
+            .with_graph_only_nodes_resolved()
+            .expect("resolves");
+        let graph_only_nodes = &resolution.graph_only_nodes_as_drawn;
+        let refusal = graph_only_nodes
+            .refuse_removing_a_node_a_drawn_link_names("Source")
+            .expect_err("the GraphOutput's link names the source")
+            .to_string();
+        assert!(
+            refusal.contains("node `Source` cannot be removed")
+                && refusal.contains("`source/video` to `video/value`"),
+            "{refusal}"
+        );
+        assert_eq!(
+            graph_only_nodes.node_names_cast(),
+            HashSet::from(["video", "encoded", "set-unread"].map(String::from))
+        );
     }
 }

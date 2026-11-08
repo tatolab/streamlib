@@ -158,7 +158,6 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
         rendered_second["nodes"][0]["id"], rendered_first["nodes"][0]["id"],
         "ids are live keys a load mints anew"
     );
-    assert_eq!(rendered_second["exposed"], serde_json::json!([]));
     assert_eq!(
         rendered_second["stream"], "built-in-code",
         "a stream built in code renders its own name, and a load of it keeps that name"
@@ -166,50 +165,19 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
 }
 
 #[test]
-#[serial]
-fn a_loaded_stream_renders_its_name_and_its_exposures_at_their_levels_and_round_trips_them() {
-    let camera = register_test_type("ExposedCamera", "_unused_in", "video");
+fn a_graph_carrying_exposed_is_refused_naming_the_keys_a_graph_has() {
+    let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
+        "stream": "main",
+        "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource", "config": {}}],
+        "exposed": [{"node": "camera", "port": "video"}]
+    }))
+    .expect_err("a graph carries no exposure")
+    .to_string();
 
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let stream = load(
-        &runner,
-        project_directory.path(),
-        serde_json::json!({
-            "stream": "main",
-            "nodes": [
-                {"name": "Front Camera", "type": camera.as_str(), "config": {}},
-                {"name": "Back Camera", "type": camera.as_str(), "config": {}}
-            ],
-            "exposed": [
-                {"node": "front-camera", "port": "Video"},
-                {"node": "back-camera", "port": "video", "level": "public"}
-            ]
-        }),
-    )
-    .expect("the graph loads");
-    let rendered = the_graph_document_of(&stream);
-
-    assert_eq!(rendered["stream"], "main");
-    assert_eq!(
-        rendered["exposed"],
-        serde_json::json!([
-            {"node": "front-camera", "port": "video", "level": "private"},
-            {"node": "back-camera", "port": "video", "level": "public"}
-        ]),
-        "an exposure renders its level, and one written with no level renders as private"
-    );
-
-    let reloading_runner = Runner::new().unwrap();
-    let reloaded = load(
-        &reloading_runner,
-        project_directory.path(),
-        rendered.clone(),
-    )
-    .expect("the render loads");
-    assert_eq!(
-        the_spec_in(the_graph_document_of(&reloaded)),
-        the_spec_in(rendered)
+    assert!(refusal.contains("the key `exposed`"), "{refusal}");
+    assert!(
+        refusal.contains("`stream`, `clock`, `nodes` and `links`"),
+        "{refusal}"
     );
 }
 
@@ -383,35 +351,6 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
     assert!(runner.ids_of_the_loaded_streams().is_empty());
 }
 
-#[test]
-#[serial]
-fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {
-    let camera = register_test_type("InputExposingCamera", "frames_in", "video");
-
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let refusal = the_refusal_of(
-        load(
-            &runner,
-            project_directory.path(),
-            serde_json::json!({
-                "stream": "main",
-                "nodes": [{"name": "camera", "type": camera.as_str()}],
-                "exposed": [{"node": "camera", "port": "frames_in"}]
-            }),
-        ),
-        "only an output port is exposed",
-    )
-    .to_string();
-
-    assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
-    assert!(refusal.contains("video"), "{refusal}");
-    assert!(
-        runner.ids_of_the_loaded_streams().is_empty(),
-        "a refused graph adds no stream"
-    );
-}
-
 /// A link naming a port its node does not have, in that direction, is
 /// refused before any node is added.
 #[test]
@@ -444,33 +383,6 @@ fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
         "{refusal}"
     );
     assert!(runner.ids_of_the_loaded_streams().is_empty());
-}
-
-#[test]
-#[serial]
-fn an_exposure_named_twice_is_refused() {
-    let camera = register_test_type("TwiceExposedCamera", "_unused_in", "video");
-
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let refusal = the_refusal_of(
-        load(
-            &runner,
-            project_directory.path(),
-            serde_json::json!({
-                "stream": "main",
-                "nodes": [{"name": "camera", "type": camera.as_str()}],
-                "exposed": [
-                    {"node": "camera", "port": "video"},
-                    {"node": "Camera", "port": "Video"}
-                ]
-            }),
-        ),
-        "one port is exposed once",
-    )
-    .to_string();
-
-    assert!(refusal.contains("twice"), "{refusal}");
 }
 
 /// A node whose type never resolved renders under the requested import path
@@ -630,4 +542,578 @@ fn a_clock_this_runtime_does_not_run_is_refused_at_load_naming_the_stream() {
             "{refusal} names the stream"
         );
     }
+}
+
+/// Register a gateway type and a track type whose config key `gateway` takes
+/// a reference to a gateway.
+fn register_a_gateway_and_a_track_naming_one()
+-> (ProcessorClassImportPath, ProcessorClassImportPath) {
+    let gateway = register_test_type("ReferenceEdgeGateway", "_unused_in", "_unused_out");
+    let track_import_path =
+        ProcessorClassImportPath::new(format!("{}::ReferenceEdgeTrack", module_path!())).unwrap();
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+        ProcessorDescriptor::new(
+            ProcessorClassShortName::new("ReferenceEdgeTrack").unwrap(),
+            track_import_path.clone(),
+            "graph round-trip test",
+        )
+        .with_config_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "gateway": {
+                    streamlib::sdk::descriptors::NODE_REFERENCE_SCHEMA_KEYWORD:
+                        {"node_type": gateway.as_str()}
+                }
+            }
+        })),
+    );
+    (gateway, track_import_path)
+}
+
+#[test]
+#[serial]
+fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_and_a_reference_renders_cast()
+ {
+    let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "live-references");
+    stream
+        .add_processor(
+            ProcessorSpec::new(gateway, serde_json::json!({}))
+                .with_display_name("Cloudflare Gateway"),
+        )
+        .expect("the gateway adds");
+    let track = stream
+        .add_processor(
+            ProcessorSpec::new(
+                track_import_path.clone(),
+                serde_json::json!({"gateway": {"node": "Cloudflare Gateway"}}),
+            )
+            .with_display_name("camera-track"),
+        )
+        .expect("the track adds");
+
+    assert_eq!(
+        the_graph_document_of(&stream)["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare-gateway"}
+        ])
+    );
+    let refusal = stream
+        .update_processor_config(&track, serde_json::json!({"gateway": {"node": "nowhere"}}))
+        .expect_err("a reference to a node the graph does not hold is refused")
+        .to_string();
+    assert!(
+        refusal.contains("names node `nowhere`") && refusal.contains("cloudflare-gateway"),
+        "{refusal}"
+    );
+    let refusal = stream
+        .add_processor(
+            ProcessorSpec::new(
+                track_import_path,
+                serde_json::json!({"gateway": {"node": "nowhere"}}),
+            )
+            .with_display_name("screen-track"),
+        )
+        .expect_err("a live add naming a node the graph does not hold is refused")
+        .to_string();
+    assert!(refusal.contains("names node `nowhere`"), "{refusal}");
+    let names_in_the_graph: Vec<serde_json::Value> = the_graph_document_of(&stream)["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["name"].clone())
+        .collect();
+    assert!(
+        !names_in_the_graph.contains(&serde_json::json!("screen-track")),
+        "the refused node is not left in the graph: {names_in_the_graph:?}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_load_listing_a_referrer_before_the_node_it_names_loads() {
+    let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
+    let graph = serde_json::json!({
+        "stream": "referrer-listed-first",
+        "nodes": [
+            {
+                "name": "camera-track",
+                "type": track_import_path.as_str(),
+                "config": {"gateway": {"node": "cloudflare"}}
+            },
+            {"name": "cloudflare", "type": gateway.as_str()}
+        ]
+    });
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(&runner, project_directory.path(), graph)
+        .expect("a referrer listed before the node it names loads");
+    assert_eq!(
+        the_graph_document_of(&stream)["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+        ])
+    );
+}
+
+#[test]
+#[serial]
+fn a_reference_edge_in_a_config_renders_beside_the_links_and_loads_back() {
+    let (gateway, track_import_path) = register_a_gateway_and_a_track_naming_one();
+    let graph = serde_json::json!({
+        "stream": "reference-edges",
+        "nodes": [
+            {"name": "cloudflare", "type": gateway.as_str()},
+            {
+                "name": "camera-track",
+                "type": track_import_path.as_str(),
+                "config": {"gateway": {"node": "cloudflare"}}
+            }
+        ]
+    });
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let first_runner = Runner::new().unwrap();
+    let first = load(&first_runner, project_directory.path(), graph).expect("the stream loads");
+    let rendered = the_graph_document_of(&first);
+    assert_eq!(
+        rendered["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+        ])
+    );
+    assert!(
+        rendered["links"].as_array().unwrap().is_empty(),
+        "a reference edge is never a link"
+    );
+
+    let second_runner = Runner::new().unwrap();
+    let second = load(&second_runner, project_directory.path(), rendered.clone())
+        .expect("a rendered reference edge loads back");
+    assert_eq!(
+        the_graph_document_of(&second)["references"],
+        rendered["references"]
+    );
+}
+
+/// Register a descriptor-only type whose ports declare `family`.
+fn register_a_family_type(
+    short: &str,
+    inputs: &[(&str, streamlib::sdk::descriptors::PortFamily)],
+    outputs: &[(&str, streamlib::sdk::descriptors::PortFamily)],
+) -> ProcessorClassImportPath {
+    use streamlib::sdk::descriptors::PortFamilyDeclaration;
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
+    let mut descriptor = ProcessorDescriptor::new(
+        ProcessorClassShortName::new(short).unwrap(),
+        import_path.clone(),
+        "graph variable test",
+    );
+    for (name, family) in inputs {
+        descriptor = descriptor.with_input(
+            PortDescriptor::new(*name, "", false)
+                .with_family(PortFamilyDeclaration::of_family(*family)),
+        );
+    }
+    for (name, family) in outputs {
+        descriptor = descriptor.with_output(
+            PortDescriptor::new(*name, "", false)
+                .with_family(PortFamilyDeclaration::of_family(*family)),
+        );
+    }
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    import_path
+}
+
+fn an_image_variable_read_by_two_readers(
+    camera: &ProcessorClassImportPath,
+    second_reader: &ProcessorClassImportPath,
+) -> serde_json::Value {
+    serde_json::json!({
+        "stream": "image-variable",
+        "nodes": [
+            {"name": "camera", "type": camera.as_str()},
+            {"name": "set-camera", "type": "tatolab.stream:SetVariable", "config": {"variable": "camera"}},
+            {"name": "get-camera", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}},
+            {"name": "get-camera-2", "type": "tatolab.stream:GetVariable", "config": {"variable": "camera"}},
+            {"name": "front", "type": camera.as_str().replace("VariableCamera", "VariableDisplay")},
+            {"name": "back", "type": second_reader.as_str()}
+        ],
+        "links": [
+            {"source": {"node": "camera", "port": "video"}, "target": {"node": "set-camera", "port": "value"}},
+            {"source": {"node": "get-camera", "port": "value"}, "target": {"node": "front", "port": "video_in"}},
+            {"source": {"node": "get-camera-2", "port": "value"}, "target": {"node": "back", "port": "video_in"}}
+        ]
+    })
+}
+
+#[test]
+#[serial]
+fn an_image_variable_read_twice_runs_as_two_links_and_renders_as_drawn() {
+    use streamlib::sdk::descriptors::PortFamily;
+    let camera = register_a_family_type("VariableCamera", &[], &[("video", PortFamily::Image)]);
+    let display =
+        register_a_family_type("VariableDisplay", &[("video_in", PortFamily::Image)], &[]);
+    let graph = an_image_variable_read_by_two_readers(&camera, &display);
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let first_runner = Runner::new().unwrap();
+    let first = load(&first_runner, project_directory.path(), graph.clone())
+        .expect("an Image variable read twice loads");
+    let rendered = the_graph_document_of(&first);
+    let link_ids_by_drawn_source: Vec<(&str, &str)> = rendered["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|link| {
+            (
+                link["source"]["node"].as_str().unwrap(),
+                link["id"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    let ids_of_links_out_of_a_get: Vec<&str> = link_ids_by_drawn_source
+        .iter()
+        .filter(|(source, _)| source.starts_with("get-camera"))
+        .map(|(_, id)| *id)
+        .collect();
+    assert_eq!(ids_of_links_out_of_a_get.len(), 2);
+    assert!(
+        ids_of_links_out_of_a_get.iter().all(|id| !id.is_empty())
+            && ids_of_links_out_of_a_get[0] != ids_of_links_out_of_a_get[1],
+        "each get's drawn link carries the id of the link the runtime runs: {link_ids_by_drawn_source:?}"
+    );
+    for node in rendered["nodes"].as_array().unwrap() {
+        let is_a_variable_node = node["type"]
+            .as_str()
+            .unwrap()
+            .starts_with("tatolab.stream:");
+        assert_eq!(
+            node["id"].as_str().unwrap().is_empty(),
+            is_a_variable_node,
+            "only a variable node renders with no runtime id: {node}"
+        );
+    }
+
+    assert_eq!(
+        the_spec_in(rendered.clone()),
+        the_spec_in(graph),
+        "graph renders the variables as drawn"
+    );
+    let second_runner = Runner::new().unwrap();
+    let second = load(&second_runner, project_directory.path(), rendered.clone())
+        .expect("a rendered graph holding variables loads back");
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&second)),
+        the_spec_in(rendered)
+    );
+}
+
+#[test]
+#[serial]
+fn a_get_read_as_the_wrong_family_is_refused_at_load_naming_the_get_and_its_variable() {
+    use streamlib::sdk::descriptors::PortFamily;
+    let camera = register_a_family_type("VariableCamera", &[], &[("video", PortFamily::Image)]);
+    register_a_family_type("VariableDisplay", &[("video_in", PortFamily::Image)], &[]);
+    let records_reader = register_a_family_type(
+        "VariableRecordsReader",
+        &[("video_in", PortFamily::Records)],
+        &[],
+    );
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let refusal = the_refusal_of(
+        load(
+            &runner,
+            project_directory.path(),
+            an_image_variable_read_by_two_readers(&camera, &records_reader),
+        ),
+        "a get read as Records from an Image variable must be refused",
+    )
+    .to_string();
+    assert!(
+        refusal.contains("`GetVariable` node `get-camera-2` reads the variable `camera`"),
+        "{refusal}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_back() {
+    let gateway = register_test_type("VariableGateway", "_unused_in", "_unused_out");
+    let track_import_path =
+        ProcessorClassImportPath::new(format!("{}::VariableTrack", module_path!())).unwrap();
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+        ProcessorDescriptor::new(
+            ProcessorClassShortName::new("VariableTrack").unwrap(),
+            track_import_path.clone(),
+            "graph variable test",
+        )
+        .with_config_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "gateway": {
+                    streamlib::sdk::descriptors::NODE_REFERENCE_SCHEMA_KEYWORD:
+                        {"node_type": gateway.as_str()}
+                }
+            }
+        })),
+    );
+    let graph = serde_json::json!({
+        "stream": "gateway-variable",
+        "nodes": [
+            {"name": "cloudflare", "type": gateway.as_str()},
+            {"name": "set-connection", "type": "tatolab.stream:SetVariable",
+             "config": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
+            {"name": "get-connection", "type": "tatolab.stream:GetVariable",
+             "config": {"variable": "connection"}},
+            {"name": "camera-track", "type": track_import_path.as_str(),
+             "config": {"gateway": {"node": "get-connection"}}}
+        ]
+    });
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let first_runner = Runner::new().unwrap();
+    let first = load(&first_runner, project_directory.path(), graph.clone())
+        .expect("a gateway held in a variable loads");
+    let rendered = the_graph_document_of(&first);
+    assert_eq!(
+        rendered["references"],
+        serde_json::json!([
+            {"node": "camera-track", "config_key": "gateway", "referenced_node": "cloudflare"}
+        ])
+    );
+    assert_eq!(the_spec_in(rendered.clone()), the_spec_in(graph));
+
+    let second_runner = Runner::new().unwrap();
+    load(&second_runner, project_directory.path(), rendered)
+        .expect("a rendered gateway variable loads back");
+
+    let wrong_type = serde_json::json!({
+        "stream": "gateway-variable-of-the-wrong-type",
+        "nodes": [
+            {"name": "cloudflare", "type": track_import_path.as_str()},
+            {"name": "set-connection", "type": "tatolab.stream:SetVariable",
+             "config": {"variable": "connection", "node_reference": {"node": "cloudflare"}}},
+            {"name": "get-connection", "type": "tatolab.stream:GetVariable",
+             "config": {"variable": "connection"}},
+            {"name": "camera-track", "type": track_import_path.as_str(),
+             "config": {"gateway": {"node": "get-connection"}}}
+        ]
+    });
+    let refusal = the_refusal_of(
+        load(
+            &Runner::new().unwrap(),
+            project_directory.path(),
+            wrong_type,
+        ),
+        "a variable naming a track where a gateway is taken must be refused",
+    )
+    .to_string();
+    assert!(
+        refusal.contains(&format!("takes a `{}`", gateway.as_str())),
+        "{refusal}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_variable_read_by_a_node_named_as_typed_renders_its_link_once() {
+    use streamlib::sdk::descriptors::PortFamily;
+    let camera = register_a_family_type("VariableCamera", &[], &[("video", PortFamily::Image)]);
+    let display =
+        register_a_family_type("VariableDisplay", &[("video_in", PortFamily::Image)], &[]);
+    let mut graph = an_image_variable_read_by_two_readers(&camera, &display);
+    graph["nodes"][5]["name"] = serde_json::json!("Back Display");
+    graph["links"][2]["target"]["node"] = serde_json::json!("Back Display");
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(&runner, project_directory.path(), graph).expect("the stream loads");
+    let links_into = |rendered: &serde_json::Value, node: &str| -> Vec<serde_json::Value> {
+        rendered["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|link| link["target"]["node"] == node)
+            .cloned()
+            .collect()
+    };
+    let rendered = the_graph_document_of(&stream);
+    let into_the_back_display = links_into(&rendered, "back-display");
+    assert_eq!(into_the_back_display.len(), 1, "{into_the_back_display:?}");
+    assert_eq!(into_the_back_display[0]["source"]["node"], "get-camera-2");
+    assert!(!into_the_back_display[0]["id"].as_str().unwrap().is_empty());
+}
+
+#[test]
+#[serial]
+fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refused() {
+    use streamlib::sdk::descriptors::PortFamily;
+    let camera = register_a_family_type("InterfaceCamera", &[], &[("video", PortFamily::Image)]);
+    let display =
+        register_a_family_type("InterfaceDisplay", &[("video_in", PortFamily::Image)], &[]);
+    let graph_offering = |output_family: &str| {
+        serde_json::json!({
+            "stream": "interface",
+            "nodes": [
+                {"name": "camera", "type": camera.as_str()},
+                {"name": "camera-out", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "Camera", "family": output_family}},
+                {"name": "overlay-in", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "overlay", "family": "image"}},
+                {"name": "display", "type": display.as_str()}
+            ],
+            "links": [
+                {"source": {"node": "camera", "port": "video"},
+                 "target": {"node": "camera-out", "port": "value"}},
+                {"source": {"node": "overlay-in", "port": "value"},
+                 "target": {"node": "display", "port": "video_in"}}
+            ]
+        })
+    };
+    let graph = graph_offering("image");
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let first_runner = Runner::new().unwrap();
+    let first = load(&first_runner, project_directory.path(), graph.clone())
+        .expect("a stream declaring an Output and an Input loads");
+    let rendered = the_graph_document_of(&first);
+    let camera_out = rendered["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "camera-out")
+        .expect("the GraphOutput renders");
+    assert_eq!(
+        camera_out["components"]["graph_interface"],
+        serde_json::json!({"direction": "output", "port": "camera", "family": "image"})
+    );
+    assert_eq!(
+        the_spec_in(rendered.clone()),
+        the_spec_in(graph),
+        "graph renders the interface as drawn"
+    );
+    let camera_id = rendered["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "camera")
+        .and_then(|node| node["id"].as_str())
+        .map(streamlib::sdk::graph::ProcessorUniqueId::from)
+        .expect("the camera renders its id");
+    let removal_refusal = first
+        .remove_processor(&camera_id)
+        .expect_err("removing the node the GraphOutput's link names is refused")
+        .to_string();
+    assert!(
+        removal_refusal.contains("node `camera` cannot be removed"),
+        "{removal_refusal}"
+    );
+    let name_refusal = first
+        .add_processor(
+            ProcessorSpec::new(display.clone(), serde_json::json!({}))
+                .with_display_name("Overlay In"),
+        )
+        .expect_err("a node added live under an interface node's name is refused");
+    assert!(
+        matches!(&name_refusal, Error::NodeNameTaken { cast, .. } if cast == "overlay-in"),
+        "{name_refusal:?}"
+    );
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&first)),
+        the_spec_in(rendered.clone()),
+        "the refused changes leave the graph as drawn"
+    );
+
+    let second_runner = Runner::new().unwrap();
+    let second = load(&second_runner, project_directory.path(), rendered.clone())
+        .expect("a rendered graph holding interface nodes loads back");
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&second)),
+        the_spec_in(rendered)
+    );
+
+    let refusal_runner = Runner::new().unwrap();
+    let refusal = the_refusal_of(
+        load(
+            &refusal_runner,
+            tempfile::tempdir().expect("a project directory").path(),
+            graph_offering("packets"),
+        ),
+        "an Output declared as another family than its port writes is refused",
+    )
+    .to_string();
+    assert!(
+        refusal.contains("`GraphOutput` node `camera-out` declares `Camera` as Packets")
+            && refusal.contains("camera.video (Image)"),
+        "{refusal}"
+    );
+}
+
+#[test]
+#[serial]
+fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port_is_refused() {
+    use streamlib::sdk::descriptors::{PortFamily, PortFamilyDeclaration};
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::InterfaceTrackReceive", module_path!()))
+            .unwrap();
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+        ProcessorDescriptor::new(
+            ProcessorClassShortName::new("InterfaceTrackReceive").unwrap(),
+            import_path.clone(),
+            "graph interface test",
+        )
+        .with_output(PortDescriptor::new("content", "", false).with_family(
+            PortFamilyDeclaration {
+                family_from_config_key: Some("family".into()),
+                ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+            },
+        )),
+    );
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({
+            "stream": "interface-live-update",
+            "nodes": [
+                {"name": "receive", "type": import_path.as_str(), "config": {"family": "packets"}},
+                {"name": "received", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "received", "family": "packets"}}
+            ],
+            "links": [
+                {"source": {"node": "receive", "port": "content"},
+                 "target": {"node": "received", "port": "value"}}
+            ]
+        }),
+    )
+    .expect("an Output fed by a port whose family its config names loads");
+    let receive_id = the_graph_document_of(&stream)["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "receive")
+        .and_then(|node| node["id"].as_str())
+        .map(streamlib::sdk::graph::ProcessorUniqueId::from)
+        .expect("the receive node renders its id");
+
+    stream
+        .update_processor_config(&receive_id, serde_json::json!({"family": "packets"}))
+        .expect("an update keeping the family is taken");
+    let refusal = stream
+        .update_processor_config(&receive_id, serde_json::json!({"family": "records"}))
+        .expect_err("an update changing the family under the declared Output is refused")
+        .to_string();
+    assert!(
+        refusal.contains("`GraphOutput` node `received` declares `received` as Packets")
+            && refusal.contains("receive.content (Records)"),
+        "{refusal}"
+    );
 }

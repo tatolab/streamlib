@@ -31,10 +31,6 @@ use pyo3::types::PyDict;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use pyo3::exceptions::PyRuntimeError;
-#[cfg(target_os = "linux")]
-use std::os::fd::OwnedFd;
-#[cfg(target_os = "linux")]
-use std::os::unix::net::UnixStream;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 
@@ -49,14 +45,10 @@ use streamlib::sdk::rhi::PixelFormat;
 mod foreign_surface_adoption;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod gpu_kernels;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod gpu_pool_claim_tables_of_this_helper;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod pool_slot_import_cache;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod pooled_gpu_frame_claims;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -71,10 +63,6 @@ pub(crate) use gpu_kernels::{
     HelperProcessRayTracingKernelRegistration, compute_dispatch_wire_entry,
 };
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use gpu_pool_claim_tables_of_this_helper::HelperGpuPoolClaimTables;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) use gpu_pool_claim_tables_of_this_helper::HelperGpuPoolSlotFrameClaim;
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
     CpuReadbackCopyDirection, DRM_FORMAT_MOD_LINEAR, ForeignDmaBufTextureWithATiledModifier,
@@ -95,7 +83,12 @@ use macos::{
     HelperPoolSlotImport,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use pool_slot_import_cache::HelperPoolSlotImportsByPoolSlot;
+pub(crate) use streamlib_gpu_frame_import_client::GpuPoolSlotFrameClaimOfThisImporter;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use streamlib_gpu_frame_import_client::{
+    GpuPoolClaimTablesOfThisImporter, SurfaceShareConnectionOfThisImporter,
+    SurfaceShareTransferredHandle,
+};
 
 /// The width, height and format a pixel surface carries.
 #[derive(Clone, Copy)]
@@ -558,38 +551,13 @@ pub(crate) enum HelperSurfaceHeldAgainstProducerReuse {
             dead_code,
             reason = "the claim is released by its own Drop; nothing reads it, and that is the point"
         )]
-        Arc<HelperGpuPoolSlotFrameClaim>,
+        Arc<GpuPoolSlotFrameClaimOfThisImporter>,
     ),
 }
-
-/// What memory crosses the surface-share channel as: a descriptor over
-/// SCM_RIGHTS on Linux.
-#[cfg(target_os = "linux")]
-type SurfaceShareTransferredHandle = OwnedFd;
-/// What memory crosses the surface-share channel as: a Mach port right on
-/// macOS.
-#[cfg(target_os = "macos")]
-type SurfaceShareTransferredHandle = streamlib_surface_client::OwnedMachSendRight;
 
 /// A surface-share answer and the handles it carried.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 type SurfaceShareAnswer = (serde_json::Value, Vec<SurfaceShareTransferredHandle>);
-
-/// How long the surface-share channel may keep a helper waiting: every
-/// request on Linux, the connect handshake on macOS. A Mach request carries
-/// no receive timeout; the service's death is what wakes one still pending.
-///
-/// The service answers from in-memory state and duplicated handles, never GPU
-/// work, so this bounds only a service that has stopped answering — and with
-/// it the time every other thread waits on the connection's lock.
-/// How many connections a helper sets aside after a failed or timed-out
-/// request before it stops asking the service anything: each one stays open,
-/// and a service that has failed this often has stopped answering.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-const SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST: usize = 4;
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-const SURFACE_SHARE_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The child-side client that fulfills `ctx.gpu_limited_access` calls by
 /// crossing to the parent: escalate for allocation, surface-share for the
@@ -601,23 +569,11 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// it is owed — every release a drop owes.
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     release_to_parent_without_waiting: Py<PyAny>,
-    #[cfg(target_os = "linux")]
-    surface_socket_path: PathBuf,
-    /// The bootstrap name of the parent's surface-share Mach service, as the
-    /// environment carried it.
-    #[cfg(target_os = "macos")]
-    surface_share_mach_service_name: std::ffi::OsString,
-    /// One connection per child, opened at first checkout; the service
-    /// releases every claim it holds when it closes.
-    #[cfg(target_os = "macos")]
-    surface_share_mach_connection:
-        Mutex<Option<Arc<streamlib_surface_client::SurfaceShareMachServiceConnection>>>,
-    /// Connections whose request failed, held open and never used again: the
-    /// service releases every lease a connection holds once it closes, and
-    /// frames this helper still reads were checked out on them.
-    #[cfg(target_os = "macos")]
-    surface_share_mach_connections_set_aside_after_a_failure:
-        Mutex<Vec<Arc<streamlib_surface_client::SurfaceShareMachServiceConnection>>>,
+    /// The connection to the runtime's surface-sharing service — its socket
+    /// on Linux, its Mach service on macOS — and the pool slot imports made
+    /// over it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    surface_share_connection: SurfaceShareConnectionOfThisImporter<HelperPoolSlotImport>,
     /// The runtime id this client's foreign-surface adoptions register and
     /// release under. Deliberately **not** the node's own runtime id: the
     /// service's crash watchdog releases every surface a disconnected
@@ -627,29 +583,10 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// child's adoptions.
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     foreign_surface_registration_runtime_id: String,
-    /// One connection per child, opened at first checkout. Taken out for
-    /// each exchange and put back only on success, so a stream with half a
-    /// frame in it is dropped rather than reused.
-    #[cfg(target_os = "linux")]
-    surface_share_connection: Mutex<Option<UnixStream>>,
-    /// Connections whose answer outwaited [`SURFACE_SHARE_RESPONSE_TIMEOUT`],
-    /// held open and never used again: the service releases every claim a
-    /// connection holds once it closes, and frames this helper still reads
-    /// were claimed on them.
-    #[cfg(target_os = "linux")]
-    surface_share_connections_set_aside_after_a_timeout: Mutex<Vec<UnixStream>>,
-    /// Each pool slot's import, made on the first frame over the slot and
-    /// reused by every later one. Holding one does not pin a slot — only a
-    /// frame's checkout lease or claim does — and the service names each slot
-    /// the engine retires on this helper's connection, which drops it here.
-    /// Emptied whenever the connection is replaced, since the notices of the
-    /// slots it held would have come on the connection that is gone.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pool_slot_imports_by_pool_slot: Arc<HelperPoolSlotImportsByPoolSlot>,
     /// The claim tables this helper was handed, mapped once per pool, and the
     /// claims its frames hold in them.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    gpu_pool_claim_tables: HelperGpuPoolClaimTables,
+    gpu_pool_claim_tables: GpuPoolClaimTablesOfThisImporter,
     /// The `deviceUUID` the runtime named at spawn, or why this child has
     /// none — what its import device is built on, and the refusal of every
     /// import when it is absent.
@@ -734,22 +671,16 @@ impl HelperProcessGpuExchangeClient {
             escalate_request_to_parent,
             release_to_parent_without_waiting,
             #[cfg(target_os = "linux")]
-            surface_socket_path: PathBuf::from(surface_share_channel_name),
+            surface_share_connection: SurfaceShareConnectionOfThisImporter::new(PathBuf::from(
+                surface_share_channel_name,
+            )),
             #[cfg(target_os = "macos")]
-            surface_share_mach_service_name: surface_share_channel_name,
-            #[cfg(target_os = "macos")]
-            surface_share_mach_connection: Mutex::new(None),
-            #[cfg(target_os = "macos")]
-            surface_share_mach_connections_set_aside_after_a_failure: Mutex::new(Vec::new()),
+            surface_share_connection: SurfaceShareConnectionOfThisImporter::new(
+                surface_share_channel_name,
+            ),
             foreign_surface_registration_runtime_id,
-            #[cfg(target_os = "linux")]
-            surface_share_connection: Mutex::new(None),
-            #[cfg(target_os = "linux")]
-            surface_share_connections_set_aside_after_a_timeout: Mutex::new(Vec::new()),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            pool_slot_imports_by_pool_slot: Arc::default(),
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            gpu_pool_claim_tables: HelperGpuPoolClaimTables::default(),
+            gpu_pool_claim_tables: GpuPoolClaimTablesOfThisImporter::default(),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             vulkan_device_uuid_the_runtime_named_at_spawn,
             #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -47,7 +47,8 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), tickets 1 and 3.
 - #3213: the `tatolab-moq` module (gateway, track, send and receive nodes) and the
   `GraphInput` / `GraphOutput` interface nodes. Waits on step 2.
 - #3215: runtime viewers. Tato Studio reads any port from the runtime and shows it by family,
-  with no relay in between. Its read path is settled in the plan before code. It does not wait
+  with no relay in between, reading the port's channel and importing an Image surface
+  zero-copy (decided 2026-11-07). It does not wait
   on #3213, so it may run beside it.
 
 ## 4. Remove the automatic path
@@ -60,7 +61,20 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), ticket 2.
 - Done when the removal gate passes on every `REMOVED:` bullet of the change and
   `/ship-change` has folded it.
 
-## 5. New capability: lightweight nodes, then shaders
+## 5. Projects and assets
+
+Change: [`changes/project-and-assets.md`](changes/project-and-assets.md).
+
+A project becomes a versioned repository of assets with its own history, a stream's graph is one
+asset, every asset and node gets a runtime-generated UUID, every change is a transaction, and
+another project's assets are linked dependencies. No `stream.py`. #3256 builds new code beside
+the stream path and may start now, beside steps 2 to 4; #3257 and the tickets after it wait on
+step 4, because `exposed` leaves the spec keys and the stream record there.
+
+Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (transactions),
+#3259 (generators as fragments), #3260 (linked dependencies) and #3152 (the project read).
+
+## 6. New capability: lightweight nodes, then shaders
 
 Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) and
 [`changes/slang-shader-compiler.md`](changes/slang-shader-compiler.md).
@@ -79,4 +93,6 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
 5. The pool, phase 4: #3237, one pool interpreter per stream for Python function nodes no
    Python class reads. It is required, not optional.
 
-Nothing in steps 1 to 4 waits on this step.
+Step 6 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
+transaction ticket, #3258, so live edits and pin values are built once, as transactions. Nothing in steps
+1 to 5 waits on this step.

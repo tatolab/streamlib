@@ -1422,7 +1422,7 @@ impl HostVulkanTexture {
                 let iosurface = crate::apple::iosurface::create_private_iosurface_for_a_gpu_image(
                     desc.width,
                     desc.height,
-                    desc.format.bytes_per_pixel(),
+                    desc.format,
                 )?;
                 Self::created_over_iosurface(
                     vulkan_device,

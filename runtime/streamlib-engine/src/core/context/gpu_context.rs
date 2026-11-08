@@ -7290,11 +7290,10 @@ mod tests {
                 .table_named(&gpu_pool_slot_frame.pool)
                 .expect("the frame names a claim table the service holds");
             let pool_slot_key = claim_table
-                .pool_slot_keys_by_row()
+                .rows_leased_to_slots()
                 .into_iter()
-                .find_map(|(row_index, pool_slot_key)| {
-                    (row_index == gpu_pool_slot_frame.slot).then_some(pool_slot_key)
-                })
+                .find(|leased_row| leased_row.row_index == gpu_pool_slot_frame.slot)
+                .map(|leased_row| leased_row.pool_slot_key)
                 .expect("the frame names a leased row");
             let published_frame_id = frame.published_frame_id.to_string();
             assert!(

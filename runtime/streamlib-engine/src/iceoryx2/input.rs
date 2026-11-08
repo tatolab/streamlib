@@ -34,7 +34,6 @@ use super::audio_window::{
     DeviceMatchedAudioWindowContractsByInputPort, LatestQueuedSourceAudioFormat,
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
-use super::bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
 use super::channel_name::InboundLinkName;
 use super::helper_process_loss_count_board::InboundLinkLossCountBoardSlotMirror;
 use super::input_port_borrow_quota::DEFAULT_INPUT_PORT_BORROW_QUOTA;
@@ -55,6 +54,7 @@ use crate::core::descriptors::CatalogEntry;
 use crate::core::error::{Error, Result};
 use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::output_port_catalog_entries::UpstreamCatalogEntriesByInboundLink;
+use streamlib_ipc_types::BagsAGapInTheNumberingSaysWereLost;
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
 /// mixdown and framing work runs with that mutex released.
@@ -87,6 +87,18 @@ pub struct MessageReadFromInputPort {
     pub lost_since_last_read: u64,
     /// What the payload is: its bytes, or a pooled GPU frame the reader claims.
     pub payload_descriptor: DataChannelPayloadDescriptor,
+}
+
+impl From<streamlib_ipc_types::MessageReadFromAReservedSlot> for MessageReadFromInputPort {
+    fn from(message: streamlib_ipc_types::MessageReadFromAReservedSlot) -> Self {
+        Self {
+            payload: message.payload.into(),
+            timestamp_ns: message.timestamp_ns,
+            group_boundary: message.group_boundary,
+            lost_since_last_read: message.lost_since_last_read,
+            payload_descriptor: message.payload_descriptor,
+        }
+    }
 }
 
 /// Where a bag taken off a port's mailbox goes.

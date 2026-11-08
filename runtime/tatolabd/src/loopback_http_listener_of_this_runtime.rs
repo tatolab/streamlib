@@ -2,15 +2,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The runtime's loopback HTTP, served beside its local API on `127.0.0.1` at
-//! [`LOOPBACK_HTTP_LISTENER_DEFAULT_PORT`], its preview page read from beside
-//! the lend. On macOS it is served on the machine runtime lock's own socket.
+//! [`LOOPBACK_HTTP_LISTENER_DEFAULT_PORT`]. On macOS it is served on the
+//! machine runtime lock's own socket.
 
 use std::net::{Ipv4Addr, TcpListener};
-use std::path::Path;
 use std::sync::Arc;
 
-use streamlib::sdk::processor_interpreter::watch_page_directory_beside_the_lend;
-use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, Runner};
+use streamlib::sdk::runtime::Runner;
 use streamlib_api_server::{
     LoopbackHttpListenerServedForAnEngine, serve_the_loopback_http_listener,
 };
@@ -35,34 +33,19 @@ pub(crate) fn the_loopback_http_listener_the_machine_runtime_lock_bound(
     }
 }
 
-/// Serve `engine`'s loopback HTTP until the returned holder is dropped, the
-/// preview page read from beside `lend_directory`, on
+/// Serve `engine`'s loopback HTTP until the returned holder is dropped, on
 /// `bound_by_the_machine_runtime_lock` — the macOS lock's socket. With none, as
 /// on Linux, the runtime binds its port here, and a port another process holds
 /// leaves it running without the listener, said once.
 pub(crate) fn serve_the_loopback_http_listener_of_this_runtime(
     engine: &Arc<Runner>,
-    lend_directory: &Path,
     bound_by_the_machine_runtime_lock: Option<TcpListener>,
 ) -> Option<LoopbackHttpListenerServedForAnEngine> {
-    let Some(watch_page_directory) = watch_page_directory_beside_the_lend(lend_directory) else {
-        tracing::warn!(
-            "no loopback HTTP is served: the lend at {} has no directory beside it for the \
-             preview page",
-            lend_directory.display()
-        );
-        return None;
-    };
     let bound_listener = match bound_by_the_machine_runtime_lock {
         Some(bound_listener) => bound_listener,
         None => bind_the_loopback_http_port()?,
     };
-    match serve_the_loopback_http_listener(
-        Arc::clone(engine) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-        bound_listener,
-        watch_page_directory,
-        &engine.tokio_handle(),
-    ) {
+    match serve_the_loopback_http_listener(bound_listener, &engine.tokio_handle()) {
         Ok(served) => Some(served),
         Err(refusal) => {
             tracing::warn!("no loopback HTTP is served: {refusal}");
@@ -84,8 +67,7 @@ fn bind_the_loopback_http_port() -> Option<TcpListener> {
         Ok(bound_listener) => Some(bound_listener),
         Err(failure) => {
             tracing::warn!(
-                "no loopback HTTP is served, so neither the listing of this machine's streams \
-                 nor the preview page answers: the loopback HTTP listener cannot listen on \
+                "no loopback HTTP is served: the loopback HTTP listener cannot listen on \
                  127.0.0.1:{port}: {failure}"
             );
             None

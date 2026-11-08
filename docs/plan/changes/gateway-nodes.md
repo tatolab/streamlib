@@ -115,8 +115,7 @@ and the runtime unit's contents (`moq-relay`, the preview page).
   ticket. This change uses them: a track names its gateway and a send node its track by
   reference, and a stream holds a track as a graph variable.
 - **Runtime viewers.** The local API serves a viewer's read of any port of any node on the
-  machine, by family (§Control plane). How the viewer reads the port is the OPEN this change
-  settles in its preview ticket; see decision 5.
+  machine, by family (§Control plane). How the viewer reads the port is decision 5.
 
 ## MODIFIED
 
@@ -147,7 +146,6 @@ and the runtime unit's contents (`moq-relay`, the preview page).
 - REMOVED: runtime/streamlib-engine/src/core/runtime/reserved_slot_forwarder.rs
 - REMOVED: runtime/streamlib-engine/src/core/runtime/loaded_stream_output_port_exposure.rs
 - REMOVED: runtime/streamlib-engine/src/core/graph/components/exposed_output_ports_component.rs
-- REMOVED: runtime/streamlib-engine/src/core/graph/components/source_side_held_open_for_a_reader_outside_its_stream.rs
 - REMOVED: class Exposure
 - REMOVED: def expose
 - REMOVED: ExposePortLevel
@@ -177,10 +175,16 @@ and the runtime unit's contents (`moq-relay`, the preview page).
 - REMOVED: xtask/src/watch_page_third_party_notices.rs
 - REMOVED: watch_page_directory_beside_the_lend
 - REMOVED: runtime/streamlib-media-builtins/src/relay_track_source.rs
-- REMOVED: RelayTrackSource
+- REMOVED: RelayTrackSourceConfig
   Continuation: the receive node's name in prose, the generated class and the MCP instructions
   all go; `tatolab.stream:RelayTrackSource` in a graph is refused naming
-  `tatolab.moq:MoqTrackReceive` and `tatolab-moq`, the refusal every former built-in gets.
+  `tatolab.moq:MoqTrackReceive` and `tatolab-moq`, the refusal every former built-in gets, so
+  the bare name stays in `BUILT_INS_MOVED_TO_MODULES` and the bullet names its config class.
+- REMOVED: relay_track_source
+- REMOVED: runtime/streamlib-engine/tests/fixtures/hosted_relays_roundtrip.sh
+  Continuation: the hosted-relay proof drove the publisher and the relay verbs, both removed.
+  `source_side_held_open_for_a_reader_outside_its_stream.rs` stays: the viewer read path holds
+  a port's source side open through it.
 
 ## Decisions
 
@@ -210,10 +214,22 @@ support variables so we can get and set just like unreal engine blueprints." `Se
 a reference edge for a node reference. A connection is held as a reference to its gateway node.
 Rejected: a connection carried as a Records value (owner, 2026-11-06).
 
-**Decision 5 — how a viewer reads a port (left OPEN in the plan).** Direction (session, not
-decided): Tato Studio opens a read of the port through the local API, and the runtime hands it
-the port's channel as it hands a helper process one. Image surfaces are imported the way a helper
-imports them, so a preview is zero-copy and never touches a relay. Settled in the preview ticket.
+**Decided 5 — a viewer reads a port's channel and imports an Image surface (owner, 2026-11-07).**
+Tato Studio opens a read of the port through the local API, and the runtime hands it the port's
+channel as it hands a helper process one. An Image frame is shared, not copied: Studio imports
+the surface the way a helper does, through the surface-sharing client, so a preview is zero-copy
+and never touches a relay. Who may open one follows the local API's posture: the user who owns
+the runtime, by the socket's file permission. Assumed unless overruled: a viewer reads the latest
+value and skips what it falls behind on, so it never slows the stream it reads. Rejected: the
+runtime downscaling each frame to a thumbnail sent over the local API; thumbnail tiles beside a
+zero-copy full view (owner, 2026-11-07).
+
+**Decided 7 — a viewer's frame import lives in a shared Rust crate (owner, 2026-11-07).** The
+helper's import client moves out of the Python wheel into a crate without pyo3 that the wheel and
+Tato Studio both link, so a helper and a viewer import a frame through one system. The claim
+table's shared memory lives beside its row layout in `streamlib-ipc-types`, which a viewer links
+anyway to read the channel. Rejected: Studio writing its own import on the surface-sharing wire
+crate; a `tatolab.stream` viewer Studio calls into (owner, 2026-11-07).
 
 ## Tickets (as few tracer bullets as the change needs)
 
@@ -224,8 +240,8 @@ imports them, so a preview is zero-copy and never touches a relay. Settled in th
 2. **The automatic path is ripped out:** the publisher, exposure, `expose`, `expose_port`,
    `tatolab expose`, the local relay, the relay verbs and their records, and the preview page. The rigs and the stream-on-runtime suite
    move onto ticket 1's nodes. The scaffold loses its encoder.
-3. **Runtime viewers:** the viewer read path and the per-family views in Tato Studio, settling
-   decision 5.
+3. **Runtime viewers:** the viewer read path of decision 5 and the per-family views in Tato
+   Studio.
 
 Consumers under `packages/` that call `.expose(` get backlog filed at each consumer
 (§Consumers). They are not in this change.

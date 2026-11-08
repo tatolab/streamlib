@@ -31,10 +31,11 @@ mod gpu_pool_claim_table_hand_over;
 mod published_frame_id_grammar;
 
 pub use gpu_pool_claim_table_hand_over::{
-    GpuPoolClaimTableHandOver, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-    SURFACE_SHARE_CLAIMANT_COLUMN_FIELD, SURFACE_SHARE_GPU_POOL_FIELD,
-    SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
-    SURFACE_SHARE_POOL_SLOT_ROW_FIELD, SURFACE_SHARE_POOL_SLOTS_FIELD,
+    GpuPoolClaimTableHandOver, GpuPoolClaimTableRowLeasedToASlot,
+    SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP, SURFACE_SHARE_CLAIMANT_COLUMN_FIELD,
+    SURFACE_SHARE_GPU_POOL_FIELD, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, SURFACE_SHARE_POOL_SLOT_ROW_FIELD,
+    SURFACE_SHARE_POOL_SLOT_ROW_LEASE_NUMBER_FIELD, SURFACE_SHARE_POOL_SLOTS_FIELD,
     SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, gpu_pool_uuid_of_its_wire_name,
     gpu_pool_uuid_wire_name, refusal_the_surface_share_service_answered,
 };
@@ -43,6 +44,15 @@ pub use published_frame_id_grammar::{
     pool_slot_key_of_surface_id, published_frame_id_of_pool_slot,
     split_pool_slot_and_frame_generation,
 };
+
+/// The resource type a `check_out` answer names; a registration that names
+/// none is a pixel buffer.
+pub fn resource_type_of_a_check_out(response: &serde_json::Value) -> &str {
+    response
+        .get("resource_type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("pixel_buffer")
+}
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -63,7 +73,6 @@ pub use linux_surface_check_out::{
     SURFACE_SHARE_TEXTURE_IMAGE_USAGE_DEFAULT, SurfaceShareCheckOutFds,
     check_out_surface_on_surface_share, device_uuid_of_its_hex_spelling,
     publish_image_layout_on_surface_share, release_check_out_on_surface_share,
-    resource_type_of_a_check_out,
 };
 
 #[cfg(target_os = "macos")]

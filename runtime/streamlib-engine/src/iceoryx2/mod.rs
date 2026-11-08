@@ -4,8 +4,6 @@
 //! iceoryx2-based IPC communication layer for cross-process processor communication.
 
 mod audio_window;
-mod bags_a_gap_in_the_numbering_says_were_lost;
-pub(crate) use bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
 mod channel_ceiling;
 mod channel_idle_poll_backoff;
 mod channel_name;

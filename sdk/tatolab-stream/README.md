@@ -33,15 +33,15 @@ def main(stream_builder: StreamBuilder) -> None:
     camera = stream_builder.add(CameraSource)
     effect = stream_builder.add(HalftoneLensEffect)
     stream_builder.connect(camera.output("video"), effect.input("video_from_upstream"))
-    stream_builder.expose(effect.output("video_to_downstream"))
 ```
 
 `CameraSource` comes from the `tatolab-camera` module, a dependency the project adds like any
 other. `tatolab dev` runs it in the runtime. Each node runs in its own process, so one slow node never
-blocks another. An exposed output gets an address other streams, agents and browsers can read.
+blocks another. Tato Studio's viewer shows any node's output on the machine, and the
+`tatolab-moq` gateway nodes send one to a MoQ relay, where other streams and machines read it.
 
 This package holds the authoring API (`@stream`, `@node`, `StreamBuilder`), typed classes for
-every built-in node (test pattern, microphone, speaker, H.264 and H.265 codecs, and more), and
+every built-in node (the converters between the Image, Array, Channels and Records families), and
 the protocols your nodes are handed at run time. It installs and imports without the runtime,
 with complete type hints, so your editor, type checker and unit tests work on any machine.
 

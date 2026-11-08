@@ -2,27 +2,26 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# `tatolab new`'s sample stream — the test pattern through the Python effect
-# into H.264 — created and run on this Mac's `tatolabd`, on the Vulkan driver
-# the runtime unit's lend carries:
+# `tatolab new`'s sample stream — the test pattern through the Python effect,
+# its brightness metered — created and run on this Mac's `tatolabd`, on the
+# Vulkan driver the runtime unit's lend carries:
 #
 #   scripts/check_scaffolded_stream_runs_on_the_driver_the_macos_lend_carries.sh \
-#     <runtime-unit-root> <tatolab-stream-wheel-directory> <tatolab-h264-wheel-directory>
+#     <runtime-unit-root> <tatolab-stream-wheel-directory>
 #
-# The project's venv holds what a user's `uv sync` gives it — `tatolab-stream`
-# and the `tatolab-h264` module, from the wheel directories because no index
-# carries this version yet, the `tatolab-testpattern` module from this
-# checkout, and the numpy the scaffold declares — and no runtime. Passes when `tatolabd` opened
-# the lend's Vulkan loader, the source wrote frames by the stream's `graph`, and
-# the encoder encoded or refused by name. Needs a Mac with no Vulkan driver of
-# its own, or the claim is not proven.
+# The project's venv holds what a user's `uv sync` gives it — `tatolab-stream`,
+# from the wheel directory because no index carries this version yet, the
+# `tatolab-testpattern` module from this checkout, and the numpy the scaffold
+# declares — and no runtime. Passes when `tatolabd` opened the lend's Vulkan
+# loader and the source and the effect each wrote frames by the stream's
+# `graph`. Needs a Mac with no Vulkan driver of its own, or the claim is not
+# proven.
 
 set -eu
 
-usage="usage: $(basename "$0") <runtime-unit-root> <tatolab-stream-wheel-directory> <tatolab-h264-wheel-directory>"
+usage="usage: $(basename "$0") <runtime-unit-root> <tatolab-stream-wheel-directory>"
 runtime_unit_root="${1:?$usage}"
 tatolab_stream_wheel_directory="${2:?$usage}"
-tatolab_h264_wheel_directory="${3:?$usage}"
 tatolabd_executable="$runtime_unit_root/bin/tatolabd"
 tatolab_executable="$runtime_unit_root/bin/tatolab"
 
@@ -48,12 +47,12 @@ done
 # load finds an interpreter that runs and syncs nothing.
 mkdir -p /tmp/scaffold-check
 python3 -m venv /tmp/scaffold-check/.venv
-# `--no-index` keeps `tatolab-stream` and `tatolab-h264` to this run's build,
-# so the one dependency of theirs no wheel directory holds comes from PyPI first.
+# `--no-index` keeps `tatolab-stream` to this run's build, so the one
+# dependency of its no wheel directory holds comes from PyPI first.
 /tmp/scaffold-check/.venv/bin/pip install 'msgpack>=1.0'
 /tmp/scaffold-check/.venv/bin/pip install --no-index \
-  --find-links "$tatolab_stream_wheel_directory" --find-links "$tatolab_h264_wheel_directory" \
-  tatolab-stream tatolab-h264
+  --find-links "$tatolab_stream_wheel_directory" \
+  tatolab-stream
 /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
 # Pure Python; `--no-deps` keeps its `tatolab-stream` to this run's build.
 /tmp/scaffold-check/.venv/bin/pip install --no-deps \
@@ -115,11 +114,18 @@ fi
 echo "::group::graph"
 cat /tmp/scaffold-graph.json
 echo "::endgroup::"
-# The stream loaded, and its source wrote frames into the graph. Far
-# enough to prove the graph runs end to end, not a frame-rate bar: the
-# runner's GPU is a paravirtual device.
-frames_written="$(python3 -c '
+# The stream loaded, and its source and effect wrote frames into the graph.
+# Far enough to prove the graph runs end to end, not a frame-rate bar: the
+# runner's GPU is a paravirtual device. `graph` counts a port's writes once
+# something reads it, and the meter reads the effect's output.
+frames_written_by() {
+  node_name="$1"
+  port_name="$2"
+  python3 - "$node_name" "$port_name" <<'EOF_FRAMES_WRITTEN'
 import json
+import sys
+
+node_name, port_name = sys.argv[1], sys.argv[2]
 try:
     graph = json.load(open("/tmp/scaffold-graph.json"))
 except ValueError:
@@ -127,40 +133,18 @@ except ValueError:
 streams = graph.get("streams", [])
 for stream_graph in streams.values() if isinstance(streams, dict) else streams:
     for node in stream_graph.get("nodes", []):
-        if node.get("name") == "testpatternsource":
+        if node.get("name") == node_name:
             metrics = node.get("components", {}).get("metrics", {})
-            print(metrics.get("written_bags_by_output_port", {}).get("video", ""))
-')"
-if [ -z "$frames_written" ] || [ "$frames_written" -lt 60 ]; then
-  echo "::error::TestPatternSource.video wrote ${frames_written:-no} frames in 20s, by the stream's graph"
-  exit 1
-fi
-echo "TestPatternSource.video wrote $frames_written frames"
-# The encoder either encodes, or — on a runner with no encoder — refuses
-# naming itself while the stream stays loaded. Read from the module's own log:
-# `graph` counts a port's writes only once something reads it, and nothing
-# subscribes to the track here.
-if grep -q 'H264Encoder: first frame encoded' /tmp/tatolabd.log; then
-  echo "H264Encoder encoded its first frame"
-elif grep -q 'H264Encoder: .*; every frame is discarded' /tmp/tatolabd.log; then
-  echo "H264Encoder refused by name on a runner with no encoder; the stream stayed loaded"
-else
-  echo "::error::H264Encoder neither encoded a frame nor refused by name"
-  exit 1
-fi
-# Frames the encoder lost to backpressure are a normal event on a realtime
-# link, so they are reported from `graph`'s drop count, never asserted.
-frames_dropped_into_the_encoder="$(python3 -c '
-import json
-try:
-    graph = json.load(open("/tmp/scaffold-graph.json"))
-except ValueError:
-    raise SystemExit(0)
-streams = graph.get("streams", [])
-for stream_graph in streams.values() if isinstance(streams, dict) else streams:
-    for node in stream_graph.get("nodes", []):
-        if node.get("name") == "h264encoder":
-            metrics = node.get("components", {}).get("metrics", {})
-            print(sum(metrics.get("dropped_bags_by_link", {}).values()))
-')"
-echo "H264Encoder.video dropped ${frames_dropped_into_the_encoder:-an unknown number of} frames, by the stream's graph"
+            print(metrics.get("written_bags_by_output_port", {}).get(port_name, ""))
+EOF_FRAMES_WRITTEN
+}
+for node_and_port in testpatternsource/video halftonelenseffect/video_to_downstream; do
+  node_name="${node_and_port%%/*}"
+  port_name="${node_and_port#*/}"
+  frames_written="$(frames_written_by "$node_name" "$port_name")"
+  if [ -z "$frames_written" ] || [ "$frames_written" -lt 60 ]; then
+    echo "::error::$node_name.$port_name wrote ${frames_written:-no} frames in 20s, by the stream's graph"
+    exit 1
+  fi
+  echo "$node_name.$port_name wrote $frames_written frames"
+done

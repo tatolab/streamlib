@@ -221,6 +221,8 @@ def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., obje
     for qualified_name, exported in _public_names_tatolab_publishes():
         if is_typeddict(exported):
             continue
+        if inspect.isclass(exported) and issubclass(exported, BaseException):
+            continue
         if inspect.isclass(exported):
             public_callables.append((qualified_name, exported))
             for member_name in dir(exported):

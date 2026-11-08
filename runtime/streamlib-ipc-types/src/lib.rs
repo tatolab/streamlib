@@ -18,16 +18,50 @@
 
 use iceoryx2::prelude::*;
 
+mod bags_a_gap_in_the_numbering_says_were_lost;
+mod engine_owned_iceoryx2_domain;
 mod gpu_pool_claim_table;
+#[cfg(all(target_os = "macos", not(loom)))]
+mod gpu_pool_claim_table_mach_memory_entry;
+#[cfg(all(target_os = "linux", not(loom)))]
+mod gpu_pool_claim_table_memfd;
 mod port_family_payload_descriptor_bodies;
+mod reserved_slot_reader;
+pub use bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
+pub use engine_owned_iceoryx2_domain::{
+    ChannelDataServiceLoanedSample, ChannelDataServicePortFactory, ChannelDataServicePublisher,
+    ChannelDataServiceSample, ChannelDataServiceSubscriber, ChannelReservedSlotSubscribeError,
+    ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, Iceoryx2DomainRefusal,
+    channel_data_service_builder, create_iceoryx2_node_in_domain,
+    create_the_reserved_slot_subscriber_of, engine_owned_iceoryx2_prefix_for_this_user,
+    iceoryx2_config_for_domain,
+};
 pub use gpu_pool_claim_table::{
     GPU_POOL_CLAIM_TABLE_BYTES, GPU_POOL_CLAIM_TABLE_CLAIMANT_COLUMNS,
     GPU_POOL_CLAIM_TABLE_RETIRING_GENERATION_BIT, GPU_POOL_CLAIM_TABLE_ROW_BYTES,
-    GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET,
+    GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET, GPU_POOL_CLAIM_TABLE_ROW_LEASE_NUMBER_OFFSET,
     GPU_POOL_CLAIM_TABLE_ROW_PUBLISHED_GENERATION_OFFSET, GPU_POOL_CLAIM_TABLE_ROWS,
     GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled, GpuPoolSlotRehandTest,
 };
+#[cfg(all(target_os = "macos", not(loom)))]
+pub use gpu_pool_claim_table_mach_memory_entry::GpuPoolClaimTableMachMemoryEntry;
+#[cfg(all(target_os = "linux", not(loom)))]
+pub use gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
 pub use port_family_payload_descriptor_bodies::*;
+pub use reserved_slot_reader::{
+    LossTallyOfAReservedSlotReader, MessageReadFromAReservedSlot, OUTPUT_PORT_VIEWER_RING_DEPTH,
+    OutputPortViewerReader, OutputPortViewerSubscribeRefusal,
+    SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST,
+};
+
+/// A claim table's rows in memory every interpreter handed the table maps:
+/// a sealed memfd on Linux.
+#[cfg(all(target_os = "linux", not(loom)))]
+pub type GpuPoolClaimTableSharedRows = GpuPoolClaimTableMemfd;
+/// A claim table's rows in memory every interpreter handed the table maps:
+/// a Mach memory entry on macOS.
+#[cfg(all(target_os = "macos", not(loom)))]
+pub type GpuPoolClaimTableSharedRows = GpuPoolClaimTableMachMemoryEntry;
 
 /// The initial iceoryx2 slot capacity every channel publisher is primed at.
 ///

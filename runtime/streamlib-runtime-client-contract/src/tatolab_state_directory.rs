@@ -122,18 +122,6 @@ impl TatolabStateDirectory {
     pub fn shared_native_service_state_directory(&self, service_name: &str) -> PathBuf {
         self.path.join("services").join(service_name)
     }
-
-    /// `<state>/relays.json`, every relay instance the runtime joins at its
-    /// start, holding no secret.
-    pub fn relay_instances_record_path(&self) -> PathBuf {
-        self.path.join("relays.json")
-    }
-
-    /// `<state>/relay-credentials.json`, each relay instance's secrets where no
-    /// OS secret store answers.
-    pub fn relay_secrets_fallback_file_path(&self) -> PathBuf {
-        self.path.join("relay-credentials.json")
-    }
 }
 
 /// This user's state directory path, from the process environment.

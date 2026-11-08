@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,9 +13,8 @@ use super::nodes::ProcessorNode;
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
-use crate::core::graph::{ExposedOutputPortsComponent, GraphNodeWithComponents};
 use crate::core::json_schema::{
-    ExposedOutputPortOutput, GraphResponse, LinkOutput, NodeNamesByProcessorId, ProcessorNodeOutput,
+    GraphResponse, LinkOutput, NodeNamesByProcessorId, ProcessorNodeOutput,
 };
 
 /// Graph state.
@@ -45,6 +45,10 @@ pub struct Graph {
     /// The node types this graph's stream resolves.
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
 
+    /// The cast names of the nodes the loaded graph drew that the runtime does
+    /// not run, which a node added live cannot take.
+    node_names_the_graph_only_nodes_hold: HashSet<String>,
+
     /// When the graph was last compiled.
     compiled_at: Option<Instant>,
 
@@ -73,6 +77,7 @@ impl Graph {
             loaded_stream_id: None,
             stream_clock_spec: StreamClockSpec::Real,
             node_types_this_stream_resolves,
+            node_names_the_graph_only_nodes_hold: HashSet::new(),
             compiled_at: None,
             state: GraphState::Idle,
         }
@@ -100,7 +105,20 @@ impl Graph {
 
     /// Start a mutable traversal on the graph.
     pub fn traversal_mut(&mut self) -> TraversalSourceMut<'_> {
-        TraversalSourceMut::new(&mut self.digraph, &self.node_types_this_stream_resolves)
+        TraversalSourceMut::new(
+            &mut self.digraph,
+            &self.node_types_this_stream_resolves,
+            &self.node_names_the_graph_only_nodes_hold,
+        )
+    }
+
+    /// Record the cast names of the nodes the loaded graph drew that the
+    /// runtime does not run, so no node added live takes one.
+    pub fn set_node_names_the_graph_only_nodes_hold(
+        &mut self,
+        node_names_the_graph_only_nodes_hold: HashSet<String>,
+    ) {
+        self.node_names_the_graph_only_nodes_hold = node_names_the_graph_only_nodes_hold;
     }
 
     // =========================================================================
@@ -199,20 +217,7 @@ impl Graph {
                 .map(|idx| &self.digraph[idx])
                 .map(|link| LinkOutput::of_a_link(link, &node_names))
                 .collect(),
-            exposed: self
-                .digraph
-                .node_weights()
-                .flat_map(|node| {
-                    node.get::<ExposedOutputPortsComponent>()
-                        .into_iter()
-                        .flat_map(ExposedOutputPortsComponent::exposed_ports_and_their_levels)
-                        .map(|(port, level)| ExposedOutputPortOutput {
-                            node: node.display_name.clone(),
-                            port: port.to_string(),
-                            level,
-                        })
-                })
-                .collect(),
+            references: Vec::new(),
             machine,
         }
     }

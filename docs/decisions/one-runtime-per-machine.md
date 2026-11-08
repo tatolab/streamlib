@@ -98,8 +98,9 @@ The owner's later clarifications, the same day:
   live graphs.
 - **A graph is data.** A stream's `@stream` function compiles to its graph, one shape with what
   the runtime renders live; the existing snapshot extended, never a second format.
-- **The graph is emitted, never authored,** and the function wins over live edits on the next
-  start.
+- ~~**The graph is emitted, never authored,** and the function wins over live edits on the next
+  start.~~ — Superseded 2026-11-07 by `project-and-assets.md`: a stream's graph document is its source
+  of truth.
 - **Several streams per project or package,** each a decorated function; `setup` retires.
 - **The runtime decides what leaves the machine.** ~~It builds its Zenoh session from its own
   configuration, dials routers, and enforces a pushed stream map that refuses links to

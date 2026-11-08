@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A long-lived native child the runtime keeps running — a local relay, a
-//! shared native service — from its start until it is stopped.
+//! A long-lived native child the runtime keeps running — a shared native
+//! service — from its start until it is stopped.
 //!
 //! The child gets the preparation every child of the runtime gets — its own
 //! process group, a lifetime bound to the runtime's where the platform can, no

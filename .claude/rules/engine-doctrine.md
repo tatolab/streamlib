@@ -44,6 +44,7 @@ Conventions:
   warning-free.
 - Platform dirs are conditionally compiled — `core/` is platform-agnostic, `apple/` and `linux/`
   are per-platform. Never put a `#[cfg]` inside a platform-specific directory.
-- macOS / Apple-path changes merge only with the `Build (macOS)` CI lane green on the
-  PR. That lane is the gate; a cross-compile from Linux is not, because it stops in a
+- macOS / Apple-path changes merge only with the `Build (macOS)` CI lane green in the
+  merge queue, which runs it on every change before it lands; pull requests do not. That
+  lane is the gate; a cross-compile from Linux is not, because it stops in a
   dependency's build script that needs Apple's compiler and SDK.

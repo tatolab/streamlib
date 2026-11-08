@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod components;
+mod config_node_reference_edges;
 mod data_structure;
 
 mod edges;
 mod graph_readiness;
 mod nodes;
-mod output_port_exposure;
 mod port_family_link_checks;
 mod processor_state_ecs_component;
 mod traits;
@@ -18,18 +18,20 @@ mod validation;
 mod graph_tests;
 
 // top level
+pub(crate) use config_node_reference_edges::{
+    config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
+    refuse_a_live_config_naming_a_node_the_graph_does_not_hold,
+    refuse_a_reference_to_a_node_of_the_wrong_type,
+    refuse_a_second_referrer_of_a_node_that_takes_one,
+};
 pub use data_structure::{Graph, GraphState};
 pub(crate) use data_structure::{
     names_listed_for_a_refusal, node_named_or_refused, node_names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
 };
 pub use graph_readiness::ObservableGraphReadiness;
-pub use output_port_exposure::{
-    OutputPortExposureLevel, OutputPortReaderLocation, OutputPortReaderOutsideItsStream,
-    output_port_exposure_allows_the_reader,
-};
 pub(crate) use port_family_link_checks::{
-    refuse_a_config_update_that_drops_a_name_a_wired_link_requires,
+    refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     refuse_a_link_between_ports_whose_families_do_not_match,
 };
 pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};

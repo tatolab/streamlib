@@ -154,11 +154,8 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
         "tatolab.testpattern:TestPatternSource",
         "nodes.halftone_lens_effect:HalftoneLensEffect",
         "nodes.brightness_meter:BrightnessMeter",
-        "tatolab.h264.processors:H264Encoder",
     ]
-    assert stream_graph["exposed"] == [
-        {"node": "h264encoder", "port": "encoded_video", "level": "public"}
-    ]
+    assert "exposed" not in stream_graph
 
 
 def test_the_sample_stream_runs_no_camera_and_names_no_window(

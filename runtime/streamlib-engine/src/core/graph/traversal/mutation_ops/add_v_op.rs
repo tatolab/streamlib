@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::HashSet;
+
 use petgraph::graph::DiGraph;
 
 use crate::core::descriptors::ProcessorClassImportPath;
@@ -38,6 +40,7 @@ impl<'a> TraversalSourceMut<'a> {
 
         let name = the_name_a_new_node_takes(
             self.graph,
+            self.node_names_the_graph_only_nodes_hold,
             node_types,
             spec.display_name.as_deref(),
             &spec.name,
@@ -95,13 +98,17 @@ fn default_display_name_for(
 }
 
 /// `requested_name` cast, or [`Error::NodeNameTaken`] when a node in `graph`
-/// already has that name — a name the author typed is an address.
+/// or a graph-only node already has that name — a name the author typed is an
+/// address.
 fn the_requested_node_name_unless_taken(
     graph: &DiGraph<ProcessorNode, Link>,
+    node_names_the_graph_only_nodes_hold: &HashSet<String>,
     requested_name: &str,
 ) -> Result<String> {
     let cast = cast_exposed_name_to_url_safe(requested_name)?;
-    if graph.node_weights().any(|node| node.display_name == cast) {
+    if node_names_the_graph_only_nodes_hold.contains(cast.as_ref())
+        || graph.node_weights().any(|node| node.display_name == cast)
+    {
         return Err(Error::NodeNameTaken {
             name: requested_name.to_string(),
             cast: cast.into_owned(),
@@ -110,7 +117,8 @@ fn the_requested_node_name_unless_taken(
     Ok(cast.into_owned())
 }
 
-/// The name a node added to `graph` takes: `requested_name` cast, or, when the
+/// The name a node added to `graph` takes, never one a graph-only node holds:
+/// `requested_name` cast, or, when the
 /// caller gave none, the class's short name cast with the next free `-2`,
 /// `-3` … appended.
 ///
@@ -120,18 +128,24 @@ fn the_requested_node_name_unless_taken(
 /// within [`EXPOSED_NAME_MAXIMUM_LENGTH`].
 pub(crate) fn the_name_a_new_node_takes(
     graph: &DiGraph<ProcessorNode, Link>,
+    node_names_the_graph_only_nodes_hold: &HashSet<String>,
     node_types: &NodeTypesOneStreamResolves,
     requested_name: Option<&str>,
     processor_class_import_path: &ProcessorClassImportPath,
 ) -> Result<String> {
     let is_taken = |candidate: &str| {
-        graph
-            .node_weights()
-            .any(|node| node.display_name == candidate)
+        node_names_the_graph_only_nodes_hold.contains(candidate)
+            || graph
+                .node_weights()
+                .any(|node| node.display_name == candidate)
     };
 
     if let Some(requested_name) = requested_name {
-        return the_requested_node_name_unless_taken(graph, requested_name);
+        return the_requested_node_name_unless_taken(
+            graph,
+            node_names_the_graph_only_nodes_hold,
+            requested_name,
+        );
     }
 
     let default_name = default_display_name_for(node_types, processor_class_import_path);
@@ -209,5 +223,42 @@ mod tests {
             other => panic!("expected NodeConfigRefused, got {other:?}"),
         }
         assert!(graph.traversal().v(()).ids().is_empty());
+    }
+
+    #[test]
+    fn a_node_added_live_takes_no_name_a_graph_only_node_holds() {
+        ensure_test_mocks_registered();
+        let mut graph = Graph::new();
+        graph.set_node_names_the_graph_only_nodes_hold(std::collections::HashSet::from([
+            "overlay".to_string(),
+            "mocksourcetakingonesetting".to_string(),
+        ]));
+        let a_mock_source = || {
+            ProcessorSpec::new(
+                MockSourceTakingOneSetting::processor_class_import_path(),
+                serde_json::json!({}),
+            )
+        };
+
+        let refusal = graph
+            .traversal_mut()
+            .add_v(a_mock_source().with_display_name("Overlay"))
+            .map(|_| ())
+            .unwrap_err();
+        assert!(
+            matches!(&refusal, Error::NodeNameTaken { cast, .. } if cast == "overlay"),
+            "{refusal:?}"
+        );
+
+        let defaulted_name = graph
+            .traversal_mut()
+            .add_v(a_mock_source())
+            .unwrap()
+            .first()
+            .map(|node| node.display_name.clone());
+        assert_eq!(
+            defaulted_name.as_deref(),
+            Some("mocksourcetakingonesetting-2")
+        );
     }
 }

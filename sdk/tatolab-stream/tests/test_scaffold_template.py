@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-from h264_module_stand_in import write_the_h264_module_stand_in_into
 from testpattern_module_stand_in import (
     TESTPATTERN_MODULE_NODE_TYPE,
     write_the_testpattern_module_stand_in_into,
@@ -150,26 +149,22 @@ def stream_builder_calls_in_the_entry(method_name: str) -> "list[str]":
     ]
 
 
-def test_the_stream_encodes_the_test_pattern_through_the_effect_and_exposes_it_publicly():
+def test_the_stream_runs_the_test_pattern_through_the_effect_with_a_meter_on_a_fan_out():
     """The sample runs on a machine with no capture device and no display: it
-    needs no camera, the runtime opens no windows, and a browser plays it."""
+    needs no camera, the runtime opens no windows, and nothing leaves the stream."""
     entry_source = template_text("stream.py")
 
     assert stream_builder_calls_in_the_entry("add") == [
         "stream_builder.add(TestPatternSource)",
         "stream_builder.add(HalftoneLensEffect)",
         "stream_builder.add(BrightnessMeter)",
-        "stream_builder.add(H264Encoder)",
     ]
     assert stream_builder_calls_in_the_entry("connect") == [
         "stream_builder.connect(source.output('video'), effect.input('video_from_upstream'))",
         "stream_builder.connect(effect.output('video_to_downstream'), "
         "meter.input('video_from_upstream'))",
-        "stream_builder.connect(effect.output('video_to_downstream'), encoder.input('video'))",
     ]
-    assert stream_builder_calls_in_the_entry("expose") == [
-        "stream_builder.expose(encoder.output('encoded_video'), Exposure.PUBLIC)"
-    ]
+    assert stream_builder_calls_in_the_entry("expose") == []
     assert "DisplayWindow" not in entry_source
 
 
@@ -234,8 +229,8 @@ def test_each_node_declares_its_ports_as_family_class_attributes(module_path: st
 
 def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
     """The effect in the video path runs on the GPU, and the numpy node reads an
-    explicit CPU view off a fan-out, so the slow door never sits on the path to
-    the encoder."""
+    explicit CPU view off the effect's output, so the slow door never sits in
+    the video path."""
     entry_source = template_text("stream.py")
     effect_source = template_text(EFFECT_MODULE_PATH)
     meter_source = template_text(METER_MODULE_PATH)
@@ -252,21 +247,20 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu():
         and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
     )
     assert readers_of_the_effect_output == [
-        "encoder.input('video')",
         "meter.input('video_from_upstream')",
-    ], "the meter reads a fan-out of the effect's output, beside the encoder"
+    ], "the meter reads the effect's output"
 
 
 def test_the_scaffold_pins_the_python_version_the_plan_names():
     assert template_text("python-version").strip() == "3.12"
 
 
-def test_the_scaffold_depends_on_tatolab_stream_the_h264_and_testpattern_modules_and_numpy_only():
-    """`new` raises the `tatolab-stream`, `tatolab-h264` and `tatolab-testpattern` floors to
+def test_the_scaffold_depends_on_tatolab_stream_the_testpattern_module_and_numpy_only():
+    """`new` raises the `tatolab-stream` and `tatolab-testpattern` floors to
     the version of the runtime that writes it; the template's own floors keep PyPI's 0.0.0 placeholder out of
     a resolve of the tree."""
     assert (
-        'dependencies = ["tatolab-stream>=0.54.2", "tatolab-h264>=0.68.13", '
+        'dependencies = ["tatolab-stream>=0.54.2", '
         '"tatolab-testpattern>=0.68.18", "numpy>=2.1"]\n'
         in template_text("pyproject.toml")
     ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
@@ -280,10 +274,9 @@ def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():
 
 def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
     """The compile `tatolab run` makes, over the template tree as `new` lays it out, with
-    the `tatolab.h264` the project's `uv sync` installs."""
+    the `tatolab.testpattern` the project's `uv sync` installs."""
     app_directory = tmp_path.resolve() / "demo"
     shutil.copytree(SCAFFOLD_TEMPLATE_DIRECTORY, app_directory)
-    write_the_h264_module_stand_in_into(app_directory)
     write_the_testpattern_module_stand_in_into(app_directory)
 
     finished = subprocess.run(
@@ -321,11 +314,6 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                     "type": "nodes.brightness_meter:BrightnessMeter",
                     "config": {},
                 },
-                {
-                    "name": "h264encoder",
-                    "type": "tatolab.h264.processors:H264Encoder",
-                    "config": {},
-                },
             ],
             "links": [
                 {
@@ -336,12 +324,7 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                     "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
                     "target": {"node": "brightnessmeter", "port": "video_from_upstream"},
                 },
-                {
-                    "source": {"node": "halftonelenseffect", "port": "video_to_downstream"},
-                    "target": {"node": "h264encoder", "port": "video"},
-                },
             ],
-            "exposed": [{"node": "h264encoder", "port": "encoded_video", "level": "public"}],
     }
 
 

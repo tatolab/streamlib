@@ -4,11 +4,9 @@
 pub(crate) mod address_chunk;
 mod end_the_process_at_once;
 mod engine_teardown_watchdog;
-mod exposed_output_port_subscription;
 mod graph_change_listener;
 mod helper_process_group_registry;
 mod loaded_stream;
-mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
 mod machine_name;
 mod machine_state_directory;
@@ -18,11 +16,11 @@ mod open_descriptor_soft_limit;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
+mod output_port_viewer;
 mod processor_interpreter_launch_record;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
-mod reserved_slot_forwarder;
 #[allow(clippy::module_inception)]
 mod runtime;
 mod runtime_crash_pinned_on_a_stream;
@@ -50,10 +48,6 @@ pub(crate) use engine_teardown_watchdog::{
     ArmedTeardownWatchdogOfOneStream, ENGINE_TEARDOWN_WATCHDOG_BUDGET,
     count_threads_abandoned_in_this_process,
 };
-pub use exposed_output_port_subscription::{
-    ExposedOutputPortOfALoadedStream, ExposedOutputPortSourceWiring, ExposedOutputPortSubscription,
-    ExposureChangeReceiver, LoadedStreamAndTheOutputPortsItExposes,
-};
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
@@ -64,12 +58,9 @@ pub(crate) use helper_process_group_registry::{
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use machine_name::MachineName;
 pub use machine_state_directory::{
-    OwnerExposureRuling, PendingStreamActionKind, PendingStreamActionOnTheRecord,
-    STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime,
-    StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
-};
-pub(crate) use machine_state_directory::{
-    OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
+    PendingStreamActionKind, PendingStreamActionOnTheRecord, STREAM_RECORD_SCHEMA_VERSION,
+    StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure,
+    StreamRecordsInTheStateDirectory,
 };
 pub use open_descriptor_soft_limit::{
     OpenDescriptorSoftLimitRaise, raise_the_open_descriptor_soft_limit_to_its_ceiling,
@@ -80,6 +71,7 @@ pub(crate) use open_descriptor_soft_limit::{
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+pub use output_port_viewer::{OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen};
 pub use project_stream_action_queue::{
     FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, ProjectStreamsListing, StreamAction,
     StreamActionKind, StreamActionQueued, StreamActionState, StreamActionStep,
@@ -112,7 +104,7 @@ pub use runtime_shutdown_request::{
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
-    CreateProjectRequest, LoadedStreamHolding, OutputPortExposureOutcome, ProjectCreationQueued,
+    CreateProjectRequest, LoadedStreamHolding, ProjectCreationQueued,
     RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, RunProjectRequest, StreamListing,
     StreamListingState, StreamReloadAtTheStart, StreamRenameOutcome,
 };

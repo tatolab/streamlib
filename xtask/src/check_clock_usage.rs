@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Bans wall-clock reads outside the surfaces the plan permits them on: three
-//! observability surfaces, the local relay's certificate validity and a moq.pro
-//! token's expiry (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`;
+//! observability surfaces (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`;
 //! rationale in `docs/decisions/one-monotonic-clock.md`).
 //!
 //! Monotonic is the only legal clock on the data plane. A wall-clock value and a
@@ -11,8 +10,7 @@
 //! across them is always a bug — and it is an easy bug to write, because
 //! `SystemTime::now()` is the reflexive spelling for "what time is it". The
 //! surfaces that keep wall clock correlate StreamLib with the outside world —
-//! other hosts' logs, a browser checking a certificate's UTC validity, and a
-//! relay checking a token's UTC expiry — a job monotonic time cannot do.
+//! other hosts' logs — a job monotonic time cannot do.
 //!
 //! There is no per-line pragma and no opt-out attribute. The file allowlist is
 //! the only way past this gate, every entry names one of the
@@ -68,8 +66,6 @@ pub enum PermittedWallClockSurfaceKind {
     LogRecordHostTimestamp,
     LogRecordSourceTimestamp,
     LogFileName,
-    CertificateValidity,
-    TokenExpiry,
 }
 
 impl PermittedWallClockSurfaceKind {
@@ -77,8 +73,6 @@ impl PermittedWallClockSurfaceKind {
         PermittedWallClockSurfaceKind::LogRecordHostTimestamp,
         PermittedWallClockSurfaceKind::LogRecordSourceTimestamp,
         PermittedWallClockSurfaceKind::LogFileName,
-        PermittedWallClockSurfaceKind::CertificateValidity,
-        PermittedWallClockSurfaceKind::TokenExpiry,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -86,8 +80,6 @@ impl PermittedWallClockSurfaceKind {
             PermittedWallClockSurfaceKind::LogRecordHostTimestamp => "log record `host_ts`",
             PermittedWallClockSurfaceKind::LogRecordSourceTimestamp => "log record `source_ts`",
             PermittedWallClockSurfaceKind::LogFileName => "log file naming",
-            PermittedWallClockSurfaceKind::CertificateValidity => "certificate validity",
-            PermittedWallClockSurfaceKind::TokenExpiry => "token expiry",
         }
     }
 }
@@ -120,21 +112,6 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         path: "runtime/streamlib-engine/src/core/logging/project_log_route.rs",
         surface: PermittedWallClockSurfaceKind::LogFileName,
         reason: "mints `started_at_millis`, which humans read off the runtime's own JSONL file name",
-    },
-    PermittedWallClockSurface {
-        path: "runtime/streamlib-relay-adapter-local/src/local_relay_certificate.rs",
-        surface: PermittedWallClockSurfaceKind::CertificateValidity,
-        reason: "sets and ages the local relay certificate's UTC `notBefore` / `notAfter`, which a browser checks against its own clock",
-    },
-    PermittedWallClockSurface {
-        path: "runtime/streamlib-relay-adapter-moqpro/src/moqpro_relay_token.rs",
-        surface: PermittedWallClockSurfaceKind::TokenExpiry,
-        reason: "sets a moq.pro publish JWT's UTC `iat` / `exp`, which the relay checks against its own clock",
-    },
-    PermittedWallClockSurface {
-        path: "runtime/streamlib-relay-adapter-moqpro/examples/mint_a_moqpro_subscribe_url.rs",
-        surface: PermittedWallClockSurfaceKind::TokenExpiry,
-        reason: "sets the live proof's subscribe-only moq.pro JWT's UTC `iat` / `exp`, which the relay checks against its own clock",
     },
 ];
 

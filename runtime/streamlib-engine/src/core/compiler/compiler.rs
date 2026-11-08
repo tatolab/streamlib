@@ -142,20 +142,13 @@ impl Compiler {
         abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
     ) -> Result<()> {
         let mut result = CompileResult::default();
-        let compiled = Self::compile_counting_into(
+        Self::compile_counting_into(
             graph_arc,
             operations,
             runtime_ctx,
             abandoned_processor_threads,
             &mut result,
-        );
-        if let Some(this_stream) = runtime_ctx.this_stream() {
-            crate::core::pubsub::OutputPortExposureChange::StreamCompiled {
-                stream_id: this_stream.stream_id().to_string(),
-            }
-            .publish();
-        }
-        compiled
+        )
     }
 
     /// Compile `operations` against `graph_arc`, counting what it did into

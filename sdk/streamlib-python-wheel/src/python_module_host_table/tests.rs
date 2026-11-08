@@ -360,7 +360,7 @@ fn the_host_capabilities_name_the_table_version_and_the_lent_ports() {
 
     assert_eq!(
         capabilities["module_host_table"],
-        serde_json::json!({"major": 1, "minor": 11})
+        serde_json::json!({"major": 1, "minor": 12})
     );
     assert_eq!(capabilities["node_id"], "source-node");
     assert_eq!(
@@ -759,6 +759,47 @@ fn a_described_native_write_reaches_a_native_reader_with_its_descriptor_and_lend
     assert!(
         refusal.contains("kind 4") && refusal.contains("Image frame"),
         "{refusal}"
+    );
+}
+
+#[test]
+fn groups_native_code_declares_given_up_reach_the_next_reader_as_lost_since_its_last_read() {
+    Python::initialize();
+    let (writer_host, reader_host, _contexts) = Python::attach(|python| {
+        let (source, destination) = one_wired_link(python, "given_up");
+        let (source_context, _) = full_access_context_recording_escalates(python, source, "source");
+        let (destination_context, _) =
+            full_access_context_recording_escalates(python, destination, "destination");
+        let writer_capsule =
+            open_module_host_table(&source_context, &[SOURCE_OUTPUT_PORT], &[]).unwrap();
+        let reader_capsule =
+            open_module_host_table(&destination_context, &[], &[DESTINATION_INPUT_PORT]).unwrap();
+        (
+            module_host_of(&writer_capsule),
+            module_host_of(&reader_capsule),
+            (source_context.unbind(), destination_context.unbind()),
+        )
+    });
+    let output_port = writer_host.open_output_port(SOURCE_OUTPUT_PORT).unwrap();
+    output_port.write(b"group 1", Some(1), true).unwrap();
+    output_port
+        .declare_groups_given_up_before_the_next_write(2)
+        .unwrap();
+    output_port.write(b"group 4", Some(4), true).unwrap();
+
+    let input_port = reader_host.open_input_port(DESTINATION_INPUT_PORT).unwrap();
+    let first = input_port.read().unwrap().expect("group 1 arrived");
+    assert_eq!(
+        (first.payload(), first.lost_since_last_read()),
+        (&b"group 1"[..], 0)
+    );
+    let after_the_gap = input_port.read().unwrap().expect("group 4 arrived");
+    assert_eq!(
+        (
+            after_the_gap.payload(),
+            after_the_gap.lost_since_last_read()
+        ),
+        (&b"group 4"[..], 2)
     );
 }
 

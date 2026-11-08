@@ -42,8 +42,7 @@ make_runtime_unit() {
 	local unit_version="$2"
 	local unit_commit="$3"
 	local unit_shape="${4:-whole}"
-	mkdir -p "$unit_directory/bin" "$unit_directory/lib/tatolab/lend/tatolab/runtime/_vulkan_driver" \
-		"$unit_directory/lib/tatolab/watch"
+	mkdir -p "$unit_directory/bin" "$unit_directory/lib/tatolab/lend/tatolab/runtime/_vulkan_driver"
 	sed -e "s/@UNIT_VERSION@/$unit_version/g" -e "s/@UNIT_COMMIT@/$unit_commit/g" \
 		>"$unit_directory/bin/tatolabd" <<'EOF_TATOLABD'
 #!/bin/sh
@@ -66,14 +65,12 @@ else
 fi
 EOF_TATOLAB
 	cp "$(readlink -f "$(command -v sleep)")" "$unit_directory/bin/stand-in-runtime-sleep"
-	printf '#!/bin/sh\nexec sleep 3600\n' >"$unit_directory/bin/moq-relay"
-	chmod +x "$unit_directory/bin/tatolabd" "$unit_directory/bin/tatolab" "$unit_directory/bin/moq-relay"
+	chmod +x "$unit_directory/bin/tatolabd" "$unit_directory/bin/tatolab"
 	if [ "$unit_shape" != without-uv ]; then
 		printf '#!/bin/sh\necho "uv %s"\n' "$unit_version" >"$unit_directory/bin/uv"
 		chmod +x "$unit_directory/bin/uv"
 	fi
 	touch "$unit_directory/lib/tatolab/lend/tatolab/runtime/__init__.py"
-	printf '<!doctype html>\n' >"$unit_directory/lib/tatolab/watch/index.html"
 	if [ "$unit_shape" != without-the-bundled-vulkan-icd-manifest ]; then
 		printf '{}\n' >"$unit_directory/$bundled_vulkan_icd_manifest_in_a_unit"
 	fi

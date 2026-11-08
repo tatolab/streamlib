@@ -4,10 +4,9 @@
 //! `tatolab-read-track <relay-url> <broadcast> <track> --count N --out <dir>`:
 //! subscribe to one track at a relay as any MoQ client does, and write its
 //! first `N` objects into `<dir>` — one file each, an index of their groups,
-//! timestamps and payload form, and the track's catalog entry. A stream's exposed port is the
-//! track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang`; the
-//! machine's local relay answers at `http://127.0.0.1:4443`. A relay URL
-//! carrying a credential is read from stdin with `-`, never an argument.
+//! timestamps and payload form, and the track's catalog entry. A `MoqTrackSend`'s track is the
+//! track its `MoqTrack` names in the broadcast `<broadcast>.hang` its `MoqGateway` publishes.
+//! A relay URL carrying a credential is read from stdin with `-`, never an argument.
 
 // stderr is this tool's progress and refusal channel, as it is the CLI's.
 #![allow(clippy::disallowed_macros)]

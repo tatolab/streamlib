@@ -160,32 +160,22 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
+name = "streamlib-project-repository"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
 name = "streamlib-runtime-client-contract"
 expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
-name = "streamlib-relay-adapter-local"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
-name = "streamlib-relay-adapter-cloudflare"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
-name = "streamlib-relay-adapter-moqpro"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
-name = "streamlib-relay-adapter-sdk"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
 name = "streamlib-surface-adapter"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-gpu-frame-import-client"
 expression = "BUSL-1.1"
 license-files = []
 

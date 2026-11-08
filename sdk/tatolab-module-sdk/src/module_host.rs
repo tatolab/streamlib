@@ -886,6 +886,30 @@ impl ModuleHostOutputPort {
         refuse_unless_ok("output_port_write_described", status, &error_message)
     }
 
+    /// Declare `given_up_group_count` groups given up before this port's next
+    /// write; its readers count them as lost since their last read.
+    pub fn declare_groups_given_up_before_the_next_write(
+        &self,
+        given_up_group_count: u64,
+    ) -> Result<(), ModuleHostError> {
+        let table = &self.module_host.module_host_table;
+        let mut error_message = ModuleHostTableErrorMessage::empty();
+        // SAFETY: as in `write`.
+        let status = unsafe {
+            (table.output_port_declare_groups_given_up_before_the_next_write)(
+                table.node_host,
+                self.handle,
+                given_up_group_count,
+                &mut error_message,
+            )
+        };
+        refuse_unless_ok(
+            "output_port_declare_groups_given_up_before_the_next_write",
+            status,
+            &error_message,
+        )
+    }
+
     /// State the port's catalog entry: `section` is `video` or `audio`, and
     /// `entry_json` the entry's fields as one JSON object, in hang's names.
     pub fn set_catalog_entry(

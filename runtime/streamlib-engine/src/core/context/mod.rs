@@ -88,12 +88,6 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 // the arm it means. The chain's probe takes the first arm that opens, so a test
 // that went through it would exercise whatever audio server the machine running
 // it happens to have.
-#[cfg(target_os = "macos")]
-pub use crate::apple::gpu_pool_claim_table_mach_memory_entry::GpuPoolClaimTableMachMemoryEntry;
-#[cfg(target_os = "linux")]
-pub use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use gpu_pool_claim_table::GpuPoolClaimTableSharedRows;
 pub(crate) use gpu_pool_claim_table::gpu_pool_claim_table_row_for_a_shared_slot;
 pub use gpu_pool_claim_table::{
     GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,
@@ -105,6 +99,8 @@ pub use stream_clock::{
     machine_time_ns_a_published_clock_reaches, stream_clock_reading_of_a_published_clock,
     stream_time_ns_on_a_published_clock,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use streamlib_ipc_types::GpuPoolClaimTableSharedRows;
 pub use streamlib_ipc_types::{
     GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled,
     GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest,

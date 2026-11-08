@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.68.34](https://github.com/tatolab/streamlib/compare/v0.68.33...v0.68.34) (2026-11-07)
+
+
+### Features
+
+* **tatolab-moq:** gateway, track, send and receive nodes as a module ([#3245](https://github.com/tatolab/streamlib/issues/3245)) ([b97b239](https://github.com/tatolab/streamlib/commit/b97b239e5761dfa0a4c5c32f969a45c804d29f7f))
+
+## [0.68.33](https://github.com/tatolab/streamlib/compare/v0.68.32...v0.68.33) (2026-11-07)
+
+
+### Features
+
+* **graph:** SetVariable and GetVariable, and node references in config as reference edges ([#3242](https://github.com/tatolab/streamlib/issues/3242)) ([a7949c8](https://github.com/tatolab/streamlib/commit/a7949c8f93f802f091be745fca5bc52e98967ed3))
+
 ## [0.68.32](https://github.com/tatolab/streamlib/compare/v0.68.31...v0.68.32) (2026-11-06)
 
 

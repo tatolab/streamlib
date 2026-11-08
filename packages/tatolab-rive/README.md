@@ -31,7 +31,7 @@ headers (`uuid-dev`) for premake. Set
 ## Run it
 
 `streams/rive-lower-third` is a camera with the lower third composited over it
-by `tatolab-compositor`'s `AlphaOverCompositor`, encoded and exposed. With this
+by `tatolab-compositor`'s `AlphaOverCompositor`, seen in a viewer. With this
 machine's runtime running and a camera attached, put a lower third at
 `streams/rive-lower-third/lower_third.riv` (or set `RIV_PATH`), and set
 `TITLE_PROPERTY_PATH` and `ENTRANCE_TRIGGER_PATHS` in `stream.py` to match its
@@ -42,8 +42,7 @@ cd streams/rive-lower-third
 tatolab dev
 ```
 
-The stream exposes H.264 at `http://127.0.0.1:4446/watch/<machine>/main`, and
-the source's thread logs its frame rate every 600 frames.
+The compositor's `video` is seen in Tato Studio's viewer, and the source's thread logs its frame rate every 600 frames.
 
 ## Check it
 

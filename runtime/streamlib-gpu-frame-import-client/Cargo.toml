@@ -1,0 +1,41 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-gpu-frame-import-client"
+description = "Imports the frames a StreamLib runtime's GPU pools publish into another process: the surface-sharing connection, the pool claim tables and the per-slot import cache a helper process and a viewer share"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_gpu_frame_import_client"
+path = "src/lib.rs"
+
+[features]
+# Lets a consumer's tests replace or set aside the surface-sharing connection.
+test-support = []
+
+[dependencies]
+parking_lot = "0.12"
+serde_json.workspace = true
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.68.34" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.34" }
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The CPU read of a pool slot whose memory crossed as OPAQUE_FD.
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.34" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# A viewed pool slot's IOSurface.
+objc2-io-surface.workspace = true
+objc2-core-foundation.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

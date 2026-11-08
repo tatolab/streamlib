@@ -1019,6 +1019,25 @@ impl SurfaceShareMachServiceConnection {
         request: &serde_json::Value,
         ports: Vec<OwnedMachSendRight>,
     ) -> io::Result<(serde_json::Value, Vec<OwnedMachSendRight>)> {
+        self.send_request_with_ports_answered_within(request, ports, None)
+    }
+
+    /// [`Self::send_request_with_ports`], giving up with
+    /// [`io::ErrorKind::TimedOut`] once `response_timeout` passes without the
+    /// request sent and answered (never, for `None`). An answer that arrives
+    /// after the timeout waits on the reply port, so a connection that timed
+    /// out is never asked again.
+    pub fn send_request_with_ports_answered_within(
+        &self,
+        request: &serde_json::Value,
+        ports: Vec<OwnedMachSendRight>,
+        response_timeout: Option<Duration>,
+    ) -> io::Result<(serde_json::Value, Vec<OwnedMachSendRight>)> {
+        let answered_by = response_timeout.map(|timeout| std::time::Instant::now() + timeout);
+        let time_left_to_answer = || {
+            answered_by
+                .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()))
+        };
         let request_bytes = serde_json::to_vec(request).map_err(|serialize_failure| {
             io::Error::other(format!("failed to serialise request: {serialize_failure}"))
         })?;
@@ -1035,13 +1054,13 @@ impl SurfaceShareMachServiceConnection {
             SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID,
             &request_bytes,
             ports,
-            None,
+            time_left_to_answer(),
         )?;
         loop {
             match receive_surface_share_mach_traffic(
                 self.reply_receive_right.name,
                 &mut receive_buffer,
-                None,
+                time_left_to_answer(),
             )? {
                 ReceivedSurfaceShareMachTraffic::Message(answer)
                     if answer.message_id == SURFACE_SHARE_MACH_REPLY_MESSAGE_ID =>

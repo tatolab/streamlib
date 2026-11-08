@@ -9,11 +9,13 @@ mod local_api_served_for_an_engine;
 mod local_api_socket;
 mod loopback_http_listener;
 mod mcp;
+mod mcp_project_asset_tools;
+mod mcp_project_change_feed;
 mod mcp_prompts;
 mod mcp_resources;
 mod mcp_stdio_upgrade;
 #[cfg(test)]
-mod relay_tools_tests;
+mod project_asset_tools_tests;
 mod state;
 #[cfg(test)]
 mod stream_tools_over_a_real_engine_tests;

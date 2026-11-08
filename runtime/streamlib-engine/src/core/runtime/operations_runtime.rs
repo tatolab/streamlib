@@ -82,6 +82,16 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
     })?
 }
 
+/// Whether an added node's config references are checked against the graph it joins.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConfigReferencesOfTheAddedNode {
+    /// A live add: every node a reference names must already be in the graph.
+    CheckedAgainstTheGraphItJoins,
+    /// A graph load: the whole graph was validated before its first node was
+    /// added, so a reference may name a node listed after it.
+    ValidatedWithTheWholeGraphBeforeTheAdd,
+}
+
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
 ///
 /// Reports the node it became, id and name together. Both come out
@@ -93,6 +103,7 @@ async fn add_processor_impl(
     processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
     lend_directory: Option<PathBuf>,
     spec: ProcessorSpec,
+    config_references_of_the_added_node: ConfigReferencesOfTheAddedNode,
 ) -> Result<NodeInTheGraph> {
     let LiveGraphChangeOnOneStream {
         compiler,
@@ -162,6 +173,28 @@ async fn add_processor_impl(
             return Err(Error::UnknownProcessorType {
                 ident: ident_for_err,
             });
+        }
+
+        if config_references_of_the_added_node
+            == ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins
+        {
+            let config_of_the_added_node = graph
+                .traversal()
+                .v(&node_id)
+                .first()
+                .and_then(|node| node.config.clone())
+                .unwrap_or_default();
+            if let Err(refusal) =
+                crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
+                    graph,
+                    processor_interpreter_launch_record.node_types_this_stream_resolves(),
+                    &node_id,
+                    &config_of_the_added_node,
+                )
+            {
+                graph.traversal_mut().v(&node_id).drop();
+                return Err(refusal);
+            }
         }
 
         emit_will_add(&node_id);
@@ -527,6 +560,22 @@ impl LoadedStreamInThisRuntime {
             Arc::clone(&self.processor_interpreter_launch_record),
             self.lend_directory(),
             spec,
+            ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+        ))
+    }
+
+    /// Add one node of a graph load whose references were validated with the
+    /// whole graph, so a reference may name a node the load adds later.
+    pub(crate) fn add_processor_of_a_validated_graph_load(
+        &self,
+        spec: ProcessorSpec,
+    ) -> Result<NodeInTheGraph> {
+        self.block_on_the_engines_tokio_runtime(add_processor_impl(
+            self.live_graph_change(),
+            Arc::clone(&self.processor_interpreter_launch_record),
+            self.lend_directory(),
+            spec,
+            ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
         ))
     }
 }
@@ -542,6 +591,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             Arc::clone(&self.processor_interpreter_launch_record),
             self.lend_directory(),
             spec,
+            ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
         ))
     }
 
@@ -550,6 +600,9 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
+        if let Err(refusal) = self.refuse_removing_a_node_a_drawn_link_names(&processor_id) {
+            return Box::pin(std::future::ready(Err(refusal)));
+        }
         self.in_this_streams_log_route(remove_processor_impl(
             self.live_graph_change(),
             processor_id,
@@ -572,14 +625,17 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
     }
 
-    fn subscribe_to_an_exposed_output_port(
+    fn open_a_viewer_of_an_output_port(
         &self,
-        node_name: String,
+        node_id: ProcessorUniqueId,
         port_name: String,
-    ) -> BoxFuture<'_, Result<crate::core::runtime::ExposedOutputPortSubscription>> {
+        process_id_of_the_viewer: Option<u32>,
+    ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>> {
         self.in_this_streams_log_route(async move {
-            self.subscribe_to_an_exposed_output_port_reading_its_reserved_slot(
-                &node_name, &port_name,
+            self.open_a_viewer_of_an_output_port_holding_its_channel(
+                &node_id,
+                &port_name,
+                process_id_of_the_viewer,
             )
             .await
         })
@@ -591,6 +647,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+        self.refuse_removing_a_node_a_drawn_link_names(processor_id)?;
         self.block_on_the_engines_tokio_runtime(remove_processor_impl(
             self.live_graph_change(),
             processor_id.clone(),
@@ -1010,7 +1067,7 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
     };
     use crate::core::graph::{
         InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
-        refuse_a_config_update_that_drops_a_name_a_wired_link_requires,
+        refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::pubsub::LoadedStreamIdentity;
@@ -1252,13 +1309,13 @@ mod connect_refuses_ports_whose_families_do_not_match_tests {
         assert!(refusal.contains("channel_names"), "{refusal}");
 
         compiler.scope(|graph, _tx| {
-            refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+            refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 &engine,
                 &json!({ "channel_names": ["rpm"] }),
             )
             .expect("an update keeping rpm is taken");
-            let refusal = refuse_a_config_update_that_drops_a_name_a_wired_link_requires(
+            let refusal = refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 &engine,
                 &json!({ "channel_names": ["torque"] }),

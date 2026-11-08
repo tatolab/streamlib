@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `rename`,
-//! `streams` and `expose` load and manage the streams the machine's runtime holds; `relays` and `relay` list,
-//! add, configure and remove the relays it joins; and `graph`, `logs` and `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
+//! `streams` and `clock` load and manage the streams the machine's runtime holds; and `graph`, `logs` and
+//! `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's
 //! description to the CLI's own version. No verb starts a runtime.
 
@@ -19,7 +19,6 @@ mod machine_runtime_local_api_socket;
 mod process_signal_handling;
 mod project_log_records_from_the_runtime;
 mod project_source_change_watcher;
-mod relay_verbs_on_the_runtime;
 mod runtime_gone_while_following_a_stream;
 mod runtime_log_record_decoding_and_filters;
 mod runtime_logs_verb;
@@ -43,7 +42,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use streamlib_runtime_client_contract::local_api_wire_contract::ExposePortLevel;
 
 use crate::stream_actions_on_the_runtime::{STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP};
 use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
@@ -105,8 +103,8 @@ enum TatolabVerb {
         long_about = "Create a project in DIRECTORY, or with none in a folder <adjective>-<noun> \
                       the runtime draws under ~/streams, and queue its load: the runtime writes \
                       stream.py, nodes/, pyproject.toml, .python-version and .gitignore — one \
-                      @stream wiring the sample animation through a GPU effect into an H.264 \
-                      encoder it exposes publicly, with a meter on a fan-out — then makes its \
+                      @stream wiring the sample animation through a GPU effect, with a meter \
+                      on a fan-out — then makes its \
                       .venv and loads the stream under the folder's name. A DIRECTORY already \
                       holding one of those files fails the action with nothing written. Needs \
                       the runtime running."
@@ -202,30 +200,6 @@ enum TatolabVerb {
     },
     /// List the streams the runtime holds: running, stopped or failed, and why each failed.
     Streams,
-    /// Set how far one output port of a stream is readable.
-    #[command(
-        long_about = "Private (the default here) lets this machine's other streams and agents read \
-                      the port; --public lets readers off the machine read it too; --remove makes \
-                      it internal to its stream. The change is live — a reader the new level no \
-                      longer allows is cut at once — and the stream's record holds it, over what \
-                      its function exposes, across restarts."
-    )]
-    #[command(
-        override_usage = "tatolab expose [STREAM] <NODE> <PORT> [--public | --remove]",
-        after_long_help = STREAM_ARGUMENT_LONG_HELP
-    )]
-    Expose {
-        /// [STREAM], as every stream verb takes it; the node by its name in the stream's graph;
-        /// and the output port by its name on the node.
-        #[arg(value_names = ["STREAM", "NODE", "PORT"], num_args = 2..=3, required = true)]
-        stream_then_node_then_port: Vec<String>,
-        /// Make the port public instead of private.
-        #[arg(long = "public", conflicts_with = "remove")]
-        public: bool,
-        /// Make the port internal to its stream instead of private.
-        #[arg(long = "remove")]
-        remove: bool,
-    },
     /// Run a stream's scaled clock at another scale, live.
     #[command(
         long_about = "Stream time carries on from where it stands at the new scale — 0.5 runs the \
@@ -244,19 +218,6 @@ enum TatolabVerb {
         /// Stream seconds per machine second from now on.
         #[arg(long = "scale", required = true, value_parser = finite_stream_clock_scale)]
         scale: f64,
-    },
-    /// List the relays the runtime joins: each one's adapter, state, settings and secrets set.
-    #[command(
-        long_about = "Every relay instance: the local relay's two built-in listeners and each \
-                      added one, with its adapter, its connection state, its settings, and each \
-                      secret setting as set or unset — never its value — then why each relay not \
-                      joined is not."
-    )]
-    Relays,
-    /// Add, configure or remove one of the relays the runtime joins.
-    Relay {
-        #[command(subcommand)]
-        relay_verb: relay_verbs_on_the_runtime::RelayVerb,
     },
     /// Export the runtime's live graph as JSON: every stream's, or one's.
     #[command(
@@ -392,23 +353,9 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
             stream_then_display_name,
         } => stream_actions_on_the_runtime::rename_stream(&stream_then_display_name),
         TatolabVerb::Streams => stream_actions_on_the_runtime::list_streams(),
-        TatolabVerb::Expose {
-            stream_then_node_then_port,
-            public,
-            remove,
-        } => stream_actions_on_the_runtime::expose_port(
-            &stream_then_node_then_port,
-            match (public, remove) {
-                (true, _) => ExposePortLevel::Public,
-                (false, true) => ExposePortLevel::Internal,
-                (false, false) => ExposePortLevel::Private,
-            },
-        ),
         TatolabVerb::Clock { stream, scale } => {
             stream_actions_on_the_runtime::set_stream_clock_scale(stream.as_deref(), scale)
         }
-        TatolabVerb::Relays => relay_verbs_on_the_runtime::list_relays(),
-        TatolabVerb::Relay { relay_verb } => relay_verbs_on_the_runtime::run_relay_verb(relay_verb),
         TatolabVerb::Graph { requested_stream } => {
             runtime_observation_verbs::print_local_api_tool_result_of_the_running_runtime(
                 runtime_observation_verbs::GRAPH_TOOL_NAME,

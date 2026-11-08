@@ -36,16 +36,16 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.32" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.34" }
 # The runtime directory the local API's socket is bound in, and the wire names and tool result
 # shapes it serves.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.32" }
-# The machine's relay instances the relay tools drive, and the relay-adapter catalog.
-streamlib-relay-adapter-sdk = { path = "../streamlib-relay-adapter-sdk", features = ["utoipa"] }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.34" }
+# The projects the asset tools open, each with its one writer.
+streamlib-project-repository = { path = "../streamlib-project-repository" }
+uuid = "1.11"
 
-# `trace` for every request's span; `fs` serves the preview page's files on the loopback listener.
-tower-http = { version = "0.6", features = ["trace", "fs"] }
-# Hands one `/watch` request to the preview page's file service.
+# `trace` for every request's span.
+tower-http = { version = "0.6", features = ["trace"] }
 tower = { version = "0.5", features = ["util"] }
 futures-util = "0.3"
 

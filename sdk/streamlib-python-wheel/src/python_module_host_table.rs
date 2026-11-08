@@ -224,6 +224,7 @@ fn module_host_of_one_node(
                 input_message_lend_pooled_gpu_frame,
                 output_port_write_described,
                 surface_gpu_pool_slot_frame,
+                output_port_declare_groups_given_up_before_the_next_write,
             },
             node_id: node_id.to_string(),
             input_mailboxes: data_plane.input_mailboxes,
@@ -505,6 +506,32 @@ unsafe fn write_on_a_lent_output_port(
             MODULE_HOST_TABLE_STATUS_OK
         }
         Err(write_failure) => unsafe { refuse(error_message, &write_failure.to_string()) },
+    }
+}
+
+unsafe extern "C" fn output_port_declare_groups_given_up_before_the_next_write(
+    node_host: *mut c_void,
+    port: ModuleHostTablePortHandle,
+    given_up_group_count: u64,
+    error_message: *mut ModuleHostTableErrorMessage,
+) -> ModuleHostTableStatus {
+    let node_host = unsafe { node_host_of(node_host) };
+    let port_name =
+        match lent_port_name_of_a_handle("output", &node_host.lent_output_port_names, port) {
+            Ok(port_name) => port_name,
+            Err(refusal) => return unsafe { refuse(error_message, &refusal) },
+        };
+    if !node_host.output_writer.has_port(port_name) {
+        return MODULE_HOST_TABLE_STATUS_OK;
+    }
+    match node_host
+        .output_writer
+        .declare_groups_given_up_upstream_before_the_next_write(port_name, given_up_group_count)
+    {
+        Ok(()) => MODULE_HOST_TABLE_STATUS_OK,
+        Err(declaration_failure) => unsafe {
+            refuse(error_message, &declaration_failure.to_string())
+        },
     }
 }
 

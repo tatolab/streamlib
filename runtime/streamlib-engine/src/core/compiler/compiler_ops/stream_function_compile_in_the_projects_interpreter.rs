@@ -576,7 +576,6 @@ mod tests {
             "stream": "camera-preview",
             "nodes": [{"name": "camera", "type": "tatolab.testpattern:TestPatternSource", "config": {}}],
             "links": [],
-            "exposed": [{"node": "camera", "port": "video", "level": "private"}],
         })
     }
 

@@ -18,7 +18,8 @@ pub(crate) use apply_processor_config_update_op::{
     ProcessorConfigUpdateOutcome, apply_processor_config_update,
 };
 pub(crate) use open_iceoryx2_service_op::{
-    SourceSideHeldOpenForTheRuntimesPublisher, open_the_source_side_for_the_runtimes_publisher,
+    SourceSideHeldOpenForAReaderOnTheReservedSlot,
+    open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_processor_op::prepare_processor;

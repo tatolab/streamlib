@@ -1,0 +1,527 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! The asset tools: a project's assets listed, described, imported, renamed, moved, deleted and
+//! given new settings, each change one transaction on the project's history.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::schemars::JsonSchema;
+use rmcp::{Peer, RoleServer, tool, tool_router};
+use serde::Deserialize;
+use serde_json::{Map, Value};
+use streamlib_project_repository::{
+    AppliedProjectTransaction, ProjectAsset, ProjectAssetChangeRequest, ProjectAssetImportSource,
+    ProjectAssetKind, ProjectAssetOperation, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+};
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    AssetTransactionToolResult, DescribeAssetToolResult, ListAssetsToolResult,
+    ProjectAssetOnTheWire,
+};
+use uuid::Uuid;
+
+use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
+use crate::mcp_project_change_feed::project_transactions_resource_uri;
+
+/// The author an asset change names when its caller's MCP client gave no name.
+const AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT: &str = "an MCP client";
+
+const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
+    "The project, by absolute path: a folder holding `tatolab-project.json`.";
+const ASSET_ARGUMENT_DESCRIPTION: &str =
+    "The asset, by the UUID `import_asset` or `list_assets` answered.";
+const AUTHOR_ARGUMENT_DESCRIPTION: &str = "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.";
+
+/// What an asset is, as a caller names it.
+#[derive(Clone, Copy, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+enum ProjectAssetKindToolArgument {
+    /// Video, audio or an image.
+    Media,
+    /// USD, glTF and other 3D scenes.
+    Scene,
+    /// Everything else a node reads: an FMU, a LUT, model weights, a font.
+    Data,
+    /// A stream's graph document; listed, never imported.
+    Stream,
+}
+
+impl From<ProjectAssetKindToolArgument> for ProjectAssetKind {
+    fn from(kind: ProjectAssetKindToolArgument) -> Self {
+        match kind {
+            ProjectAssetKindToolArgument::Media => Self::Media,
+            ProjectAssetKindToolArgument::Scene => Self::Scene,
+            ProjectAssetKindToolArgument::Data => Self::Data,
+            ProjectAssetKindToolArgument::Stream => Self::Stream,
+        }
+    }
+}
+
+/// Who an asset change is by, as a caller names it.
+#[derive(Clone, Copy, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(rename_all = "snake_case")]
+enum ProjectTransactionAuthorKindToolArgument {
+    /// A person, through the studio or the CLI.
+    Person,
+    /// An agent.
+    Agent,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ProjectTransactionAuthorToolArgument {
+    #[schemars(description = "`person` or `agent`.")]
+    kind: ProjectTransactionAuthorKindToolArgument,
+    #[schemars(description = "The author's name as history shows it.")]
+    name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ListAssetsToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = "Only the assets of this kind. Omit it for every asset.")]
+    kind: Option<ProjectAssetKindToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DescribeAssetToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    asset: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ImportAssetToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(
+        description = "Where the bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of bytes the project's content store already holds."
+    )]
+    source: String,
+    #[schemars(
+        description = "Where the asset sits in the project, `/`-separated and relative to the project directory, such as `media/intro.mp4`."
+    )]
+    asset_path: String,
+    #[schemars(
+        description = "`media`, `scene` or `data`. Omit it for the kind the file's extension implies, `data` when it implies none."
+    )]
+    kind: Option<ProjectAssetKindToolArgument>,
+    #[schemars(description = "The settings the import takes, kept in the asset's sidecar.")]
+    import_settings: Option<Map<String, Value>>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RenameAssetToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    asset: String,
+    #[schemars(description = "The asset's new file name, in the folder it sits in.")]
+    file_name: String,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct MoveAssetToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    asset: String,
+    #[schemars(
+        description = "The project folder the asset moves into, `/`-separated, `\"\"` for the project's root."
+    )]
+    into_directory: String,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DeleteAssetToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    asset: String,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct SetAssetSettingsToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    asset: String,
+    #[schemars(description = "The settings that replace the asset's import settings whole.")]
+    import_settings: Map<String, Value>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[tool_router(router = project_asset_tool_router, vis = "pub(crate)")]
+impl LocalApiMcpServerHandler {
+    #[tool(
+        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID and name and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
+    )]
+    async fn list_assets(
+        &self,
+        Parameters(ListAssetsToolArguments {
+            project_directory,
+            kind,
+        }): Parameters<ListAssetsToolArguments>,
+    ) -> ToolCallAnswer {
+        let kind = kind.map(ProjectAssetKind::from);
+        let listed = self
+            .a_project_repository_call_off_the_async_runtime(
+                "list_assets",
+                project_directory,
+                move |project_repository| {
+                    let mut assets: Vec<ProjectAssetOnTheWire> = project_repository
+                        .assets()
+                        .filter(|asset| kind.is_none_or(|kind| asset.kind == kind))
+                        .map(project_asset_on_the_wire)
+                        .collect();
+                    assets.sort_by(|first, second| first.path.cmp(&second.path));
+                    Ok(ListAssetsToolResult {
+                        project_directory: project_repository.project_directory().to_path_buf(),
+                        project: project_repository.project_file().project.to_string(),
+                        project_name: project_repository.project_file().name.clone(),
+                        assets,
+                        transactions_resource_uri: project_transactions_resource_uri(
+                            project_repository.project_file().project,
+                        ),
+                    })
+                },
+            )
+            .await?;
+        serialized_tool_result("list_assets", &listed)
+    }
+
+    #[tool(
+        description = "Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of its bytes, its import settings, and `content_held`, whether the project's content store holds its bytes."
+    )]
+    async fn describe_asset(
+        &self,
+        Parameters(DescribeAssetToolArguments {
+            project_directory,
+            asset,
+        }): Parameters<DescribeAssetToolArguments>,
+    ) -> ToolCallAnswer {
+        let asset = the_asset_a_call_names("describe_asset", &asset)?;
+        let described = self
+            .a_project_repository_call_off_the_async_runtime(
+                "describe_asset",
+                project_directory,
+                move |project_repository| {
+                    let described_asset = project_repository.asset(asset)?;
+                    Ok(DescribeAssetToolResult {
+                        content_held: project_repository
+                            .content_store()
+                            .content_path(&described_asset.content_sha256)
+                            .is_file(),
+                        asset: project_asset_on_the_wire(described_asset),
+                    })
+                },
+            )
+            .await?;
+        serialized_tool_result("describe_asset", &described)
+    }
+
+    #[tool(
+        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later rename and move keeps, and the `transaction` and `commit` that record it. The bytes are copied into the project's content store under their SHA-256 before the transaction, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, or bytes the content store already holds by their SHA-256; a file already at `asset_path` is imported in place. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
+    )]
+    async fn import_asset(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(ImportAssetToolArguments {
+            project_directory,
+            source,
+            asset_path,
+            kind,
+            import_settings,
+            author,
+        }): Parameters<ImportAssetToolArguments>,
+    ) -> ToolCallAnswer {
+        let change = ProjectAssetChangeRequest::ImportAsset {
+            source: project_asset_import_source(&source)?,
+            asset_path,
+            kind: kind.map(ProjectAssetKind::from),
+            import_settings: import_settings.unwrap_or_default(),
+        };
+        self.one_asset_change_as_a_transaction(
+            "import_asset",
+            project_directory,
+            the_author_of_a_change(author, &peer),
+            change,
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Give an asset a new file name in its folder, its sidecar going with it, as one transaction; the asset keeps its UUID. Answers the asset as it now is, with the `transaction` and `commit`."
+    )]
+    async fn rename_asset(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(RenameAssetToolArguments {
+            project_directory,
+            asset,
+            file_name,
+            author,
+        }): Parameters<RenameAssetToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "rename_asset",
+            project_directory,
+            the_author_of_a_change(author, &peer),
+            ProjectAssetChangeRequest::RenameAsset {
+                asset: the_asset_a_call_names("rename_asset", &asset)?,
+                file_name,
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Move an asset into another folder of the project, made when missing, its sidecar going with it, as one transaction; the asset keeps its UUID. Answers the asset as it now is, with the `transaction` and `commit`."
+    )]
+    async fn move_asset(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(MoveAssetToolArguments {
+            project_directory,
+            asset,
+            into_directory,
+            author,
+        }): Parameters<MoveAssetToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "move_asset",
+            project_directory,
+            the_author_of_a_change(author, &peer),
+            ProjectAssetChangeRequest::MoveAsset {
+                asset: the_asset_a_call_names("move_asset", &asset)?,
+                into_directory,
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Stop tracking an asset as one transaction: its file and sidecar leave the project, and its bytes stay in the content store, so undoing the transaction brings it back. Refused while a stream's graph document references the asset, the refusal naming each document. Answers the asset as it was, with the `transaction` and `commit`."
+    )]
+    async fn delete_asset(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(DeleteAssetToolArguments {
+            project_directory,
+            asset,
+            author,
+        }): Parameters<DeleteAssetToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "delete_asset",
+            project_directory,
+            the_author_of_a_change(author, &peer),
+            ProjectAssetChangeRequest::DeleteAsset {
+                asset: the_asset_a_call_names("delete_asset", &asset)?,
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Replace an asset's import settings whole, as one transaction. Answers the asset as it now is, with the `transaction` and `commit`."
+    )]
+    async fn set_asset_settings(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(SetAssetSettingsToolArguments {
+            project_directory,
+            asset,
+            import_settings,
+            author,
+        }): Parameters<SetAssetSettingsToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "set_asset_settings",
+            project_directory,
+            the_author_of_a_change(author, &peer),
+            ProjectAssetChangeRequest::SetAssetSettings {
+                asset: the_asset_a_call_names("set_asset_settings", &asset)?,
+                import_settings,
+            },
+        )
+        .await
+    }
+}
+
+impl LocalApiMcpServerHandler {
+    /// Run `call` on the project at `project_directory`, its one writer held, on a blocking task;
+    /// a refusal is the runtime's own words.
+    async fn a_project_repository_call_off_the_async_runtime<ProjectRepositoryCallOutcome>(
+        &self,
+        tool_name: &'static str,
+        project_directory: PathBuf,
+        call: impl FnOnce(
+            &mut ProjectRepository,
+        ) -> Result<ProjectRepositoryCallOutcome, ProjectRepositoryRefusal>
+        + Send
+        + 'static,
+    ) -> Result<ProjectRepositoryCallOutcome, String>
+    where
+        ProjectRepositoryCallOutcome: Send + 'static,
+    {
+        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        tokio::task::spawn_blocking(move || {
+            let project_repository =
+                project_repositories.the_project_repository_at(&project_directory)?;
+            let mut project_repository = project_repository.lock();
+            call(&mut project_repository)
+        })
+        .await
+        .map_err(|join_failure| {
+            format!("{tool_name} failed: the call did not finish: {join_failure}")
+        })?
+        .map_err(|refusal| format!("{tool_name} failed: {refusal}"))
+    }
+
+    /// Apply `change` by `author` to the project as one transaction, answering the asset it changed.
+    async fn one_asset_change_as_a_transaction(
+        &self,
+        tool_name: &'static str,
+        project_directory: PathBuf,
+        author: ProjectTransactionAuthor,
+        change: ProjectAssetChangeRequest,
+    ) -> ToolCallAnswer {
+        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let answered = self
+            .a_project_repository_call_off_the_async_runtime(
+                tool_name,
+                project_directory,
+                move |project_repository| {
+                    let applied = project_repository.apply_asset_changes(&author, vec![change])?;
+                    project_repositories
+                        .announce_applied_transaction(project_repository, applied.clone());
+                    let AppliedProjectTransaction {
+                        transaction,
+                        commit,
+                    } = applied;
+                    let changed_asset = match transaction.operations.first() {
+                        Some(ProjectAssetOperation::ImportAsset { asset })
+                        | Some(ProjectAssetOperation::DeleteAsset { asset }) => asset.clone(),
+                        Some(ProjectAssetOperation::RelocateAsset { asset, .. })
+                        | Some(ProjectAssetOperation::SetAssetSettings { asset, .. }) => {
+                            project_repository.asset(*asset)?.clone()
+                        }
+                        None => return Err(ProjectRepositoryRefusal::EmptyTransaction),
+                    };
+                    Ok(AssetTransactionToolResult {
+                        asset: project_asset_on_the_wire(&changed_asset),
+                        transaction: transaction.transaction.to_string(),
+                        commit,
+                    })
+                },
+            )
+            .await?;
+        serialized_tool_result(tool_name, &answered)
+    }
+}
+
+/// The author a change names: the caller's own, or the agent its MCP client is.
+fn the_author_of_a_change(
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    peer: &Peer<RoleServer>,
+) -> ProjectTransactionAuthor {
+    match author {
+        Some(ProjectTransactionAuthorToolArgument { kind, name }) => ProjectTransactionAuthor {
+            kind: match kind {
+                ProjectTransactionAuthorKindToolArgument::Person => {
+                    ProjectTransactionAuthorKind::Person
+                }
+                ProjectTransactionAuthorKindToolArgument::Agent => {
+                    ProjectTransactionAuthorKind::Agent
+                }
+            },
+            name,
+        },
+        None => ProjectTransactionAuthor {
+            kind: ProjectTransactionAuthorKind::Agent,
+            name: peer
+                .peer_info()
+                .map(|client| client.client_info.name.clone())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT.to_owned()),
+        },
+    }
+}
+
+/// The asset UUID a call's `asset` spells.
+fn the_asset_a_call_names(tool_name: &str, asset: &str) -> Result<Uuid, String> {
+    Uuid::parse_str(asset)
+        .map_err(|_| format!("{tool_name} failed: `asset` must be an asset's UUID; got `{asset}`"))
+}
+
+/// `source` as an import reads it: an absolute path, or a content hash the store holds.
+fn project_asset_import_source(source: &str) -> Result<ProjectAssetImportSource, String> {
+    let source_path = std::path::Path::new(source);
+    if source_path.is_absolute() {
+        return Ok(ProjectAssetImportSource::FileOnThisMachine(
+            source_path.to_path_buf(),
+        ));
+    }
+    if source.len() == 64
+        && source
+            .bytes()
+            .all(|digit| digit.is_ascii_digit() || (b'a'..=b'f').contains(&digit))
+    {
+        return Ok(ProjectAssetImportSource::StoredContent(source.to_owned()));
+    }
+    Err(format!(
+        "import_asset failed: `source` must be an absolute path or a SHA-256 in 64 lowercase hex digits; got `{source}`"
+    ))
+}
+
+fn project_asset_on_the_wire(asset: &ProjectAsset) -> ProjectAssetOnTheWire {
+    ProjectAssetOnTheWire {
+        asset: asset.asset.to_string(),
+        kind: project_asset_kind_on_the_wire(asset.kind).to_owned(),
+        path: asset.path.to_string(),
+        content_sha256: asset.content_sha256.clone(),
+        content_byte_len: asset.content_byte_len,
+        import_settings: asset.import_settings.clone(),
+    }
+}
+
+fn project_asset_kind_on_the_wire(kind: ProjectAssetKind) -> &'static str {
+    match kind {
+        ProjectAssetKind::Stream => "stream",
+        ProjectAssetKind::Media => "media",
+        ProjectAssetKind::Scene => "scene",
+        ProjectAssetKind::Data => "data",
+    }
+}

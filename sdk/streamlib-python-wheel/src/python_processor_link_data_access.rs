@@ -551,9 +551,9 @@ impl PythonProcessorLinkDataAccess {
 pub(crate) enum PortPayloadReadShape<'target, 'py> {
     /// The `PortPayloadBorrow` of the sample: a read by name.
     RawBorrow,
-    /// The family's own type, built from the message's descriptor kind: a
-    /// read through a port attribute of that family.
-    FamilyType(PortFamilyOfTheRead),
+    /// The arriving family's own type, built from the message's descriptor
+    /// kind: a read through a port attribute taking those families.
+    FamilyType(PortFamiliesOfTheRead),
     /// What `into.from_bytes` builds from the borrow.
     CastInto(&'target Bound<'py, PyAny>),
 }
@@ -569,6 +569,14 @@ pub(crate) enum PortFamilyOfTheRead {
 }
 
 impl PortFamilyOfTheRead {
+    const ALL: [Self; 5] = [
+        Self::Image,
+        Self::Array,
+        Self::Channels,
+        Self::Packets,
+        Self::Records,
+    ];
+
     /// The family a declaration spells as `declaration_name`, such as `Image`.
     pub(crate) fn of_declaration_name(declaration_name: &str) -> Option<Self> {
         Some(match declaration_name {
@@ -590,6 +598,47 @@ impl PortFamilyOfTheRead {
             Self::Packets => DataChannelPayloadDescriptorKind::PacketsUnit,
             Self::Records => DataChannelPayloadDescriptorKind::RecordsMessage,
         }
+    }
+}
+
+/// The families an `Input` attribute a read names takes: its own and its
+/// `also_takes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PortFamiliesOfTheRead {
+    declared_family: PortFamilyOfTheRead,
+    is_taken_by_family: [bool; PortFamilyOfTheRead::ALL.len()],
+}
+
+impl PortFamiliesOfTheRead {
+    /// An input taking `declared_family` alone.
+    #[cfg(test)]
+    pub(crate) fn of_one(declared_family: PortFamilyOfTheRead) -> Self {
+        Self::of_the_declared_family_and_also(declared_family, [])
+    }
+
+    /// An input taking `declared_family` and each of `also_taken_families`.
+    pub(crate) fn of_the_declared_family_and_also(
+        declared_family: PortFamilyOfTheRead,
+        also_taken_families: impl IntoIterator<Item = PortFamilyOfTheRead>,
+    ) -> Self {
+        let mut is_taken_by_family = [false; PortFamilyOfTheRead::ALL.len()];
+        for family in std::iter::once(declared_family).chain(also_taken_families) {
+            is_taken_by_family[family as usize] = true;
+        }
+        Self {
+            declared_family,
+            is_taken_by_family,
+        }
+    }
+
+    /// The taken family whose messages carry `kind`.
+    fn family_carrying(
+        self,
+        kind: DataChannelPayloadDescriptorKind,
+    ) -> Option<PortFamilyOfTheRead> {
+        PortFamilyOfTheRead::ALL.into_iter().find(|family| {
+            self.is_taken_by_family[*family as usize] && family.descriptor_kind() == kind
+        })
     }
 }
 
@@ -618,13 +667,18 @@ fn payload_borrowed_into_the_read_target_when_named<'py>(
         PortPayloadReadShape::CastInto(into) => Some(into),
         PortPayloadReadShape::RawBorrow | PortPayloadReadShape::FamilyType(_) => None,
     };
-    if let PortPayloadReadShape::FamilyType(family) = read_shape {
+    if let PortPayloadReadShape::FamilyType(families) = read_shape {
         let kind = payload_descriptor.known_kind();
-        if kind != Ok(family.descriptor_kind()) {
+        let family_of_the_message = kind
+            .as_ref()
+            .ok()
+            .and_then(|kind| families.family_carrying(*kind));
+        if family_of_the_message.is_none() {
+            let family = families.declared_family;
             return Err(PyTypeError::new_err(format!(
                 "a read of {family:?} input port {port_name:?} got a message described as \
                  {kind:?} rather than {:?}: its producer wrote it by name rather than through \
-                 a {family:?} Output. Read it by name to take its raw payload.",
+                 an Output of a family the port takes. Read it by name to take its raw payload.",
                 family.descriptor_kind()
             )));
         }
@@ -2291,7 +2345,7 @@ mod tests {
             .read_from_input_port_offering_gpu_access(
                 python,
                 "frames_from_upstream",
-                PortPayloadReadShape::FamilyType(family),
+                PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(family)),
                 None,
             )
             .unwrap()
@@ -2411,6 +2465,60 @@ mod tests {
                 records_message_payload_of("frames_to_downstream", &missing_at, &declared_names)
                     .expect_err("`at` is declared");
             assert!(refusal.to_string().contains("\"at\""), "{refusal}");
+        });
+    }
+
+    /// A read through a Packets input that also takes Records hands back a
+    /// Records message as its dict; an input taking Packets alone refuses it.
+    #[test]
+    fn a_read_through_an_input_taking_several_families_builds_the_arriving_familys_type() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (source, destination) = one_wired_link(python, "records-into-packets-or-records");
+            let record = python
+                .eval(c"{'kind': 'tap', 'at': 3}", None, None)
+                .unwrap();
+            let encoded = records_message_payload_of(
+                "frames_to_downstream",
+                &record,
+                &["kind".to_string(), "at".to_string()],
+            )
+            .unwrap();
+            let write_the_record = || {
+                source
+                    .write_described_by(
+                        python,
+                        "frames_to_downstream",
+                        PyBytes::new(python, &encoded).as_any(),
+                        None,
+                        true,
+                        |_| Ok(DataChannelPayloadDescriptor::records_message()),
+                    )
+                    .unwrap();
+            };
+            let read_through = |families: PortFamiliesOfTheRead| {
+                destination.read_from_input_port_offering_gpu_access(
+                    python,
+                    "frames_from_upstream",
+                    PortPayloadReadShape::FamilyType(families),
+                    None,
+                )
+            };
+
+            write_the_record();
+            let received = read_through(PortFamiliesOfTheRead::of_the_declared_family_and_also(
+                PortFamilyOfTheRead::Packets,
+                [PortFamilyOfTheRead::Records],
+            ))
+            .unwrap()
+            .expect("the wired input received the record");
+            assert!(received.eq(&record).unwrap(), "got {received}");
+
+            write_the_record();
+            let refusal = read_through(PortFamiliesOfTheRead::of_one(PortFamilyOfTheRead::Packets))
+                .map(|_| ())
+                .expect_err("a Packets input alone does not take a Records message");
+            assert!(refusal.is_instance_of::<PyTypeError>(python), "{refusal}");
         });
     }
 
@@ -2705,7 +2813,9 @@ mod tests {
                     .read_from_input_port_offering_gpu_access(
                         python,
                         "frames_from_upstream",
-                        PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Image),
+                        PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
+                            PortFamilyOfTheRead::Image,
+                        )),
                         Some(&gpu),
                     )
                     .unwrap()
@@ -2916,7 +3026,9 @@ mod tests {
                 .read_from_input_port_offering_gpu_access(
                     python,
                     "frames_from_upstream",
-                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Image),
+                    PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
+                        PortFamilyOfTheRead::Image,
+                    )),
                     Some(&gpu),
                 )
                 .unwrap()
@@ -2938,7 +3050,9 @@ mod tests {
                 .read_from_input_port_offering_gpu_access(
                     python,
                     "frames_from_upstream",
-                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Array),
+                    PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
+                        PortFamilyOfTheRead::Array,
+                    )),
                     Some(&gpu),
                 )
                 .unwrap()
@@ -3121,7 +3235,9 @@ mod tests {
                 .read_from_input_port_offering_gpu_access(
                     python,
                     "frames_from_upstream",
-                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Image),
+                    PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
+                        PortFamilyOfTheRead::Image,
+                    )),
                     Some(&gpu),
                 )
                 .unwrap()
@@ -3187,7 +3303,9 @@ mod tests {
                 .read_from_input_port_offering_gpu_access(
                     python,
                     "frames_from_upstream",
-                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Records),
+                    PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
+                        PortFamilyOfTheRead::Records,
+                    )),
                     None,
                 )
                 .expect_err("a Bytes message is no Records message");
@@ -3854,7 +3972,9 @@ mod tests {
                 .read_from_input_port_offering_gpu_access(
                     python,
                     "audio_from_upstream",
-                    PortPayloadReadShape::FamilyType(PortFamilyOfTheRead::Channels),
+                    PortPayloadReadShape::FamilyType(PortFamiliesOfTheRead::of_one(
+                        PortFamilyOfTheRead::Channels,
+                    )),
                     None,
                 )
                 .unwrap()

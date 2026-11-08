@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
+use std::os::fd::{IntoRawFd as _, OwnedFd, RawFd};
 use std::sync::Arc;
 
 use pyo3::exceptions::{PyKeyError, PyRuntimeError};
@@ -14,14 +14,13 @@ use streamlib_surface_client::{
     refusal_the_surface_share_service_answered, resource_type_of_a_check_out,
 };
 
-use super::pool_slot_import_cache::{
-    pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
-};
 use super::{
-    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperGpuPoolSlotFrameClaim,
+    GpuPoolSlotFrameClaimOfThisImporter, HelperCheckedOutPixelSurface, HelperCheckedOutSurface,
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceHeldAgainstProducerReuse, SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST,
-    SURFACE_SHARE_RESPONSE_TIMEOUT, refuse_check_out_the_service_declined, response_field,
+    HelperSurfaceHeldAgainstProducerReuse, refuse_check_out_the_service_declined, response_field,
+};
+use streamlib_gpu_frame_import_client::{
+    pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
 };
 use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
@@ -410,14 +409,9 @@ impl HelperProcessGpuExchangeClient {
         Ok((response, received_fds))
     }
 
-    /// The one exchange every surface-share request makes.
-    /// `while_the_connection_is_held` runs on the answer before the
-    /// connection is free for another request, so what it records is ordered
-    /// against the retirement notice of every later reply.
-    ///
-    /// Every pool slot import is dropped whenever this helper's connection is
-    /// replaced: the service lists a retired slot only on the connection it
-    /// handed the slot's memory to.
+    /// The one exchange every surface-share request makes, over this
+    /// helper's connection; see
+    /// [`SurfaceShareConnectionOfThisImporter::exchange`](streamlib_gpu_frame_import_client::SurfaceShareConnectionOfThisImporter::exchange).
     fn surface_share_exchange<DecidedWhileTheConnectionIsHeld>(
         &self,
         request: &serde_json::Value,
@@ -428,88 +422,9 @@ impl HelperProcessGpuExchangeClient {
         Vec<OwnedFd>,
         DecidedWhileTheConnectionIsHeld,
     )> {
-        let mut connection = self.surface_share_connection.lock();
-        let stream = match connection.take() {
-            Some(open_stream) => open_stream,
-            None => {
-                let connections_set_aside = self
-                    .surface_share_connections_set_aside_after_a_timeout
-                    .lock()
-                    .len();
-                if connections_set_aside >= SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
-                    return Err(PyRuntimeError::new_err(format!(
-                        "the surface-share service has outwaited the {} s response timeout \
-                         {connections_set_aside} times, so this helper asks it nothing more; the \
-                         connections it set aside stay open, keeping the frames claimed on them \
-                         held, until this helper stops",
-                        SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
-                    )));
-                }
-                let opened_stream = streamlib_surface_client::connect_to_surface_share_socket(
-                    &self.surface_socket_path,
-                )
-                .map_err(|connect_failure| {
-                    PyRuntimeError::new_err(format!(
-                        "could not reach the surface-share socket at {}: {connect_failure}. The \
-                         parent runtime owns that socket; if it is gone, this helper is orphaned",
-                        self.surface_socket_path.display(),
-                    ))
-                })?;
-                opened_stream
-                    .set_read_timeout(Some(SURFACE_SHARE_RESPONSE_TIMEOUT))
-                    .map_err(|timeout_failure| {
-                        PyRuntimeError::new_err(format!(
-                            "could not bound how long the surface-share socket at {} may take \
-                             to answer: {timeout_failure}",
-                            self.surface_socket_path.display(),
-                        ))
-                    })?;
-                self.pool_slot_imports_by_pool_slot.drop_every_import();
-                opened_stream
-            }
-        };
-        let (response, received_raw_fds) = match streamlib_surface_client::send_request_with_fds(
-            &stream,
-            request,
-            outbound_fds,
-            streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
-        ) {
-            Ok(answered) => answered,
-            Err(io_failure)
-                if matches!(
-                    io_failure.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                self.surface_share_connections_set_aside_after_a_timeout
-                    .lock()
-                    .push(stream);
-                self.pool_slot_imports_by_pool_slot.drop_every_import();
-                return Err(PyRuntimeError::new_err(format!(
-                    "the surface-share service did not answer within {} s; this helper set that \
-                     connection aside, keeping the frames it claimed on it held until it stops, \
-                     and opens a new one on its next request",
-                    SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
-                )));
-            }
-            Err(io_failure) => {
-                self.pool_slot_imports_by_pool_slot.drop_every_import();
-                return Err(PyRuntimeError::new_err(format!(
-                    "the surface-share request failed mid-stream: {io_failure}"
-                )));
-            }
-        };
-        self.pool_slot_imports_by_pool_slot
-            .drop_the_pool_slots_a_reply_lists_as_retired(&response);
-        let decided_while_the_connection_is_held = while_the_connection_is_held(&response);
-        *connection = Some(stream);
-        // SAFETY: adopting kernel-delivered fds the recvmsg just placed in
-        // this process's fd table; nothing else holds them.
-        let received_fds = received_raw_fds
-            .into_iter()
-            .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
-            .collect();
-        Ok((response, received_fds, decided_while_the_connection_is_held))
+        self.surface_share_connection
+            .exchange(request, outbound_fds, while_the_connection_is_held)
+            .map_err(PyRuntimeError::new_err)
     }
 
     /// `check_out` over the surface-share socket, then the import of
@@ -524,7 +439,8 @@ impl HelperProcessGpuExchangeClient {
         }
         let published_pool_slot = pool_slot_of_a_published_frame_id(surface_id);
         let held_pool_slot_import = published_pool_slot.and_then(|published_pool_slot| {
-            self.pool_slot_imports_by_pool_slot
+            self.surface_share_connection
+                .pool_slot_imports_by_pool_slot()
                 .import_held_for(published_pool_slot)
         });
         let holds_pool_slot_import = held_pool_slot_import.is_some();
@@ -543,7 +459,8 @@ impl HelperProcessGpuExchangeClient {
                             .any(|retired_pool_slot| retired_pool_slot == published_pool_slot) =>
                 {
                     Some(
-                        self.pool_slot_imports_by_pool_slot
+                        self.surface_share_connection
+                            .pool_slot_imports_by_pool_slot()
                             .reserve_for_a_fresh_import(published_pool_slot),
                     )
                 }
@@ -581,7 +498,7 @@ impl HelperProcessGpuExchangeClient {
     fn import_a_frame_claimed_in_its_pool_claim_table(
         self: &Arc<Self>,
         surface_id: &str,
-        claimed: Arc<HelperGpuPoolSlotFrameClaim>,
+        claimed: Arc<GpuPoolSlotFrameClaimOfThisImporter>,
     ) -> PyResult<HelperCheckedOutSurface> {
         let pool_slot_key = pool_slot_of_a_published_frame_id(surface_id).ok_or_else(|| {
             PyRuntimeError::new_err(format!(
@@ -589,7 +506,8 @@ impl HelperProcessGpuExchangeClient {
             ))
         })?;
         let pool_slot_import = match self
-            .pool_slot_imports_by_pool_slot
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot()
             .import_held_for(pool_slot_key)
         {
             Some(held_pool_slot_import) => held_pool_slot_import,
@@ -605,7 +523,8 @@ impl HelperProcessGpuExchangeClient {
                             && !pool_slots_a_reply_lists_as_retired(reply)
                                 .any(|retired_pool_slot| retired_pool_slot == pool_slot_key))
                         .then(|| {
-                            self.pool_slot_imports_by_pool_slot
+                            self.surface_share_connection
+                                .pool_slot_imports_by_pool_slot()
                                 .reserve_for_a_fresh_import(pool_slot_key)
                         })
                     },
@@ -845,9 +764,6 @@ enum ProducerImageLayoutOfAFrame<'reply> {
     StatedByTheCheckOut(&'reply serde_json::Value),
     StatedByItsDescriptor(VulkanLayout),
 }
-
-#[cfg(test)]
-mod surface_share_response_timeout_tests;
 
 /// The OPAQUE_FD pixel-buffer arm against an engine-exported allocation. Needs
 /// a Vulkan device and skips where none comes up — the rig runs it on NVIDIA

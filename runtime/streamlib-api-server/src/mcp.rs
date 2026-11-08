@@ -9,10 +9,9 @@
 //! `connect` and `disconnect`, each naming a node by its name; and the stream
 //! actions `run_project`, `describe_stream_action`,
 //! `cancel_stream_action`, `list_project_streams`, `stop_stream`, `start_stream`, `remove_project`,
-//! `list_streams`, `expose_port` and `set_stream_clock_scale`; and the relay verbs `add_relay`,
-//! `configure_relay`, `remove_relay` and `list_relays` — and beside them it
-//! serves the node catalog, the live graph and the relay-adapter catalog as
-//! resources ([`crate::mcp_resources`]) and
+//! `list_streams` and `set_stream_clock_scale`; and the viewer verbs
+//! `open_viewer` and `close_viewer` — and beside them it serves the node
+//! catalog and the live graph as resources ([`crate::mcp_resources`]) and
 //! recipes over those tools as prompts ([`crate::mcp_prompts`]). `rmcp` owns
 //! the protocol; this module owns only what the runtime says through it.
 //!
@@ -37,9 +36,9 @@ use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ListResourcesResult, PaginatedRequestParams,
-    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities,
-    ServerConfig, SubscriptionFilter,
+    CallToolResult, ContentBlock, Implementation, ListResourceTemplatesResult, ListResourcesResult,
+    PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
+    ServerCapabilities, ServerConfig, SubscriptionFilter,
 };
 use rmcp::schemars::JsonSchema;
 use rmcp::service::{RequestContext, SubscriptionContext};
@@ -51,24 +50,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, PrivacyGatedCaptureDevice, Result as StreamlibResult};
-use streamlib::sdk::graph::{
-    InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, OutputPortExposureLevel,
-};
+use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
-    CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, ProjectStreamsListing,
-    RunProjectRequest, RuntimeOperations, StreamAction, StreamActionKind, StreamActionState,
-    StreamActionStep, StreamListing, StreamListingState, StreamLocation,
+    CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, OutputPortViewerHeldOpen,
+    ProjectStreamsListing, RunProjectRequest, RuntimeOperations, StreamAction, StreamActionKind,
+    StreamActionState, StreamActionStep, StreamListing, StreamListingState, StreamLocation,
     WhatTheLastCompileOfTheProjectGave,
 };
-use streamlib_relay_adapter_sdk::{RelayInstanceControlRefusal, RelayInstancesOfThisMachine};
+use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AddRelayToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
-    ConfigureRelayToolResult, CreateProjectToolResult, DescribeStreamActionToolResult,
-    DescribeStreamActionToolResultStream, ExposePortLevel, ExposePortToolResult,
-    ListProjectStreamsToolResult, ListProjectStreamsToolResultStream, ListRelaysToolResult,
-    ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, LogsToolResult,
-    RemoveProjectToolResult, RemoveRelayToolResult, RenameStreamToolResult, RunProjectToolResult,
+    CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
+    CreateProjectToolResult, DescribeStreamActionToolResult, DescribeStreamActionToolResultStream,
+    ListProjectStreamsToolResult, ListProjectStreamsToolResultStream, ListStreamsToolResult,
+    ListStreamsToolResultStream, ListedStreamState, LogsToolResult, OpenViewerToolResult,
+    RemoveProjectToolResult, RenameStreamToolResult, RunProjectToolResult,
     SetStreamClockScaleToolResult, StartStreamToolResult, StopStreamToolResult,
     StreamActionKindOnTheWire, StreamActionStateOnTheWire, StreamActionStepOnTheWire,
     StreamLocationOnTheWire,
@@ -97,7 +93,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `run_project` runs a project from its absolute `project_directory`: it answers at once with an `action` id while the project's own queue makes its `.venv`, compiles every `@stream` in its `stream.py` and starts each — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled`, end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_project_streams` lists the project's `@stream` functions as its last compile named them, running none of its code. `create_project` creates a project — the one `tatolab new` creates — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its run the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. Each stream a run takes in is listed under its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, a project replaces its streams under the same ids, keeping their display names. A run never fails for what the project's code does: a stream whose function raises, whose load or start is refused, or whose project's `stream.py` does not import or defines no `@stream` is listed failed with its traceback or reason in `failed_because` until a run of the fixed code replaces it or `start_stream` compiles it again; only the caller's own mistakes — a directory that is not a project, an id another location holds — fail the action. Every stream a run loads is recorded and re-loaded whenever the runtime starts, until `stop_stream` or `remove_project` ends it: closing the connection that carried the call unloads nothing. `stop_stream` queues the unload of a stream that records it stopped, `start_stream` queues a load of a stopped one and a retry of a failed one, and `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its stream's project queue; `rename_stream` shows a stream under another display name — recorded at once, never waiting behind an action, and never changing its id, address or broadcast — and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level on the stream's record; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. Every tool about one stream — `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv and compile lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream only by exposing it with `expose_port`: an exposed port is the track `<node>/<port>` of the broadcast `<machine>/<stream id>.hang` at the local relay — a private one at its loopback listener alone — and a public one at every relay the machine has joined, which any MoQ client reads. The relays are `list_relays`'s: the local relay's two built-in instances and any added with `add_relay` through an adapter the resource `streamlib://relay-adapter-catalog` lists with its settings; `configure_relay` replaces settings, a secret among them kept in the OS secret store and only ever listed as `set` or `unset`, and `remove_relay` forgets an added one. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `run_project` again starts it afresh. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's port, on this machine or another, through a `RelayTrackSource` node. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `run_project` runs a project from its absolute `project_directory`: it answers at once with an `action` id while the project's own queue makes its `.venv`, compiles every `@stream` in its `stream.py` and starts each — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled`, end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_project_streams` lists the project's `@stream` functions as its last compile named them, running none of its code. `create_project` creates a project — the one `tatolab new` creates — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its run the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. Each stream a run takes in is listed under its stream id, `<folder>-<function>-<hash>`, computed from its location: the resolved project directory and the function's `module:qualname`. Run again, a project replaces its streams under the same ids, keeping their display names. A run never fails for what the project's code does: a stream whose function raises, whose load or start is refused, or whose project's `stream.py` does not import or defines no `@stream` is listed failed with its traceback or reason in `failed_because` until a run of the fixed code replaces it or `start_stream` compiles it again; only the caller's own mistakes — a directory that is not a project, an id another location holds — fail the action. Every stream a run loads is recorded and re-loaded whenever the runtime starts, until `stop_stream` or `remove_project` ends it: closing the connection that carried the call unloads nothing. `stop_stream` queues the unload of a stream that records it stopped, `start_stream` queues a load of a stopped one and a retry of a failed one, and `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its stream's project queue; `rename_stream` shows a stream under another display name — recorded at once, never waiting behind an action, and never changing its id; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. Every tool about one stream — `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv and compile lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream in two ways. `open_viewer` holds a node's output port open for a viewer on this machine, naming the node by the `id` `graph` lists, and answers the channel the viewer reads it from with no copy, until `close_viewer` or the connection's end. A stream sends a port off itself through the `tatolab-moq` gateway nodes: a `MoqTrackSend` linked from the port publishes it as a track at the relay a `MoqGateway` node joins, which any MoQ client reads, and another stream reads that track through a `MoqTrackReceive`. Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `run_project` again starts it afresh. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's track at a relay, on this machine or another, through a `MoqTrackReceive` node. A project's assets — media, scenes and data such as an FMU or a LUT, each a file beside its sidecar `<file>.asset.json`, which holds the UUID the runtime made at its import and keeps across every rename and move — are read with `list_assets` and `describe_asset` and changed with `import_asset`, `rename_asset`, `move_asset`, `delete_asset` and `set_asset_settings`, each naming the project by its absolute `project_directory`, a folder holding `tatolab-project.json`, and an asset by its UUID; each change is one transaction by its `author`, applied whole or refused whole in the runtime's own words, and one commit on the project's own history at `.tatolab/history.git`, while the asset's bytes stay in the project's content store, `.tatolab/content`, and never enter history. A project's change feed is the resource `list_assets` names as `transactions_resource_uri`, `streamlib://project/<project>/transactions`, holding its newest transactions with their author, operations and inverse; name it in `subscriptions/listen` over `/mcp/stdio` to be sent `notifications/resources/updated` each time a transaction applies, then read it. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -130,14 +126,39 @@ pub(crate) enum LocalApiMcpConnection {
     McpStdio,
 }
 
+/// The viewers one `/mcp/stdio` connection opened, by id, each holding its
+/// port's channel open until it is closed or the connection ends.
+#[derive(Default)]
+pub(crate) struct ViewersOneLocalApiConnectionHoldsOpen {
+    viewers_by_id: parking_lot::Mutex<std::collections::BTreeMap<String, OutputPortViewerHeldOpen>>,
+}
+
+impl Drop for ViewersOneLocalApiConnectionHoldsOpen {
+    /// Releasing a port's channel may wait on its helper process, so the
+    /// viewers a connection left open are released off the async workers.
+    fn drop(&mut self) {
+        let viewers_left_open = std::mem::take(self.viewers_by_id.get_mut());
+        if viewers_left_open.is_empty() {
+            return;
+        }
+        match tokio::runtime::Handle::try_current() {
+            Ok(async_runtime) => {
+                drop(async_runtime.spawn_blocking(move || drop(viewers_left_open)))
+            }
+            Err(_) => drop(viewers_left_open),
+        }
+    }
+}
+
 /// The runtime's MCP server handler: its tools, resources and prompts over the
 /// streams the runtime loads, for one connection.
 #[derive(Clone)]
 pub(crate) struct LocalApiMcpServerHandler {
     pub(crate) operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    relay_instances: Arc<dyn RelayInstancesOfThisMachine>,
     local_api_stopping_token: CancellationToken,
     mcp_connection: LocalApiMcpConnection,
+    viewers_this_connection_holds_open: Arc<ViewersOneLocalApiConnectionHoldsOpen>,
+    pub(crate) project_repositories_open_in_this_runtime: Arc<ProjectRepositoriesOpenInThisRuntime>,
     tool_router: Arc<ToolRouter<Self>>,
     prompt_router: Arc<PromptRouter<Self>>,
 }
@@ -148,15 +169,15 @@ impl LocalApiMcpServerHandler {
     /// server's graceful shutdown never waits on a host that holds one open.
     pub(crate) fn new(
         operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-        relay_instances: Arc<dyn RelayInstancesOfThisMachine>,
         local_api_stopping_token: CancellationToken,
     ) -> Self {
         Self {
             operations_on_the_loaded_streams,
-            relay_instances,
             local_api_stopping_token,
             mcp_connection: LocalApiMcpConnection::OneShotStreamableHttpRequest,
-            tool_router: Arc::new(Self::tool_router()),
+            viewers_this_connection_holds_open: Arc::default(),
+            project_repositories_open_in_this_runtime: Arc::default(),
+            tool_router: Arc::new(Self::tool_router() + Self::project_asset_tool_router()),
             prompt_router: Arc::new(Self::prompt_router()),
         }
     }
@@ -165,6 +186,7 @@ impl LocalApiMcpServerHandler {
     pub(crate) fn for_one_mcp_stdio_connection(&self) -> Self {
         Self {
             mcp_connection: LocalApiMcpConnection::McpStdio,
+            viewers_this_connection_holds_open: Arc::default(),
             ..self.clone()
         }
     }
@@ -196,25 +218,6 @@ impl LocalApiMcpServerHandler {
             .await
             .map_err(|join_failure| format!("the stream action did not finish: {join_failure}"))?
             .map_err(|refusal: Error| refusal.to_string())
-    }
-}
-
-impl LocalApiMcpServerHandler {
-    /// Run `call` on the machine's relay instances on a blocking task; a
-    /// refusal is the runtime's own words.
-    async fn a_relay_call_off_the_async_runtime<RelayCallOutcome: Send + 'static>(
-        &self,
-        call: impl FnOnce(
-            &dyn RelayInstancesOfThisMachine,
-        ) -> Result<RelayCallOutcome, RelayInstanceControlRefusal>
-        + Send
-        + 'static,
-    ) -> Result<RelayCallOutcome, String> {
-        let relay_instances = Arc::clone(&self.relay_instances);
-        tokio::task::spawn_blocking(move || call(relay_instances.as_ref()))
-            .await
-            .map_err(|join_failure| format!("the relay call did not finish: {join_failure}"))?
-            .map_err(|refusal| refusal.to_string())
     }
 }
 
@@ -407,29 +410,6 @@ struct RenameStreamToolArguments {
 #[serde(deny_unknown_fields)]
 struct ListStreamsToolArguments {}
 
-/// An output port's exposure level as `expose_port` takes it.
-#[derive(Clone, Copy, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(rename_all = "lowercase")]
-enum OutputPortExposureLevelToolArgument {
-    /// Read by the stream's own nodes alone.
-    Internal,
-    /// Read by any other stream, and any code, on this machine as well.
-    Private,
-    /// Read off this machine as well.
-    Public,
-}
-
-impl From<OutputPortExposureLevelToolArgument> for OutputPortExposureLevel {
-    fn from(level: OutputPortExposureLevelToolArgument) -> Self {
-        match level {
-            OutputPortExposureLevelToolArgument::Internal => OutputPortExposureLevel::Internal,
-            OutputPortExposureLevelToolArgument::Private => OutputPortExposureLevel::Private,
-            OutputPortExposureLevelToolArgument::Public => OutputPortExposureLevel::Public,
-        }
-    }
-}
-
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
@@ -445,57 +425,29 @@ struct SetStreamClockScaleToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct ExposePortToolArguments {
-    #[schemars(description = STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION)]
+struct OpenViewerToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
     stream: String,
-    #[schemars(description = "The node's name, as `graph` lists it.")]
-    node: String,
+    #[schemars(
+        description = "The node's id, as `graph` lists it under `id`; its name is a label, not its identity."
+    )]
+    node_id: String,
     #[schemars(description = "The node's output port, as `graph` lists it under `ports.outputs`.")]
     port: String,
     #[schemars(
-        description = "`internal` for the stream's own nodes alone, `private` for any reader on this machine, `public` for readers off it as well."
+        description = "The process id of the viewer that imports the port's Image frames. On macOS the surface-sharing service admits only that process, a running process of the runtime's user, to new connections while the viewer stays open, and without it the answer names no `surface_share_address`; Linux admits whoever may open its socket."
     )]
-    level: OutputPortExposureLevelToolArgument,
+    #[serde(default)]
+    viewer_process_id: Option<u32>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct AddRelayToolArguments {
-    #[schemars(
-        description = "The adapter's kind, as the resource `streamlib://relay-adapter-catalog` lists it."
-    )]
-    adapter: String,
-    #[schemars(
-        description = "The instance's settings, keyed as the adapter's `settings` in the catalog name them; each secret among them is kept in the OS secret store, never recorded. Absent is no settings."
-    )]
-    settings: Option<Map<String, Value>>,
+struct CloseViewerToolArguments {
+    #[schemars(description = "The viewer, by the id `open_viewer` answered.")]
+    viewer: String,
 }
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct ConfigureRelayToolArguments {
-    #[schemars(description = "The relay instance, as `list_relays` names it.")]
-    relay_id: String,
-    #[schemars(
-        description = "The settings to replace, each by name; a setting left out keeps its value, and `null` returns one to its default. A secret given here replaces the one held."
-    )]
-    settings: Map<String, Value>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct RemoveRelayToolArguments {
-    #[schemars(description = "The relay instance, as `list_relays` names it.")]
-    relay_id: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct ListRelaysToolArguments {}
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -503,7 +455,7 @@ struct ListRelaysToolArguments {}
 struct DescribeRuntimeToolArguments {}
 
 /// A tool's answer: its result, or the message an `isError` result carries.
-type ToolCallAnswer = Result<CallToolResult, String>;
+pub(crate) type ToolCallAnswer = Result<CallToolResult, String>;
 
 // ============================================================================
 // Tools
@@ -512,7 +464,7 @@ type ToolCallAnswer = Result<CallToolResult, String>;
 #[tool_router]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. Without `stream`, `{machine, streams}` holds every loaded stream's graph."
+        description = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. Without `stream`, `{machine, streams}` holds every loaded stream's graph."
     )]
     async fn graph(
         &self,
@@ -620,7 +572,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Link an output port to an input port in one loaded stream, and answer the new link's `link_id` and `state` — with `error_reason` when the link will carry nothing. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs`. A stream reads another stream's port through a `RelayTrackSource` node."
+        description = "Link an output port to an input port in one loaded stream, and answer the new link's `link_id` and `state` — with `error_reason` when the link will carry nothing. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node."
     )]
     async fn connect(
         &self,
@@ -680,7 +632,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Queue a run of the project in `project_directory` on its own stream action queue and answer at once with the action's id as `action`: the run makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — compiles every `@stream` in its `stream.py`, then loads and starts each under its stream id, `<folder>-<function>-<hash>`, computed from its location — the resolved project directory and the function's `module:qualname` — recording each stream running or failed: a function that raises with its traceback, a load or start that is refused with its reason, and a `.venv` uv cannot make — uv's own words — or a `stream.py` that does not import or defines no `@stream` failing every stream recorded from the project, or with none a stream `<folder>-<hash>` shown under the folder's name. A run replaces the streams the project's last run recorded under the same ids, keeping their display names and the owner's exposure levels; a running stream is unloaded once its replacement is recorded. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or is no project fails the action, never the call; refused only for a `project_directory` that is not absolute."
+        description = "Queue a run of the project in `project_directory` on its own stream action queue and answer at once with the action's id as `action`: the run makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — compiles every `@stream` in its `stream.py`, then loads and starts each under its stream id, `<folder>-<function>-<hash>`, computed from its location — the resolved project directory and the function's `module:qualname` — recording each stream running or failed: a function that raises with its traceback, a load or start that is refused with its reason, and a `.venv` uv cannot make — uv's own words — or a `stream.py` that does not import or defines no `@stream` failing every stream recorded from the project, or with none a stream `<folder>-<hash>` shown under the folder's name. A run replaces the streams the project's last run recorded under the same ids, keeping their display names; a running stream is unloaded once its replacement is recorded. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or is no project fails the action, never the call; refused only for a `project_directory` that is not absolute."
     )]
     async fn run_project(
         &self,
@@ -824,7 +776,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Queue a start of a recorded stream that is not loaded — one `stop_stream` stopped, or a failed one, which this retries — on its project's stream action queue, and answer at once with the action's id as `action` beside the stream's id as `stream`. Once the project's earlier actions have run, the start makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run, then loads and starts the stream from the graph recorded when it was run, with the owner's exposure levels applied; once it starts it is neither stopped nor failed and its count of the runtime's crashes is reset. A failed stream whose retry is refused stays failed, for the retry's reason, and the action ends `done` with the stream `failed`. The stream is `preparing` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a stream loaded once the actions queued before it run, and an id no record holds."
+        description = "Queue a start of a recorded stream that is not loaded — one `stop_stream` stopped, or a failed one, which this retries — on its project's stream action queue, and answer at once with the action's id as `action` beside the stream's id as `stream`. Once the project's earlier actions have run, the start makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run, then loads and starts the stream from the graph recorded when it was run; once it starts it is neither stopped nor failed and its count of the runtime's crashes is reset. A failed stream whose retry is refused stays failed, for the retry's reason, and the action ends `done` with the stream `failed`. The stream is `preparing` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a stream loaded once the actions queued before it run, and an id no record holds."
     )]
     async fn start_stream(
         &self,
@@ -939,33 +891,97 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a recorded stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. On a loaded stream a restriction is recorded before it changes live, and refused with the live level unchanged when it cannot be recorded. `not_recorded_because`, present only when `recorded` is false, says why a level raised live could not be recorded, so a runtime restart puts back the level it had."
+        description = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running."
     )]
-    async fn expose_port(
+    async fn open_viewer(
         &self,
-        Parameters(ExposePortToolArguments {
+        Parameters(OpenViewerToolArguments {
             stream,
-            node,
+            node_id,
             port,
-            level,
-        }): Parameters<ExposePortToolArguments>,
+            viewer_process_id,
+        }): Parameters<OpenViewerToolArguments>,
     ) -> ToolCallAnswer {
-        let exposed = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.expose_port(&stream, &node, &port, level.into())
-            })
-            .await?;
+        if matches!(
+            self.mcp_connection,
+            LocalApiMcpConnection::OneShotStreamableHttpRequest
+        ) {
+            return Err(
+                "open_viewer failed: a viewer stays open for the connection that opened it, and \
+                 a `POST /mcp` request ends with its answer; open it over `/mcp/stdio`"
+                    .to_string(),
+            );
+        }
+        let viewer = format!("{stream}/{node_id}/{port}");
+        if self
+            .viewers_this_connection_holds_open
+            .viewers_by_id
+            .lock()
+            .contains_key(&viewer)
+        {
+            return Err(format!(
+                "open_viewer failed: this connection already holds viewer `{viewer}` open"
+            ));
+        }
+        let stream_operations = self.the_stream_a_tool_call_names("open_viewer", &stream)?;
+        let viewer_held_open = stream_operations
+            .open_a_viewer_of_an_output_port(node_id.into(), port, viewer_process_id)
+            .await
+            .map_err(|refusal| format!("open_viewer failed: {refusal}"))?;
+        let hand_off = viewer_held_open.hand_off().clone();
+        let viewer = format!("{}/{}/{}", hand_off.stream, hand_off.node_id, hand_off.port);
+        let viewer_already_open = {
+            let mut viewers_by_id = self.viewers_this_connection_holds_open.viewers_by_id.lock();
+            match viewers_by_id.entry(viewer.clone()) {
+                std::collections::btree_map::Entry::Occupied(_) => Some(viewer_held_open),
+                std::collections::btree_map::Entry::Vacant(vacant) => {
+                    vacant.insert(viewer_held_open);
+                    None
+                }
+            }
+        };
+        if let Some(viewer_opened_twice) = viewer_already_open {
+            let _ = tokio::task::spawn_blocking(move || drop(viewer_opened_twice)).await;
+            return Err(format!(
+                "open_viewer failed: this connection already holds viewer `{viewer}` open"
+            ));
+        }
         serialized_tool_result(
-            "expose_port",
-            &ExposePortToolResult {
-                stream: exposed.stream_id,
-                node: exposed.node,
-                port: exposed.port,
-                level: expose_port_level_on_the_wire(exposed.level),
-                recorded: exposed.recorded,
-                not_recorded_because: exposed.ruling_not_recorded_because,
+            "open_viewer",
+            &OpenViewerToolResult {
+                viewer,
+                stream: hand_off.stream,
+                node_id: hand_off.node_id.to_string(),
+                node_name: hand_off.node_name,
+                port: hand_off.port,
+                iceoryx2_domain_root: hand_off.iceoryx2_domain_root.display().to_string(),
+                channel: hand_off.channel_service_name,
+                surface_share_address: hand_off.surface_share_address,
             },
         )
+    }
+
+    #[tool(
+        description = "Close a viewer this connection opened, letting go of its port's channel."
+    )]
+    async fn close_viewer(
+        &self,
+        Parameters(CloseViewerToolArguments { viewer }): Parameters<CloseViewerToolArguments>,
+    ) -> ToolCallAnswer {
+        let closed = self
+            .viewers_this_connection_holds_open
+            .viewers_by_id
+            .lock()
+            .remove(&viewer);
+        let Some(closed) = closed else {
+            return Err(format!(
+                "close_viewer failed: this connection holds no viewer `{viewer}` open"
+            ));
+        };
+        tokio::task::spawn_blocking(move || drop(closed))
+            .await
+            .map_err(|join_failure| format!("close_viewer failed: {join_failure}"))?;
+        serialized_tool_result("close_viewer", &CloseViewerToolResult { viewer })
     }
 
     #[tool(
@@ -990,81 +1006,6 @@ impl LocalApiMcpServerHandler {
                 scale: rescaled.scale,
             },
         )
-    }
-
-    #[tool(
-        description = "Add a relay instance of an adapter and join it: `adapter` is a kind the resource `streamlib://relay-adapter-catalog` lists, `settings` carries the settings that adapter lists, by name. Answers the `relay_id` the runtime gave it. Each secret among the settings is kept in the OS secret store and never shown again; the rest is recorded in `relays.json` and joined again at every start. An instance that cannot be joined is refused and nothing is recorded. The local relay is built in, so no `local` instance is added."
-    )]
-    async fn add_relay(
-        &self,
-        Parameters(AddRelayToolArguments { adapter, settings }): Parameters<AddRelayToolArguments>,
-    ) -> ToolCallAnswer {
-        let relay_id = self
-            .a_relay_call_off_the_async_runtime(move |relay_instances| {
-                relay_instances.add_relay(&adapter, settings.unwrap_or_default())
-            })
-            .await?;
-        serialized_tool_result(
-            "add_relay",
-            &AddRelayToolResult {
-                relay_id: relay_id.0,
-            },
-        )
-    }
-
-    #[tool(
-        description = "Replace settings of a relay instance and join it again with them, or keep what it had when it cannot be joined. Only the settings named change; `null` returns one to its default; a secret named replaces the one held in the OS secret store."
-    )]
-    async fn configure_relay(
-        &self,
-        Parameters(ConfigureRelayToolArguments { relay_id, settings }): Parameters<
-            ConfigureRelayToolArguments,
-        >,
-    ) -> ToolCallAnswer {
-        let configured_relay_id = relay_id.clone();
-        self.a_relay_call_off_the_async_runtime(move |relay_instances| {
-            relay_instances.configure_relay(&relay_id, settings)
-        })
-        .await?;
-        serialized_tool_result(
-            "configure_relay",
-            &ConfigureRelayToolResult {
-                relay_id: configured_relay_id,
-            },
-        )
-    }
-
-    #[tool(
-        description = "Leave a relay instance and forget it and its secrets. The local relay's built-in instances, `local-loopback` and `local-every-interface`, are never removed."
-    )]
-    async fn remove_relay(
-        &self,
-        Parameters(RemoveRelayToolArguments { relay_id }): Parameters<RemoveRelayToolArguments>,
-    ) -> ToolCallAnswer {
-        let removed_relay_id = relay_id.clone();
-        self.a_relay_call_off_the_async_runtime(move |relay_instances| {
-            relay_instances.remove_relay(&relay_id)
-        })
-        .await?;
-        serialized_tool_result(
-            "remove_relay",
-            &RemoveRelayToolResult {
-                relay_id: removed_relay_id,
-            },
-        )
-    }
-
-    #[tool(
-        description = "List every relay instance the runtime holds, the built-in ones first: its `relay_id`, its `adapter`, whether it is `built_in`, its `settings` with every secret left out, each secret setting by name as `set` or `unset` and never its value, and its `connection_state` — `not_joined` (with `why` when known), `joining`, `joined`, or `lost` (with `why` and `rejoining_after_ms`)."
-    )]
-    async fn list_relays(
-        &self,
-        Parameters(ListRelaysToolArguments {}): Parameters<ListRelaysToolArguments>,
-    ) -> ToolCallAnswer {
-        let relays = self
-            .a_relay_call_off_the_async_runtime(|relay_instances| Ok(relay_instances.list_relays()))
-            .await?;
-        serialized_tool_result("list_relays", &ListRelaysToolResult { relays })
     }
 
     #[tool(
@@ -1198,14 +1139,6 @@ fn list_project_streams_tool_result_of(
     }
 }
 
-fn expose_port_level_on_the_wire(level: OutputPortExposureLevel) -> ExposePortLevel {
-    match level {
-        OutputPortExposureLevel::Internal => ExposePortLevel::Internal,
-        OutputPortExposureLevel::Private => ExposePortLevel::Private,
-        OutputPortExposureLevel::Public => ExposePortLevel::Public,
-    }
-}
-
 /// Refuses a `project_directory` that is not absolute, since the runtime cannot see the caller's
 /// working directory.
 fn refuse_a_relative_project_directory(project_directory: &std::path::Path) -> Result<(), String> {
@@ -1234,6 +1167,7 @@ impl ServerHandler for LocalApiMcpServerHandler {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_resources_subscribe()
                 .enable_prompts()
                 .build(),
         )
@@ -1252,21 +1186,33 @@ impl ServerHandler for LocalApiMcpServerHandler {
         }
     }
 
-    /// No list ever changes under a host, so a listen is acknowledged with
-    /// nothing subscribed and held until it is cancelled.
+    /// No list ever changes under a host; a listen subscribes only to projects' change feeds,
+    /// and is held until it is cancelled.
     fn accepted_subscription_filter(
         &self,
-        _requested: &SubscriptionFilter,
+        requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
-        Some(SubscriptionFilter::default())
+        Some(crate::mcp_project_change_feed::accepted_project_transactions_subscriptions(requested))
     }
 
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
-        tokio::select! {
-            () = context.cancelled() => {}
-            () = self.local_api_stopping_token.cancelled() => {}
-        }
+        crate::mcp_project_change_feed::announce_project_transactions_until_the_listen_ends(
+            &self.project_repositories_open_in_this_runtime,
+            &context,
+            &self.local_api_stopping_token,
+        )
+        .await;
         Ok(())
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, McpError> {
+        Ok(ListResourceTemplatesResult::with_all_items(vec![
+            crate::mcp_project_change_feed::project_transactions_resource_template(),
+        ]))
     }
 
     async fn list_resources(
@@ -1282,13 +1228,22 @@ impl ServerHandler for LocalApiMcpServerHandler {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        crate::mcp_resources::read_resource(
-            &self.operations_on_the_loaded_streams,
-            self.relay_instances.as_ref(),
-            &request.uri,
-        )
-        .await
-        .map(Into::into)
+        if let Some(project) =
+            crate::mcp_project_change_feed::the_project_a_transactions_resource_uri_names(
+                &request.uri,
+            )
+        {
+            return crate::mcp_project_change_feed::read_project_transactions_resource(
+                Arc::clone(&self.project_repositories_open_in_this_runtime),
+                &request.uri,
+                project,
+            )
+            .await
+            .map(Into::into);
+        }
+        crate::mcp_resources::read_resource(&self.operations_on_the_loaded_streams, &request.uri)
+            .await
+            .map(Into::into)
     }
 }
 
@@ -1345,7 +1300,10 @@ async fn how_the_graph_reads_one_link(
 // ============================================================================
 
 /// `tool_result` as `tool_name`'s successful result.
-fn serialized_tool_result(tool_name: &str, tool_result: &impl Serialize) -> ToolCallAnswer {
+pub(crate) fn serialized_tool_result(
+    tool_name: &str,
+    tool_result: &impl Serialize,
+) -> ToolCallAnswer {
     let tool_result_json = serde_json::to_value(tool_result)
         .map_err(|e| format!("{tool_name} result serialization failed: {e}"))?;
     Ok(json_text_tool_result(&tool_result_json))
@@ -1446,7 +1404,7 @@ pub(crate) mod tests {
             let exported_graph = self.exported_graph.lock().clone();
             Box::pin(async move { Ok(exported_graph) })
         }
-        crate::control_plane_stub_support::the_exposed_port_subscription_is_unreachable!("tool");
+        crate::control_plane_stub_support::every_reserved_slot_reader_is_unreachable!("tool");
         crate::control_plane_stub_support::graph_mutation_ops_record_the_call!();
         fn to_json(&self) -> Result<Value> {
             Ok(json!({}))
@@ -1476,13 +1434,17 @@ pub(crate) mod tests {
         "remove_project",
         "rename_stream",
         "list_streams",
-        "expose_port",
+        "open_viewer",
+        "close_viewer",
         "set_stream_clock_scale",
-        "add_relay",
-        "configure_relay",
-        "remove_relay",
-        "list_relays",
         "describe_runtime",
+        "list_assets",
+        "describe_asset",
+        "import_asset",
+        "rename_asset",
+        "move_asset",
+        "delete_asset",
+        "set_asset_settings",
     ];
 
     /// The tools that act on one stream, each naming it with a required
@@ -1495,7 +1457,7 @@ pub(crate) mod tests {
         "stop_stream",
         "start_stream",
         "rename_stream",
-        "expose_port",
+        "open_viewer",
         "set_stream_clock_scale",
     ];
 
@@ -1768,7 +1730,6 @@ pub(crate) mod tests {
     fn the_endpoint_is_stateless_demands_per_request_metadata_and_admits_any_host() {
         let service = local_api_mcp_streamable_http_service(LocalApiMcpServerHandler::new(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            crate::control_plane_stub_support::RelayInstancesOfThisMachineStub::shared(),
             CancellationToken::new(),
         ));
         assert!(!service.config.legacy_session_mode);
@@ -2049,7 +2010,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             runtime,
             "add_node",
-            json!({ "stream": STUB_STREAM_ID, "type": "tatolab.stream:RelayTrackSource" }),
+            json!({ "stream": STUB_STREAM_ID, "type": "tatolab.moq:MoqTrackReceive" }),
         )
         .await;
         let stated = first_text_block_json(&body);
@@ -2642,32 +2603,6 @@ pub(crate) mod tests {
                 json!({ "stream": STUB_STREAM_ID }),
                 "stream",
             ),
-            (
-                "expose_port",
-                json!({ "stream": STUB_STREAM_ID, "node": "camera", "port": "video" }),
-                "level",
-            ),
-            (
-                "expose_port",
-                json!({
-                    "stream": STUB_STREAM_ID, "node": "camera", "port": "video",
-                    "level": "everyone",
-                }),
-                "everyone",
-            ),
-            (
-                "expose_port",
-                json!({
-                    "stream": STUB_STREAM_ID, "node": "camera", "port": "video",
-                    "level": "public", "exposed": true,
-                }),
-                "exposed",
-            ),
-            (
-                "expose_port",
-                json!({ "node": "camera", "port": "video", "level": "public" }),
-                "stream",
-            ),
         ] {
             let body = tool_call_result(
                 Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
@@ -2709,11 +2644,6 @@ pub(crate) mod tests {
                 "remove_project",
                 json!({ "project_directory": "/home/someone/projects/camera" }),
                 "remove_project",
-            ),
-            (
-                "expose_port",
-                json!({ "stream": "camera", "node": "source", "port": "video", "level": "private" }),
-                "expose_port",
             ),
         ] {
             let body = tool_call_result(
@@ -2799,11 +2729,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// `run_project`'s, `expose_port`'s and `logs`' schemas say what each takes:
-    /// a required project directory and nothing else, one of the three levels,
-    /// and a count with no maximum, since a larger one is clamped.
+    /// `run_project`'s and `logs`' schemas say what each takes: a required
+    /// project directory and nothing else, and a count with no maximum, since
+    /// a larger one is clamped.
     #[tokio::test]
-    async fn the_run_project_expose_port_and_logs_schemas_state_what_each_takes() {
+    async fn the_run_project_and_logs_schemas_state_what_each_takes() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         let input_schema_of = |tool_name: &str| {
             tools
@@ -2831,16 +2761,6 @@ pub(crate) mod tests {
             .keys()
             .collect();
         assert_eq!(run_project_arguments, ["project_directory"]);
-
-        let expose_port = input_schema_of("expose_port");
-        assert_eq!(
-            required_of(&expose_port),
-            ["level", "node", "port", "stream"]
-        );
-        let rendered_level = expose_port.to_string();
-        for level in ["internal", "private", "public"] {
-            assert!(rendered_level.contains(level), "{rendered_level}");
-        }
 
         assert_eq!(
             required_of(&input_schema_of("list_streams")),
@@ -2904,7 +2824,6 @@ pub(crate) mod tests {
                 "state": "wired",
                 "components": {}
             }],
-            "exposed": [],
             "machine": "desk"
         })
     }
@@ -3122,7 +3041,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn resources_list_names_the_node_catalog_the_live_graph_and_the_relay_adapter_catalog() {
+    async fn resources_list_names_the_node_catalog_and_the_live_graph() {
         let result =
             listed_resources_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
 
@@ -3132,14 +3051,7 @@ pub(crate) mod tests {
             .iter()
             .map(|resource| resource["uri"].as_str().unwrap())
             .collect();
-        assert_eq!(
-            uris,
-            [
-                "streamlib://node-catalog",
-                "streamlib://graph",
-                "streamlib://relay-adapter-catalog"
-            ]
-        );
+        assert_eq!(uris, ["streamlib://node-catalog", "streamlib://graph"]);
         for resource in result["resources"].as_array().unwrap() {
             assert_eq!(resource["mimeType"], "application/json", "{resource}");
             assert!(
@@ -3152,7 +3064,16 @@ pub(crate) mod tests {
         let templates =
             listed_resource_templates_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()))
                 .await;
-        assert_eq!(templates["resourceTemplates"], json!([]), "{templates}");
+        assert_eq!(
+            templates["resourceTemplates"][0]["uriTemplate"],
+            "streamlib://project/{project}/transactions",
+            "{templates}"
+        );
+        assert_eq!(
+            templates["resourceTemplates"].as_array().unwrap().len(),
+            1,
+            "{templates}"
+        );
     }
 
     /// Mental revert: render the catalog once at startup and cache it, and the
@@ -3710,20 +3631,6 @@ pub(crate) mod tests {
             ]
         );
         assert!(text.contains("audio window contract"), "{text}");
-    }
-
-    #[test]
-    fn each_exposure_level_reaches_the_wire_as_the_engine_spells_it() {
-        for engine_level in [
-            OutputPortExposureLevel::Internal,
-            OutputPortExposureLevel::Private,
-            OutputPortExposureLevel::Public,
-        ] {
-            assert_eq!(
-                serde_json::to_value(expose_port_level_on_the_wire(engine_level)).unwrap(),
-                serde_json::to_value(engine_level).unwrap()
-            );
-        }
     }
 
     #[test]

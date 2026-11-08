@@ -9,10 +9,11 @@ decodes it. Nothing joins the two on this machine: every frame the receiver's
 player writes was packetised into RTP, ingested by the endpoint, and
 depacketised back out of it, so what it writes is a statement about this wheel.
 
-The receiver exposes the player's `encoded_video` port, the frames that crossed
-the network, which `whip_whep_roundtrip.sh` reads at the local relay with
-`tatolab-read-track`, decodes with ffmpeg and scores; and the decoder's `video`
-port, so `graph` counts what the decoder writes.
+The receiver sends the player's `encoded_video` port, the frames that crossed
+the network, to the fixture's relay through `MoqGateway` → `MoqTrack` →
+`MoqTrackSend`, where `whip_whep_roundtrip.sh` reads it with
+`tatolab-read-track`, decodes it with ffmpeg and scores it; and a sink reads the
+decoder's `video` port, so `graph` counts what the decoder writes.
 
 The two URLs arrive in the environment and never in argv: Cloudflare Stream
 carries the stream key as a path segment, and argv is world-readable through
@@ -23,13 +24,16 @@ carries the stream key as a path segment, and argv is world-readable through
 compile inherits: `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` names the device to
 capture from — the driver passes the fixture sink's monitor, so the known
 signal played into that sink is what crosses the network (else the backend's
-own default device).
+own default device). `STREAMLIB_FIXTURE_RELAY_URL` names the relay the
+fixture started.
 """
 
 import os
 
+from decoded_video_frame_sink import DecodedVideoFrameSink
 from tatolab.h264 import H264Decoder, H264Encoder
 from tatolab.microphone import MicrophoneSource
+from tatolab.moq import MoqGateway, MoqTrack, MoqTrackSend
 from tatolab.speaker import SpeakerSink
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.webrtc import WhepPlayer, WhipPublisher
@@ -42,6 +46,13 @@ ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 PUBLISH_URL_VARIABLE = "STREAMLIB_WHIP_URL"
 PLAYBACK_URL_VARIABLE = "STREAMLIB_WHEP_URL"
+FIXTURE_RELAY_URL_VARIABLE = "STREAMLIB_FIXTURE_RELAY_URL"
+
+#: The broadcast the receiver's gateway publishes; the relay serves it as `<this>.hang`.
+RECEIVER_BROADCAST = "whip-whep-roundtrip-receiver"
+
+#: The player's encoded video in the receiver's broadcast.
+PLAYER_ENCODED_VIDEO_TRACK = "player_encoded_video"
 
 
 def _url_from_the_environment(variable: str) -> str:
@@ -121,5 +132,23 @@ def the_same_input_played_back_over_whep_through_the_decoders(
     )
     stream_builder.connect(audio_decoder.output("audio"), speaker.input("audio"))
 
-    stream_builder.expose(player.output("encoded_video"))
-    stream_builder.expose(video_decoder.output("video"))
+    relay_url = os.environ.get(FIXTURE_RELAY_URL_VARIABLE)
+    if not relay_url:
+        raise SystemExit(f"{FIXTURE_RELAY_URL_VARIABLE} is unset, so the receiver names no relay")
+    gateway = stream_builder.add(
+        MoqGateway,
+        config={"kind": "moq-relay", "relay_url": relay_url, "broadcast": RECEIVER_BROADCAST},
+        name="gateway",
+    )
+    player_encoded_video_track = stream_builder.add(
+        MoqTrack,
+        config={"gateway": gateway, "track": PLAYER_ENCODED_VIDEO_TRACK},
+        name="player_encoded_video_track",
+    )
+    send = stream_builder.add(
+        MoqTrackSend, config={"track": player_encoded_video_track}, name="send"
+    )
+    sink = stream_builder.add(DecodedVideoFrameSink, name="sink")
+
+    stream_builder.connect(player.output("encoded_video"), send.input("content"))
+    stream_builder.connect(video_decoder.output("video"), sink.input("video_from_upstream"))

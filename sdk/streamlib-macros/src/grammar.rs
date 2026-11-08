@@ -1581,12 +1581,12 @@ mod tests {
             input(
                 "audio",
                 delivery_profile = "ordered",
-                audio_window(sample_rate = 16_000, channels = 1, dtype = "f64", window_size = 512)
+                audio_window(sample_rate = 16_000, channels = 1, dtype = "i16", window_size = 512)
             ),
         });
 
         assert!(
-            msg.contains("f64") && msg.contains("f32") && msg.contains("i16"),
+            msg.contains("i16") && msg.contains("f32") && msg.contains("f64"),
             "the refusal must name the value and the legal ones; got {msg}"
         );
     }

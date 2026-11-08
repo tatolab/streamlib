@@ -50,11 +50,10 @@ FRONT_STREAM_SOURCE = (
     "\n"
     "@stream\n"
     "def front(stream_builder: StreamBuilder) -> None:\n"
-    '    """Front pattern, exposed.\n'
+    '    """Front pattern.\n'
     "\n"
     '    The second paragraph is not listed."""\n'
-    "    source = stream_builder.add(TestPatternSource)\n"
-    '    stream_builder.expose(source.output("video"))\n'
+    "    stream_builder.add(TestPatternSource)\n"
 )
 TWO_STREAM_SOURCE = FRONT_STREAM_SOURCE + (
     "\n"
@@ -70,7 +69,6 @@ FRONT_STREAM_GRAPH = {
         {"name": "testpatternsource", "type": TESTPATTERN_MODULE_NODE_TYPE, "config": {}},
     ],
     "links": [],
-    "exposed": [{"node": "testpatternsource", "port": "video", "level": "private"}],
 }
 BACK_STREAM_GRAPH = {
     "stream": "back",
@@ -78,7 +76,6 @@ BACK_STREAM_GRAPH = {
         {"name": "back-pattern", "type": TESTPATTERN_MODULE_NODE_TYPE, "config": {}}
     ],
     "links": [],
-    "exposed": [],
 }
 
 
@@ -708,7 +705,7 @@ def test_every_stream_is_compiled_in_definition_order_with_its_description(
         "streams": [
             {
                 "stream_function": "stream:front",
-                "description": "Front pattern, exposed.\n\nThe second paragraph is not listed.",
+                "description": "Front pattern.\n\nThe second paragraph is not listed.",
                 "stream_graph": FRONT_STREAM_GRAPH,
             },
             {"stream_function": "stream:back", "description": None, "stream_graph": BACK_STREAM_GRAPH},
@@ -846,7 +843,7 @@ def test_a_named_function_the_file_lacks_is_reported_under_its_location_listing_
     assert document["project_directory"] == str(anchor_directory)
 
     assert "defines no @stream function named `side`" in message
-    assert "    front — Front pattern, exposed.\n" in message
+    assert "    front — Front pattern.\n" in message
     assert "    back" in message
 
 
@@ -982,7 +979,7 @@ def test_a_stream_that_adds_nothing_compiles_and_is_the_runtimes_to_refuse(
 
     document = compiled_document(run_compile_entry(anchor_directory))
 
-    assert document["stream_graph"] == {"stream": "main", "nodes": [], "links": [], "exposed": []}
+    assert document["stream_graph"] == {"stream": "main", "nodes": [], "links": []}
 
 
 def test_a_raising_stream_function_is_reported_under_its_location_with_its_traceback(

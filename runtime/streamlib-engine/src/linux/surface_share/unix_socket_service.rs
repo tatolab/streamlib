@@ -19,10 +19,10 @@ use std::sync::Arc;
 use std::thread;
 
 use streamlib_surface_client::{
-    MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS, SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP,
-    SURFACE_SHARE_CLAIMANT_COLUMN_FIELD, SURFACE_SHARE_GPU_POOL_FIELD,
-    SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
-    SURFACE_SHARE_POOL_SLOT_ROW_FIELD, SURFACE_SHARE_POOL_SLOTS_FIELD,
+    GpuPoolClaimTableRowLeasedToASlot, MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS,
+    SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP, SURFACE_SHARE_CLAIMANT_COLUMN_FIELD,
+    SURFACE_SHARE_GPU_POOL_FIELD, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
+    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, SURFACE_SHARE_POOL_SLOTS_FIELD,
     SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, gpu_pool_uuid_of_its_wire_name,
     gpu_pool_uuid_wire_name, recv_message_with_fds, send_message_with_fds,
     split_pool_slot_and_frame_generation,
@@ -849,14 +849,9 @@ fn handle_claim_table_of_gpu_pool(
         );
     }
     let pool_slots: Vec<serde_json::Value> = table
-        .pool_slot_keys_by_row()
-        .into_iter()
-        .map(|(row_index, pool_slot_key)| {
-            serde_json::json!({
-                SURFACE_SHARE_POOL_SLOT_ROW_FIELD: row_index,
-                "surface_id": pool_slot_key,
-            })
-        })
+        .rows_leased_to_slots()
+        .iter()
+        .map(GpuPoolClaimTableRowLeasedToASlot::pool_slots_entry)
         .collect();
     (
         serde_json::json!({
@@ -2829,8 +2824,8 @@ mod tests {
     #[test]
     fn a_claim_table_hand_over_maps_the_engines_rows_and_names_every_leased_slot() {
         use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
-        use crate::linux::gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
         use std::os::fd::OwnedFd;
+        use streamlib_ipc_types::GpuPoolClaimTableMemfd;
         use streamlib_ipc_types::GpuPoolClaimantColumn;
         use streamlib_surface_client::GpuPoolClaimTableHandOver;
 
@@ -2864,8 +2859,22 @@ mod tests {
         assert!(reply.get("error").is_none(), "{reply:?}");
         let hand_over = GpuPoolClaimTableHandOver::from_reply(&reply).unwrap();
         assert_eq!(
-            hand_over.pool_slot_key_by_row,
-            vec![(0, "slot-a".to_string()), (1, "slot-b".to_string())]
+            hand_over
+                .rows_leased_to_slots
+                .iter()
+                .map(|leased_row| (leased_row.row_index, leased_row.pool_slot_key.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(0, "slot-a"), (1, "slot-b")]
+        );
+        assert!(
+            hand_over
+                .rows_leased_to_slots
+                .iter()
+                .all(|leased_row| leased_row.row_lease_number
+                    == leased_rows[leased_row.row_index as usize]
+                        .row()
+                        .lease_number()),
+            "each row is listed under the lease its shared row carries"
         );
         let [memfd] = reply_fds.as_slice() else {
             panic!("one memfd, got {reply_fds:?}");

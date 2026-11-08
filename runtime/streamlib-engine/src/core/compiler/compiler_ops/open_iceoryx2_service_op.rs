@@ -380,17 +380,17 @@ pub(crate) fn open_the_source_side_of_a_link(
     })
 }
 
-/// The input port the runtime's publisher is named as when a source's side is
-/// opened for it, for the log lines that name a link's destination.
-const THE_RUNTIMES_PUBLISHER_AS_A_DESTINATION_PORT: &str = "the-runtimes-publisher";
+/// The input port a reader of a channel's reserved slot is named as when a
+/// source's side is opened for it, for the log lines that name a link's
+/// destination.
+const A_RESERVED_SLOT_READER_AS_A_DESTINATION_PORT: &str = "a-reserved-slot-reader";
 
-/// What the runtime's publisher holds open on an exposed output port's source
-/// while it reads the port's channel through the reserved slot: the channel's
-/// name and sizing, the source's side, and the services. Dropping it releases
-/// the source's side, then the services.
-pub(crate) struct SourceSideHeldOpenForTheRuntimesPublisher {
+/// What a reader of an output port's channel through its reserved slot — the
+/// runtime's publisher or a viewer — holds open on the port's source: the
+/// channel's name and sizing, the source's side, and the services. Dropping it
+/// releases the source's side, then the services.
+pub(crate) struct SourceSideHeldOpenForAReaderOnTheReservedSlot {
     pub(crate) channel_service_name: String,
-    pub(crate) channel_sizing: ChannelSizing,
     /// Where a helper source answers whether it opened its port; `None` for a
     /// source with nothing to answer.
     pub(crate) wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
@@ -398,25 +398,25 @@ pub(crate) struct SourceSideHeldOpenForTheRuntimesPublisher {
     _services: Iceoryx2ServicesHeldOpenForLinkComponent,
 }
 
-/// Open the source's side of output port `source` on `source_graph` for the
-/// runtime's publisher, as a link's source side is opened, whether or not a
+/// Open the source's side of output port `source` on `source_graph` for a
+/// reader of its channel's reserved slot, as a link's source side is opened, whether or not a
 /// link out of the port exists: the channel's single publisher is installed
 /// when none is, and held until what this hands back drops. A channel this is
 /// the first to open is made as deep as a windowed reader's ring, so a live
 /// graph change may still connect one; one already open keeps its depth. The
-/// publisher's end is a destination of its own, notified through a notify
+/// reader's end is a destination of its own, notified through a notify
 /// service no listener waits on, since it polls the reserved slot.
-pub(crate) fn open_the_source_side_for_the_runtimes_publisher(
+pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
     source_graph: &mut Graph,
     source: &OutputLinkPortRef,
     iceoryx2_node: &Iceoryx2Node,
-) -> Result<SourceSideHeldOpenForTheRuntimesPublisher> {
-    let the_runtimes_publisher = ProcessorUniqueId::new();
+) -> Result<SourceSideHeldOpenForAReaderOnTheReservedSlot> {
+    let the_reserved_slot_reader = ProcessorUniqueId::new();
     let link_id = LinkUniqueId::new();
     let destination = DestinationOfALinkAsItsWiringReadsIt {
-        notify_service_name: notify_service_name_for(&the_runtimes_publisher),
-        dest_proc_id: the_runtimes_publisher,
-        dest_port: THE_RUNTIMES_PUBLISHER_AS_A_DESTINATION_PORT.to_string(),
+        notify_service_name: notify_service_name_for(&the_reserved_slot_reader),
+        dest_proc_id: the_reserved_slot_reader,
+        dest_port: A_RESERVED_SLOT_READER_AS_A_DESTINATION_PORT.to_string(),
         link_wiring_of_a_destination_out_of_process: None,
         audio_windowing: None,
         input_port_delivery: DeliveryProfile::Ordered.resolve(),
@@ -442,9 +442,8 @@ pub(crate) fn open_the_source_side_for_the_runtimes_publisher(
         source.port_name(),
         &link_id,
     );
-    Ok(SourceSideHeldOpenForTheRuntimesPublisher {
+    Ok(SourceSideHeldOpenForAReaderOnTheReservedSlot {
         channel_service_name: opened.channel_service_name,
-        channel_sizing: opened.channel_sizing,
         wire_reply_awaited_from_the_source: opened.wire_reply_awaited_from_the_source,
         _source_side: source_side,
         _services: Iceoryx2ServicesHeldOpenForLinkComponent {
@@ -3395,7 +3394,7 @@ mod tests {
             )),
         );
 
-        let held = open_the_source_side_for_the_runtimes_publisher(
+        let held = open_the_source_side_for_a_reader_on_the_reserved_slot(
             &mut graph,
             &OutputLinkPortRef::new(&source_id, "out1"),
             &Iceoryx2Node::for_this_test_process(),
@@ -4274,7 +4273,7 @@ mod tests {
         let mut graph = Graph::new();
         let source_id = add_mock_output_only(&mut graph);
         attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-        let _held = open_the_source_side_for_the_runtimes_publisher(
+        let _held = open_the_source_side_for_a_reader_on_the_reserved_slot(
             &mut graph,
             &OutputLinkPortRef::new(&source_id, "out1"),
             &Iceoryx2Node::for_this_test_process(),
@@ -4309,16 +4308,17 @@ mod tests {
         let depth_the_link_opened_it_at =
             creation_depth_of_the_channel_held_by(&graph, &plain_link);
 
-        let held = open_the_source_side_for_the_runtimes_publisher(
+        let held = open_the_source_side_for_a_reader_on_the_reserved_slot(
             &mut graph,
             &OutputLinkPortRef::new(&source_id, "out1"),
             &Iceoryx2Node::for_this_test_process(),
         )
-        .expect("the publisher joins a channel a link opened");
+        .expect("the viewer joins a channel a link opened");
         assert_eq!(
-            held.channel_sizing.channel_service_creation_depth,
+            creation_depth_of_the_channel_held_by(&graph, &plain_link),
             depth_the_link_opened_it_at
         );
+        drop(held);
     }
 
     /// A port the publisher holds keeps publishing once a live graph change
@@ -4338,7 +4338,7 @@ mod tests {
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &consumer_id);
         open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
             .expect("the link wires");
-        let held = open_the_source_side_for_the_runtimes_publisher(
+        let held = open_the_source_side_for_a_reader_on_the_reserved_slot(
             &mut graph,
             &OutputLinkPortRef::new(&source_id, "out1"),
             &Iceoryx2Node::for_this_test_process(),
@@ -4926,7 +4926,7 @@ mod tests {
                     ),
                 )),
             );
-            let held = open_the_source_side_for_the_runtimes_publisher(
+            let held = open_the_source_side_for_a_reader_on_the_reserved_slot(
                 &mut source_graph,
                 &OutputLinkPortRef::new(&source_id, "out1"),
                 &Iceoryx2Node::for_this_test_process(),

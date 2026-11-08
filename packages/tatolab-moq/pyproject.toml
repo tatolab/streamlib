@@ -1,0 +1,53 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tatolab-moq"
+version = "0.68.34"
+description = "MoQ gateway, track, send and receive nodes for Tatolab streams."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "BUSL-1.1" }
+# PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
+# dependency's. `LICENSE` is a symlink to the repo root, which maturin follows;
+# the notices are generated over this project's own closure by `cargo xtask
+# generate-third-party-notices --extension-package-directory packages/tatolab-moq`.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Video",
+    "Topic :: System :: Networking",
+]
+# The stream package and nothing of the engine: the nodes here run in a
+# processor interpreter, which borrows `tatolab.runtime` from the runtime that
+# starts it. A minimum, never an exact pin, as a third party's package
+# depends on it.
+dependencies = ["tatolab-stream>=0.68.34"]  # x-release-please-version
+
+[project.urls]
+Homepage = "https://tatolab.com"
+Install = "https://tatolab.com/docs/install"
+Source = "https://github.com/tatolab/streamlib"
+
+[tool.maturin]
+python-source = "python"
+module-name = "tatolab.moq._native"
+features = ["pyo3/extension-module"]
+
+# The engine wheel's macOS floor, so this wheel installs wherever that one does.
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "26.0"
+
+[tool.pyright]
+include = ["python", "tests"]
+extraPaths = ["python", "../../sdk/streamlib-python-wheel/python"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# `_native` is a compiled artifact, so a checkout has the stub and not the `.so`
+# it describes. `mypy.stubtest` is what checks the stub against the real binary.
+reportMissingModuleSource = "none"

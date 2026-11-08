@@ -34,9 +34,9 @@ cd streams/module-camera
 tatolab dev
 ```
 
-The stream exposes H.264 at `http://127.0.0.1:4446/watch/<machine>/main` and
-logs a `CaptureToDownstreamLatencyProbe[...]` report every 600 frames; the
-capture thread logs its own capture-to-publish latency as often.
+The camera's `video` is seen in Tato Studio's viewer, and the stream logs a
+`CaptureToDownstreamLatencyProbe[...]` report every 600 frames; the capture
+thread logs its own capture-to-publish latency as often.
 
 ## Check it
 
