@@ -20,7 +20,7 @@
 //! `drain_listener`, etc.) operates on `Arc<InputMailboxesInner>`
 //! directly via the methods declared on the inner type.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -1435,10 +1435,12 @@ impl InputMailboxesInner {
     /// mailbox is empty.
     pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
         if let Some(island_port) = self.function_node_island_feeding(port) {
-            return island_port.read_the_island_output();
+            return island_port.read_the_island_output(
+                self.a_message_waits_at_a_reader_input_port_of(&island_port),
+            );
         }
         if let Some(pinned_port) = self.pin_value_read_by_an_unlinked(port) {
-            return pinned_port.read_the_island_output();
+            return pinned_port.read_the_island_output(false);
         }
         Ok(self
             .next_bag_for_the_reader(port)?
@@ -1548,13 +1550,36 @@ impl InputMailboxesInner {
     /// On a port declaring a window contract this means a full window, not an
     /// arrived bag: the contract promises `process()` exact-size blocks, so a
     /// reactive processor that woke and found nothing would contradict it.
+    ///
+    /// A port an island feeds has data when a read now would hand out a
+    /// message, which for an island reading links from outside it means
+    /// evaluating it; the output evaluated is held for the read that follows.
     pub fn has_data(&self, port: &str) -> bool {
-        if self.function_node_island_feeding(port).is_some()
-            || self.pin_value_read_by_an_unlinked(port).is_some()
-        {
+        if self.pin_value_read_by_an_unlinked(port).is_some() {
             return true;
         }
         self.receive_pending();
+        if let Some(island_port) = self.function_node_island_feeding(port) {
+            if island_port
+                .the_reader_input_ports_its_links_from_outside_it_arrive_at()
+                .is_empty()
+            {
+                return true;
+            }
+            return island_port
+                .a_read_would_return_something(
+                    self.a_message_waits_at_a_reader_input_port_of(&island_port),
+                )
+                .unwrap_or_else(|refusal| {
+                    tracing::warn!(
+                        input_port = port,
+                        %refusal,
+                        "the function node island feeding the input port refused to evaluate \
+                         while its readiness was judged; a read will meet the refusal"
+                    );
+                    true
+                });
+        }
         let Some(readiness) = self.readiness_of_one_port(port) else {
             return false;
         };
@@ -1571,9 +1596,75 @@ impl InputMailboxesInner {
     /// Event service coalesces multiple notifies on the same EventId
     /// into one fd-readable transition, so the runner must check
     /// queue depth itself rather than trusting one wake = one event.
+    ///
+    /// A reader input port an island reads a link from outside it at does not
+    /// count on its own: the island fed port it feeds answers for it, so a
+    /// message the island would hand nothing out for wakes no reader.
     pub fn any_port_has_data(&self) -> bool {
         self.receive_pending();
-        self.any_ports_read_would_return_something()
+        let island_ports_reading_links_from_outside_them: Vec<(
+            String,
+            Arc<InputPortFedByAFunctionNodeIsland>,
+        )> = self
+            .input_ports_fed_by_function_node_islands
+            .read()
+            .iter()
+            .filter(|(_, island_port)| {
+                !island_port
+                    .the_reader_input_ports_its_links_from_outside_it_arrive_at()
+                    .is_empty()
+            })
+            .map(|(port, island_port)| (port.clone(), Arc::clone(island_port)))
+            .collect();
+        let reader_input_ports_islands_read: HashSet<&str> =
+            island_ports_reading_links_from_outside_them
+                .iter()
+                .flat_map(|(_, island_port)| {
+                    island_port
+                        .the_reader_input_ports_its_links_from_outside_it_arrive_at()
+                        .iter()
+                        .map(String::as_str)
+                })
+                .collect();
+        if self.any_ports_read_would_return_something(&reader_input_ports_islands_read) {
+            return true;
+        }
+        island_ports_reading_links_from_outside_them
+            .iter()
+            .any(|(port, island_port)| {
+                island_port
+                    .wakes_its_reader(self.a_message_waits_at_a_reader_input_port_of(island_port))
+                    .unwrap_or_else(|refusal| {
+                        tracing::warn!(
+                            input_port = port.as_str(),
+                            %refusal,
+                            "the function node island feeding the input port refused to \
+                             evaluate while its readiness was judged; a read will meet the \
+                             refusal"
+                        );
+                        true
+                    })
+            })
+    }
+
+    /// Whether a message the island feeding `island_port` has not read yet
+    /// waits at one of the reader input ports its links from outside it
+    /// arrive at.
+    fn a_message_waits_at_a_reader_input_port_of(
+        &self,
+        island_port: &InputPortFedByAFunctionNodeIsland,
+    ) -> bool {
+        let reader_input_ports =
+            island_port.the_reader_input_ports_its_links_from_outside_it_arrive_at();
+        if reader_input_ports.is_empty() {
+            return false;
+        }
+        let ports = self.ports.lock();
+        reader_input_ports.iter().any(|reader_input_port| {
+            ports
+                .get(reader_input_port)
+                .is_some_and(|port_config| !port_config.mailbox.is_empty())
+        })
     }
 
     /// What one port would hand a reader, gathered under the `ports` lock so
@@ -1588,11 +1679,18 @@ impl InputMailboxesInner {
     /// collects only the windowed ones — normally none — so a processor with no
     /// window contract pays no allocation on a path the reactive runner walks
     /// once per wake and once per drain iteration.
-    fn any_ports_read_would_return_something(&self) -> bool {
+    fn any_ports_read_would_return_something(
+        &self,
+        reader_input_ports_islands_read: &HashSet<&str>,
+    ) -> bool {
         let windowed: Vec<PortReadiness> = {
             let ports = self.ports.lock();
             let mut windowed = Vec::new();
-            for readiness in ports.values().map(PortReadiness::of) {
+            for readiness in ports
+                .iter()
+                .filter(|(port, _)| !reader_input_ports_islands_read.contains(port.as_str()))
+                .map(|(_, port_config)| PortReadiness::of(port_config))
+            {
                 match readiness {
                     PortReadiness::AFrameIsWaiting => return true,
                     PortReadiness::NothingIsWaiting => {}
@@ -1934,6 +2032,10 @@ mod tests {
         fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
             Vec::new()
         }
+
+        fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
+            &[]
+        }
     }
 
     struct IslandRunningOneNodeAsPython;
@@ -1955,6 +2057,170 @@ mod tests {
         fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
             vec![(7, vec![3.0])]
         }
+
+        fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
+            &[]
+        }
+    }
+
+    const GATE_READER_INPUT_PORT: &str = "function_node_island_input_l-counter";
+
+    /// A Gate's island: it reads the newest message at its reader input port
+    /// at each evaluation and hands it on unread while open.
+    struct GateIslandReadingALinkFromOutsideIt {
+        open: std::sync::atomic::AtomicBool,
+        evaluations: std::sync::atomic::AtomicUsize,
+        reader_input_ports: Vec<String>,
+        mailboxes_it_reads: std::sync::OnceLock<std::sync::Weak<InputMailboxesInner>>,
+    }
+
+    impl GateIslandReadingALinkFromOutsideIt {
+        fn feeding_value_of(
+            mailboxes: &Arc<InputMailboxesInner>,
+        ) -> (Arc<Self>, TestChannelPublisherNumberingItsSends) {
+            let gate_island = Arc::new(Self {
+                open: std::sync::atomic::AtomicBool::new(true),
+                evaluations: std::sync::atomic::AtomicUsize::new(0),
+                reader_input_ports: vec![GATE_READER_INPUT_PORT.to_string()],
+                mailboxes_it_reads: std::sync::OnceLock::new(),
+            });
+            gate_island
+                .mailboxes_it_reads
+                .set(Arc::downgrade(mailboxes))
+                .unwrap();
+            mailboxes.add_port(GATE_READER_INPUT_PORT, 8, ReadMode::ReadNextInOrder);
+            let counter_publisher = a_test_link_into(mailboxes, GATE_READER_INPUT_PORT);
+            mailboxes.feed_an_input_port_from_a_function_node_island(
+                "value",
+                Arc::clone(&gate_island) as Arc<dyn FunctionNodeIslandEvaluatedAtEachRead>,
+            );
+            (gate_island, counter_publisher)
+        }
+
+        fn set_open(&self, open: bool) {
+            self.open.store(open, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn evaluations(&self) -> usize {
+            self.evaluations.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl FunctionNodeIslandEvaluatedAtEachRead for GateIslandReadingALinkFromOutsideIt {
+        fn evaluate_the_island_output_for_this_read(
+            &self,
+        ) -> Result<FunctionNodeIslandOutputForOneRead> {
+            self.evaluations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mailboxes = self.mailboxes_it_reads.get().unwrap().upgrade().unwrap();
+            let mut newest_message = None;
+            while let Some(message) = mailboxes.read_raw(GATE_READER_INPUT_PORT)? {
+                newest_message = Some(message);
+            }
+            let value = match newest_message {
+                Some(message) if self.open.load(std::sync::atomic::Ordering::SeqCst) => {
+                    FunctionNodeIslandOutputValue::MessageHandedOnUnread(
+                        crate::iceoryx2::MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(
+                            &message,
+                        ),
+                    )
+                }
+                _ => FunctionNodeIslandOutputValue::Nothing,
+            };
+            Ok(FunctionNodeIslandOutputForOneRead {
+                value,
+                evaluated_at_ns: 0,
+            })
+        }
+
+        fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+            None
+        }
+
+        fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
+            Vec::new()
+        }
+
+        fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
+            &self.reader_input_ports
+        }
+    }
+
+    #[test]
+    fn a_closed_gate_wakes_no_reader_and_reports_no_data_however_many_messages_arrive() {
+        let mailboxes = Arc::new(InputMailboxesInner::new());
+        let (gate_island, counter_publisher) =
+            GateIslandReadingALinkFromOutsideIt::feeding_value_of(&mailboxes);
+        gate_island.set_open(false);
+        publish_one_frame(&counter_publisher, "count", b"1");
+        publish_one_frame(&counter_publisher, "count", b"2");
+
+        assert!(
+            !mailboxes.any_port_has_data(),
+            "a message the closed gate hands nothing out for wakes no reader"
+        );
+        assert!(
+            !mailboxes.any_port_has_data(),
+            "and it does not wake the reader on the next judgement either"
+        );
+        assert!(!mailboxes.has_data("value"));
+        assert!(mailboxes.read_raw("value").unwrap().is_none());
+        assert_eq!(
+            gate_island.evaluations(),
+            1,
+            "only the judgement the messages arrived for evaluates the island; the has_data \
+             and the read after it take what it evaluated"
+        );
+    }
+
+    #[test]
+    fn an_open_gate_wakes_its_reader_until_a_read_takes_the_message_it_judged() {
+        let mailboxes = Arc::new(InputMailboxesInner::new());
+        let (gate_island, counter_publisher) =
+            GateIslandReadingALinkFromOutsideIt::feeding_value_of(&mailboxes);
+        assert!(!mailboxes.any_port_has_data());
+        assert!(!mailboxes.has_data("value"));
+        assert!(mailboxes.read_raw("value").unwrap().is_none());
+
+        publish_one_frame(&counter_publisher, "count", b"1");
+        assert!(mailboxes.any_port_has_data());
+        assert!(
+            mailboxes.any_port_has_data(),
+            "a message handed on unread keeps waking the reader until a read takes it"
+        );
+        let evaluations_before_the_read = gate_island.evaluations();
+        gate_island.set_open(false);
+        assert!(mailboxes.has_data("value"));
+        let message = mailboxes.read_raw("value").unwrap().unwrap();
+        assert_eq!(message.payload.bytes(), b"1");
+        assert_eq!(
+            gate_island.evaluations(),
+            evaluations_before_the_read,
+            "the read takes the message the judgement evaluated rather than dropping it"
+        );
+        assert!(!mailboxes.any_port_has_data());
+        assert!(mailboxes.read_raw("value").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_reader_that_never_reads_the_gated_port_is_not_woken_again_once_the_gate_closes() {
+        let mailboxes = Arc::new(InputMailboxesInner::new());
+        let (gate_island, counter_publisher) =
+            GateIslandReadingALinkFromOutsideIt::feeding_value_of(&mailboxes);
+        gate_island.set_open(false);
+        for count in 0..5u8 {
+            publish_one_frame(&counter_publisher, "count", &[count]);
+            assert!(!mailboxes.any_port_has_data());
+        }
+        gate_island.set_open(true);
+        publish_one_frame(&counter_publisher, "count", b"6");
+        assert!(mailboxes.any_port_has_data());
+        let message = mailboxes.read_raw("value").unwrap().unwrap();
+        assert_eq!(
+            message.payload.bytes(),
+            b"6",
+            "a message the closed gate passed over is not handed on once it opens"
+        );
     }
 
     #[test]
@@ -2581,6 +2847,7 @@ mod tests {
     ) {
         output_writer.set_channel_publisher(
             output_port,
+            channel,
             channel.create_publisher(64).unwrap(),
             crate::iceoryx2::ChannelEgressConfig {
                 service_name: format!("test/input/{output_port}"),

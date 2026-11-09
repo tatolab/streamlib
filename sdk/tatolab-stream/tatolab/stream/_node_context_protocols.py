@@ -61,9 +61,18 @@ class PortPayloadBorrow(Protocol):
 class UnreadMessage(Protocol):
     """A message of any family a `@node.function` body hands on without reading it.
 
-    Its body can only return it, or `None` to hand out nothing; the output
-    takes the family of what is linked into the input it came from.
+    Its body can only return it, or `None` to hand out nothing, and keep it in
+    its state; the output takes the family of what is linked into the input it
+    came from. A pooled GPU frame it names stays claimed while any copy lives.
     """
+
+    def __copy__(self) -> UnreadMessage:
+        """The message itself: it is immutable, so a copy is the same message."""
+        ...
+
+    def __deepcopy__(self, memo: Any) -> UnreadMessage:
+        """The message itself, as a state record's deep copy takes it."""
+        ...
 
 
 @runtime_backed_protocol
@@ -823,6 +832,16 @@ class LinkOutputDataWriter(Protocol):
         write or a second loan on the port is refused while this one is open,
         so a port's order is its write order. A port no link has reached, or a
         payload over the channel's ceiling, loans bytes that publish nowhere.
+        """
+        ...
+
+    def has_a_reader_the_last_write_missed(self, port: str | Output[Any]) -> bool:
+        """Whether a reader now connected to `port` connected after its last write, so that write never reached it.
+
+        A channel keeps no history, so a node that writes only on change
+        writes again for such a reader. Every reader counts: a link's
+        destination once its subscriber is open, a viewer, an island. A port
+        no link has reached has no reader.
         """
         ...
 

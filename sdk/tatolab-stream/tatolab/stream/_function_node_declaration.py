@@ -7,9 +7,11 @@ A plain parameter is an input pin and its default the pin's value; the return
 annotation is the output `result`, or one output per field of a dataclass. An
 output typed `T | None` hands out nothing on a call that returns `None`. An
 `UnreadMessage` input takes a message of any family, which the body can only
-hand on, to an `UnreadMessage` output of the family linked into that input.
-`config` names the node's one config dataclass. `Time` and `State[...]` are
-found by type and are never pins. Decorating registers nothing: it reads the
+hand on, to an `UnreadMessage` output of the family linked into that input;
+`Annotated[UnreadMessage, Image]` takes the one family it names. A state field
+may hold an `UnreadMessage`, which a helper restart drops. `config` names the
+node's one config dataclass. `Time` and `State[...]` are found by type and are
+never pins. Decorating registers nothing: it reads the
 signature once and stamps the declaration the runtime reads, the same stamps a
 `@node.process` class carries plus the signature the runtime calls the body
 with.
@@ -219,7 +221,7 @@ class _FunctionNodeSignatureReading:
 
     def _resolved_annotations(self, function: Callable[..., Any]) -> "dict[str, Any]":
         try:
-            return typing.get_type_hints(function)
+            return typing.get_type_hints(function, include_extras=True)
         except Exception as unresolvable:
             raise TypeError(
                 f"{self._function_name} carries an annotation that cannot be resolved, so its "
@@ -472,7 +474,22 @@ class _FunctionNodeSignatureReading:
         self, annotation: Any, what_it_types: str
     ) -> "tuple[str, dict[str, Any]]":
         from ._node_context_protocols import UnreadMessage
+        from ._port_family_declaration import PortFamily
 
+        if typing.get_origin(annotation) is typing.Annotated:
+            annotated, *metadata = typing.get_args(annotation)
+            families_named = [each for each in metadata if isinstance(each, PortFamily)]
+            if annotated is UnreadMessage and len(families_named) == 1:
+                return UNREAD_MESSAGE_VALUE_TYPE, {
+                    "family": families_named[0].declaration_name.lower()
+                }
+            if families_named:
+                raise TypeError(
+                    f"{self._function_name}'s {what_it_types} names a port family on "
+                    f"{_name_of(annotated)}, and only an `UnreadMessage` takes one. To fix: "
+                    f"`Annotated[UnreadMessage, {families_named[0]!r}]`."
+                )
+            return self._pin_value_type_and_family(annotated, what_it_types)
         if annotation is UnreadMessage:
             return UNREAD_MESSAGE_VALUE_TYPE, dict(_UNREAD_MESSAGE_INPUT_FAMILY)
         if annotation in _SCALAR_PIN_VALUE_TYPES:

@@ -309,9 +309,7 @@ impl ProjectRepository {
                         Entry::Vacant(unstaged) => unstaged
                             .insert(self.read_stream_graph_document(&staged_assets, *stream)?.1),
                     };
-                    if let (Some(config), Some(node)) =
-                        (graph_operation.config_it_sets(), graph_operation.node())
-                    {
+                    for (node, config) in graph_operation.configs_it_sets() {
                         refuse_a_config_referencing_an_asset_the_project_does_not_hold(
                             &staged_assets,
                             node,

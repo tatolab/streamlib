@@ -37,7 +37,7 @@ extension-module = ["pyo3/extension-module"]
 # exist for them.
 pyo3 = { version = "0.29.0", features = ["abi3-py312"] }
 
-streamlib = { path = "../streamlib-sdk", version = "0.68.39" }
+streamlib = { path = "../streamlib-sdk", version = "0.68.40" }
 
 # The project an asset UUID resolves in, read from its files alone: no history, so no libgit2.
 streamlib-project-repository = { path = "../../runtime/streamlib-project-repository", default-features = false }
@@ -52,7 +52,7 @@ tatolab-module-sdk = { path = "../tatolab-module-sdk", version = "1.2.0", defaul
 # pixel-exchange surface builds its capsules here rather than growing a second
 # copy of the spec — the CUDA half of the same adapter is what the device-memory
 # export path uses.
-streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.68.39" }
+streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.68.40" }
 
 # The value tree a tapped message and config JSON cross into Python through;
 # `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
@@ -84,11 +84,11 @@ cudarc = { workspace = true }
 # carries into mapped memory. Both already ride in the binary via the engine;
 # named here so the wheel can call them.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.68.39" }
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.68.39" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.68.40" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.68.40" }
 # The surface-sharing connection, pool claim tables and per-slot import cache
 # a helper shares with a viewer.
-streamlib-gpu-frame-import-client = { path = "../../runtime/streamlib-gpu-frame-import-client", version = "0.68.39" }
+streamlib-gpu-frame-import-client = { path = "../../runtime/streamlib-gpu-frame-import-client", version = "0.68.40" }
 
 # The IOSurface a macOS helper looks up from the port a check-out carries, and
 # the no-copy MTLBuffer a Metal DLPack capsule points at.
@@ -100,20 +100,20 @@ objc2.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
 # Tests replace the surface-sharing connection to prove imports leave with it.
-streamlib-gpu-frame-import-client = { path = "../../runtime/streamlib-gpu-frame-import-client", version = "0.68.39", features = ["test-support"] }
+streamlib-gpu-frame-import-client = { path = "../../runtime/streamlib-gpu-frame-import-client", version = "0.68.40", features = ["test-support"] }
 
 [dev-dependencies]
 # Unit tests open helper data planes over a node in the test process's own
 # iceoryx2 domain.
-streamlib = { path = "../streamlib-sdk", version = "0.68.39", features = ["test-support"] }
+streamlib = { path = "../streamlib-sdk", version = "0.68.40", features = ["test-support"] }
 # The bag wire format a cast test pins its bytes against.
 rmp-serde = { workspace = true }
 # The test surface-share service's socket directory, created at an explicit mode.
-streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.68.39" }
+streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.68.40" }
 # The table read back through the capsule, as a module's binding reads it.
 tatolab-module-sdk = { path = "../tatolab-module-sdk", version = "1.2.0", default-features = false, features = ["pyo3"] }
 # The port-family conversions an Image or Array read is checked against.
-streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.68.39" }
+streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.68.40" }
 
 [lints]
 workspace = true

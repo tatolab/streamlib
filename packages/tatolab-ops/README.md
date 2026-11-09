@@ -4,7 +4,8 @@ The small nodes every Tatolab stream can wire, built the way a third
 party builds a module: `@node.function` functions in an ordinary Python package
 that depends on `tatolab-stream` and on no engine crate. Each body is compiled to
 native code by Numba when the helper that reads it loads, and runs inside that
-helper's read, with no process of its own.
+helper's read, with no process of its own; a body that does not compile, such as
+`HoldFrame`'s, runs as Python there instead.
 
 - Math: `Add`, `Subtract`, `Multiply`, `Divide`, `Power`, `Minimum`, `Maximum`,
   `Absolute` and `Modulo`. A division or remainder by 0, and a power that is no real
@@ -20,10 +21,14 @@ helper's read, with no process of its own.
 - Time: `Lfo`, a sine wave from -1 to 1 at `rate_hz`; `Timer`, the seconds since its start
   or reset; `Lag`, which follows its input smoothly; `Trigger`, on for the one evaluation its
   input turns on; `Counter`; and `SampleAndHold`.
+- `HoldFrame`, which holds the first Image it is handed and hands it on at each read, so
+  one decoded or captured frame can feed a stream that keeps running, until `refresh`
+  takes a newer one. Its state holds the frame, so it runs as Python in its reader
+  rather than compiled.
 - `Feedback`, the one node a loop of function nodes closes through.
 - `ImageFile`, a class node rather than a function node, publishes the PNG or JPEG
-  project asset its `asset` config names by UUID as an Image: once at start, and
-  again on each config change.
+  project asset its `asset` config names by UUID as an Image: once at start,
+  again on each config change, and again to any reader that connects later.
 
 ```python
 from tatolab.ops import Lfo, Remap

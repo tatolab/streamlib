@@ -1094,7 +1094,7 @@ fn wire_rust_source(
 
     if !output_inner.has_channel_publisher(source_port) {
         let publisher = service.create_publisher(egress_config.expected_payload_bytes)?;
-        output_inner.set_channel_publisher(source_port, publisher, egress_config);
+        output_inner.set_channel_publisher(source_port, service, publisher, egress_config);
         tracing::debug!(
             "Installed channel publisher for source output port '{}'",
             source_port

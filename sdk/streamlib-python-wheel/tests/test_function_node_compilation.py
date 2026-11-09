@@ -25,6 +25,7 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
     FunctionNodeRunAsPythonInItsReader,
+    UNREAD_MESSAGE_VALUE_TYPE,
     compile_function_node_to_its_evaluate_entry,
     feed_each_input_port_from_its_function_node_island,
     prepare_function_node_to_evaluate,
@@ -35,6 +36,7 @@ from tatolab.runtime._function_node_run_as_its_helpers_processor import (
 )
 from tatolab.runtime._processor_hosting import apply_configuration, construct_processor_instance
 from tatolab.stream import State, Stateful, Time, UnreadMessage, node
+from tatolab.stream import _function_node_declaration
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -824,6 +826,10 @@ def test_a_body_run_as_python_answers_each_output_as_a_float_or_a_dict():
     assert letters == [4.0] and isinstance(letters[0], float)
 
 
+def test_the_runtime_spells_the_unread_message_value_type_as_tatolab_stream_does():
+    assert UNREAD_MESSAGE_VALUE_TYPE == _function_node_declaration.UNREAD_MESSAGE_VALUE_TYPE
+
+
 @node.function
 def hand_on_once_it_has_built_an_object(value: UnreadMessage) -> UnreadMessage:
     repr(object())
@@ -836,6 +842,28 @@ def test_a_body_run_as_python_hands_on_unread_a_number_or_a_dict_another_node_of
     record = {"label": "low"}
     assert handing_on.evaluate([level], 0)[0] is level
     assert handing_on.evaluate([record], 1)[0] is record
+
+
+@dataclass(frozen=True)
+class FirstMessageHeld:
+    message: UnreadMessage | None = None
+
+
+@node.function
+def hold_the_first_message_handed(
+    value: UnreadMessage | None = None, *, previous: State[FirstMessageHeld]
+) -> Stateful[UnreadMessage | None, FirstMessageHeld]:
+    if previous.message is None and value is not None:
+        return value, FirstMessageHeld(value)
+    return previous.message, previous
+
+
+def test_a_body_run_as_python_hands_on_a_number_or_a_dict_its_state_held_from_an_earlier_call():
+    holding = FunctionNodeBodyRunAsPython(run_as_python(hold_the_first_message_handed), "h", None)
+    record = {"label": "low"}
+    assert holding.evaluate([record], 0)[0] is record
+    assert holding.evaluate([None], 1)[0] == record
+    assert holding.evaluate([{"label": "high"}], 2)[0] == record
 
 
 def test_a_body_run_as_python_keeps_a_state_of_any_record_between_calls():

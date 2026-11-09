@@ -46,8 +46,9 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::iceoryx2::{
     ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelEgressConfig,
-    ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner, MessageGroupBoundary,
-    OutputWriter, OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    ChannelTrustTier, Iceoryx2Node, Iceoryx2Service, InboundLinkName, InputMailboxesInner,
+    MessageGroupBoundary, OutputWriter, OutputWriterInner, ReadMode,
+    TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
 };
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
@@ -74,6 +75,7 @@ const BENCH_NOTIFY_MAX_NOTIFIERS: usize = 2;
 /// opens one on a node in the engine-owned domain a runtime on this machine
 /// would use, and that node.
 struct BenchChannel {
+    channel: Iceoryx2Service,
     publisher: ChannelDataServicePublisher,
     subscribers: Vec<ChannelDataServiceSubscriber>,
     node: Iceoryx2Node,
@@ -97,6 +99,7 @@ fn open_bench_channel(tag: &str, subscriber_count: usize) -> BenchChannel {
         .map(|_| channel.create_subscriber(BENCH_CHANNEL_RING_DEPTH).unwrap())
         .collect();
     BenchChannel {
+        channel,
         publisher,
         subscribers,
         node,
@@ -104,10 +107,14 @@ fn open_bench_channel(tag: &str, subscriber_count: usize) -> BenchChannel {
 }
 
 /// An `OutputWriterInner` primed with the bench's one "out" channel egress.
-fn output_writer_inner_publishing_to(publisher: ChannelDataServicePublisher) -> OutputWriterInner {
+fn output_writer_inner_publishing_to(
+    channel: &Iceoryx2Service,
+    publisher: ChannelDataServicePublisher,
+) -> OutputWriterInner {
     let output_writer_inner = OutputWriterInner::new();
     output_writer_inner.set_channel_publisher(
         "out",
+        channel,
         publisher,
         ChannelEgressConfig {
             service_name: "bench/out".to_string(),
@@ -138,6 +145,7 @@ struct BenchFixture {
 /// publisher's ring doesn't back-pressure).
 fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let BenchChannel {
+        channel,
         publisher,
         mut subscribers,
         node,
@@ -153,7 +161,7 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let notifier = notify.create_notifier().unwrap();
     let listener = notify.create_listener().unwrap();
 
-    let inner = Arc::new(output_writer_inner_publishing_to(publisher));
+    let inner = Arc::new(output_writer_inner_publishing_to(&channel, publisher));
     inner.add_channel_link("out", "L-bench-ffi-hop", notifier);
 
     BenchFixture {
@@ -269,11 +277,12 @@ struct FanoutFixture {
 /// pubsub service.
 fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture {
     let BenchChannel {
+        channel,
         publisher,
         subscribers,
         node,
     } = open_bench_channel(tag, subscriber_count);
-    let inner = Arc::new(output_writer_inner_publishing_to(publisher));
+    let inner = Arc::new(output_writer_inner_publishing_to(&channel, publisher));
 
     let mut listeners = Vec::with_capacity(subscriber_count);
     for i in 0..subscriber_count {
@@ -349,13 +358,14 @@ struct RoundTripFixture {
 
 fn build_round_trip(tag: &str) -> RoundTripFixture {
     let BenchChannel {
+        channel,
         publisher,
         mut subscribers,
         node,
     } = open_bench_channel(tag, 1);
     let subscriber = subscribers.pop().unwrap();
 
-    let output_writer_inner = output_writer_inner_publishing_to(publisher);
+    let output_writer_inner = output_writer_inner_publishing_to(&channel, publisher);
     let notifier_nothing_listens_on = node
         .open_or_create_notify_service(&unique_suffix(&format!("{tag}/notify")), 1)
         .unwrap()
