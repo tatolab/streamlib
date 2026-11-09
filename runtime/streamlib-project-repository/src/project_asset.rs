@@ -380,16 +380,22 @@ pub fn the_content_path_of_an_asset(
 pub const PROJECT_DEPENDENCY_ASSET_RECORDS_DIRECTORY: &str = ".tatolab/dependency-assets";
 
 /// Where the project at `project_directory` records the assets the dependency `project` holds
-/// at `commit`.
+/// at `commit`; refused when `commit` is no commit's hexadecimal hash.
 pub fn the_dependency_asset_record_path(
     project_directory: &Path,
     project: Uuid,
     commit: &str,
-) -> PathBuf {
-    project_directory
+) -> Result<PathBuf, ProjectRepositoryRefusal> {
+    if commit.is_empty() || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ProjectRepositoryRefusal::DependencyPinNamesNoCommitHash {
+            project,
+            revision: commit.to_owned(),
+        });
+    }
+    Ok(project_directory
         .join(PROJECT_DEPENDENCY_ASSET_RECORDS_DIRECTORY)
         .join(project.to_string())
-        .join(format!("{commit}.json"))
+        .join(format!("{commit}.json")))
 }
 
 /// Every asset the dependency `project` holds at `commit`, as the project at
@@ -399,7 +405,7 @@ pub fn the_dependency_assets_recorded_at(
     project: Uuid,
     commit: &str,
 ) -> Result<Vec<ProjectAsset>, ProjectRepositoryRefusal> {
-    let record_path = the_dependency_asset_record_path(project_directory, project, commit);
+    let record_path = the_dependency_asset_record_path(project_directory, project, commit)?;
     let bytes = match std::fs::read(&record_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

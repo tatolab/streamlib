@@ -3,11 +3,11 @@
 
 use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
-    ProjectAssetChangeRequest, ProjectAssetForkOrigin, ProjectAssetImportSource, ProjectOperation,
-    ProjectRelativeAssetPath, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionLineage, StreamGraphDocumentNode, StreamGraphOperation,
-    StreamGraphOperationOnAStream, the_content_path_of_a_dependency_asset,
+    PROJECT_FILE_NAME, ProjectAssetChangeRequest, ProjectAssetForkOrigin, ProjectAssetImportSource,
+    ProjectHistoryRepository, ProjectOperation, ProjectRelativeAssetPath, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, StreamGraphDocumentNode,
+    StreamGraphOperation, StreamGraphOperationOnAStream, the_content_path_of_a_dependency_asset,
     the_content_path_of_an_asset,
 };
 use uuid::Uuid;
@@ -269,6 +269,14 @@ fn a_forked_stream_is_an_editable_copy_the_dependencys_next_revision_no_longer_r
     assert_eq!(
         copy["forked_from"],
         json!({ "asset": arm.stream, "from": arm_project, "revision": first_revision })
+    );
+    assert_eq!(
+        cell.repository.asset(fork.copy).unwrap().forked_from,
+        Some(ProjectAssetForkOrigin {
+            asset: arm.stream,
+            from: arm_project,
+            revision: first_revision.clone(),
+        })
     );
     let copy_node_names: Vec<&str> = copy["nodes"]
         .as_array()
@@ -1167,4 +1175,74 @@ fn a_forked_data_asset_is_this_projects_own_file_and_undo_points_each_reference_
             .config,
         dependency_reference
     );
+}
+
+#[test]
+fn a_dependencys_sidecar_holding_no_digest_or_sharing_its_uuid_names_no_asset_of_it() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let (grade, _) = arm.import_an_asset("looks/grade.cube", b"grade lut");
+    let (night, _) = arm.import_an_asset("looks/night.cube", b"night lut");
+    let arm_history =
+        ProjectHistoryRepository::open_for_project(arm.repository.project_directory()).unwrap();
+    let mut tracked_files = arm_history.files_at_head().unwrap();
+    let night_sidecar: Value =
+        serde_json::from_slice(&tracked_files["looks/night.cube.asset.json"]).unwrap();
+    tracked_files.insert(
+        "looks/night-again.cube.asset.json".to_owned(),
+        night_sidecar.to_string().into_bytes(),
+    );
+    let mut grade_sidecar: Value =
+        serde_json::from_slice(&tracked_files["looks/grade.cube.asset.json"]).unwrap();
+    grade_sidecar["content_sha256"] = json!("../../../tatolab.json");
+    tracked_files.insert(
+        "looks/grade.cube.asset.json".to_owned(),
+        grade_sidecar.to_string().into_bytes(),
+    );
+    let malformed_revision = arm_history
+        .commit_tracked_files(&tracked_files, &a_person(), "malformed sidecars")
+        .unwrap();
+    let (kept, kept_revision) = arm.import_an_asset("looks/kept.cube", b"kept lut");
+    let arm_project = arm.repository.project_file().project;
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let cell_directory = cell.repository.project_directory().to_path_buf();
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &malformed_revision, None)
+        .unwrap();
+
+    for neither_names_an_asset in [grade, night] {
+        assert!(matches!(
+            the_content_path_of_a_dependency_asset(
+                &cell_directory,
+                arm_project,
+                neither_names_an_asset
+            ),
+            Err(ProjectRepositoryRefusal::DependencyHoldsNoAsset { .. })
+        ));
+    }
+    cell.repository
+        .update_dependency(&a_person(), arm_project, &kept_revision, None)
+        .unwrap();
+    assert_eq!(
+        std::fs::read(
+            the_content_path_of_a_dependency_asset(&cell_directory, arm_project, kept).unwrap()
+        )
+        .unwrap(),
+        b"kept lut"
+    );
+
+    let project_file_path = cell_directory.join(PROJECT_FILE_NAME);
+    let project_file = std::fs::read_to_string(&project_file_path).unwrap();
+    std::fs::write(
+        &project_file_path,
+        project_file.replace(
+            &kept_revision,
+            &format!("../{}/{kept_revision}", Uuid::new_v4()),
+        ),
+    )
+    .unwrap();
+    assert!(matches!(
+        the_content_path_of_a_dependency_asset(&cell_directory, arm_project, kept),
+        Err(ProjectRepositoryRefusal::DependencyPinNamesNoCommitHash { .. })
+    ));
 }

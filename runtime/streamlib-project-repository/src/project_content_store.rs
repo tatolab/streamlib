@@ -96,9 +96,7 @@ impl ProjectContentStore {
         content_sha256: &str,
     ) -> Result<StoredProjectContent, ProjectRepositoryRefusal> {
         let not_held = || ProjectRepositoryRefusal::ContentNotInTheStore(content_sha256.to_owned());
-        if content_sha256.len() != 64
-            || !content_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
+        if !is_a_sha256_digest(content_sha256) {
             return Err(not_held());
         }
         let metadata =
@@ -145,6 +143,12 @@ impl ProjectContentStore {
 #[cfg(feature = "history")]
 pub(crate) fn content_sha256_of(bytes: &[u8]) -> String {
     lowercase_hex(&Sha256::digest(bytes))
+}
+
+/// Whether `content_sha256` reads as a SHA-256 digest: 64 hexadecimal digits, so it names one
+/// file of a content store and no path beside it.
+pub(crate) fn is_a_sha256_digest(content_sha256: &str) -> bool {
+    content_sha256.len() == 64 && content_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn lowercase_hex(bytes: &[u8]) -> String {
