@@ -18,7 +18,8 @@ path = "src/lib.rs"
 # Test builds only, never a release: the runtime directory, the state directory and the Linux
 # machine runtime lock all move under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be
 # set; the macOS lock is the loopback port TATOLAB_TEST_LOOPBACK_HTTP_PORT names, which must be set
-# there too.
+# there too. A root too long for iceoryx2's socket paths reaches its iceoryx2 domain through a
+# short symlink in /tmp named for the root.
 machine-directories-under-a-test-root = []
 
 [dependencies]
