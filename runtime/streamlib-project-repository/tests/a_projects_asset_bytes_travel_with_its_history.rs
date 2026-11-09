@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! A project's asset bytes travel through the Git LFS endpoint beside its history remote: a push
-//! uploads them before the history, and a clone and a fetch bring them back.
+//! uploads them before the history, a clone and a fetch bring them back, and a dependency on the
+//! remote arrives with them.
 
 mod support;
 
@@ -11,7 +12,7 @@ use std::path::Path;
 use streamlib_project_repository::{
     PROJECT_HISTORY_DIRECTORY, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind,
+    ProjectTransactionAuthorKind, the_content_path_of_a_dependency_asset,
 };
 use support::{REMOTE_BEARER_TOKEN, SmartHttpRemoteServedByGitHttpBackend};
 
@@ -246,4 +247,41 @@ fn a_push_without_the_token_sends_neither_bytes_nor_history() {
     );
     assert!(!refused.to_string().contains("art_v1_wrong"), "{refused}");
     assert!(remote_server.requests().is_empty());
+}
+
+#[test]
+fn a_dependency_on_a_git_remote_arrives_with_its_asset_bytes() {
+    let remote_server = SmartHttpRemoteServedByGitHttpBackend::serving_an_empty_bare_repository();
+    let parent = tempfile::tempdir().unwrap();
+    let arm = the_arm_project(parent.path());
+    arm.push_to_remote(&remote_server.remote(Some(REMOTE_BEARER_TOKEN)))
+        .unwrap();
+    let mut cell = ProjectRepository::create(
+        &parent.path().join("cell"),
+        "cell",
+        &ProjectTransactionAuthor::the_runtime(),
+    )
+    .unwrap();
+
+    cell.add_dependency(
+        &a_person(),
+        &remote_server.remote(None).url,
+        "main",
+        Some(REMOTE_BEARER_TOKEN),
+    )
+    .unwrap();
+    let intro = arm
+        .assets()
+        .unwrap()
+        .into_iter()
+        .find(|asset| asset.path.to_string() == "media/intro.mp4")
+        .unwrap()
+        .asset;
+    let content_path = the_content_path_of_a_dependency_asset(
+        cell.project_directory(),
+        arm.project_file().project,
+        intro,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(content_path).unwrap(), b"video bytes");
 }
