@@ -206,12 +206,20 @@ fn the_control_value_a_message_carries(
 type NewestMessageReaderOfTheReadersInputPorts =
     Box<dyn Fn(&str) -> Result<Option<MessageReadFromInputPort>> + Send + Sync>;
 
+/// The most messages one read of the newest message takes off a port, so a
+/// publisher that keeps up with the reads cannot hold an evaluation in the
+/// loop; any past it wait for the next read.
+const MOST_MESSAGES_ONE_READ_OF_THE_NEWEST_TAKES: usize = 64;
+
 fn the_newest_message_read_from(
     input_mailboxes: &InputMailboxesInner,
     reader_input_port: &str,
 ) -> Result<Option<MessageReadFromInputPort>> {
     let mut newest: Option<MessageReadFromInputPort> = None;
-    while let Some(mut message) = input_mailboxes.read_raw(reader_input_port)? {
+    for _ in 0..MOST_MESSAGES_ONE_READ_OF_THE_NEWEST_TAKES {
+        let Some(mut message) = input_mailboxes.read_raw(reader_input_port)? else {
+            break;
+        };
         if let Some(replaced) = newest {
             message.lost_since_last_read = message
                 .lost_since_last_read
@@ -1195,6 +1203,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         config_value_indices_set_by_the_inputs_past_its_own,
         initial_state_values,
         output_count,
+        outputs_that_may_hand_out_nothing = Vec::new(),
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -1206,6 +1215,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         config_value_indices_set_by_the_inputs_past_its_own: Vec<usize>,
         initial_state_values: Vec<f64>,
         output_count: usize,
+        outputs_that_may_hand_out_nothing: Vec<usize>,
     ) -> PyResult<Self> {
         let breadcrumb_number =
             BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
@@ -1231,7 +1241,10 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
             the_state_a_function_node_starts_from(initial_state_values, state_resumed_from),
             resumes_from_the_state_its_stream_carries,
             output_count,
-            &HowAFunctionNodeCarriesValuesBeyondNumbers::default(),
+            &HowAFunctionNodeCarriesValuesBeyondNumbers {
+                outputs_that_may_hand_out_nothing,
+                ..HowAFunctionNodeCarriesValuesBeyondNumbers::default()
+            },
         )
         .map_err(PyValueError::new_err)?;
         Ok(Self {
@@ -1251,8 +1264,9 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
     }
 
     /// Call the node with `input_values` at the stream's time now, answering
-    /// its outputs, a `float` for a number or bool and a `dict` as given;
-    /// refused when it refuses, keeping the state it had.
+    /// its outputs, a `float` for a number or bool, a `dict` as given and
+    /// `None` for one that hands out nothing; refused when it refuses,
+    /// keeping the state it had.
     fn evaluate<'py>(
         &self,
         python: Python<'py>,
@@ -2116,6 +2130,14 @@ mod tests {
         assert_eq!(handed_on.payload_bytes, vec![4, 5]);
         assert_eq!(handed_on.timestamp_ns, 50);
         assert_eq!(handed_on.lost_since_last_read, 2);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::Nothing,
+            "a second read at the same stream time is not handed the message again"
+        );
         stream_time_ns.store(200, Ordering::SeqCst);
         assert_eq!(
             island

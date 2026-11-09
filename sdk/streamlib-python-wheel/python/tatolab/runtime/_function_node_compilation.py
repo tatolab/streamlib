@@ -611,8 +611,15 @@ class FunctionNodeBodyRunAsPython:
             output if each_output["field"] is None else getattr(output, each_output["field"])
             for each_output in outputs
         ]
+        values_handed_to_be_handed_on_unread = [
+            input_value
+            for parameter_name, input_value in zip(self._input_parameters, input_values)
+            if self._value_type_by_input_parameter[parameter_name] == UNREAD_MESSAGE_VALUE_TYPE
+        ]
         answered = [
-            self._the_output_the_evaluator_takes(each_output, output_value)
+            self._the_output_the_evaluator_takes(
+                each_output, output_value, values_handed_to_be_handed_on_unread
+            )
             for each_output, output_value in zip(outputs, output_values)
         ]
         self._the_state_values_of(new_state)
@@ -663,11 +670,20 @@ class FunctionNodeBodyRunAsPython:
             return copy.deepcopy(input_value)
         return _python_value_of_an_f64(float(input_value), value_type)
 
-    def _the_output_the_evaluator_takes(self, each_output: "dict[str, Any]", output_value: Any) -> Any:
+    def _the_output_the_evaluator_takes(
+        self,
+        each_output: "dict[str, Any]",
+        output_value: Any,
+        values_handed_to_be_handed_on_unread: "list[Any]",
+    ) -> Any:
         what_it_is = f"function node `{self._node_id}`'s output `{each_output['port']}`"
         if output_value is None and each_output.get("may_hand_out_nothing"):
             return None
         if each_output["value_type"] == UNREAD_MESSAGE_VALUE_TYPE:
+            if output_value is not None and any(
+                output_value is handed for handed in values_handed_to_be_handed_on_unread
+            ):
+                return output_value
             if output_value is None or isinstance(output_value, (bool, int, float, dict)):
                 raise TypeError(
                     f"{what_it_is} hands on a message it was handed, and the body gave "

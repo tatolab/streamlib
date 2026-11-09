@@ -31,10 +31,12 @@ class ImageFileConfig:
 
 
 def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
-    """The PNG or JPEG at `path`, upright by its EXIF orientation, decoded to an `(height, width, 4)` array of 8-bit RGBA."""
+    """The PNG or JPEG at `path`, upright by its EXIF orientation and in sRGB by its embedded colour profile, decoded to an `(height, width, 4)` array of 8-bit RGBA."""
+    import io
+
     import numpy
     from PIL import Image as PillowImage
-    from PIL import ImageOps
+    from PIL import ImageCms, ImageOps
 
     with PillowImage.open(path) as image_file:
         if image_file.format not in ("PNG", "JPEG"):
@@ -42,7 +44,20 @@ def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
                 f"the image asset at {path} is {image_file.format or 'no format Pillow knows'}, "
                 f"and an ImageFile decodes PNG and JPEG"
             )
-        return numpy.asarray(ImageOps.exif_transpose(image_file).convert("RGBA"))
+        upright = ImageOps.exif_transpose(image_file).convert("RGBA")
+        embedded_colour_profile = image_file.info.get("icc_profile")
+        if embedded_colour_profile:
+            alpha = upright.getchannel("A")
+            in_srgb = ImageCms.profileToProfile(
+                upright.convert("RGB"),
+                ImageCms.ImageCmsProfile(io.BytesIO(embedded_colour_profile)),
+                ImageCms.createProfile("sRGB"),
+                outputMode="RGB",
+            )
+            assert in_srgb is not None
+            in_srgb.putalpha(alpha)
+            upright = in_srgb
+        return numpy.asarray(upright)
 
 
 @node.process(execution="continuous", interval_ms=100)
@@ -53,7 +68,7 @@ class ImageFile:
     each failure raised once until it changes.
     """
 
-    image = Output(Image)
+    image = Output(Image, formats=(IMAGE_FILE_TEXTURE_FORMAT,))
 
     def __init__(self, config: ImageFileConfig) -> None:
         self._asset = config.asset

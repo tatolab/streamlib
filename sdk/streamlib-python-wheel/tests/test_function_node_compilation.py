@@ -824,6 +824,20 @@ def test_a_body_run_as_python_answers_each_output_as_a_float_or_a_dict():
     assert letters == [4.0] and isinstance(letters[0], float)
 
 
+@node.function
+def hand_on_once_it_has_built_an_object(value: UnreadMessage) -> UnreadMessage:
+    repr(object())
+    return value
+
+
+def test_a_body_run_as_python_hands_on_unread_a_number_or_a_dict_another_node_of_its_island_gave():
+    handing_on = FunctionNodeBodyRunAsPython(run_as_python(hand_on_once_it_has_built_an_object), "h", None)
+    level = 0.25
+    record = {"label": "low"}
+    assert handing_on.evaluate([level], 0)[0] is level
+    assert handing_on.evaluate([record], 1)[0] is record
+
+
 def test_a_body_run_as_python_keeps_a_state_of_any_record_between_calls():
     remembering = FunctionNodeBodyRunAsPython(run_as_python(remember_each_call_by_a_letter), "r", None)
     assert remembering.evaluate([1.0], 0) == [1.0]

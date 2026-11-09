@@ -9,8 +9,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use super::function_node_island::{
-    runs_inside_the_read_of_each_node_it_feeds, the_report_of_how_its_helpers_ran_a_function_node,
-    the_state_fields_of_a_function_node,
+    is_a_function_node, runs_inside_the_read_of_each_node_it_feeds,
+    the_report_of_how_its_helpers_ran_a_function_node, the_state_fields_of_a_function_node,
 };
 use crate::core::ProcessorUniqueId;
 use crate::core::error::{Error, Result};
@@ -255,6 +255,27 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
                 .join(", ")
         )));
     }
+    let class_nodes_feeding_a_promoted_node: BTreeSet<String> = graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| promoted.contains(link.to_port().processor_id()))
+        .map(|link| link.source().processor_id())
+        .filter(|source| !is_a_function_node(graph, source))
+        .map(|class_node| the_name_in_the_graph_of(graph, class_node))
+        .collect();
+    if !class_nodes_feeding_a_promoted_node.is_empty() {
+        return Err(Error::InvalidGraph(format!(
+            "function node `{crashed_function_node_name}` is not promoted out of \
+             `{reader_name}`'s islands: the nodes it would move read {}, and a promoted \
+             function node reads only other function nodes in this release",
+            class_nodes_feeding_a_promoted_node
+                .iter()
+                .map(|class_node| format!("`{class_node}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
     let reader_link_wiring = graph
         .traversal()
         .v(reader)
@@ -380,9 +401,10 @@ mod tests {
 
     use super::*;
     use crate::core::compiler::compiler_ops::function_node_island::tests::{
-        a_function_node_type, a_graph_resolving_these_function_node_types,
-        a_graph_resolving_three_function_node_types, a_helper_reader_before_its_setup,
-        a_helper_reader_before_its_setup_driven_in, add_a_node, link, reader_setup_command_ports,
+        a_class_node_feeding_remap_into_a_helper_reader, a_function_node_type,
+        a_graph_resolving_these_function_node_types, a_graph_resolving_three_function_node_types,
+        a_helper_reader_before_its_setup, a_helper_reader_before_its_setup_driven_in, add_a_node,
+        link, reader_setup_command_ports,
     };
     use crate::core::compiler::compiler_ops::function_node_island::{
         HowALinkIsWired, how_a_link_is_wired,
@@ -523,6 +545,51 @@ mod tests {
         for link_id in [&lfo_into_remap, &remap_into_the_reader] {
             assert_eq!(the_link_state_of(&graph, link_id), Some(LinkState::Pending));
         }
+    }
+
+    #[test]
+    fn a_function_node_reading_a_class_node_is_refused_promotion_leaving_its_island_and_links() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let (remap, reader, into_the_island, into_the_reader) =
+            a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &crate::iceoryx2::Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
+        let islands_before = reader_setup_command_ports(&graph, &reader)["islands"].clone();
+        let link_states_before = [
+            the_link_state_of(&graph, &into_the_island),
+            the_link_state_of(&graph, &into_the_reader),
+        ];
+
+        let refusal = plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+            &mut graph,
+            &remap,
+            &reader,
+            "function node `remap` crashed its helper process during its call.",
+            &NOTHING_REMOVED,
+        )
+        .expect_err("a promoted function node reads only other function nodes")
+        .to_string();
+
+        assert!(
+            refusal.contains("a promoted function node reads only other function nodes"),
+            "{refusal}"
+        );
+        assert!(runs_inside_the_read_of_each_node_it_feeds(&graph, &remap));
+        assert_eq!(
+            reader_setup_command_ports(&graph, &reader)["islands"],
+            islands_before
+        );
+        assert_eq!(
+            [
+                the_link_state_of(&graph, &into_the_island),
+                the_link_state_of(&graph, &into_the_reader),
+            ],
+            link_states_before
+        );
     }
 
     #[test]

@@ -81,13 +81,20 @@ pub(crate) fn open_iceoryx2_service_into_the_reader_of_a_function_node_island(
     reader_input_port: InputLinkPortRef,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    open_iceoryx2_service_read_at(graph, link_id, Some(&reader_input_port), iceoryx2_node)?;
     graph
         .traversal_mut()
         .e(link_id)
         .first_mut()
         .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?
-        .insert(LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent { reader_input_port });
+        .insert(LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
+            reader_input_port: reader_input_port.clone(),
+        });
+    if let Err(refusal) =
+        open_iceoryx2_service_read_at(graph, link_id, Some(&reader_input_port), iceoryx2_node)
+    {
+        close_iceoryx2_service(graph, link_id)?;
+        return Err(refusal);
+    }
     Ok(())
 }
 

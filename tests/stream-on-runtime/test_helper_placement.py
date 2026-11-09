@@ -447,6 +447,9 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
     assert reopened["counts"] and reopened["counts"][0] > counts[-1], (
         f"opened again, the gate hands on the counts written since, and the sink read {reopened}"
     )
+    assert reopened["counts"] == sorted(set(reopened["counts"])), (
+        f"opened again, each count is handed on once, in order, and the sink read {reopened}"
+    )
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)

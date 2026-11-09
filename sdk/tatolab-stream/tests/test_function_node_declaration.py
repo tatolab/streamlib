@@ -324,9 +324,15 @@ def test_an_output_that_may_be_none_is_one_that_may_hand_out_nothing():
     assert remap_signature["outputs"][0]["may_hand_out_nothing"] is False
 
 
+def hand_on_a_message_it_was_never_handed(value: float) -> UnreadMessage:
+    raise NotImplementedError
+
+
 def test_an_unread_message_output_without_exactly_one_unread_message_input_is_refused():
     with pytest.raises(TypeError, match="take exactly one `UnreadMessage` input"):
         node.function(pick_one_of_two)
+    with pytest.raises(TypeError, match="take exactly one `UnreadMessage` input"):
+        node.function(hand_on_a_message_it_was_never_handed)
 
 
 @dataclass(frozen=True)

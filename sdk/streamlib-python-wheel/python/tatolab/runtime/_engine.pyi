@@ -66,13 +66,14 @@ class FunctionNodeEvaluatedAsItsHelpersProcessor:
         config_value_indices_set_by_the_inputs_past_its_own: list[int],
         initial_state_values: list[float],
         output_count: int,
+        outputs_that_may_hand_out_nothing: list[int] = ...,
     ) -> FunctionNodeEvaluatedAsItsHelpersProcessor:
         """`called_through` is a compiled evaluate entry's address, or the object that runs the body as Python.
 
         Of a compiled node's `input_count` inputs, the last set the config values these indices name.
         """
-    def evaluate(self, input_values: list[float | dict[str, Any]]) -> list[float | dict[str, Any]]:
-        """Call the node with `input_values` at the stream's time now, answering its outputs, a `float` or a `dict` each."""
+    def evaluate(self, input_values: list[float | dict[str, Any]]) -> list[float | dict[str, Any] | None]:
+        """Call the node with `input_values` at the stream's time now, answering its outputs, a `float`, a `dict` or `None` for one that hands out nothing."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,
