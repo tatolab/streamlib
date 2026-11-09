@@ -26,9 +26,12 @@ use crate::core::graph::{
     refuse_a_second_referrer_of_a_node_that_takes_one,
 };
 use crate::core::graph_fragment_flattening::GraphFragmentsAsDrawn;
-use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
+use crate::core::graph_interface_resolution::{
+    GraphInterfaceAsDrawn, is_a_graph_interface_node_type,
+};
 use crate::core::graph_variable_resolution::{
     GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
+    is_a_graph_variable_node_type,
 };
 use crate::core::json_schema::{
     ForkedStreamOrigin, GraphResponse, LabelledNodeGroup, LinkPortRefOutput,
@@ -377,20 +380,39 @@ impl GraphSnapshot {
     /// runtime would run is checked, and each setter's value and each
     /// interface port with it.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
-        self.with_graph_only_nodes_resolved()?.validate(node_types)
+        self.with_graph_only_nodes_resolved(node_types)?
+            .validate(node_types)
+    }
+
+    /// The type of every node at every level that a processor runs as: no fragment, variable or
+    /// interface node. These are the types to describe before the graph is resolved.
+    pub fn node_types_its_running_nodes_name_at_every_level(
+        &self,
+    ) -> Vec<ProcessorClassImportPath> {
+        self.nodes_at_every_level()
+            .into_iter()
+            .filter(|(_, node)| {
+                node.fragment.is_none()
+                    && !is_a_graph_variable_node_type(&node.processor_type)
+                    && !is_a_graph_interface_node_type(node.processor_type.as_str())
+            })
+            .map(|(_, node)| node.processor_type.clone())
+            .collect()
     }
 
     /// Resolve the nodes that run nothing out of this graph: its fragments, flattened, then its
-    /// variables, then its interface nodes.
+    /// variables, then its interface nodes. `node_types` names the config keys of each node
+    /// inside a fragment that hold a node reference.
     pub fn with_graph_only_nodes_resolved(
         &self,
+        node_types: &NodeTypesOneStreamResolves,
     ) -> Result<GraphSnapshotWithGraphOnlyNodesResolved> {
         let fragments = Self {
             groups: Vec::new(),
             forked_from: None,
             ..self.clone()
         }
-        .with_graph_fragments_flattened()?;
+        .with_graph_fragments_flattened(node_types)?;
         let variables = fragments
             .graph_the_runtime_runs
             .with_graph_variables_resolved()?;
@@ -2167,7 +2189,7 @@ mod tests {
     #[test]
     fn removing_a_node_a_link_to_an_interface_or_variable_node_names_is_refused_naming_the_link() {
         let resolution = a_variable_set_from("encoded", "value")
-            .with_graph_only_nodes_resolved()
+            .with_graph_only_nodes_resolved(&NodeTypesOneStreamResolves::new())
             .expect("resolves");
         let graph_only_nodes = &resolution.graph_only_nodes_as_drawn;
         let refusal = graph_only_nodes
@@ -2222,8 +2244,12 @@ mod tests {
             GraphSnapshot::from_graph_document(a_camera_graph_document(serde_json::Value::Null))
                 .unwrap();
 
-        let grouped_resolved = grouped.with_graph_only_nodes_resolved().unwrap();
-        let ungrouped_resolved = ungrouped.with_graph_only_nodes_resolved().unwrap();
+        let grouped_resolved = grouped
+            .with_graph_only_nodes_resolved(&NodeTypesOneStreamResolves::new())
+            .unwrap();
+        let ungrouped_resolved = ungrouped
+            .with_graph_only_nodes_resolved(&NodeTypesOneStreamResolves::new())
+            .unwrap();
 
         assert_eq!(
             grouped_resolved.graph_the_runtime_runs,

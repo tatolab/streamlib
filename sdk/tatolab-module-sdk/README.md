@@ -142,8 +142,16 @@ returned, and a parameter named `config` the node's config record. A value is an
 `f64`, `i64` or `bool`; a record is a struct of them deriving
 `FunctionNodeRecord`, whose `Default` is its first state or its config's defaults.
 
+A pin typed `UnreadMessage` takes a message of any family, which the body can
+only hand on to an `UnreadMessage` output, whose family follows that input's; a
+function handing one out takes exactly one. `Option<UnreadMessage>` takes `None`
+when it holds nothing. An output typed `Option<T>` hands out nothing on `None`,
+and a record of outputs types each field that may hand out nothing `Option<T>`.
+
 ```rust
-use tatolab_module_sdk::function_node::{function_node, FunctionNodeRecord, State, Stateful};
+use tatolab_module_sdk::function_node::{
+    function_node, FunctionNodeRecord, State, Stateful, UnreadMessage,
+};
 
 /// `x` scaled by `gain`, then moved by `offset`.
 #[function_node]
@@ -161,6 +169,12 @@ struct RunningTotal {
 fn accumulate(x: f64, previous: State<RunningTotal>) -> Stateful<f64, RunningTotal> {
     let total = previous.total + x;
     (total, RunningTotal { total })
+}
+
+/// `value` handed on unread while `open`, and nothing while closed.
+#[function_node]
+fn gate(value: UnreadMessage, #[pin_default(true)] open: bool) -> Option<UnreadMessage> {
+    open.then_some(value)
 }
 ```
 

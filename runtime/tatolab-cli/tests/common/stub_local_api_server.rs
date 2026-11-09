@@ -159,6 +159,9 @@ pub struct StubLocalApiScript {
     pub mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     /// Tools whose calls are recorded and never answered.
     pub tools_that_never_answer: HashSet<String>,
+    /// Tools whose calls are recorded and answered only once
+    /// [`StubLocalApiServer::release_the_held_tool_answers`] is called.
+    pub tools_answered_once_released: HashSet<String>,
 }
 
 impl StubLocalApiScript {
@@ -196,6 +199,8 @@ struct StubLocalApiState {
     recorded_mcp_stdio_request_heads: Mutex<Vec<RecordedHttpRequestHead>>,
     recorded_mcp_stdio_client_bytes: Mutex<Vec<u8>>,
     tools_that_never_answer: HashSet<String>,
+    tools_answered_once_released: HashSet<String>,
+    held_tool_answers_released: tokio::sync::watch::Sender<bool>,
 }
 
 #[derive(Clone)]
@@ -265,6 +270,17 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
             .contains(request.name.as_ref())
         {
             return std::future::pending().await;
+        }
+        if self
+            .stub_state
+            .tools_answered_once_released
+            .contains(request.name.as_ref())
+        {
+            let mut held_tool_answers_released =
+                self.stub_state.held_tool_answers_released.subscribe();
+            let _ = held_tool_answers_released
+                .wait_for(|released| *released)
+                .await;
         }
         let answer = self.stub_state.answer_for(&request);
         let content = vec![ContentBlock::text(answer.text)];
@@ -569,6 +585,8 @@ impl StubLocalApiServer {
             recorded_mcp_stdio_request_heads: Mutex::new(Vec::new()),
             recorded_mcp_stdio_client_bytes: Mutex::new(Vec::new()),
             tools_that_never_answer: stub_local_api_script.tools_that_never_answer,
+            tools_answered_once_released: stub_local_api_script.tools_answered_once_released,
+            held_tool_answers_released: tokio::sync::watch::Sender::new(false),
         });
         let (stop_serving, serving_stopped) = tokio::sync::oneshot::channel::<()>();
         let served_stub_state = stub_state.clone();
@@ -616,6 +634,13 @@ impl StubLocalApiServer {
         Self::serve(StubLocalApiScript::answering_the_mcp_stdio_upgrade_with(
             mcp_stdio_upgrade_answer,
         ))
+    }
+
+    /// Answer every call held by `tools_answered_once_released`, and each later one at once.
+    pub fn release_the_held_tool_answers(&self) {
+        self.stub_state
+            .held_tool_answers_released
+            .send_replace(true);
     }
 
     /// Every tool call received so far, in arrival order.
