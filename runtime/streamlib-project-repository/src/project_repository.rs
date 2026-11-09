@@ -16,10 +16,10 @@ use crate::project_asset::{
     read_every_asset_sidecar,
 };
 use crate::project_content_store::{ProjectContentStore, content_sha256_of};
+use crate::project_dependency_source::ProjectDependencySource;
 use crate::project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjectFile};
 use crate::project_history_repository::{
-    PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRemote,
-    ProjectHistoryRepository,
+    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
@@ -496,19 +496,21 @@ impl ProjectRepository {
         })
     }
 
-    /// Depend on the project `source` holds — a project directory or a Git remote's URL — pinned
-    /// to the commit `revision` names there, as one transaction by `author`: its history is
-    /// fetched into [`PROJECT_DEPENDENCIES_DIRECTORY`] and the pin recorded in the project file.
+    /// Depend on the project `source` holds — a [`ProjectDependencySource`] — pinned to the
+    /// commit `revision` names there, as one transaction by `author`: its history is fetched
+    /// into [`PROJECT_DEPENDENCIES_DIRECTORY`] and the pin recorded in the project file. A Git
+    /// remote is sent `bearer_token`, which nothing keeps.
     pub fn add_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
         source: &str,
         revision: &str,
+        bearer_token: Option<&str>,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
         refuse_a_project_directory_source_named_by_a_relative_path(source)?;
         let (commit, project_file_at_the_pin) =
-            self.a_dependency_history_fetched_into_place(source, |fetched| {
+            self.a_dependency_history_fetched_into_place(source, bearer_token, |fetched| {
                 let commit = fetched.commit_a_revision_names(revision)?;
                 let project_file_at_the_pin =
                     project_file_in(&fetched.files_at_commit(&commit)?, source)?;
@@ -542,15 +544,17 @@ impl ProjectRepository {
         )
     }
 
-    /// Fetch the dependency `project` from its source again and move its pin to the commit
-    /// `revision` names there, as one transaction by `author`.
+    /// Fetch the dependency `project` from its source again, a Git remote with `bearer_token`,
+    /// and move its pin to the commit `revision` names there, as one transaction by `author`.
     pub fn update_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
         project: Uuid,
         revision: &str,
+        bearer_token: Option<&str>,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
-        let pin_move = self.the_pin_move_a_dependency_update_makes(project, revision)?;
+        let pin_move =
+            self.the_pin_move_a_dependency_update_makes(project, revision, bearer_token)?;
         self.apply_project_operations(
             author,
             vec![ProjectOperation::Dependency(pin_move)],
@@ -558,16 +562,20 @@ impl ProjectRepository {
         )
     }
 
-    /// Fetch the dependency `project` from its source again and answer the move of its pin to
-    /// the commit `revision` names there, applying nothing.
+    /// Fetch the dependency `project` from its source again, a Git remote with `bearer_token`,
+    /// and answer the move of its pin to the commit `revision` names there, applying nothing.
     pub fn the_pin_move_a_dependency_update_makes(
         &self,
         project: Uuid,
         revision: &str,
+        bearer_token: Option<&str>,
     ) -> Result<ProjectDependencyOperation, ProjectRepositoryRefusal> {
         let pinned = self.dependency(project)?;
-        let history = self.dependency_history(project)?;
-        history.fetch_every_branch_and_tag_from(&the_remote_a_source_names(&pinned.source))?;
+        let history = self.dependency_history_fetched_with(project, bearer_token)?;
+        history.fetch_every_branch_and_tag_from(
+            &ProjectDependencySource::named_by(&pinned.source)
+                .the_remote_to_fetch_from(&self.project_directory, bearer_token)?,
+        )?;
         let commit = history.commit_a_revision_names(revision)?;
         let project_file_at_the_pin =
             project_file_in(&history.files_at_commit(&commit)?, &pinned.source)?;
@@ -771,24 +779,38 @@ impl ProjectRepository {
         &self,
         project: Uuid,
     ) -> Result<ProjectHistoryRepository, ProjectRepositoryRefusal> {
+        self.dependency_history_fetched_with(project, None)
+    }
+
+    /// The fetched history of the dependency `project`, fetched again from the source its pin
+    /// records, a Git remote with `bearer_token`, when it is missing, as in a clone.
+    fn dependency_history_fetched_with(
+        &self,
+        project: Uuid,
+        bearer_token: Option<&str>,
+    ) -> Result<ProjectHistoryRepository, ProjectRepositoryRefusal> {
         let history_directory = self.dependency_history_directory(project);
         if !history_directory.exists() {
             let pinned = self.dependency(project)?;
-            self.a_dependency_history_fetched_into_place(&pinned.source, |fetched| {
-                let commit = fetched.commit_a_revision_names(&pinned.revision)?;
-                let project_file_at_the_pin =
-                    project_file_in(&fetched.files_at_commit(&commit)?, &pinned.source)?;
-                if project_file_at_the_pin.project != project {
-                    return Err(
-                        ProjectRepositoryRefusal::DependencySourceHoldsAnotherProject {
-                            dependency_source: pinned.source.clone(),
-                            expected: project,
-                            held: project_file_at_the_pin.project,
-                        },
-                    );
-                }
-                Ok((project, ()))
-            })?;
+            self.a_dependency_history_fetched_into_place(
+                &pinned.source,
+                bearer_token,
+                |fetched| {
+                    let commit = fetched.commit_a_revision_names(&pinned.revision)?;
+                    let project_file_at_the_pin =
+                        project_file_in(&fetched.files_at_commit(&commit)?, &pinned.source)?;
+                    if project_file_at_the_pin.project != project {
+                        return Err(
+                            ProjectRepositoryRefusal::DependencySourceHoldsAnotherProject {
+                                dependency_source: pinned.source.clone(),
+                                expected: project,
+                                held: project_file_at_the_pin.project,
+                            },
+                        );
+                    }
+                    Ok((project, ()))
+                },
+            )?;
             tracing::info!(
                 project = %self.project_directory.display(),
                 dependency = %project,
@@ -810,6 +832,7 @@ impl ProjectRepository {
     fn a_dependency_history_fetched_into_place<WhatTheFetchedHistoryHolds>(
         &self,
         source: &str,
+        bearer_token: Option<&str>,
         read_the_fetched_history: impl FnOnce(
             &ProjectHistoryRepository,
         ) -> Result<
@@ -823,7 +846,10 @@ impl ProjectRepository {
             .join(format!(".fetching-{}", Uuid::new_v4()));
         let fetched =
             ProjectHistoryRepository::open_or_create_at(&fetching_directory).and_then(|fetching| {
-                fetching.fetch_every_branch_and_tag_from(&the_remote_a_source_names(source))?;
+                fetching.fetch_every_branch_and_tag_from(
+                    &ProjectDependencySource::named_by(source)
+                        .the_remote_to_fetch_from(&self.project_directory, bearer_token)?,
+                )?;
                 read_the_fetched_history(&fetching)
             });
         let (project, what_the_fetched_history_holds) = match fetched {
@@ -1697,24 +1723,6 @@ fn refuse_a_project_directory_source_named_by_a_relative_path(
         );
     }
     Ok(())
-}
-
-/// The remote `source` names: a project directory's own history, or a Git remote's URL as
-/// written.
-fn the_remote_a_source_names(source: &str) -> ProjectHistoryRemote {
-    let source_path = Path::new(source);
-    let url = if source_path.join(PROJECT_FILE_NAME).is_file() {
-        source_path
-            .join(PROJECT_HISTORY_DIRECTORY)
-            .display()
-            .to_string()
-    } else {
-        source.to_owned()
-    };
-    ProjectHistoryRemote {
-        url,
-        bearer_token: None,
-    }
 }
 
 fn project_file_in(

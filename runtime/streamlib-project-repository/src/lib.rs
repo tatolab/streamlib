@@ -6,6 +6,8 @@
 mod canonical_project_json;
 mod project_asset;
 mod project_content_store;
+#[cfg(feature = "history")]
+mod project_dependency_source;
 mod project_file;
 #[cfg(feature = "history")]
 mod project_history_repository;
@@ -28,6 +30,11 @@ pub use project_asset::{
 };
 pub use project_content_store::{
     PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,
+};
+#[cfg(feature = "history")]
+pub use project_dependency_source::{
+    PYTHON_PACKAGE_DEPENDENCY_SOURCE_PREFIX, ProjectDependencySource,
+    the_project_directory_an_installed_package_ships,
 };
 pub use project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjectFile};
 #[cfg(feature = "history")]

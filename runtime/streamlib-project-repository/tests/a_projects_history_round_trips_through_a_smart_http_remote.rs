@@ -253,3 +253,124 @@ fn a_push_that_is_not_a_fast_forward_is_refused() {
         "{refused:?}"
     );
 }
+
+#[test]
+fn a_dependency_on_a_remote_that_needs_a_token_fetches_with_it_and_keeps_it_nowhere() {
+    let remote_server = SmartHttpRemoteServedByGitHttpBackend::serving_an_empty_bare_repository();
+    let parent = tempfile::tempdir().unwrap();
+    let arm = a_project_with_one_imported_asset(parent.path());
+    arm.history()
+        .push_main_to(&remote_server.remote(Some(REMOTE_BEARER_TOKEN)))
+        .unwrap();
+    let first_revision = arm.history().head_commit().unwrap().unwrap();
+    let remote_url = remote_server.remote(None).url;
+    let mut cell = ProjectRepository::create(
+        &parent.path().join("cell"),
+        "cell",
+        &ProjectTransactionAuthor::the_runtime(),
+    )
+    .unwrap();
+    let a_person = ProjectTransactionAuthor {
+        kind: ProjectTransactionAuthorKind::Person,
+        name: "Jonathan".to_owned(),
+    };
+
+    let refused = cell
+        .add_dependency(&a_person, &remote_url, "main", Some("art_v1_wrong"))
+        .err()
+        .unwrap();
+    assert!(!refused.to_string().contains("art_v1_wrong"), "{refused}");
+    assert!(cell.project_file().dependencies.is_empty());
+
+    cell.add_dependency(&a_person, &remote_url, "main", Some(REMOTE_BEARER_TOKEN))
+        .unwrap();
+    let arm_project = arm.project_file().project;
+    assert_eq!(
+        cell.dependency(arm_project).unwrap().revision,
+        first_revision
+    );
+
+    std::fs::write(parent.path().join("outro.mp4"), b"more video").unwrap();
+    let mut arm = ProjectRepository::open(arm.project_directory()).unwrap();
+    arm.apply_asset_changes(
+        &a_person,
+        vec![ProjectAssetChangeRequest::ImportAsset {
+            source: ProjectAssetImportSource::FileOnThisMachine(parent.path().join("outro.mp4")),
+            asset_path: "media/outro.mp4".to_owned(),
+            kind: None,
+            import_settings: serde_json::Map::new(),
+        }],
+    )
+    .unwrap();
+    arm.history()
+        .push_main_to(&remote_server.remote(Some(REMOTE_BEARER_TOKEN)))
+        .unwrap();
+    assert!(
+        cell.update_dependency(&a_person, arm_project, "main", None)
+            .is_err()
+    );
+    cell.update_dependency(&a_person, arm_project, "main", Some(REMOTE_BEARER_TOKEN))
+        .unwrap();
+    assert_eq!(
+        cell.dependency(arm_project).unwrap().revision,
+        arm.history().head_commit().unwrap().unwrap()
+    );
+
+    let every_file_cell_keeps = walk_every_file(cell.project_directory());
+    for file in every_file_cell_keeps {
+        let bytes = std::fs::read(&file).unwrap();
+        assert!(
+            !bytes
+                .windows(REMOTE_BEARER_TOKEN.len())
+                .any(|window| window == REMOTE_BEARER_TOKEN.as_bytes()),
+            "{} holds the token",
+            file.display()
+        );
+    }
+}
+
+fn walk_every_file(directory: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(directory).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walk_every_file(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// Against a real Artifacts repo holding a project, named by `TATOLAB_ARTIFACTS_TEST_REMOTE_URL`
+/// with a read token in `TATOLAB_ARTIFACTS_TEST_REMOTE_TOKEN`; passes without checking when
+/// either is unset.
+#[test]
+fn a_dependency_on_an_artifacts_repo_fetches_with_its_token_where_one_is_present() {
+    let (Ok(remote_url), Ok(bearer_token)) = (
+        std::env::var("TATOLAB_ARTIFACTS_TEST_REMOTE_URL"),
+        std::env::var("TATOLAB_ARTIFACTS_TEST_REMOTE_TOKEN"),
+    ) else {
+        return;
+    };
+    let parent = tempfile::tempdir().unwrap();
+    let mut cell = ProjectRepository::create(
+        &parent.path().join("cell"),
+        "cell",
+        &ProjectTransactionAuthor::the_runtime(),
+    )
+    .unwrap();
+    let applied = cell
+        .add_dependency(
+            &ProjectTransactionAuthor {
+                kind: ProjectTransactionAuthorKind::Person,
+                name: "Jonathan".to_owned(),
+            },
+            &remote_url,
+            "main",
+            Some(&bearer_token),
+        )
+        .unwrap();
+    assert_eq!(cell.project_file().dependencies.len(), 1);
+    assert!(!applied.commit.is_empty());
+}

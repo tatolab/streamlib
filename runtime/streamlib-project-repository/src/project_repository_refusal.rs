@@ -117,6 +117,24 @@ pub enum ProjectRepositoryRefusal {
          holds no UUID, so no operation can point it at the copy; load the stream, then fork"
     )]
     ForkReachesANodeHoldingNoUuid { path: String, node_name: String },
+    #[error(
+        "no package `{distribution}` is installed in the project's venv under {venv_lib_directory}; add it to pyproject.toml and sync"
+    )]
+    DependencyPackageNotInstalled {
+        distribution: String,
+        venv_lib_directory: PathBuf,
+    },
+    #[error(
+        "the package `{distribution}` ships no project: none of its files is a tatolab-project.json beside its .tatolab/history.git"
+    )]
+    DependencyPackageShipsNoProject { distribution: String },
+    #[error(
+        "the package `{distribution}` ships several projects, {project_directories:?}; a package dependency needs exactly one"
+    )]
+    DependencyPackageShipsSeveralProjects {
+        distribution: String,
+        project_directories: Vec<PathBuf>,
+    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "history")]

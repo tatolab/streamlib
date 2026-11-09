@@ -36,6 +36,8 @@ use crate::mcp_stream_graph_tools::{
     STREAM_FRAGMENT_TYPE, StreamGraphOperationToolArgument,
 };
 
+const DEPENDENCY_SOURCE_BEARER_TOKEN_ARGUMENT_DESCRIPTION: &str = "The token a Git remote that needs one, such as a private Artifacts repo, is sent as `Authorization: Bearer`, for this fetch alone: never written to `tatolab-project.json`, history, a transaction, a log or a refusal. Ignored for a project directory or a package.";
+
 const DEPENDING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
     "The project that depends, by absolute path: a folder holding `tatolab-project.json`.";
 
@@ -46,13 +48,15 @@ struct AddDependencyToolArguments {
     #[schemars(description = DEPENDING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
     #[schemars(
-        description = "Where the project depended on is fetched from: its project directory by absolute path, or the URL of a Git remote holding its history."
+        description = "Where the project depended on is fetched from: its project directory by absolute path, `package:<distribution>` for a Python package installed in this project's venv that ships a project with its history, or the URL of a Git remote holding its history, such as an Artifacts repo."
     )]
     source: String,
     #[schemars(
         description = "The commit, tag or branch of its history to pin to; the pin records the commit it names now."
     )]
     revision: String,
+    #[schemars(description = DEPENDENCY_SOURCE_BEARER_TOKEN_ARGUMENT_DESCRIPTION)]
+    bearer_token: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
 }
@@ -69,6 +73,8 @@ struct UpdateDependencyToolArguments {
         description = "The commit, tag or branch of its history to move the pin to, fetched from its source first."
     )]
     revision: String,
+    #[schemars(description = DEPENDENCY_SOURCE_BEARER_TOKEN_ARGUMENT_DESCRIPTION)]
+    bearer_token: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
 }
@@ -112,7 +118,7 @@ struct ForkAssetToolArguments {
 #[tool_router(router = project_dependency_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Depend on another project, pinned at a revision, as one transaction by `author`: its history is fetched from `source` into `.tatolab/dependencies/<project uuid>/` and the pin, the commit `revision` names, is recorded in `tatolab-project.json`. A local project directory needs no network; a Git remote needs it only to fetch. A clone of the project carries the pin without the fetched history, which is fetched again from the recorded `source` the first time it is read, the pin left where it is. Its assets are then referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read at the pin; its streams are placed with `use_dependency_stream`. Answers the `dependency` with its pinned `revision`. Refused, nothing pinned, for a revision the source does not hold, a source holding no project, the project itself, or a project already depended on."
+        description = "Depend on another project, pinned at a revision, as one transaction by `author`: its history is fetched from `source` — a project directory, a package installed in this project's venv that ships a project, or a Git remote, sent `bearer_token` when it needs one — into `.tatolab/dependencies/<project uuid>/` and the pin, the commit `revision` names, is recorded in `tatolab-project.json`. A project directory or a package needs no network; a Git remote needs it only to fetch. A clone of the project carries the pin without the fetched history, which is fetched again from the recorded `source` the first time it is read, the pin left where it is. Its assets are then referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read at the pin; its streams are placed with `use_dependency_stream`. Answers the `dependency` with its pinned `revision`. Refused, nothing pinned, for a revision the source does not hold, a source holding no project, the project itself, or a project already depended on."
     )]
     async fn add_dependency(
         &self,
@@ -121,6 +127,7 @@ impl LocalApiMcpServerHandler {
             project_directory,
             source,
             revision,
+            bearer_token,
             author,
         }): Parameters<AddDependencyToolArguments>,
     ) -> ToolCallAnswer {
@@ -131,7 +138,7 @@ impl LocalApiMcpServerHandler {
                 the_project_repository_open_at(&project_repositories, &project_directory)?;
             let mut project_repository_held = project_repository.lock();
             let applied = project_repository_held
-                .add_dependency(&author, &source, &revision)
+                .add_dependency(&author, &source, &revision, bearer_token.as_deref())
                 .map_err(|refusal| refusal.to_string())?;
             let added = applied
                 .transaction
@@ -161,7 +168,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Move a dependency's pin to another revision, as one transaction by `author`: its history is fetched again from its source, and every fragment of this project's loaded streams that holds one of its streams is refreshed from the new pin, each node keeping its UUID by name so links into the fragment and edits around it hold. Answers the `dependency` and the `graph_operations` that refreshed each fragment; undo moves the pin back and restores each fragment as it was. Refused, nothing changed, for a project not depended on or a revision its source does not hold."
+        description = "Move a dependency's pin to another revision, as one transaction by `author`: its history is fetched again from its source, a Git remote sent `bearer_token` when it needs one, and every fragment of this project's loaded streams that holds one of its streams is refreshed from the new pin, each node keeping its UUID by name so links into the fragment and edits around it hold. Answers the `dependency` and the `graph_operations` that refreshed each fragment; undo moves the pin back and restores each fragment as it was. Refused, nothing changed, for a project not depended on or a revision its source does not hold."
     )]
     async fn update_dependency(
         &self,
@@ -170,6 +177,7 @@ impl LocalApiMcpServerHandler {
             project_directory,
             project,
             revision,
+            bearer_token,
             author,
         }): Parameters<UpdateDependencyToolArguments>,
     ) -> ToolCallAnswer {
@@ -192,7 +200,11 @@ impl LocalApiMcpServerHandler {
                 &author,
                 |project_repository_held, stream_id_of_each_stream_asset| {
                     let pin_move = project_repository_held
-                        .the_pin_move_a_dependency_update_makes(project, &revision)
+                        .the_pin_move_a_dependency_update_makes(
+                            project,
+                            &revision,
+                            bearer_token.as_deref(),
+                        )
                         .map_err(|refusal| refusal.to_string())?;
                     let refreshes = the_refresh_of_each_fragment_holding_a_stream_of(
                         project_repository_held,

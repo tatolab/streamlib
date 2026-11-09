@@ -116,7 +116,7 @@ fn a_dependency_is_read_at_its_pin_until_an_update_moves_it_and_undo_moves_it_ba
     let arm_project = arm.repository.project_file().project;
 
     cell.repository
-        .add_dependency(&a_person(), &arm.source(), &first_revision[..10])
+        .add_dependency(&a_person(), &arm.source(), &first_revision[..10], None)
         .unwrap();
     let second_revision = arm.add_a_node_named("elbow");
 
@@ -136,7 +136,7 @@ fn a_dependency_is_read_at_its_pin_until_an_update_moves_it_and_undo_moves_it_ba
     );
 
     cell.repository
-        .update_dependency(&a_person(), arm_project, &second_revision)
+        .update_dependency(&a_person(), arm_project, &second_revision, None)
         .unwrap();
     assert_eq!(
         node_names_of_the_main_stream_at_the_pin(&cell.repository, arm_project),
@@ -162,7 +162,7 @@ fn a_revision_the_source_does_not_hold_is_refused_and_nothing_is_pinned() {
 
     let refusal = cell
         .repository
-        .add_dependency(&a_person(), &arm.source(), "v9")
+        .add_dependency(&a_person(), &arm.source(), "v9", None)
         .unwrap_err();
 
     assert!(
@@ -192,7 +192,7 @@ fn a_project_is_refused_as_its_own_dependency_and_a_second_add_of_one_is_refused
 
     assert!(matches!(
         arm.repository
-            .add_dependency(&a_person(), &source, &revision),
+            .add_dependency(&a_person(), &source, &revision, None),
         Err(ProjectRepositoryRefusal::ProjectDependsOnItself(_))
     ));
     assert!(
@@ -203,11 +203,11 @@ fn a_project_is_refused_as_its_own_dependency_and_a_second_add_of_one_is_refused
             .exists()
     );
     cell.repository
-        .add_dependency(&a_person(), &source, &revision)
+        .add_dependency(&a_person(), &source, &revision, None)
         .unwrap();
     assert!(matches!(
         cell.repository
-            .add_dependency(&a_person(), &source, &revision),
+            .add_dependency(&a_person(), &source, &revision, None),
         Err(ProjectRepositoryRefusal::DependencyAlreadyHeld(_))
     ));
 }
@@ -220,7 +220,7 @@ fn a_forked_stream_is_an_editable_copy_the_dependencys_next_revision_no_longer_r
     let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
     let arm_project = arm.repository.project_file().project;
     cell.repository
-        .add_dependency(&a_person(), &arm.source(), &first_revision)
+        .add_dependency(&a_person(), &arm.source(), &first_revision, None)
         .unwrap();
     let arm_stream_reference = json!({ "stream": { "asset": arm.stream, "from": arm_project } });
     let user_of_the_arm = Uuid::new_v4();
@@ -255,7 +255,7 @@ fn a_forked_stream_is_an_editable_copy_the_dependencys_next_revision_no_longer_r
         .unwrap();
     let second_revision = arm.add_a_node_named("elbow");
     cell.repository
-        .update_dependency(&a_person(), arm_project, &second_revision)
+        .update_dependency(&a_person(), arm_project, &second_revision, None)
         .unwrap();
 
     let copy_on_disk = cell
@@ -304,7 +304,7 @@ fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_depen
     let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
     let arm_project = arm.repository.project_file().project;
     cell.repository
-        .add_dependency(&a_person(), &arm.source(), &revision)
+        .add_dependency(&a_person(), &arm.source(), &revision, None)
         .unwrap();
     let arm_stream_reference = json!({ "stream": { "asset": arm.stream, "from": arm_project } });
     let (user_of_the_arm, _) = cell.add_a_node("arm", arm_stream_reference.clone(), None);
@@ -372,7 +372,7 @@ fn a_forked_stream_references_the_dependencys_own_assets_into_the_dependency() {
     let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
     let arm_project = arm.repository.project_file().project;
     cell.repository
-        .add_dependency(&a_person(), &arm.source(), &revision)
+        .add_dependency(&a_person(), &arm.source(), &revision, None)
         .unwrap();
 
     let (fork, _) = cell
@@ -402,11 +402,11 @@ fn undo_of_an_add_is_refused_once_another_author_has_moved_the_pin() {
     let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
     let arm_project = arm.repository.project_file().project;
     cell.repository
-        .add_dependency(&a_person(), &arm.source(), &first_revision)
+        .add_dependency(&a_person(), &arm.source(), &first_revision, None)
         .unwrap();
     let second_revision = arm.add_a_node_named("elbow");
     cell.repository
-        .update_dependency(&another_person(), arm_project, &second_revision)
+        .update_dependency(&another_person(), arm_project, &second_revision, None)
         .unwrap();
 
     let reversal = cell.repository.undo_by(&a_person()).unwrap();
@@ -435,7 +435,7 @@ fn a_project_directory_named_by_a_relative_path_is_refused() {
 
     let refusal = cell
         .repository
-        .add_dependency(&a_person(), &relative_source, &revision)
+        .add_dependency(&a_person(), &relative_source, &revision, None)
         .unwrap_err();
 
     assert!(
@@ -478,7 +478,7 @@ impl CellDependingOnArm {
         let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
         let arm_project = arm.repository.project_file().project;
         cell.repository
-            .add_dependency(&a_person(), &arm.source(), &pinned_revision)
+            .add_dependency(&a_person(), &arm.source(), &pinned_revision, None)
             .unwrap();
         Self {
             _root: root,
@@ -783,5 +783,115 @@ fn a_created_stream_document_referencing_an_asset_the_project_does_not_hold_is_r
             .project_directory()
             .join("streams/made.graph.json")
             .exists()
+    );
+}
+
+/// Install `arm` into `cell`'s venv as the distribution `tatolab-robot-arm`, its project
+/// directory and history among the package's files as a wheel would lay them out.
+fn install_a_package_shipping(cell: &ProjectWithOneStream, arm: &ProjectWithOneStream) {
+    let site_packages = cell
+        .repository
+        .project_directory()
+        .join(".venv/lib/python3.12/site-packages");
+    let shipped_project = site_packages.join("tatolab_robot_arm/project");
+    copy_directory(arm.repository.project_directory(), &shipped_project);
+    let dist_info = site_packages.join("tatolab_robot_arm-1.0.0.dist-info");
+    std::fs::create_dir_all(&dist_info).unwrap();
+    std::fs::write(
+        dist_info.join("METADATA"),
+        "Metadata-Version: 2.1\nName: Tatolab_Robot_Arm\nVersion: 1.0.0\n\nThe arm.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dist_info.join("RECORD"),
+        "tatolab_robot_arm/__init__.py,,\ntatolab_robot_arm/project/tatolab-project.json,sha256=x,2\ntatolab_robot_arm-1.0.0.dist-info/RECORD,,\n",
+    )
+    .unwrap();
+}
+
+fn copy_directory(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let destination = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_directory(&entry.path(), &destination);
+        } else {
+            std::fs::copy(entry.path(), destination).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_package_that_ships_a_project_is_pinned_at_that_projects_history() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let shipped_revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+
+    let refused = cell
+        .repository
+        .add_dependency(&a_person(), "package:tatolab-robot-arm", "main", None)
+        .err()
+        .unwrap();
+    assert!(
+        matches!(
+            refused,
+            ProjectRepositoryRefusal::DependencyPackageNotInstalled { .. }
+        ),
+        "{refused:?}"
+    );
+
+    install_a_package_shipping(&cell, &arm);
+    cell.repository
+        .add_dependency(&a_person(), "package:tatolab-robot-arm", "main", None)
+        .unwrap();
+    let pinned = cell.repository.dependency(arm_project).unwrap();
+    assert_eq!(pinned.source, "package:tatolab-robot-arm");
+    assert_eq!(pinned.revision, shipped_revision);
+    assert_eq!(
+        node_names_of_the_main_stream_at_the_pin(&cell.repository, arm_project),
+        vec!["shoulder"]
+    );
+
+    let upgraded_revision = arm.add_a_node_named("elbow");
+    std::fs::remove_dir_all(
+        cell.repository
+            .project_directory()
+            .join(".venv/lib/python3.12/site-packages"),
+    )
+    .unwrap();
+    install_a_package_shipping(&cell, &arm);
+    cell.repository
+        .update_dependency(&a_person(), arm_project, "main", None)
+        .unwrap();
+    assert_eq!(
+        cell.repository.dependency(arm_project).unwrap().revision,
+        upgraded_revision
+    );
+}
+
+#[test]
+fn a_package_that_ships_no_project_is_refused_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let dist_info = cell
+        .repository
+        .project_directory()
+        .join(".venv/lib/python3.12/site-packages/numpy-2.0.0.dist-info");
+    std::fs::create_dir_all(&dist_info).unwrap();
+    std::fs::write(dist_info.join("METADATA"), "Name: numpy\nVersion: 2.0.0\n").unwrap();
+    std::fs::write(dist_info.join("RECORD"), "numpy/__init__.py,,\n").unwrap();
+    let refused = cell
+        .repository
+        .add_dependency(&a_person(), "package:numpy", "main", None)
+        .err()
+        .unwrap();
+    assert!(
+        matches!(
+            refused,
+            ProjectRepositoryRefusal::DependencyPackageShipsNoProject { .. }
+        ),
+        "{refused:?}"
     );
 }
