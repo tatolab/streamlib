@@ -41,14 +41,15 @@ pub use project_repositories_open_in_this_runtime::{
     ProjectTransactionAnnouncement,
 };
 #[cfg(feature = "history")]
-pub use project_repository::ProjectRepository;
+pub use project_repository::{DependencyStreamFork, FORKED_FROM_KEY, ProjectRepository};
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
 };
 pub use project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation, ProjectTransaction,
+    ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation,
+    ProjectStreamDocumentOperation, ProjectTransaction,
     ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
     ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
@@ -56,7 +57,8 @@ pub use stream_graph_document::{
     StreamGraphDocument, StreamGraphDocumentGroup, StreamGraphDocumentLink,
     StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
     StreamGraphGroupFields, StreamGraphOperation, a_graph_document_as_a_fragment_run,
-    assets_a_node_config_references, fragment_with_each_node_uuid_kept_by_its_name,
+    assets_a_node_config_references, config_with_a_dependency_asset_reference_made_local,
+    fragment_with_each_node_uuid_kept_by_its_name,
 };
 
 /// The directory inside a project that holds what the runtime keeps for it: history, content and dependencies.

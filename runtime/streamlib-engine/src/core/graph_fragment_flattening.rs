@@ -89,6 +89,7 @@ impl GraphSnapshot {
                 nodes: level.nodes,
                 links: level.links,
                 groups: self.groups.clone(),
+                forked_from: self.forked_from.clone(),
             },
             fragments_as_drawn: GraphFragmentsAsDrawn {
                 fragments: level.fragments,
@@ -170,6 +171,7 @@ fn flatten_one_level(
             nodes: inner.nodes,
             links: inner.links,
             groups: Vec::new(),
+            forked_from: None,
         }
         .with_graph_interface_resolved()
         .map_err(|refusal| {
@@ -857,6 +859,7 @@ mod tests {
             references: Vec::new(),
             machine: "rig".to_string(),
             groups: Vec::new(),
+            forked_from: None,
         }
     }
 

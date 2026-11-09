@@ -21,19 +21,53 @@ use crate::project_history_repository::{
     PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRemote,
     ProjectHistoryRepository,
 };
+use crate::project_repository_refusal::ProjectRepositoryRefusal;
+use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
+use crate::project_transaction::{
+    AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
+    ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation,
+    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
+};
+use crate::stream_graph_document::{
+    StreamGraphDocument, StreamGraphOperation, assets_a_node_config_references,
+    config_with_a_dependency_asset_reference_made_local,
+};
 
 /// Where each dependency's history is fetched to, relative to the project: one bare Git
 /// repository per depended-on project, named by its UUID.
 pub const PROJECT_DEPENDENCIES_DIRECTORY: &str = ".tatolab/dependencies";
-use crate::project_repository_refusal::ProjectRepositoryRefusal;
-use crate::project_stream_document::project_stream_documents;
-use crate::project_transaction::{
-    AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation, ProjectTransaction,
-    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphOperationOnAStream,
-};
-use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
+
+/// The top-level key of a forked graph document that records the stream it was copied from.
+pub const FORKED_FROM_KEY: &str = "forked_from";
+
+/// What a fork of a dependency's stream makes, before it is applied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DependencyStreamFork {
+    /// The copy's new stream asset UUID.
+    pub copy: Uuid,
+    /// The copy's graph document, written into this project.
+    pub create_the_copy: ProjectStreamDocumentOperation,
+    /// Each of this project's node configs that referenced the dependency's stream, made to
+    /// reference the copy.
+    pub references_made_local: Vec<StreamGraphOperationOnAStream>,
+}
+
+impl DependencyStreamFork {
+    /// The fork as the operations of one transaction: the copy first, then each reference.
+    pub fn operations(&self) -> Vec<ProjectOperation> {
+        std::iter::once(ProjectOperation::StreamDocument(
+            self.create_the_copy.clone(),
+        ))
+        .chain(
+            self.references_made_local
+                .iter()
+                .cloned()
+                .map(ProjectOperation::StreamGraph),
+        )
+        .collect()
+    }
+}
 
 /// A project the runtime opened: the one writer of its files, its content store and its history.
 pub struct ProjectRepository {
@@ -295,8 +329,17 @@ impl ProjectRepository {
         let mut staged_assets = self.every_asset()?;
         let mut staged_documents: BTreeMap<Uuid, StreamGraphDocument> = BTreeMap::new();
         let mut staged_project_file = self.project_file.clone();
+        let mut stream_documents_taken_out: BTreeSet<ProjectRelativeAssetPath> = BTreeSet::new();
         for operation in &operations {
             match operation {
+                ProjectOperation::StreamDocument(stream_document_operation) => {
+                    self.apply_operation_to_stream_documents(
+                        &mut staged_assets,
+                        &mut staged_documents,
+                        &mut stream_documents_taken_out,
+                        stream_document_operation,
+                    )?;
+                }
                 ProjectOperation::Dependency(dependency_operation) => {
                     apply_operation_to_dependencies(
                         &mut staged_project_file,
@@ -374,8 +417,20 @@ impl ProjectRepository {
                 }
             }
         }
-        let written_documents = match self.write_staged_documents(&staged_assets, &staged_documents)
-        {
+        let written_documents = match self
+            .write_staged_documents(&staged_assets, &staged_documents)
+            .and_then(|mut written_documents| {
+                match self.take_out_stream_documents(&stream_documents_taken_out) {
+                    Ok(taken_out) => {
+                        written_documents.extend(taken_out);
+                        Ok(written_documents)
+                    }
+                    Err(refusal) => {
+                        self.restore_written_documents(written_documents);
+                        Err(refusal)
+                    }
+                }
+            }) {
             Ok(written_documents) => written_documents,
             Err(refusal) => {
                 self.undo_performed_effects(performed_effects);
@@ -576,6 +631,135 @@ impl ProjectRepository {
         self.dependency_history(project)?.files_at_commit(commit)
     }
 
+    /// The graph document of the dependency `project`'s stream asset `stream` at `commit` of
+    /// its fetched history, with its path there.
+    pub fn dependency_stream_at_commit(
+        &self,
+        project: Uuid,
+        stream: Uuid,
+        commit: &str,
+    ) -> Result<(ProjectRelativeAssetPath, Value), ProjectRepositoryRefusal> {
+        for (path, bytes) in self.dependency_files_at_commit(project, commit)? {
+            if !path.ends_with(GRAPH_DOCUMENT_FILE_SUFFIX) {
+                continue;
+            }
+            let Ok(graph_document) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            if graph_document
+                .get(STREAM_DOCUMENT_ASSET_KEY)
+                .and_then(Value::as_str)
+                == Some(stream.to_string().as_str())
+            {
+                return Ok((ProjectRelativeAssetPath::parse(&path)?, graph_document));
+            }
+        }
+        Err(ProjectRepositoryRefusal::DependencyHoldsNoStream {
+            project,
+            stream,
+            commit: commit.to_owned(),
+        })
+    }
+
+    /// What a fork of the dependency `project`'s stream `stream`, at its pin, into this project
+    /// makes: its graph document copied to `path` under a new stream asset UUID, recording the
+    /// stream, project and commit it came from under `forked_from`, and every top-level node of
+    /// this project's streams that referenced it made to reference the copy.
+    pub fn the_fork_of_a_dependency_stream(
+        &self,
+        project: Uuid,
+        stream: Uuid,
+        path: Option<&str>,
+    ) -> Result<DependencyStreamFork, ProjectRepositoryRefusal> {
+        let pinned = self.dependency(project)?;
+        let (path_in_the_dependency, mut document) =
+            self.dependency_stream_at_commit(project, stream, &pinned.revision)?;
+        let path = match path {
+            Some(path) => ProjectRelativeAssetPath::parse(path)?,
+            None => {
+                let file_name = path_in_the_dependency.file_name();
+                let stream_name = file_name
+                    .strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX)
+                    .unwrap_or(file_name);
+                ProjectRelativeAssetPath::parse(&format!(
+                    "streams/{stream_name}-fork{GRAPH_DOCUMENT_FILE_SUFFIX}"
+                ))?
+            }
+        };
+        let copy = Uuid::new_v4();
+        let document_object = document.as_object_mut().ok_or_else(|| {
+            ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                path: path_in_the_dependency.to_string(),
+                why: "it is no JSON object".to_owned(),
+            }
+        })?;
+        document_object.insert(
+            STREAM_DOCUMENT_ASSET_KEY.to_owned(),
+            Value::String(copy.to_string()),
+        );
+        document_object.insert(
+            FORKED_FROM_KEY.to_owned(),
+            serde_json::json!({
+                "asset": stream.to_string(),
+                "from": project.to_string(),
+                "revision": pinned.revision,
+            }),
+        );
+        let assets = self.every_asset()?;
+        let mut references_made_local = Vec::new();
+        for this_projects_stream in assets
+            .values()
+            .filter(|asset| asset.kind == ProjectAssetKind::Stream)
+        {
+            let (_, stream_document) =
+                self.read_stream_graph_document(&assets, this_projects_stream.asset)?;
+            for node in stream_document.nodes() {
+                if let Some(to) = config_with_a_dependency_asset_reference_made_local(
+                    &node.config,
+                    project,
+                    stream,
+                    copy,
+                ) {
+                    references_made_local.push(StreamGraphOperationOnAStream {
+                        stream: this_projects_stream.asset,
+                        graph_operation: StreamGraphOperation::SetNodeConfig {
+                            node: node.id,
+                            from: node.config,
+                            to,
+                        },
+                    });
+                }
+            }
+        }
+        Ok(DependencyStreamFork {
+            copy,
+            create_the_copy: ProjectStreamDocumentOperation::CreateStreamDocument {
+                stream: copy,
+                path,
+                document,
+            },
+            references_made_local,
+        })
+    }
+
+    /// Fork the dependency `project`'s stream `stream` at its pin into this project, as one
+    /// transaction by `author`: [`Self::the_fork_of_a_dependency_stream`], applied.
+    pub fn fork_dependency_stream(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        project: Uuid,
+        stream: Uuid,
+        path: Option<&str>,
+    ) -> Result<(DependencyStreamFork, AppliedProjectTransaction), ProjectRepositoryRefusal> {
+        let fork = self.the_fork_of_a_dependency_stream(project, stream, path)?;
+        let applied = self.apply_project_operations(
+            author,
+            fork.operations(),
+            ProjectTransactionLineage::NewEdit,
+        )?;
+        Ok((fork, applied))
+    }
+
     fn dependency_history(
         &self,
         project: Uuid,
@@ -691,6 +875,111 @@ impl ProjectRepository {
             written_documents.push((on_disk, bytes_before));
         }
         Ok(written_documents)
+    }
+
+    /// Remove each graph document at `paths`, answering what each held so a refusal can
+    /// restore it.
+    fn take_out_stream_documents(
+        &self,
+        paths: &BTreeSet<ProjectRelativeAssetPath>,
+    ) -> Result<Vec<GraphDocumentAsItWasBeforeAWrite>, ProjectRepositoryRefusal> {
+        let mut taken_out = Vec::with_capacity(paths.len());
+        for path in paths {
+            let on_disk = path.on_disk_under(&self.project_directory);
+            let removed = std::fs::read(&on_disk).and_then(|bytes_before| {
+                std::fs::remove_file(&on_disk).map(|()| bytes_before)
+            });
+            match removed {
+                Ok(bytes_before) => taken_out.push((on_disk, Some(bytes_before))),
+                Err(not_removed) => {
+                    self.restore_written_documents(taken_out);
+                    return Err(not_removed.into());
+                }
+            }
+        }
+        Ok(taken_out)
+    }
+
+    /// Stage `operation` on the stream assets and their graph documents.
+    fn apply_operation_to_stream_documents(
+        &self,
+        staged_assets: &mut BTreeMap<Uuid, ProjectAsset>,
+        staged_documents: &mut BTreeMap<Uuid, StreamGraphDocument>,
+        stream_documents_taken_out: &mut BTreeSet<ProjectRelativeAssetPath>,
+        operation: &ProjectStreamDocumentOperation,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        match operation {
+            ProjectStreamDocumentOperation::CreateStreamDocument {
+                stream,
+                path,
+                document,
+            } => {
+                refuse_a_stream_document_path_without_its_suffix(path)?;
+                if let Some(holder) = staged_assets.values().find(|asset| asset.path == *path) {
+                    return Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset {
+                        path: path.to_string(),
+                        holder: holder.asset,
+                    });
+                }
+                if !stream_documents_taken_out.contains(path)
+                    && path.on_disk_under(&self.project_directory).exists()
+                {
+                    return Err(ProjectRepositoryRefusal::AssetPathHoldsAnotherFile {
+                        path: path.to_string(),
+                    });
+                }
+                if let Some(earlier) = staged_assets.get(stream) {
+                    return Err(ProjectRepositoryRefusal::AssetNamedTwice {
+                        asset: *stream,
+                        first: earlier.path.to_string(),
+                        second: path.to_string(),
+                    });
+                }
+                let unreadable = |why: String| ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                    path: path.to_string(),
+                    why,
+                };
+                if document.get(STREAM_DOCUMENT_ASSET_KEY).and_then(Value::as_str)
+                    != Some(stream.to_string().as_str())
+                {
+                    return Err(unreadable(format!(
+                        "its `{STREAM_DOCUMENT_ASSET_KEY}` does not name its stream asset {stream}"
+                    )));
+                }
+                let staged_document = StreamGraphDocument::from_value(document.clone())
+                    .map_err(unreadable)?;
+                let bytes = staged_document.canonical_bytes()?;
+                staged_assets.insert(
+                    *stream,
+                    ProjectAsset {
+                        asset: *stream,
+                        kind: ProjectAssetKind::Stream,
+                        content_sha256: content_sha256_of(&bytes),
+                        content_byte_len: bytes.len() as u64,
+                        import_settings: serde_json::Map::new(),
+                        path: path.clone(),
+                    },
+                );
+                staged_documents.insert(*stream, staged_document);
+                stream_documents_taken_out.remove(path);
+            }
+            ProjectStreamDocumentOperation::DeleteStreamDocument { stream, path, .. } => {
+                let stream_asset = staged_assets
+                    .get(stream)
+                    .filter(|asset| asset.kind == ProjectAssetKind::Stream && asset.path == *path)
+                    .cloned()
+                    .ok_or(ProjectRepositoryRefusal::NoSuchStream(*stream))?;
+                self.refuse_deleting_an_asset_a_graph_references(
+                    &stream_asset,
+                    staged_assets,
+                    staged_documents,
+                )?;
+                staged_assets.remove(stream);
+                staged_documents.remove(stream);
+                stream_documents_taken_out.insert(path.clone());
+            }
+        }
+        Ok(())
     }
 
     fn restore_written_documents(&self, written_documents: Vec<GraphDocumentAsItWasBeforeAWrite>) {

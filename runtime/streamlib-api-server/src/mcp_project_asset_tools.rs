@@ -471,7 +471,11 @@ impl LocalApiMcpServerHandler {
                         ProjectAssetOperation::RelocateAsset { asset, .. }
                         | ProjectAssetOperation::SetAssetSettings { asset, .. },
                     )) => project_repository.asset(*asset)?,
-                    Some(ProjectOperation::StreamGraph(_) | ProjectOperation::Dependency(_))
+                    Some(
+                        ProjectOperation::StreamGraph(_)
+                        | ProjectOperation::Dependency(_)
+                        | ProjectOperation::StreamDocument(_),
+                    )
                     | None => {
                         return Err(ProjectRepositoryRefusal::EmptyTransaction);
                     }
@@ -544,7 +548,7 @@ fn project_asset_import_source(source: &str) -> Result<ProjectAssetImportSource,
     ))
 }
 
-fn project_asset_on_the_wire(asset: &ProjectAsset) -> ProjectAssetOnTheWire {
+pub(crate) fn project_asset_on_the_wire(asset: &ProjectAsset) -> ProjectAssetOnTheWire {
     ProjectAssetOnTheWire {
         asset: asset.asset.to_string(),
         kind: project_asset_kind_on_the_wire(asset.kind).to_owned(),

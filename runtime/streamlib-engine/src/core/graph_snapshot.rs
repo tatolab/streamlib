@@ -30,7 +30,9 @@ use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
 use crate::core::graph_variable_resolution::{
     GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
 };
-use crate::core::json_schema::{GraphResponse, LabelledNodeGroup, LinkPortRefOutput};
+use crate::core::json_schema::{
+    ForkedStreamOrigin, GraphResponse, LabelledNodeGroup, LinkPortRefOutput,
+};
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
@@ -62,6 +64,11 @@ pub struct GraphSnapshot {
     /// Every labelled group of the stream's own level, which nothing that runs reads.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LabelledNodeGroup>,
+
+    /// The stream of another project this graph document was forked from, which nothing that
+    /// runs reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<ForkedStreamOrigin>,
 }
 
 /// The spec keys a graph document is read through, before its keys are checked.
@@ -78,6 +85,8 @@ struct GraphSnapshotAsWritten {
     links: Vec<GraphSnapshotLink>,
     #[serde(default)]
     groups: Vec<LabelledNodeGroup>,
+    #[serde(default)]
+    forked_from: Option<ForkedStreamOrigin>,
 }
 
 /// One JSON object of a graph document: the graph, a node, a link or a link
@@ -97,7 +106,15 @@ struct GraphDocumentObjectKeys {
 
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
-    spec_keys: &["asset", "stream", "clock", "nodes", "links", "groups"],
+    spec_keys: &[
+        "asset",
+        "stream",
+        "clock",
+        "nodes",
+        "links",
+        "groups",
+        "forked_from",
+    ],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &["extensions", "machine", "references", "runtime_name"],
 };
@@ -254,6 +271,7 @@ impl GraphSnapshot {
             nodes,
             links,
             groups,
+            forked_from,
         } = GraphSnapshotAsWritten::deserialize(&graph_document)
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
         let mut graph = Self {
@@ -263,6 +281,7 @@ impl GraphSnapshot {
             nodes,
             links,
             groups,
+            forked_from,
         };
         refuse_a_group_of_no_uuid_or_one_uuid_twice(&graph.groups, &graph.nodes, "")?;
         graph.name_each_link_end_by_its_nodes_name()?;
@@ -368,6 +387,7 @@ impl GraphSnapshot {
     ) -> Result<GraphSnapshotWithGraphOnlyNodesResolved> {
         let fragments = Self {
             groups: Vec::new(),
+            forked_from: None,
             ..self.clone()
         }
         .with_graph_fragments_flattened()?;
@@ -384,6 +404,7 @@ impl GraphSnapshot {
                 variables_as_drawn: variables.variables_as_drawn,
                 interface_as_drawn: interface.interface_as_drawn,
                 groups_as_drawn: self.groups.clone(),
+                forked_from_as_drawn: self.forked_from.clone(),
             },
             values_the_set_variables_hold: variables.values_the_set_variables_hold,
         })
@@ -487,6 +508,7 @@ pub struct GraphOnlyNodesAsDrawn {
     pub variables_as_drawn: GraphVariablesAsDrawn,
     pub interface_as_drawn: GraphInterfaceAsDrawn,
     pub groups_as_drawn: Vec<LabelledNodeGroup>,
+    pub forked_from_as_drawn: Option<ForkedStreamOrigin>,
 }
 
 /// A change to a node that a drawn link naming it by name blocks.
@@ -593,6 +615,7 @@ impl GraphOnlyNodesAsDrawn {
         self.variables_as_drawn.render_into(graph_response);
         self.fragments_as_drawn.render_into(graph_response);
         graph_response.groups = self.groups_as_drawn.clone();
+        graph_response.forked_from = self.forked_from_as_drawn.clone();
     }
 }
 
@@ -1119,6 +1142,7 @@ mod tests {
             }],
             links: vec![],
             groups: vec![],
+            forked_from: None,
         };
 
         let serialized = serde_json::to_value(&graph).unwrap();
@@ -1447,7 +1471,7 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`asset`, `stream`, `clock`, `nodes`, `links` and `groups`",
+                    "`asset`, `stream`, `clock`, `nodes`, `links`, `groups` and `forked_from`",
                 ],
             ),
             (

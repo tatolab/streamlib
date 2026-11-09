@@ -200,6 +200,60 @@ impl ProjectDependencyOperation {
     }
 }
 
+/// One stream asset's graph document written into the project or taken out of it whole,
+/// recorded with the document so its inverse can restore it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ProjectStreamDocumentOperation {
+    /// The stream asset's graph document was written at `path`.
+    CreateStreamDocument {
+        stream: Uuid,
+        path: ProjectRelativeAssetPath,
+        document: Value,
+    },
+    /// The stream asset's graph document at `path` was taken out.
+    DeleteStreamDocument {
+        stream: Uuid,
+        path: ProjectRelativeAssetPath,
+        document: Value,
+    },
+}
+
+impl ProjectStreamDocumentOperation {
+    /// The operation that undoes this one.
+    pub fn inverse(&self) -> Self {
+        match self.clone() {
+            Self::CreateStreamDocument {
+                stream,
+                path,
+                document,
+            } => Self::DeleteStreamDocument {
+                stream,
+                path,
+                document,
+            },
+            Self::DeleteStreamDocument {
+                stream,
+                path,
+                document,
+            } => Self::CreateStreamDocument {
+                stream,
+                path,
+                document,
+            },
+        }
+    }
+
+    /// The operation as a commit's summary line names it.
+    #[cfg(feature = "history")]
+    pub(crate) fn summary(&self) -> String {
+        match self {
+            Self::CreateStreamDocument { path, .. } => format!("create_stream_document {path}"),
+            Self::DeleteStreamDocument { path, .. } => format!("delete_stream_document {path}"),
+        }
+    }
+}
+
 /// One change to one stream's graph: the stream by its asset's UUID, and the operation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StreamGraphOperationOnAStream {
@@ -220,6 +274,8 @@ pub enum ProjectOperation {
     StreamGraph(StreamGraphOperationOnAStream),
     /// A change to the projects this one depends on.
     Dependency(ProjectDependencyOperation),
+    /// A stream asset's graph document written or taken out whole.
+    StreamDocument(ProjectStreamDocumentOperation),
 }
 
 impl ProjectOperation {
@@ -237,6 +293,9 @@ impl ProjectOperation {
             Self::Dependency(dependency_operation) => {
                 Self::Dependency(dependency_operation.inverse())
             }
+            Self::StreamDocument(stream_document_operation) => {
+                Self::StreamDocument(stream_document_operation.inverse())
+            }
         }
     }
 
@@ -247,6 +306,7 @@ impl ProjectOperation {
             Self::Asset(asset_operation) => asset_operation.summary(),
             Self::StreamGraph(on_a_stream) => on_a_stream.graph_operation.summary(),
             Self::Dependency(dependency_operation) => dependency_operation.summary(),
+            Self::StreamDocument(stream_document_operation) => stream_document_operation.summary(),
         }
     }
 }

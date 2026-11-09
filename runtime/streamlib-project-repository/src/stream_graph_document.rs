@@ -454,6 +454,15 @@ impl StreamGraphDocument {
         Ok(())
     }
 
+    /// Every top-level node, as the document holds it.
+    pub fn nodes(&self) -> Vec<StreamGraphDocumentNode> {
+        self.node_objects()
+            .filter_map(|node_object| {
+                serde_json::from_value(Value::Object(node_object.clone())).ok()
+            })
+            .collect()
+    }
+
     /// Every top-level fragment node, as the document holds it.
     pub fn fragment_nodes(&self) -> Vec<StreamGraphDocumentNode> {
         self.node_objects()
@@ -948,6 +957,59 @@ fn groups_with_each_uuid_kept_by_its_title(
         );
     }
     Ok(groups)
+}
+
+/// `config` with each reference to the asset `asset` of the dependency `project`,
+/// `{"asset": <asset>, "from": <project>}`, made a reference to this project's asset `copy`, or
+/// `None` when it holds no such reference.
+pub fn config_with_a_dependency_asset_reference_made_local(
+    config: &Value,
+    project: Uuid,
+    asset: Uuid,
+    copy: Uuid,
+) -> Option<Value> {
+    let mut rewritten = config.clone();
+    rewrite_the_dependency_asset_references(&mut rewritten, project, asset, copy)
+        .then_some(rewritten)
+}
+
+fn rewrite_the_dependency_asset_references(
+    value: &mut Value,
+    project: Uuid,
+    asset: Uuid,
+    copy: Uuid,
+) -> bool {
+    match value {
+        Value::Object(object) => {
+            let names_the_dependency_asset = |key: &str, expected: Uuid| {
+                object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .and_then(|held| Uuid::parse_str(held).ok())
+                    == Some(expected)
+            };
+            if names_the_dependency_asset("asset", asset)
+                && names_the_dependency_asset("from", project)
+            {
+                object.remove("from");
+                object.insert("asset".to_owned(), Value::String(copy.to_string()));
+                return true;
+            }
+            let mut rewritten_any = false;
+            for entry in object.values_mut() {
+                rewritten_any |= rewrite_the_dependency_asset_references(entry, project, asset, copy);
+            }
+            rewritten_any
+        }
+        Value::Array(items) => {
+            let mut rewritten_any = false;
+            for item in items {
+                rewritten_any |= rewrite_the_dependency_asset_references(item, project, asset, copy);
+            }
+            rewritten_any
+        }
+        _ => false,
+    }
 }
 
 /// `graph_document`, another project's stream as its graph document holds it, as a graph

@@ -536,6 +536,7 @@ impl GraphSnapshot {
                 nodes: runtime_nodes,
                 links: runtime_links,
                 groups: self.groups.clone(),
+                forked_from: self.forked_from.clone(),
             },
             variables_as_drawn: GraphVariablesAsDrawn {
                 variable_node_positions: self
@@ -1071,6 +1072,7 @@ mod tests {
             references: Vec::new(),
             machine: "vm".to_string(),
             groups: Vec::new(),
+            forked_from: None,
         };
         resolution
             .variables_as_drawn
@@ -1103,6 +1105,7 @@ mod tests {
             references: Vec::new(),
             machine: "vm".to_string(),
             groups: Vec::new(),
+            forked_from: None,
         };
         resolution
             .variables_as_drawn

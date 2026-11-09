@@ -96,6 +96,12 @@ pub enum ProjectRepositoryRefusal {
         expected: Uuid,
         held: Uuid,
     },
+    #[error("the dependency {project} holds no stream asset {stream} at {commit}")]
+    DependencyHoldsNoStream {
+        project: Uuid,
+        stream: Uuid,
+        commit: String,
+    },
     #[error("the dependency {project} has no fetched history at {history_directory}; add it again")]
     DependencyNotFetched {
         project: Uuid,

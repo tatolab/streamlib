@@ -194,3 +194,126 @@ fn a_project_is_refused_as_its_own_dependency_and_a_second_add_of_one_is_refused
         Err(ProjectRepositoryRefusal::DependencyAlreadyHeld(_))
     ));
 }
+
+#[test]
+fn a_forked_stream_is_an_editable_copy_the_dependencys_next_revision_no_longer_reaches() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let first_revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &first_revision)
+        .unwrap();
+    let arm_stream_reference = json!({ "stream": { "asset": arm.stream, "from": arm_project } });
+    let user_of_the_arm = Uuid::new_v4();
+    cell.repository
+        .apply_project_operations(
+            &a_person(),
+            vec![ProjectOperation::StreamGraph(
+                StreamGraphOperationOnAStream {
+                    stream: cell.stream,
+                    graph_operation: StreamGraphOperation::AddNode {
+                        node: StreamGraphDocumentNode {
+                            id: user_of_the_arm,
+                            name: "arm".to_owned(),
+                            node_type: "nodes.arm:ArmUser".to_owned(),
+                            config: arm_stream_reference.clone(),
+                            pins: Map::new(),
+                            exposed_config_fields: Vec::new(),
+                            studio: Map::new(),
+                            fragment: None,
+                        },
+                        links: Vec::new(),
+                    },
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+
+    let (fork, _) = cell
+        .repository
+        .fork_dependency_stream(&a_person(), arm_project, arm.stream, None)
+        .unwrap();
+    let second_revision = arm.add_a_node_named("elbow");
+    cell.repository
+        .update_dependency(&a_person(), arm_project, &second_revision)
+        .unwrap();
+
+    let copy_on_disk = cell
+        .repository
+        .project_directory()
+        .join("streams/main-fork.graph.json");
+    let copy: Value = serde_json::from_slice(&std::fs::read(&copy_on_disk).unwrap()).unwrap();
+    assert_eq!(copy["asset"], json!(fork.copy));
+    assert_eq!(
+        copy["forked_from"],
+        json!({ "asset": arm.stream, "from": arm_project, "revision": first_revision })
+    );
+    let copy_node_names: Vec<&str> = copy["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(copy_node_names, ["shoulder"]);
+    let user_after_the_fork = cell
+        .repository
+        .stream_graph_document(cell.stream)
+        .unwrap()
+        .node(user_of_the_arm)
+        .unwrap();
+    assert_eq!(
+        user_after_the_fork.config,
+        json!({ "stream": { "asset": fork.copy } })
+    );
+
+    let mut forked = ProjectWithOneStream {
+        repository: ProjectRepository::open(cell.repository.project_directory()).unwrap(),
+        stream: fork.copy,
+    };
+    forked.add_a_node_named("gripper");
+    let edited_copy = forked.repository.stream_graph_document(fork.copy).unwrap();
+    assert!(edited_copy.node_named("gripper").is_some());
+    assert!(edited_copy.node_named("elbow").is_none());
+}
+
+#[test]
+fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_dependency() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &revision)
+        .unwrap();
+
+    let (fork, _) = cell
+        .repository
+        .fork_dependency_stream(&a_person(), arm_project, arm.stream, Some("streams/arm.graph.json"))
+        .unwrap();
+    assert!(cell.repository.asset(fork.copy).is_ok());
+    let reversal = cell.repository.undo_by(&a_person()).unwrap();
+    cell.repository
+        .apply_project_operations(&a_person(), reversal.operations, reversal.lineage)
+        .unwrap();
+
+    assert!(
+        !cell
+            .repository
+            .project_directory()
+            .join("streams/arm.graph.json")
+            .exists()
+    );
+    assert!(matches!(
+        cell.repository.asset(fork.copy),
+        Err(ProjectRepositoryRefusal::NoSuchAsset(_))
+    ));
+    assert!(matches!(
+        cell.repository
+            .fork_dependency_stream(&a_person(), arm_project, Uuid::new_v4(), None),
+        Err(ProjectRepositoryRefusal::DependencyHoldsNoStream { .. })
+    ));
+}

@@ -38,7 +38,7 @@ use crate::mcp_project_asset_tools::{
 };
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 
-const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the edit is to, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
+pub(crate) const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the edit is to, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
 const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.";
 const IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION: &str = "The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`.";
 const IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import.";
@@ -51,13 +51,14 @@ const GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION: &str =
     "What the group's nodes do, for the next person who reads the graph.";
 const GROUP_COLOUR_ARGUMENT_DESCRIPTION: &str =
     "The colour Tato Studio draws the group's frame with, e.g. `#3b82f6`.";
-const DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION: &str = "The project depended on, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`.";
-const DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION: &str = "The depended-on project's stream, by its stream asset's UUID, the `asset` its graph document holds.";
-const DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. A top-level fragment of that name holding the same stream is refreshed from the pin.";
-/// The `type` of a fragment node holding a stream of a project this one depends on.
-pub(crate) const DEPENDENCY_STREAM_FRAGMENT_TYPE: &str = "tatolab.project:DependencyStream";
-/// The config key of a dependency stream's fragment node naming the stream it holds.
-pub(crate) const DEPENDENCY_STREAM_FRAGMENT_CONFIG_KEY: &str = "stream";
+pub(crate) const DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION: &str = "The project depended on, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`.";
+pub(crate) const DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION: &str = "The depended-on project's stream, by its stream asset's UUID, the `asset` its graph document holds.";
+pub(crate) const DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. A top-level fragment of that name holding the same stream is refreshed from the pin.";
+/// The `type` of a fragment node holding a stored copy of a stream: a dependency's, or one a
+/// fork made this project's.
+pub(crate) const STREAM_FRAGMENT_TYPE: &str = "tatolab.project:StreamFragment";
+/// The config key of a stream's fragment node naming the stream it holds.
+pub(crate) const STREAM_FRAGMENT_CONFIG_KEY: &str = "stream";
 const GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.";
 
 /// Whether a graph edit is kept.
@@ -1010,7 +1011,7 @@ impl LocalApiMcpServerHandler {
 }
 
 impl LocalApiMcpServerHandler {
-    async fn one_graph_transaction(
+    pub(crate) async fn one_graph_transaction(
         &self,
         tool_name: &'static str,
         operations: Vec<StreamGraphOperationToolArgument>,
@@ -1095,30 +1096,34 @@ pub(crate) struct GraphTransactionInFlight<'transaction> {
 }
 
 impl GraphTransactionInFlight<'_> {
-    /// Apply `requests` as one transaction by `author`, after `dependency_operations`, which
-    /// move the pins a `use_dependency_stream` of the same transaction reads its stream at.
+    /// Apply `requests` as one transaction by `author`, after `project_operations_first`: a
+    /// dependency pin they move is the pin a `use_dependency_stream` of the same transaction
+    /// reads its stream at.
     pub(crate) fn apply(
         &self,
         requests: Vec<StreamGraphOperationToolArgument>,
-        dependency_operations: Vec<ProjectDependencyOperation>,
+        project_operations_first: Vec<ProjectOperation>,
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
     ) -> Result<GraphTransactionToolResult, String> {
         if requests.is_empty() {
             return Err("a transaction holds at least one operation".to_owned());
         }
-        if mode == GraphEditMode::Live && !dependency_operations.is_empty() {
+        if mode == GraphEditMode::Live && !project_operations_first.is_empty() {
             return Err(
-                "a dependency's pin moves only in a committed transaction; send `mode` `commit`"
+                "a change to the project beside its graphs is made only in a committed \
+                 transaction; send `mode` `commit`"
                     .to_owned(),
             );
         }
-        let pin_moved_in_this_transaction: HashMap<Uuid, String> = dependency_operations
+        let pin_moved_in_this_transaction: HashMap<Uuid, String> = project_operations_first
             .iter()
-            .filter_map(|dependency_operation| match dependency_operation {
-                ProjectDependencyOperation::MoveDependencyPin { project, to, .. } => {
-                    Some((*project, to.clone()))
-                }
+            .filter_map(|project_operation| match project_operation {
+                ProjectOperation::Dependency(ProjectDependencyOperation::MoveDependencyPin {
+                    project,
+                    to,
+                    ..
+                }) => Some((*project, to.clone())),
                 _ => None,
             })
             .collect();
@@ -1264,9 +1269,8 @@ impl GraphTransactionInFlight<'_> {
         let (transaction, commit) = match project_repository_held.as_mut() {
             None => (None, None),
             Some(project_repository) => {
-                let project_operations = dependency_operations
+                let project_operations = project_operations_first
                     .into_iter()
-                    .map(ProjectOperation::Dependency)
                     .chain(
                         applied_live
                             .iter()
@@ -1860,7 +1864,7 @@ fn graph_operation_for_the_request(
                 read_the_dependency_stream(project, dependency_stream)?;
             let fragment_run = a_graph_document_as_a_fragment_run(&graph_document)?;
             let name = name.unwrap_or(stream_name);
-            let config = json!({ DEPENDENCY_STREAM_FRAGMENT_CONFIG_KEY: {
+            let config = json!({ STREAM_FRAGMENT_CONFIG_KEY: {
                 "asset": dependency_stream.to_string(),
                 "from": project.to_string(),
             }});
@@ -1872,7 +1876,7 @@ fn graph_operation_for_the_request(
                         node: StreamGraphDocumentNode {
                             id: node,
                             name,
-                            node_type: DEPENDENCY_STREAM_FRAGMENT_TYPE.to_owned(),
+                            node_type: STREAM_FRAGMENT_TYPE.to_owned(),
                             config,
                             pins: Map::new(),
                             exposed_config_fields: Vec::new(),
@@ -1894,7 +1898,7 @@ fn graph_operation_for_the_request(
                     config: held_config,
                     fragment: Some(previous_fragment),
                     ..
-                }) if node_type == DEPENDENCY_STREAM_FRAGMENT_TYPE && held_config == config => {
+                }) if node_type == STREAM_FRAGMENT_TYPE && held_config == config => {
                     label_the_node(label, id, node_by_label)?;
                     Ok(StreamGraphOperation::RefreshFragment {
                         node: id,
@@ -1939,26 +1943,24 @@ fn the_dependency_stream_at_its_pin(
     dependency_stream: Uuid,
     pin_moved_to: Option<&str>,
 ) -> Result<(Value, String), String> {
-    let files = match pin_moved_to {
-        Some(commit) => project_repository.dependency_files_at_commit(project, commit),
-        None => project_repository.dependency_files_at_its_pin(project),
-    }
-    .map_err(|refusal| refusal.to_string())?;
-    for (path, bytes) in &files {
-        let Some(file_name) = path.strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX) else {
-            continue;
-        };
-        let Ok(graph_document) = serde_json::from_slice::<Value>(bytes) else {
-            continue;
-        };
-        if graph_document["asset"].as_str() == Some(dependency_stream.to_string().as_str()) {
-            let stream_name = file_name.rsplit('/').next().unwrap_or(file_name).to_owned();
-            return Ok((graph_document, stream_name));
+    let commit = match pin_moved_to {
+        Some(commit) => commit.to_owned(),
+        None => {
+            project_repository
+                .dependency(project)
+                .map_err(|refusal| refusal.to_string())?
+                .revision
         }
-    }
-    Err(format!(
-        "the dependency {project} holds no stream asset {dependency_stream} at its pin"
-    ))
+    };
+    let (path, graph_document) = project_repository
+        .dependency_stream_at_commit(project, dependency_stream, &commit)
+        .map_err(|refusal| refusal.to_string())?;
+    let file_name = path.file_name();
+    let stream_name = file_name
+        .strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX)
+        .unwrap_or(file_name)
+        .to_owned();
+    Ok((graph_document, stream_name))
 }
 
 fn the_group_named(group: &str) -> Result<Uuid, String> {
