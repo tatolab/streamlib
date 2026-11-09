@@ -16,7 +16,8 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_project_repository::PROJECT_IMPORTS_DIRECTORY;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ListProjectNodeTypesToolResult, NodeTypeSourceReadWithoutRunningIt,
+    ListProjectNodeTypesToolResult, NodeModuleNotReadable, NodeTypeSourceOrigin,
+    NodeTypeSourceReadWithoutRunningIt,
 };
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
@@ -41,6 +42,16 @@ struct ProjectReadForItsNodeTypeListing {
     project: String,
     project_name: String,
     import_sources: Vec<ImportedProjectPythonSources>,
+    unread_files_of_each_import: BTreeMap<String, Vec<NodeModuleNotReadable>>,
+}
+
+/// The Python import name of the module at `path`, relative to its source's root.
+fn the_module_name_of_a_python_file(path: &str) -> String {
+    let without_suffix = path.strip_suffix(PYTHON_SOURCE_FILE_SUFFIX).unwrap_or(path);
+    let package_or_module = without_suffix
+        .strip_suffix("/__init__")
+        .unwrap_or(without_suffix);
+    package_or_module.replace('/', ".")
 }
 
 #[tool_router(router = project_node_type_tool_router, vis = "pub(crate)")]
@@ -60,12 +71,14 @@ impl LocalApiMcpServerHandler {
                 project_directory,
                 |project_repository| {
                     let mut import_sources = Vec::new();
+                    let mut unread_files_of_each_import = BTreeMap::new();
                     for import in &project_repository.project_file().dependencies {
                         let import_folder = project_repository
                             .project_directory()
                             .join(PROJECT_IMPORTS_DIRECTORY)
                             .join(&import.folder);
                         let mut files = BTreeMap::new();
+                        let mut unread_files = Vec::new();
                         for path in project_repository
                             .files_the_import_carries(import)?
                             .into_iter()
@@ -79,15 +92,17 @@ impl LocalApiMcpServerHandler {
                                     files
                                         .insert(path, String::from_utf8_lossy(&bytes).into_owned());
                                 }
-                                Err(not_read) => tracing::warn!(
-                                    import = %import.folder,
-                                    %path,
-                                    %not_read,
-                                    "an import's Python file was not read, so the listing \
-                                     leaves it out"
-                                ),
+                                Err(not_read) => unread_files.push(NodeModuleNotReadable {
+                                    module: the_module_name_of_a_python_file(&path),
+                                    path,
+                                    line: None,
+                                    column: None,
+                                    why: not_read.to_string(),
+                                }),
                             }
                         }
+                        unread_files_of_each_import
+                            .insert(import.project.to_string(), unread_files);
                         import_sources.push(ImportedProjectPythonSources {
                             project: import.project.to_string(),
                             folder: import.folder.clone(),
@@ -100,13 +115,15 @@ impl LocalApiMcpServerHandler {
                         project: project_repository.project_file().project.to_string(),
                         project_name: project_repository.project_file().name.clone(),
                         import_sources,
+                        unread_files_of_each_import,
                     })
                 },
             )
             .await?;
         let listing_project_directory = project_read.project_directory.clone();
         let import_sources = project_read.import_sources;
-        let sources = tokio::task::spawn_blocking(move || {
+        let mut unread_files_of_each_import = project_read.unread_files_of_each_import;
+        let mut sources = tokio::task::spawn_blocking(move || {
             list_a_projects_node_types_and_graph_generators_from_source(
                 &listing_project_directory,
                 &import_sources,
@@ -127,6 +144,13 @@ impl LocalApiMcpServerHandler {
                  the runtime's"
             )
         })?;
+        for source in &mut sources {
+            if let NodeTypeSourceOrigin::Dependency { project, .. } = &source.origin
+                && let Some(unread_files) = unread_files_of_each_import.remove(project)
+            {
+                source.unreadable_modules.extend(unread_files);
+            }
+        }
         serialized_tool_result(
             "list_project_node_types",
             &ListProjectNodeTypesToolResult {
