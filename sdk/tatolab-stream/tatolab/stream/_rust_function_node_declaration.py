@@ -22,6 +22,8 @@ from ._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
     NODE_DECLARATION_LANGUAGE_STAMP,
+    UNREAD_MESSAGE_INPUT_FAMILY,
+    UNREAD_MESSAGE_VALUE_TYPE,
     FunctionNode,
 )
 from ._node_config_schema import json_schema_for_a_node_declaring_no_config
@@ -33,6 +35,12 @@ RUST_FUNCTION_NODE_LANGUAGE = "rust"
 # The value types an evaluate entry carries, each as one f64, and the JSON
 # Schema type a config field of each is.
 _JSON_SCHEMA_TYPE_BY_VALUE_TYPE = {"float": "number", "int": "integer", "bool": "boolean"}
+
+# The value types a pin or an output port carries: the scalars, and a message handed on unread as a token.
+_PORT_VALUE_TYPES = (*_JSON_SCHEMA_TYPE_BY_VALUE_TYPE, UNREAD_MESSAGE_VALUE_TYPE)
+
+#: The token an `UnreadMessage` pin holding no message carries: inputs are numbered from 1.
+_NOTHING_AS_AN_UNREAD_MESSAGE_TOKEN = 0.0
 
 # `ModuleHostTableFunctionNodeEvaluateEntry`: inputs, config, state, outputs, now.
 _EVALUATE_ENTRY_C_SIGNATURE = ctypes.CFUNCTYPE(
@@ -54,10 +62,11 @@ _LARGEST_INTEGER_AN_F64_HOLDS_EXACTLY = 2**53
 
 @dataclasses.dataclass(frozen=True)
 class RustFunctionNodeOutputPort:
-    """An output port, and the value it carries."""
+    """An output port, the value it carries, and whether it may hand out nothing."""
 
     name: str
     value_type: str
+    may_hand_out_nothing: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -71,11 +80,12 @@ class RustFunctionNodeRecordField:
 
 @dataclasses.dataclass(frozen=True)
 class RustFunctionNodeInputPin:
-    """An input pin, and its value when nothing is wired to it."""
+    """An input pin, its value when nothing is wired to it, and whether it takes `None` holding nothing."""
 
     port: str
     value_type: str
     pin_default: Optional[float]
+    takes_none: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -102,7 +112,9 @@ class RustFunctionNode(FunctionNode[..., Any]):
     Called with its input pins positionally or by port, its stream time,
     state and config by its Rust parameters' names. It answers its output (a
     dict by port when it has several), and when stateful the output and the
-    state its next call takes, as a dict.
+    state its next call takes, as a dict. An output that hands out nothing
+    answers `None`, and an `UnreadMessage` output the very object its input
+    was handed.
     """
 
     rust_function_node_declaration: RustFunctionNodeDeclaration
@@ -135,9 +147,10 @@ class RustFunctionNode(FunctionNode[..., Any]):
                 raise TypeError(f"{self.__name__} was handed `{input_pin.port}` twice")
             arguments_by_name[input_pin.port] = input_value
 
+        input_values_by_index = [arguments_by_name.pop(input_pin.port, None) for input_pin in input_pins]
         input_f64s = [
-            _the_input_value(self.__name__, input_pin, arguments_by_name.pop(input_pin.port, None))
-            for input_pin in input_pins
+            _the_input_value(self.__name__, input_index, input_pin, input_value)
+            for input_index, (input_pin, input_value) in enumerate(zip(input_pins, input_values_by_index))
         ]
         config_f64s = _record_values(
             self.__name__,
@@ -163,15 +176,23 @@ class RustFunctionNode(FunctionNode[..., Any]):
         input_array = (ctypes.c_double * max(len(input_f64s), 1))(*input_f64s)
         config_array = (ctypes.c_double * max(len(config_f64s), 1))(*config_f64s)
         state_array = (ctypes.c_double * max(len(state_f64s), 1))(*state_f64s)
-        output_array = (ctypes.c_double * len(declaration.output_ports))()
+        output_ports = declaration.output_ports
+        handed_out_flag_slot_by_output_index = _handed_out_flag_slot_by_output_index(output_ports)
+        output_array = (ctypes.c_double * (len(output_ports) + len(handed_out_flag_slot_by_output_index)))()
         evaluate_entry = _EVALUATE_ENTRY_C_SIGNATURE(declaration.evaluate_entry_address)
         status = evaluate_entry(input_array, config_array, state_array, output_array, int(now_ns or 0))
         if status != _MODULE_HOST_TABLE_STATUS_OK:
             raise RuntimeError(f"{self.__name__}'s evaluate entry refused the call (status {status})")
 
         outputs = {
-            output_port.name: _from_f64(output_array[index], output_port.value_type)
-            for index, output_port in enumerate(declaration.output_ports)
+            output_port.name: self._the_value_an_output_took(
+                output_port,
+                output_array[index],
+                handed_out_flag_slot_by_output_index.get(index),
+                output_array,
+                input_values_by_index,
+            )
+            for index, output_port in enumerate(output_ports)
         }
         output: Any = outputs["result"] if list(outputs) == ["result"] else outputs
         if declaration.state_parameter is None:
@@ -181,6 +202,33 @@ class RustFunctionNode(FunctionNode[..., Any]):
             for index, state_field in enumerate(declaration.state_fields)
         }
         return output, next_state
+
+    def _the_value_an_output_took(
+        self,
+        output_port: RustFunctionNodeOutputPort,
+        written: float,
+        handed_out_flag_slot: Optional[int],
+        output_array: Any,
+        input_values_by_index: "list[Any]",
+    ) -> Any:
+        if handed_out_flag_slot is not None and output_array[handed_out_flag_slot] == 0.0:
+            return None
+        if output_port.value_type != UNREAD_MESSAGE_VALUE_TYPE:
+            return _from_f64(written, output_port.value_type)
+        if written == _NOTHING_AS_AN_UNREAD_MESSAGE_TOKEN:
+            return None
+        named_input_index = int(written) - 1
+        input_pins = self.rust_function_node_declaration.input_pins
+        if (
+            written != int(written)
+            or not 0 <= named_input_index < len(input_pins)
+            or input_pins[named_input_index].value_type != UNREAD_MESSAGE_VALUE_TYPE
+        ):
+            raise RuntimeError(
+                f"{self.__name__} handed out {written} on `{output_port.name}`, which carries a "
+                f"message it was handed, and names none of its `UnreadMessage` inputs"
+            )
+        return input_values_by_index[named_input_index]
 
     def __repr__(self) -> str:
         return f"<rust function node {self.__module__}:{self.__qualname__}>"
@@ -202,15 +250,20 @@ def declare_rust_function_node(
             "name": input_pin.port,
             "description": "",
             "delivery_profile": "newest",
-            "family": {"family": "channels"},
+            "family": dict(UNREAD_MESSAGE_INPUT_FAMILY)
+            if input_pin.value_type == UNREAD_MESSAGE_VALUE_TYPE
+            else {"family": "channels"},
         }
         signature_input: "dict[str, Any]" = {
             "parameter": input_pin.port,
             "port": input_pin.port,
             "value_type": input_pin.value_type,
-            "optional": False,
+            "optional": input_pin.takes_none,
         }
-        if input_pin.pin_default is not None:
+        if input_pin.takes_none:
+            signature_input["default"] = None
+            input_port["pin_default"] = None
+        elif input_pin.pin_default is not None:
             signature_input["default"] = _from_f64(input_pin.pin_default, input_pin.value_type)
             input_port["pin_default"] = signature_input["default"]
         input_ports.append(input_port)
@@ -229,7 +282,7 @@ def declare_rust_function_node(
             {
                 "name": output_port.name,
                 "description": "",
-                "family": {"family": "channels", "names": {"stated": [output_port.name]}, "dtype": "f64"},
+                "family": _output_port_family(declaration, output_port),
             }
             for output_port in declaration.output_ports
         ],
@@ -240,6 +293,7 @@ def declare_rust_function_node(
                     "port": output_port.name,
                     "field": output_port.name if several_outputs else None,
                     "value_type": output_port.value_type,
+                    "may_hand_out_nothing": output_port.may_hand_out_nothing,
                 }
                 for output_port in declaration.output_ports
             ],
@@ -271,10 +325,14 @@ def read_rust_function_node_declaration(native_declaration: Mapping[str, Any]) -
         raise ValueError(f"a Rust function node's short name {short_name!r} is not a Python identifier")
     ports_by_cast_name: "dict[str, str]" = {}
     input_pins = tuple(
-        RustFunctionNodeInputPin(
-            port=_a_port_name(short_name, input_pin.text("port"), ports_by_cast_name),
-            value_type=input_pin.value_type(),
-            pin_default=input_pin.optional_number("pin_default"),
+        _an_input_pin(
+            short_name,
+            RustFunctionNodeInputPin(
+                port=_a_port_name(short_name, input_pin.text("port"), ports_by_cast_name),
+                value_type=input_pin.value_type(_PORT_VALUE_TYPES),
+                pin_default=input_pin.optional_number("pin_default"),
+                takes_none=input_pin.flag_absent_as_false("takes_none"),
+            ),
         )
         for input_pin in reading.entries("input_pins")
     )
@@ -282,12 +340,23 @@ def read_rust_function_node_declaration(native_declaration: Mapping[str, Any]) -
     output_ports = tuple(
         RustFunctionNodeOutputPort(
             name=_a_port_name(short_name, output_port.text("name"), ports_by_cast_name),
-            value_type=output_port.value_type(),
+            value_type=output_port.value_type(_PORT_VALUE_TYPES),
+            may_hand_out_nothing=output_port.flag_absent_as_false("may_hand_out_nothing"),
         )
         for output_port in reading.entries("output_ports")
     )
     if not output_ports:
         raise ValueError(f"Rust function node {short_name} declares no output")
+    unread_message_input_count = sum(
+        input_pin.value_type == UNREAD_MESSAGE_VALUE_TYPE for input_pin in input_pins
+    )
+    for output_port in output_ports:
+        if output_port.value_type == UNREAD_MESSAGE_VALUE_TYPE and unread_message_input_count != 1:
+            raise ValueError(
+                f"{short_name}'s output `{output_port.name}` is an `UnreadMessage`, which takes the "
+                f"family of the `UnreadMessage` input it hands on, and {short_name} takes "
+                f"{unread_message_input_count} of them"
+            )
     return RustFunctionNodeDeclaration(
         short_name=short_name,
         description=reading.text("description"),
@@ -342,12 +411,17 @@ class _NativeDeclarationReading:
             raise ValueError(f"a Rust function node's `{key}` is {value!r}, not a number")
         return float(value)
 
-    def value_type(self) -> str:
+    def flag_absent_as_false(self, key: str) -> bool:
+        value = self._entries_by_key.get(key, False)
+        if not isinstance(value, bool):
+            raise ValueError(f"a Rust function node's `{key}` is {value!r}, not a bool")
+        return value
+
+    def value_type(self, value_types: "tuple[str, ...]" = tuple(_JSON_SCHEMA_TYPE_BY_VALUE_TYPE)) -> str:
         value_type = self.text("value_type")
-        if value_type not in _JSON_SCHEMA_TYPE_BY_VALUE_TYPE:
+        if value_type not in value_types:
             raise ValueError(
-                f"a Rust function node's value type {value_type!r} is none of "
-                f"{', '.join(_JSON_SCHEMA_TYPE_BY_VALUE_TYPE)}"
+                f"a Rust function node's value type {value_type!r} is none of {', '.join(value_types)}"
             )
         return value_type
 
@@ -371,6 +445,45 @@ class _NativeDeclarationReading:
                 )
             )
         return tuple(record_fields)
+
+
+def _an_input_pin(short_name: str, input_pin: RustFunctionNodeInputPin) -> RustFunctionNodeInputPin:
+    carries_an_unread_message = input_pin.value_type == UNREAD_MESSAGE_VALUE_TYPE
+    if carries_an_unread_message and input_pin.pin_default is not None:
+        raise ValueError(
+            f"{short_name}'s input `{input_pin.port}` is an `UnreadMessage`, which takes no pin default"
+        )
+    if input_pin.takes_none and not carries_an_unread_message:
+        raise ValueError(
+            f"{short_name}'s input `{input_pin.port}` takes `None`, and only an `UnreadMessage` "
+            f"input does in this release"
+        )
+    return input_pin
+
+
+def _output_port_family(
+    declaration: RustFunctionNodeDeclaration, output_port: RustFunctionNodeOutputPort
+) -> "dict[str, Any]":
+    if output_port.value_type != UNREAD_MESSAGE_VALUE_TYPE:
+        return {"family": "channels", "names": {"stated": [output_port.name]}, "dtype": "f64"}
+    (followed_input_port,) = [
+        input_pin.port
+        for input_pin in declaration.input_pins
+        if input_pin.value_type == UNREAD_MESSAGE_VALUE_TYPE
+    ]
+    return {"family": "image", "family_follows_input_port": followed_input_port}
+
+
+def _handed_out_flag_slot_by_output_index(
+    output_ports: "tuple[RustFunctionNodeOutputPort, ...]",
+) -> "dict[int, int]":
+    """The slot, past every output, where each output that may hand out nothing says whether it handed one out."""
+    return {
+        output_index: len(output_ports) + flag_index
+        for flag_index, output_index in enumerate(
+            index for index, output_port in enumerate(output_ports) if output_port.may_hand_out_nothing
+        )
+    }
 
 
 def _a_port_name(short_name: str, spelling: str, ports_by_cast_name: "dict[str, str]") -> str:
@@ -409,7 +522,15 @@ def _pop_the_parameter(arguments_by_name: "dict[str, Any]", parameter: Optional[
     return arguments_by_name.pop(parameter, None)
 
 
-def _the_input_value(short_name: str, input_pin: RustFunctionNodeInputPin, value: Any) -> float:
+def _the_input_value(
+    short_name: str, input_index: int, input_pin: RustFunctionNodeInputPin, value: Any
+) -> float:
+    if input_pin.value_type == UNREAD_MESSAGE_VALUE_TYPE:
+        if value is not None:
+            return float(input_index + 1)
+        if input_pin.takes_none:
+            return _NOTHING_AS_AN_UNREAD_MESSAGE_TOKEN
+        raise TypeError(f"{short_name}'s input `{input_pin.port}` takes a message and was handed none")
     if value is None:
         if input_pin.pin_default is None:
             raise TypeError(f"{short_name}'s input `{input_pin.port}` has no default and was handed none")
