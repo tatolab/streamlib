@@ -61,9 +61,18 @@ class PortPayloadBorrow(Protocol):
 class UnreadMessage(Protocol):
     """A message of any family a `@node.function` body hands on without reading it.
 
-    Its body can only return it, or `None` to hand out nothing; the output
-    takes the family of what is linked into the input it came from.
+    Its body can only return it, or `None` to hand out nothing, and keep it in
+    its state; the output takes the family of what is linked into the input it
+    came from. A pooled GPU frame it names stays claimed while any copy lives.
     """
+
+    def __copy__(self) -> UnreadMessage:
+        """The message itself: it is immutable, so a copy is the same message."""
+        ...
+
+    def __deepcopy__(self, memo: Any) -> UnreadMessage:
+        """The message itself, as a state record's deep copy takes it."""
+        ...
 
 
 @runtime_backed_protocol

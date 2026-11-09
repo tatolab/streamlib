@@ -4,7 +4,8 @@
 """The small nodes every stream can wire.
 
 Each is a `@node.function` compiled to native code that runs inside the read of
-the node it feeds, with no process of its own, but `ImageFile`, a class node,
+the node it feeds, with no process of its own, but two: `HoldFrame`, whose state
+holds a frame, runs as Python in that read, and `ImageFile` is a class node,
 which reads a project image asset.
 """
 
@@ -12,8 +13,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Annotated
 
-from tatolab.stream import State, Stateful, Time, UnreadMessage, node
+from tatolab.stream import Image, State, Stateful, Time, UnreadMessage, node
 
 from .image_file import ImageFile, ImageFileConfig
 
@@ -29,6 +31,8 @@ __all__ = [
     "Divide",
     "Feedback",
     "Gate",
+    "HeldFrame",
+    "HoldFrame",
     "ImageFile",
     "ImageFileConfig",
     "Lag",
@@ -370,3 +374,23 @@ def SampleAndHold(  # noqa: N802
     """`x` as it was when `sample` last turned on, starting at 0."""
     held = x if sample and not previous.sample_was_on else previous.held
     return held, SampledValue(held, sample)
+
+
+@dataclass(frozen=True)
+class HeldFrame:
+    """The frame a `HoldFrame` holds, none before its first."""
+
+    frame: UnreadMessage | None = None
+
+
+@node.function
+def HoldFrame(  # noqa: N802
+    frame: Annotated[UnreadMessage, Image] | None = None,
+    refresh: bool = False,
+    *,
+    previous: State[HeldFrame],
+) -> Stateful[UnreadMessage | None, HeldFrame]:
+    """The first Image `frame` it is handed, held and handed on each read until `refresh` takes a newer one."""
+    if frame is not None and (previous.frame is None or refresh):
+        return frame, HeldFrame(frame)
+    return previous.frame, previous

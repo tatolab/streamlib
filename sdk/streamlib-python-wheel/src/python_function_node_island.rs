@@ -15,10 +15,11 @@ use pyo3::types::{PyDict, PyInt, PyList};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
-    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptorKind,
-    FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
-    FunctionNodeIslandOutputValue, HelperProcessLossCountBoardWriter, InputMailboxesInner,
-    MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
+    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
+    DataChannelPayloadDescriptorKind, FunctionNodeIslandEvaluatedAtEachRead,
+    FunctionNodeIslandOutputForOneRead, FunctionNodeIslandOutputValue,
+    GpuPoolSlotFrameDescriptorBody, HelperProcessLossCountBoardWriter, ImageFrameDescriptorBody,
+    InputMailboxesInner, MessageAFunctionNodeIslandHandsOnUnread, MessageReadFromInputPort,
 };
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_OK, ModuleHostTableFunctionNodeEvaluateEntry,
@@ -37,7 +38,7 @@ pub(crate) enum FunctionNodeValue {
     /// A `dict`, which only a node run as Python takes or gives.
     Record(Py<PyAny>),
     /// A message read off a channel, which a node hands on without reading it.
-    MessageHandedOnUnread(MessageAFunctionNodeIslandHandsOnUnread),
+    MessageHandedOnUnread(Arc<MessageAFunctionNodeIslandHolds>),
     /// No value: a link from outside the island that carried none yet, a
     /// message input no new message reached, or an output its node handed out
     /// nothing on.
@@ -71,7 +72,9 @@ impl FunctionNodeValue {
         match self {
             Self::Number(number) => Self::Number(*number),
             Self::Record(record) => Python::attach(|python| Self::Record(record.clone_ref(python))),
-            Self::MessageHandedOnUnread(message) => Self::MessageHandedOnUnread(message.clone()),
+            Self::MessageHandedOnUnread(message) => {
+                Self::MessageHandedOnUnread(Arc::clone(message))
+            }
             Self::Nothing => Self::Nothing,
         }
     }
@@ -83,7 +86,7 @@ impl FunctionNodeValue {
             Self::MessageHandedOnUnread(message) => Bound::new(
                 python,
                 UnreadMessageAFunctionNodeHandsOn {
-                    message: message.clone(),
+                    message: Arc::clone(message),
                 },
             )?
             .into_any(),
@@ -99,9 +102,9 @@ impl FunctionNodeValue {
             return Ok(Self::Nothing);
         }
         if let Ok(unread_message) = value.cast::<UnreadMessageAFunctionNodeHandsOn>() {
-            return Ok(Self::MessageHandedOnUnread(
-                unread_message.get().message.clone(),
-            ));
+            return Ok(Self::MessageHandedOnUnread(Arc::clone(
+                &unread_message.get().message,
+            )));
         }
         if value.is_instance_of::<PyDict>() {
             return Ok(Self::Record(value.clone().unbind()));
@@ -126,18 +129,83 @@ impl FunctionNodeValue {
                 .map_err(|refusal| Error::Runtime(refusal.to_string()))
             })?,
             Self::MessageHandedOnUnread(message) => {
-                FunctionNodeIslandOutputValue::MessageHandedOnUnread(message.clone())
+                FunctionNodeIslandOutputValue::MessageHandedOnUnread(message.message.clone())
             }
             Self::Nothing => FunctionNodeIslandOutputValue::Nothing,
         })
     }
 }
 
+/// What holds a pooled GPU frame against its producer's reuse while a message
+/// an island holds names it; released as the message's last copy drops.
+pub(crate) type PooledGpuFrameClaimAnIslandHolds = Box<dyn std::any::Any + Send + Sync>;
+
+/// Claims the pooled GPU frame a message names as an island reads it off its
+/// channel; `Ok(None)` where nothing in this helper covers the frame's pool.
+pub(crate) type ClaimOfThePooledGpuFrameAMessageNames = Box<
+    dyn Fn(
+            GpuPoolSlotFrameDescriptorBody,
+        ) -> std::result::Result<Option<PooledGpuFrameClaimAnIslandHolds>, String>
+        + Send
+        + Sync,
+>;
+
+/// A message an island read off a channel to hand on unread, holding the
+/// pooled GPU frame it names, if any, for as long as any copy of it lives: in
+/// an input, an output, or a node's state.
+pub(crate) struct MessageAFunctionNodeIslandHolds {
+    message: MessageAFunctionNodeIslandHandsOnUnread,
+    _claim_of_its_pooled_gpu_frame: Option<PooledGpuFrameClaimAnIslandHolds>,
+}
+
+impl std::fmt::Debug for MessageAFunctionNodeIslandHolds {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MessageAFunctionNodeIslandHolds")
+            .field("message", &self.message)
+            .field(
+                "holds_its_pooled_gpu_frame",
+                &self._claim_of_its_pooled_gpu_frame.is_some(),
+            )
+            .finish()
+    }
+}
+
+/// The pooled GPU frame a message names: an Image frame's slot, or a pooled
+/// frame's; `None` for a message whose payload is its bytes.
+fn the_pooled_gpu_frame_a_message_names(
+    payload_descriptor: &DataChannelPayloadDescriptor,
+) -> Option<GpuPoolSlotFrameDescriptorBody> {
+    match DataChannelPayloadDescriptorKind::from_wire(payload_descriptor.kind)? {
+        DataChannelPayloadDescriptorKind::ImageFrame => {
+            Some(ImageFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body).slot)
+        }
+        DataChannelPayloadDescriptorKind::GpuPoolSlotFrame => Some(
+            GpuPoolSlotFrameDescriptorBody::from_descriptor_body(&payload_descriptor.body),
+        ),
+        _ => None,
+    }
+}
+
 /// A message of any family a function node was handed to pass on without
-/// reading it: the body can only hand it on or not.
+/// reading it: the body can only hand it on, or keep it in its state.
 #[pyclass(name = "UnreadMessage", module = "tatolab.stream", frozen)]
 pub(crate) struct UnreadMessageAFunctionNodeHandsOn {
-    message: MessageAFunctionNodeIslandHandsOnUnread,
+    message: Arc<MessageAFunctionNodeIslandHolds>,
+}
+
+#[pymethods]
+impl UnreadMessageAFunctionNodeHandsOn {
+    /// The message itself: it is immutable, so a copy is the same message.
+    fn __copy__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    /// The message itself, as a state record's deep copy takes it.
+    #[pyo3(signature = (memo))]
+    fn __deepcopy__(slf: Py<Self>, #[allow(unused_variables)] memo: &Bound<'_, PyAny>) -> Py<Self> {
+        slf
+    }
 }
 
 /// How a function node input reads the messages a link from outside its
@@ -258,6 +326,7 @@ pub(crate) struct HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
     how_each_node_carries_its_values: Vec<HowAFunctionNodeCarriesValuesBeyondNumbers>,
     read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
     values_last_read_off_links_from_outside_islands: ValuesLastReadOffLinksFromOutsideIslands,
+    claim_the_pooled_gpu_frame_a_message_names: ClaimOfThePooledGpuFrameAMessageNames,
 }
 
 /// The control value or record each reader input port last carried into an
@@ -273,6 +342,7 @@ impl HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
             how_each_node_carries_its_values: Vec::new(),
             read_the_newest_message_at: Box::new(|_| Ok(None)),
             values_last_read_off_links_from_outside_islands: Arc::default(),
+            claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
         }
     }
 }
@@ -379,6 +449,7 @@ struct FunctionNodeIslandEvaluation {
     message_handed_on_since_the_last_evaluation: bool,
     read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
     values_last_read_off_links_from_outside_islands: ValuesLastReadOffLinksFromOutsideIslands,
+    claim_the_pooled_gpu_frame_a_message_names: ClaimOfThePooledGpuFrameAMessageNames,
     /// The board each call's breadcrumb is noted on, so the parent can name
     /// the node a call died or stalled in.
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
@@ -440,9 +511,34 @@ impl FunctionNodeIslandEvaluation {
                         Some(message),
                         HowAnInputReadsALinkFromOutsideItsIsland::MessageHandedOnUnread,
                     ) => {
-                        *value_read_last = FunctionNodeValue::MessageHandedOnUnread(
-                            MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(&message),
-                        );
+                        let claim_of_its_pooled_gpu_frame =
+                            the_pooled_gpu_frame_a_message_names(&message.payload_descriptor)
+                                .and_then(|pooled_gpu_frame| {
+                                    (self.claim_the_pooled_gpu_frame_a_message_names)(
+                                        pooled_gpu_frame,
+                                    )
+                                    .unwrap_or_else(
+                                        |refusal| {
+                                            tracing::warn!(
+                                                function_node = %function_node.node_id,
+                                                reader_input_port = %reader_input_port,
+                                                "the pooled GPU frame a message names could not be \
+                                                 claimed, so its producer may reuse it while the \
+                                                 island holds it: {refusal}"
+                                            );
+                                            None
+                                        },
+                                    )
+                                });
+                        *value_read_last = FunctionNodeValue::MessageHandedOnUnread(Arc::new(
+                            MessageAFunctionNodeIslandHolds {
+                                message:
+                                    MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(
+                                        &message,
+                                    ),
+                                _claim_of_its_pooled_gpu_frame: claim_of_its_pooled_gpu_frame,
+                            },
+                        ));
                     }
                     (None, HowAnInputReadsALinkFromOutsideItsIsland::MessageHandedOnUnread) => {
                         *value_read_last = FunctionNodeValue::Nothing;
@@ -1010,6 +1106,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             mut how_each_node_carries_its_values,
             read_the_newest_message_at,
             values_last_read_off_links_from_outside_islands,
+            claim_the_pooled_gpu_frame_a_message_names,
         } = how_it_carries_values_beyond_numbers;
         how_each_node_carries_its_values.resize_with(function_nodes.len(), Default::default);
         let mut function_nodes_each_after_what_it_reads: Vec<FunctionNodeInAnIsland> =
@@ -1175,6 +1272,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 message_handed_on_since_the_last_evaluation: false,
                 read_the_newest_message_at,
                 values_last_read_off_links_from_outside_islands,
+                claim_the_pooled_gpu_frame_a_message_names,
                 call_breadcrumb_board_writer,
             }),
             stream_clock_now_ns,
@@ -1381,6 +1479,8 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
                 },
                 values_last_read_off_links_from_outside_islands: link_data_access
                     .values_last_read_off_links_into_its_function_node_islands(),
+                claim_the_pooled_gpu_frame_a_message_names: link_data_access
+                    .claim_of_the_pooled_gpu_frames_its_islands_hold(),
             },
         )
         .map_err(PyValueError::new_err)?;
@@ -2063,6 +2163,7 @@ mod tests {
         is_open: bool,
         stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
         read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
+        claim_the_pooled_gpu_frame_a_message_names: ClaimOfThePooledGpuFrameAMessageNames,
     ) -> FunctionNodeIslandEvaluatedInThisHelper {
         FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
             vec![(
@@ -2095,6 +2196,7 @@ mod tests {
                 ],
                 read_the_newest_message_at,
                 values_last_read_off_links_from_outside_islands: Arc::default(),
+                claim_the_pooled_gpu_frame_a_message_names,
             },
         )
         .unwrap()
@@ -2108,6 +2210,7 @@ mod tests {
             true,
             stream_clock_now_ns,
             read_the_newest_message_at,
+            Box::new(|_| Ok(None)),
         );
         queued.lock().push(a_message_of(
             vec![1, 2, 3],
@@ -2149,6 +2252,76 @@ mod tests {
     }
 
     #[test]
+    fn a_pooled_gpu_frame_a_message_names_is_claimed_while_the_island_holds_it_and_released_after()
+    {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let (queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
+        let claims_held: Arc<Mutex<Vec<std::sync::Weak<u32>>>> = Arc::new(Mutex::new(Vec::new()));
+        let claims_noted_by_the_island = Arc::clone(&claims_held);
+        let island = a_gate_reading_a_link_from_outside_its_island(
+            false,
+            stream_clock_now_ns,
+            read_the_newest_message_at,
+            Box::new(move |pooled_gpu_frame: GpuPoolSlotFrameDescriptorBody| {
+                let claim = Arc::new(pooled_gpu_frame.slot);
+                claims_noted_by_the_island
+                    .lock()
+                    .push(Arc::downgrade(&claim));
+                Ok(Some(Box::new(claim) as PooledGpuFrameClaimAnIslandHolds))
+            }),
+        );
+        let pooled_gpu_frame = GpuPoolSlotFrameDescriptorBody {
+            pool: [7; 16],
+            slot: 3,
+            generation: 1,
+            timeline_value: 9,
+            image_layout: 0,
+        };
+        queued.lock().push(a_message_of(
+            vec![],
+            DataChannelPayloadDescriptor::gpu_pool_slot_frame(pooled_gpu_frame),
+            10,
+        ));
+        stream_time_ns.store(100, Ordering::SeqCst);
+        island.evaluate_the_island_output_for_this_read().unwrap();
+        {
+            let claims_held = claims_held.lock();
+            assert_eq!(claims_held.len(), 1);
+            assert_eq!(claims_held[0].upgrade().as_deref(), Some(&3));
+        }
+        stream_time_ns.store(200, Ordering::SeqCst);
+        island.evaluate_the_island_output_for_this_read().unwrap();
+        let claims_held = claims_held.lock();
+        assert_eq!(claims_held.len(), 1);
+        assert!(claims_held[0].upgrade().is_none());
+    }
+
+    #[test]
+    fn a_copy_of_an_unread_message_a_state_record_keeps_is_the_same_message() {
+        Python::attach(|python| {
+            let unread_message = Py::new(
+                python,
+                UnreadMessageAFunctionNodeHandsOn {
+                    message: Arc::new(MessageAFunctionNodeIslandHolds {
+                        message: MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(
+                            &a_message_of(vec![1], DataChannelPayloadDescriptor::bytes(), 10),
+                        ),
+                        _claim_of_its_pooled_gpu_frame: None,
+                    }),
+                },
+            )
+            .unwrap();
+            let copy_module = python.import("copy").unwrap();
+            for copy_function in ["copy", "deepcopy"] {
+                let copied = copy_module
+                    .call_method1(copy_function, (unread_message.clone_ref(python),))
+                    .unwrap();
+                assert!(copied.is(unread_message.bind(python)), "{copy_function}");
+            }
+        });
+    }
+
+    #[test]
     fn a_closed_gate_hands_out_nothing_rather_than_the_last_message() {
         let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
         let (queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
@@ -2156,6 +2329,7 @@ mod tests {
             false,
             stream_clock_now_ns,
             read_the_newest_message_at,
+            Box::new(|_| Ok(None)),
         );
         queued.lock().push(a_message_of(
             vec![1],
@@ -2205,6 +2379,7 @@ mod tests {
                     ],
                     read_the_newest_message_at,
                     values_last_read_off_links_from_outside_islands: Arc::default(),
+                    claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
                 },
             )
             .unwrap();
@@ -2275,6 +2450,7 @@ mod tests {
                 ],
                 read_the_newest_message_at,
                 values_last_read_off_links_from_outside_islands,
+                claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
             },
         )
         .unwrap()
@@ -2367,6 +2543,7 @@ mod tests {
                     ],
                     read_the_newest_message_at: Box::new(|_| Ok(None)),
                     values_last_read_off_links_from_outside_islands: Arc::default(),
+                    claim_the_pooled_gpu_frame_a_message_names: Box::new(|_| Ok(None)),
                 },
             )
             .unwrap();

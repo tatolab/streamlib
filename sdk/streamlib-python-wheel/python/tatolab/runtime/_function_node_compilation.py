@@ -594,8 +594,10 @@ class FunctionNodeBodyRunAsPython:
             )
         if signature["time_parameter"] is not None:
             arguments[signature["time_parameter"]] = now_ns
+        state_handed_to_the_body = None
         if signature["state_parameter"] is not None:
-            arguments[signature["state_parameter"]] = copy.deepcopy(self._state)
+            state_handed_to_the_body = copy.deepcopy(self._state)
+            arguments[signature["state_parameter"]] = state_handed_to_the_body
         if signature["config_parameter"] is not None:
             arguments[signature["config_parameter"]] = self._config
         positional_arguments = [
@@ -615,7 +617,7 @@ class FunctionNodeBodyRunAsPython:
             input_value
             for parameter_name, input_value in zip(self._input_parameters, input_values)
             if self._value_type_by_input_parameter[parameter_name] == UNREAD_MESSAGE_VALUE_TYPE
-        ]
+        ] + _the_field_values_of(state_handed_to_the_body)
         answered = [
             self._the_output_the_evaluator_takes(
                 each_output, output_value, values_handed_to_be_handed_on_unread
@@ -700,6 +702,12 @@ class FunctionNodeBodyRunAsPython:
                 f"{type(output_value).__name__}"
             )
         return _exactly_as_f64(output_value, what_it_is)
+
+
+def _the_field_values_of(state_record: Any) -> "list[Any]":
+    if state_record is None or not dataclasses.is_dataclass(state_record):
+        return []
+    return [getattr(state_record, field.name) for field in dataclasses.fields(state_record)]
 
 
 def the_value_a_config_field_takes(value_it_holds: Any, input_value: float) -> Any:

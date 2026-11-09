@@ -838,6 +838,28 @@ def test_a_body_run_as_python_hands_on_unread_a_number_or_a_dict_another_node_of
     assert handing_on.evaluate([record], 1)[0] is record
 
 
+@dataclass(frozen=True)
+class FirstMessageHeld:
+    message: UnreadMessage | None = None
+
+
+@node.function
+def hold_the_first_message_handed(
+    value: UnreadMessage | None = None, *, previous: State[FirstMessageHeld]
+) -> Stateful[UnreadMessage | None, FirstMessageHeld]:
+    if previous.message is None and value is not None:
+        return value, FirstMessageHeld(value)
+    return previous.message, previous
+
+
+def test_a_body_run_as_python_hands_on_a_number_or_a_dict_its_state_held_from_an_earlier_call():
+    holding = FunctionNodeBodyRunAsPython(run_as_python(hold_the_first_message_handed), "h", None)
+    record = {"label": "low"}
+    assert holding.evaluate([record], 0)[0] is record
+    assert holding.evaluate([None], 1)[0] == record
+    assert holding.evaluate([{"label": "high"}], 2)[0] == record
+
+
 def test_a_body_run_as_python_keeps_a_state_of_any_record_between_calls():
     remembering = FunctionNodeBodyRunAsPython(run_as_python(remember_each_call_by_a_letter), "r", None)
     assert remembering.evaluate([1.0], 0) == [1.0]
