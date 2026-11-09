@@ -18,15 +18,16 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
 
 **The direction, in five sentences:**
 1. A project is self-contained: every file a load reads sits inside its directory, save the
-   runtime's own first-party modules, so copying or zipping the folder carries everything, and the
-   same folder opens to the same state under the same runtime anywhere.
+   runtime's own first-party modules, so copying or zipping the folder carries everything; it opens
+   under any runtime, and under the same one it opens to the same state anywhere.
 2. Adding a module copies that project once, whole, into `imports/<module>/`; an update replaces
    the folder whole, a removal deletes it, and nothing is ever copied out of it or moved inside it.
 3. Every reference to a module's stream, asset or node code resolves into its import folder at
    load, relative to the project that holds the reference, so a module's own imports stay nested
    at `imports/<module>/imports/<other>/`.
 4. An asset is the one file at its visible path: a node reads that file, an import copies the
-   source into the project once, and history records the file's bytes like any other file.
+   source into the project once, and history records only the file's hash and size, as Git LFS
+   records a pointer, never its bytes.
 5. History is one local Git repository per project, the transaction log behind undo, redo and
    multiplayer; nothing pushes, fetches or clones it, and nothing else travels through Git.
 
@@ -60,19 +61,23 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
   version it carried — its history's head commit when copied, informational only and never
   resolved.
 - **Content** (project-and-assets §ADDED): an asset's bytes are the file at its path and nowhere
-  else. The sidecar keeps the UUID, kind and import settings; it no longer holds a hash or a size,
-  which the file itself answers. `import_asset` copies a source on the machine into place once; an
+  else; nothing keeps an older version of them. The sidecar keeps the UUID, kind, content hash,
+  size and import settings, so history knows a different file stood there at each commit.
+  `import_asset` copies a source on the machine into place once; an
   upload a client streams lands in `.tatolab/uploads/`, a cache the import empties.
 - **History** (project-and-assets §ADDED, Decided 4, 6 and 8): every commit records every file
   of the project as Decided 8 states — every file outside a hidden folder (`.tatolab/` and `.git`
   among them), `node_modules`, `__pycache__` and a Python virtual environment, and no symbolic
-  link — so asset bytes and `imports/` are in history and an undo of a delete brings the bytes
-  back. Git is
+  link — except a media, scene or data asset's bytes, which history records as its sidecar alone.
+  `imports/` is in history on the same terms. An undo of a delete or a replace restores the
+  sidecar; the bytes come back only if the file is still at its path, and otherwise the asset reads
+  missing, naming the file it needs. Git is
   the store engine only: one branch, `main`, no remote, no push, no fetch, no clone path.
 - **Linked dependencies → imports** (project-and-assets §ADDED, Decided 3):
-  - `add_dependency {source}` copies the module once into `imports/<folder>/`, where `source` is
-    a folder on this machine or a GitHub repository downloaded as an archive at a branch, tag or
-    commit, with no Git. What is copied is the module's project: everything its history records
+  - `add_dependency {source}` copies the module once into `imports/<folder>/`, wherever it comes
+    from: a folder or a zip on this machine (a teammate's hand-off, dropped onto Tato Studio), or a
+    download such as a GitHub archive, with no Git. The source is refused unless it holds a
+    `tatolab-project.json` with a project UUID, naming what is missing. What is copied is the module's project: everything its history records
     (its own `imports/` nested inside), never its `.tatolab/` or a cache. The folder is named after
     the module and refused when another import holds that name or that project UUID.
   - `update_dependency {project, source?}` copies the module again, whole, from its recorded
@@ -141,10 +146,12 @@ compiled shader).
 **Decided 2 — no fork.** Editing a module means opening it as its own project.
 
 **Decided 3 — no `package:` source and no Git remote.** A module arrives as a project, from a
-folder or a downloaded archive, through the one `add_dependency`.
+folder, a zip or a download, through the one `add_dependency`.
 
-**Decided 4 — imports and asset bytes are in history.** A project contains everything, so its
-history does too.
+**Decided 4 — history holds pointers, never media bytes.** A project's media, scenes and data are
+tens or hundreds of megabytes each, so history records that a different file stood at a path,
+never the file, as Git LFS, Perforce workspaces and Unity's Plastic keep only the current bytes on
+the machine. Keeping older versions is cloud storage's job, later.
 
 **Decided 5 — one way in.** `add_dependency` is the one door for a module copied into a project;
 `.venv` is a cache rebuilt from the lock.
@@ -193,9 +200,9 @@ not a lock. It replaces the PyPI requirement PR #3392 added.
    rewritten to the import verbs, and the plan, decisions doc and glossary corrected. Proof: a project with a module
    zipped, unzipped elsewhere and loaded reads the module's stream, asset and node code.
 2. **One copy of each asset.** The content store goes; nodes read the visible file; history records
-   asset bytes; uploads land in `.tatolab/uploads/`; `LOCAL_API_MCP_SERVER_INSTRUCTIONS` and the
+   each asset's sidecar, never its bytes; uploads land in `.tatolab/uploads/`; `LOCAL_API_MCP_SERVER_INSTRUCTIONS` and the
    asset tools' descriptions stop naming the content store. Proof: replacing a file in Finder is what a
-   node reads, and an undo of a delete brings the bytes back. May land before or after 1.
+   node reads, and history grows by a sidecar, not the file, when a 100 MB file is replaced. May land before or after 1.
 3. **Tato Studio's "Get more" through the runtime** (tatolab-app): adding and updating modules,
    the overwrite prompt for an edited import, and a status indicator showing a run's download and
    install steps. Waits on 1.

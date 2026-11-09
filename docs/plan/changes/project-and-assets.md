@@ -40,7 +40,7 @@ follow. Rationale: `docs/decisions/project-and-assets.md`.
 robot-cell/
   tatolab-project.json                  # project UUID, name, its imports
   streams/arm-control.graph.json        # a stream asset: nodes by UUID, links, fragments
-  media/intro.mp4  media/intro.mp4.asset.json   # the bytes, and the sidecar: UUID, kind
+  media/intro.mp4  media/intro.mp4.asset.json   # the bytes, and the sidecar: UUID, kind, hash
   models/arm.usd  models/arm.usd.asset.json
   imports/<module>/                     # another project, copied in whole
   nodes/inverse_kinematics.py           # node code, plain files
@@ -83,9 +83,9 @@ API's addressing, the processor model's load path, and adds the project as a sto
 - **Assets.** Every asset has a UUID, a kind and a path in the project. Kinds in the first slice:
   `stream` (a graph document), `media` (video, audio, image), `scene` (USD, glTF), `data` (an FMU,
   a LUT, model weights, a font). A stream asset carries its UUID inside its document; every other
-  asset has a sidecar `<file>.asset.json` holding its UUID, kind and import settings, so each asset is one file in history and a move or rename keeps its UUID.
-- **Content.** An asset's bytes are the one file at its path, which a node reads and history
-  records like any other file. Node code (`nodes/*.py`, Slang) is plain files in history, named by
+  asset has a sidecar `<file>.asset.json` holding its UUID, kind, content hash, size and import settings, so each asset is one file in history and a move or rename keeps its UUID.
+- **Content.** An asset's bytes are the one file at its path, which a node reads; history records
+  its sidecar alone, as Git LFS records a pointer. Node code (`nodes/*.py`, Slang) is plain files in history, named by
   import path as today.
 - **Content never rides a transaction.** An import first copies the bytes to the asset's path
   (from a path on the machine, or from an upload a client streams to `.tatolab/uploads/`), and the
@@ -210,8 +210,8 @@ database refuses a damaged file, and never mints one in memory.
 agents, the studio and, later, remote collaborators reconcile their edits; it is no Git repository
 for the person and never touches their own `.git` or any tool they version with. Each commit
 records the whole project: every file outside a hidden folder, `node_modules`, `__pycache__` and a
-Python virtual environment, and no symbolic link; asset bytes and `imports/` are recorded like any
-other file.
+Python virtual environment, a media, scene or data asset as its
+sidecar alone, and no symbolic link; `imports/` is recorded on the same terms.
 
 **Decided 9 — pin values are saved like links (owner, 2026-11-08).** A value typed on an unlinked
 input is part of the document; delivering it to the running node is lightweight-node-kinds'

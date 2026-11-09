@@ -1900,7 +1900,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   language of nodes: a `@graph_generator` function, replacing `@stream`, builds graph, and its
   output is stored as a frozen, read-only fragment, never one-to-one with a stream, and nothing writes a graph edit back into Python. Data on links and runtime
   state are never saved. Single player first; the cloud hub, branches, roles and releases build on
-  the same transactions and history. Owner, 2026-11-07 and 2026-11-08. [project-and-assets; amended by self-contained-project-imports: a self-contained project whose history records every file, asset bytes and imports included, with no remote; a module copied once, whole, into imports/ and referenced there; a stream fragment as a reference read at load; no fork and no Git transport]
+  the same transactions and history. Owner, 2026-11-07 and 2026-11-08. [project-and-assets; amended by self-contained-project-imports: a self-contained project whose history records each media asset as its sidecar alone, with no remote; a module copied once, whole, into imports/ and referenced there; a stream fragment as a reference read at load; no fork and no Git transport]
   Rejected: graph edits written back into `stream.py` through a concrete-syntax-tree rewrite — text
   becomes the meeting point of four writers, a stream with loops or helpers refuses edits, and
   studio data, undo and multi-user editing have no home (owner, 2026-11-07).
