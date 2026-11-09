@@ -678,7 +678,6 @@ impl ProjectRepository {
             project_file_at_the_pin.project,
             source,
             &commit,
-            bearer_token,
         )?;
         self.apply_project_operations(
             author,
@@ -811,13 +810,7 @@ impl ProjectRepository {
                 },
             );
         }
-        self.record_and_copy_the_dependency_assets_at(
-            &history,
-            project,
-            &pinned.source,
-            &commit,
-            bearer_token,
-        )?;
+        self.record_and_copy_the_dependency_assets_at(&history, project, &pinned.source, &commit)?;
         Ok(ProjectDependencyOperation::MoveDependencyPin {
             project,
             from: pinned.revision,
@@ -995,7 +988,6 @@ impl ProjectRepository {
                     pinned.project,
                     &pinned.source,
                     &pinned.revision,
-                    None,
                 )?,
             recorded => recorded?,
         };
@@ -1140,7 +1132,6 @@ impl ProjectRepository {
         project: Uuid,
         source: &str,
         commit: &str,
-        bearer_token: Option<&str>,
     ) -> Result<Vec<ProjectAsset>, ProjectRepositoryRefusal> {
         let record_path =
             the_dependency_asset_record_path(&self.project_directory, project, commit)?;
@@ -1210,16 +1201,7 @@ impl ProjectRepository {
                 .ok()
                 .map(|shipped| shipped.join(PROJECT_CONTENT_STORE_DIRECTORY))
             }
-            ProjectDependencySource::GitRemote(url) => {
-                self.download_the_dependency_content_from_its_remote(
-                    project,
-                    &url,
-                    bearer_token,
-                    &files_at_the_commit,
-                    &recorded_assets,
-                );
-                None
-            }
+            ProjectDependencySource::GitRemote(_) => None,
         };
         for recorded_asset in &recorded_assets {
             if self
@@ -1281,47 +1263,6 @@ impl ProjectRepository {
             return Err(not_placed.into());
         }
         Ok(recorded_assets)
-    }
-
-    /// Download into the content store the bytes of `recorded_assets` it lacks from the content
-    /// remote beside the dependency's history remote `url`; bytes that do not arrive are left to
-    /// be refused by name when read.
-    fn download_the_dependency_content_from_its_remote(
-        &self,
-        project: Uuid,
-        url: &str,
-        bearer_token: Option<&str>,
-        files_at_the_commit: &BTreeMap<String, Vec<u8>>,
-        recorded_assets: &[ProjectAsset],
-    ) {
-        let history_remote = ProjectHistoryRemote {
-            url: url.to_owned(),
-            bearer_token: bearer_token.map(str::to_owned),
-            content_remote: None,
-        };
-        let Some(content_remote) = ProjectContentRemote::beside_the_history_remote(
-            &history_remote,
-            lfs_config_in(files_at_the_commit),
-        ) else {
-            return;
-        };
-        let contents: Vec<StoredProjectContent> = recorded_assets
-            .iter()
-            .map(|recorded_asset| StoredProjectContent {
-                content_sha256: recorded_asset.content_sha256.clone(),
-                content_byte_len: recorded_asset.content_byte_len,
-            })
-            .collect();
-        if let Err(refusal) =
-            content_remote.download_each_content_into(&self.content_store, &contents)
-        {
-            tracing::warn!(
-                dependency = %project,
-                remote = %content_remote.lfs_endpoint_url,
-                %refusal,
-                "a dependency's asset bytes did not arrive from its content remote, so reading them is refused"
-            );
-        }
     }
 
     /// Every dependency the project file pins, each with, when `check_for_newer`, the newest
@@ -1484,7 +1425,6 @@ impl ProjectRepository {
                 project,
                 &pinned.source,
                 &pinned.revision,
-                bearer_token,
             )?;
             return Ok(history);
         }
