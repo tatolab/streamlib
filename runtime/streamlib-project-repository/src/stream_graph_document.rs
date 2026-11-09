@@ -984,7 +984,6 @@ pub fn asset_references_made_references_into_the_dependency(value: &mut Value, p
                 object
                     .entry("from")
                     .or_insert_with(|| Value::String(project.to_string()));
-                return;
             }
             for entry in object.values_mut() {
                 asset_references_made_references_into_the_dependency(entry, project);
@@ -1065,12 +1064,7 @@ pub fn a_graph_document_as_a_fragment_run(graph_document: &Value) -> Result<Valu
     let mut name_of_the_uuid: Map<String, Value> = Map::new();
     let mut names_in_each_group: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut nodes = Vec::new();
-    for node in level
-        .get("nodes")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    for node in a_graph_collection_of(level, "nodes")? {
         let Value::Object(node) = node else {
             return Err("a graph document's node is a JSON object".to_owned());
         };
@@ -1101,12 +1095,7 @@ pub fn a_graph_document_as_a_fragment_run(graph_document: &Value) -> Result<Valu
         nodes.push(Value::Object(run_node));
     }
     let mut links = Vec::new();
-    for link in level
-        .get("links")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    for link in a_graph_collection_of(level, "links")? {
         let mut run_link = link.clone();
         for end_key in ["source", "target"] {
             if let Some(Value::Object(end)) = run_link.get_mut(end_key)
@@ -1150,6 +1139,19 @@ pub fn a_graph_document_as_a_fragment_run(graph_document: &Value) -> Result<Valu
         run.insert(GROUPS_KEY.to_owned(), Value::Array(run_groups));
     }
     Ok(Value::Object(run))
+}
+
+/// The `collection` list of a graph document's `level`, empty when absent; refused when present
+/// as anything but a list.
+fn a_graph_collection_of<'level>(
+    level: &'level Map<String, Value>,
+    collection: &str,
+) -> Result<&'level [Value], String> {
+    match level.get(collection) {
+        None => Ok(&[]),
+        Some(Value::Array(items)) => Ok(items),
+        Some(_) => Err(format!("a graph document's `{collection}` is a JSON list")),
+    }
 }
 
 fn push_the_config_of_each_node_at_every_level<'fragment>(
@@ -1203,6 +1205,36 @@ fn collect_asset_references(value: &Value, referenced: &mut Vec<Uuid>) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_asset_reference_nested_in_another_is_made_a_dependency_reference_too() {
+        let project = Uuid::new_v4();
+        let outer = Uuid::new_v4().to_string();
+        let inner = Uuid::new_v4().to_string();
+        let mut config = serde_json::json!({ "asset": outer, "lut": { "asset": inner } });
+
+        asset_references_made_references_into_the_dependency(&mut config, project);
+
+        assert_eq!(
+            config,
+            serde_json::json!({
+                "asset": outer, "from": project.to_string(),
+                "lut": { "asset": inner, "from": project.to_string() },
+            })
+        );
+    }
+
+    #[test]
+    fn a_graph_document_whose_nodes_or_links_are_no_list_is_refused_as_a_fragment_run() {
+        for collection in ["nodes", "links"] {
+            let refusal =
+                a_graph_document_as_a_fragment_run(&serde_json::json!({ collection: "invalid" }))
+                    .unwrap_err();
+
+            assert!(refusal.contains(collection), "{refusal}");
+        }
+    }
+
     use serde_json::json;
 
     use super::*;
