@@ -253,7 +253,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later rename and move keeps, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
+        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later rename and move keeps, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Undoing the import removes the file at `asset_path`, one imported in place included, and nothing keeps its bytes. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
     )]
     async fn import_asset(
         &self,
