@@ -10,7 +10,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::project_file::PROJECT_FILE_NAME;
-use crate::project_repository::ProjectRepository;
+use crate::project_repository::{ProjectPythonRequirementsLock, ProjectRepository};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::AppliedProjectTransaction;
 
@@ -38,6 +38,7 @@ pub struct ProjectRepositoriesOpenInThisRuntime {
     project_repository_by_resolved_directory:
         Mutex<BTreeMap<PathBuf, ProjectRepositoryOneWriterAtATime>>,
     project_transaction_feed: broadcast::Sender<ProjectTransactionAnnouncement>,
+    python_requirements_lock: Option<ProjectPythonRequirementsLock>,
 }
 
 impl Default for ProjectRepositoriesOpenInThisRuntime {
@@ -45,11 +46,23 @@ impl Default for ProjectRepositoriesOpenInThisRuntime {
         Self {
             project_repository_by_resolved_directory: Mutex::default(),
             project_transaction_feed: broadcast::channel(PROJECT_TRANSACTION_FEED_CAPACITY).0,
+            python_requirements_lock: None,
         }
     }
 }
 
 impl ProjectRepositoriesOpenInThisRuntime {
+    /// No project open yet, each one opened handed `python_requirements_lock` to lock its
+    /// Python requirements with.
+    pub fn locking_python_requirements_with(
+        python_requirements_lock: ProjectPythonRequirementsLock,
+    ) -> Self {
+        Self {
+            python_requirements_lock: Some(python_requirements_lock),
+            ..Self::default()
+        }
+    }
+
     /// The open project whose `tatolab-project.json` names `project`, if this runtime has opened it.
     pub fn the_open_project_repository_of(
         &self,
@@ -148,9 +161,11 @@ impl ProjectRepositoriesOpenInThisRuntime {
         {
             return Ok(Arc::clone(open));
         }
-        let opened = Arc::new(Mutex::new(ProjectRepository::open(
-            &resolved_project_directory,
-        )?));
+        let mut opened = ProjectRepository::open(&resolved_project_directory)?;
+        if let Some(python_requirements_lock) = &self.python_requirements_lock {
+            opened.lock_the_python_requirements_with(Arc::clone(python_requirements_lock));
+        }
+        let opened = Arc::new(Mutex::new(opened));
         project_repository_by_resolved_directory
             .insert(resolved_project_directory, Arc::clone(&opened));
         Ok(opened)

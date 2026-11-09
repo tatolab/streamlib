@@ -28,6 +28,7 @@ use super::project_stream_action_queue::{
 };
 use super::project_venv_made_with_the_runtime_unit_uv::{
     ProjectVenvNotMade, every_first_party_module_folder_in,
+    lock_the_projects_python_requirements_with_the_runtime_unit_uv,
     make_the_projects_venv_current_with_the_runtime_unit_uv, the_projects_venv_interpreter,
 };
 use super::runtime::{
@@ -2230,6 +2231,28 @@ impl Runner {
             _entered_on_this_thread: entry.enter_on_this_thread(),
             entry,
         })
+    }
+
+    /// Lock the Python requirements the `pyproject.toml` in `project_directory` declares with
+    /// the uv this runtime was handed, refused in uv's own words when they cannot be resolved.
+    /// A runtime never handed a uv locks nothing, and the project's next load resolves them.
+    pub fn lock_the_python_requirements_of_the_project_in(
+        &self,
+        project_directory: &Path,
+    ) -> std::result::Result<(), String> {
+        match self
+            .engine_resources_shared_by_every_stream
+            .runtime_unit_uv_executable
+            .get()
+        {
+            Some(runtime_unit_uv) => {
+                lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+                    project_directory,
+                    runtime_unit_uv,
+                )
+            }
+            None => Ok(()),
+        }
     }
 
     /// Make the `.venv` of the project in `project_directory` current with the

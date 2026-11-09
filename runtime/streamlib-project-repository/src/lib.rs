@@ -48,7 +48,9 @@ pub use project_repositories_open_in_this_runtime::{
     ProjectTransactionAnnouncement,
 };
 #[cfg(feature = "history")]
-pub use project_repository::{ProjectImportListed, ProjectRepository};
+pub use project_repository::{
+    ProjectImportListed, ProjectPythonRequirementsLock, ProjectRepository,
+};
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,

@@ -424,6 +424,38 @@ fn sync_the_venv_and_install_the_first_party_modules(
     Ok(())
 }
 
+/// `<runtime_unit_uv> lock` in `project_directory`, refused in uv's own words when the
+/// requirements its `pyproject.toml` declares cannot be resolved.
+pub(crate) fn lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+    project_directory: &Path,
+    runtime_unit_uv: &Path,
+) -> Result<(), String> {
+    let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
+    command.arg("lock");
+    let run = run_a_child_process_to_its_exit_within(
+        &mut command,
+        PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
+        Duration::MAX,
+        &|| false,
+    )
+    .map_err(|spawn_failure| {
+        format!(
+            "`{} lock` could not be started in {}: {spawn_failure}",
+            runtime_unit_uv.display(),
+            project_directory.display()
+        )
+    })?;
+    if run.exited_successfully() {
+        return Ok(());
+    }
+    Err(format!(
+        "`uv lock` failed in {}: it exited with {}. {}",
+        project_directory.display(),
+        run.exit_status_rendered(),
+        run.standard_error_as_a_refusal_quotes_it()
+    ))
+}
+
 /// `<runtime_unit_uv> pip install --python <the project's venv interpreter>
 /// <each first-party module folder>` in `project_directory`, started as a
 /// sync is.
@@ -1171,5 +1203,39 @@ mod tests {
             ]
         );
         assert!(every_first_party_module_folder_in(&modules.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn a_lock_runs_uv_lock_in_the_project() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+            &project.project_directory,
+            &project.stub_uv,
+        )
+        .unwrap();
+        assert_eq!(
+            project.uv_runs(),
+            vec![format!(
+                "lock in {}",
+                project.the_project_directory_resolved()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_lock_uv_cannot_resolve_is_refused_in_uvs_own_words() {
+        let project = ProjectAndAStubUv::whose_uv_runs(
+            "echo 'No solution found when resolving dependencies' >&2\nexit 1",
+        );
+        let refusal = lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+            &project.project_directory,
+            &project.stub_uv,
+        )
+        .unwrap_err();
+        assert!(refusal.contains("`uv lock` failed"), "{refusal}");
+        assert!(
+            refusal.contains("No solution found when resolving dependencies"),
+            "{refusal}"
+        );
     }
 }

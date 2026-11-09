@@ -67,6 +67,11 @@ pub enum ProjectRepositoryRefusal {
         first_folder: String,
         second_folder: String,
     },
+    #[error(
+        "the project's Python requirements, with this import change, cannot be resolved, so \
+         nothing changed: {resolver_refusal}"
+    )]
+    ImportRequirementsUnresolvable { resolver_refusal: String },
     #[error("the import source {path} could not be read: {why}")]
     ImportSourceUnreadable { path: PathBuf, why: String },
     #[error("the project's content store holds no content {0}")]

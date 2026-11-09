@@ -4,6 +4,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value;
 use uuid::Uuid;
@@ -52,6 +53,13 @@ pub struct ProjectImportListed {
     pub version_on_the_source: Option<Result<String, String>>,
 }
 
+/// The file uv locks a project's Python requirements in, beside its `pyproject.toml`.
+const UV_LOCK_FILE_NAME: &str = "uv.lock";
+
+/// What the host hands a project to lock the Python requirements of the project in a
+/// directory with, refused in the resolver's own words when they cannot be resolved.
+pub type ProjectPythonRequirementsLock = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+
 /// A project the runtime opened: the one writer of its files, its imports, its content store and
 /// its history.
 pub struct ProjectRepository {
@@ -60,6 +68,7 @@ pub struct ProjectRepository {
     assets_by_uuid: BTreeMap<Uuid, ProjectAsset>,
     content_store: ProjectContentStore,
     history: ProjectHistoryRepository,
+    python_requirements_lock: Option<ProjectPythonRequirementsLock>,
 }
 
 enum PerformedImportEffect {
@@ -128,6 +137,7 @@ impl ProjectRepository {
             history: ProjectHistoryRepository::create_for_project(project_directory)?,
             project_file,
             assets_by_uuid: BTreeMap::new(),
+            python_requirements_lock: None,
         };
         repository.history.commit_tracked_files(
             &repository.tracked_files(&repository.assets_by_uuid)?,
@@ -177,7 +187,18 @@ impl ProjectRepository {
             history: ProjectHistoryRepository::open_for_project(project_directory)?,
             project_file,
             assets_by_uuid,
+            python_requirements_lock: None,
         })
+    }
+
+    /// Lock the project's Python requirements with `python_requirements_lock` each time an
+    /// import change rewrites its `pyproject.toml`, refusing the change when they cannot be
+    /// resolved; a project never handed one leaves them to be resolved when it loads.
+    pub fn lock_the_python_requirements_with(
+        &mut self,
+        python_requirements_lock: ProjectPythonRequirementsLock,
+    ) {
+        self.python_requirements_lock = Some(python_requirements_lock);
     }
 
     /// The project's directory.
@@ -493,6 +514,23 @@ impl ProjectRepository {
                 return Err(refusal);
             }
         };
+        let uv_lock_as_it_was = match pyproject_as_it_was
+            .as_deref()
+            .map(|pyproject_as_it_was| {
+                self.lock_the_python_requirements_of_the_rewritten_pyproject()
+                    .inspect_err(|_| self.restore_the_pyproject(pyproject_as_it_was))
+            })
+            .transpose()
+        {
+            Ok(uv_lock_as_it_was) => uv_lock_as_it_was.flatten(),
+            Err(refusal) => {
+                self.restore_the_project_file(&project_file_as_it_was);
+                self.restore_written_documents(written_documents);
+                self.undo_performed_import_effects(performed_import_effects);
+                self.undo_performed_effects(performed_effects);
+                return Err(refusal);
+            }
+        };
         let committed = self
             .tracked_files(&staged_assets)
             .and_then(|tracked_files| {
@@ -505,6 +543,9 @@ impl ProjectRepository {
         let commit = match committed {
             Ok(commit) => commit,
             Err(refusal) => {
+                if let Some(uv_lock_as_it_was) = uv_lock_as_it_was {
+                    self.restore_the_uv_lock(uv_lock_as_it_was);
+                }
                 if let Some(pyproject_as_it_was) = pyproject_as_it_was {
                     self.restore_the_pyproject(&pyproject_as_it_was);
                 }
@@ -794,6 +835,51 @@ impl ProjectRepository {
         }
         write_file_whole(&pyproject_path, pyproject.as_bytes())?;
         Ok(Some(pyproject_as_it_was))
+    }
+
+    /// Lock the Python requirements the rewritten `pyproject.toml` declares with what the host
+    /// handed, answering the `uv.lock` as it was, `None` inside when there was none, so a
+    /// refused commit can put it back; refused in the resolver's words, `uv.lock` put back.
+    /// `None` when the project was handed nothing to lock with.
+    fn lock_the_python_requirements_of_the_rewritten_pyproject(
+        &self,
+    ) -> Result<Option<Option<Vec<u8>>>, ProjectRepositoryRefusal> {
+        let Some(python_requirements_lock) = &self.python_requirements_lock else {
+            return Ok(None);
+        };
+        let uv_lock_path = self.project_directory.join(UV_LOCK_FILE_NAME);
+        let uv_lock_as_it_was = match std::fs::read(&uv_lock_path) {
+            Ok(bytes) => Some(bytes),
+            Err(not_read) if not_read.kind() == std::io::ErrorKind::NotFound => None,
+            Err(not_read) => return Err(not_read.into()),
+        };
+        if let Err(resolver_refusal) = python_requirements_lock(&self.project_directory) {
+            self.restore_the_uv_lock(uv_lock_as_it_was);
+            return Err(ProjectRepositoryRefusal::ImportRequirementsUnresolvable {
+                resolver_refusal,
+            });
+        }
+        Ok(Some(uv_lock_as_it_was))
+    }
+
+    fn restore_the_uv_lock(&self, uv_lock_as_it_was: Option<Vec<u8>>) {
+        let uv_lock_path = self.project_directory.join(UV_LOCK_FILE_NAME);
+        let restored = match uv_lock_as_it_was {
+            Some(bytes) => write_file_whole(&uv_lock_path, &bytes),
+            None => match std::fs::remove_file(&uv_lock_path) {
+                Err(not_removed) if not_removed.kind() != std::io::ErrorKind::NotFound => {
+                    Err(not_removed.into())
+                }
+                _ => Ok(()),
+            },
+        };
+        if let Err(not_restored) = restored {
+            tracing::error!(
+                project = %self.project_directory.display(),
+                %not_restored,
+                "could not restore uv.lock after a refused change"
+            );
+        }
     }
 
     fn restore_the_pyproject(&self, pyproject_as_it_was: &str) {
