@@ -458,6 +458,17 @@ pub struct GraphTransactionAddedNode {
     pub label: Option<String>,
 }
 
+/// A labelled group a graph transaction made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphTransactionAddedGroup {
+    /// The stream it was made in, by stream id.
+    pub stream: String,
+    /// The UUID the runtime made for it.
+    pub group: String,
+    /// Its title.
+    pub title: String,
+}
+
 /// A link a graph transaction made, with the state the stream's graph reads it in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphTransactionConnectedLink {
@@ -494,6 +505,9 @@ pub struct GraphTransactionToolResult {
     pub added_nodes: Vec<GraphTransactionAddedNode>,
     /// Each link it made.
     pub connected_links: Vec<GraphTransactionConnectedLink>,
+    /// Each labelled group it made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_groups: Vec<GraphTransactionAddedGroup>,
 }
 
 /// What a project's transactions resource holds: its newest transactions, newest first.

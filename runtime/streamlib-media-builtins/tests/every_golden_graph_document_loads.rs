@@ -17,10 +17,16 @@ use streamlib::sdk::runtime::{OptionsForLoadingOneStream, Runner};
 use streamlib_media_builtins::register_media_builtin_processor_types;
 
 /// Each golden graph document's SHA-256, pinned as it was added.
-const GOLDEN_GRAPH_DOCUMENT_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[(
-    "0001-every-media-module-with-node-uuids-links-by-uuid-and-studio-fields.graph.json",
-    "65d56576a429a4951b289a6b04685b0e7248f68660edca460bdb74991b032f9c",
-)];
+const GOLDEN_GRAPH_DOCUMENT_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
+    (
+        "0001-every-media-module-with-node-uuids-links-by-uuid-and-studio-fields.graph.json",
+        "65d56576a429a4951b289a6b04685b0e7248f68660edca460bdb74991b032f9c",
+    ),
+    (
+        "0002-a-labelled-group-of-nodes.graph.json",
+        "26d953f39e76c4d76e34194bb5e6779a6e6c5594f2662eae84423e29e3d19d40",
+    ),
+];
 
 fn golden_graph_document_paths() -> Vec<PathBuf> {
     let golden_graph_documents_directory =
@@ -122,7 +128,7 @@ fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
             continue;
         }
         let project_directory = tempfile::tempdir().expect("a project directory");
-        Runner::new()
+        let loaded_stream = Runner::new()
             .expect("a runtime constructs")
             .load_stream_from_graph_snapshot(
                 &built_ins_only,
@@ -130,6 +136,12 @@ fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
                     .with_stream_id("golden-document"),
             )
             .unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
+        let graph_render = loaded_stream.to_json().expect("the loaded stream renders");
+        assert_eq!(
+            graph_render.get("groups"),
+            recorded_graph_document.get("groups"),
+            "{path:?} does not render the groups it holds"
+        );
     }
 }
 

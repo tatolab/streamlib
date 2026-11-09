@@ -1,0 +1,86 @@
+{
+  "asset": "ef13391d-e17f-5754-b64c-301ac34a8a41",
+  "groups": [
+    {
+      "colour": "#22c55e",
+      "description": "the test pattern and the H.265 encoder that reads it",
+      "id": "82c620c8-c70c-5439-9927-8ef70b4a7876",
+      "title": "encode the pattern"
+    }
+  ],
+  "links": [
+    {
+      "source": {
+        "node": "d15fe068-04e3-5d8b-89ee-28032ade7368",
+        "port": "video"
+      },
+      "target": {
+        "node": "e3234ace-e0de-5825-b4a3-26de696d9248",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "e3234ace-e0de-5825-b4a3-26de696d9248",
+        "port": "encoded_video"
+      },
+      "target": {
+        "node": "54fb1d27-b5db-5c79-b530-a6d403793e8c",
+        "port": "encoded_video"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "height": 720,
+        "width": 1280
+      },
+      "id": "d15fe068-04e3-5d8b-89ee-28032ade7368",
+      "name": "testpatternsource",
+      "studio": {
+        "group": "82c620c8-c70c-5439-9927-8ef70b4a7876",
+        "position": [
+          120,
+          80
+        ]
+      },
+      "type": "tatolab.testpattern:TestPatternSource"
+    },
+    {
+      "config": {
+        "bitrate_bps": 4000000,
+        "effort_level": 1,
+        "fps": 30,
+        "height": 1080,
+        "keyframe_interval_seconds": 2,
+        "width": 1920
+      },
+      "id": "e3234ace-e0de-5825-b4a3-26de696d9248",
+      "name": "h265encoder",
+      "studio": {
+        "group": "82c620c8-c70c-5439-9927-8ef70b4a7876",
+        "position": [
+          360,
+          80
+        ]
+      },
+      "type": "tatolab.h265:H265Encoder"
+    },
+    {
+      "config": {
+        "max_height": 1080,
+        "max_width": 1920
+      },
+      "id": "54fb1d27-b5db-5c79-b530-a6d403793e8c",
+      "name": "h265decoder",
+      "studio": {
+        "position": [
+          600,
+          80
+        ]
+      },
+      "type": "tatolab.h265:H265Decoder"
+    }
+  ]
+}
