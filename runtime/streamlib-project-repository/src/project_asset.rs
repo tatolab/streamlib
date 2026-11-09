@@ -202,6 +202,21 @@ pub struct ProjectAssetSidecar {
     /// Settings the import or a later `set_asset_settings` gave the asset.
     #[serde(default)]
     pub import_settings: Map<String, Value>,
+    /// The dependency's asset this one is a fork of, when it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<ProjectAssetForkOrigin>,
+}
+
+/// The asset of a dependency a fork copied, at the commit of the dependency's history then pinned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAssetForkOrigin {
+    /// The dependency's asset the fork copied.
+    pub asset: Uuid,
+    /// The dependency, by its project UUID.
+    pub from: Uuid,
+    /// The commit of the dependency's history the fork copied it at.
+    pub revision: String,
 }
 
 /// One asset of a project: its sidecar and where it sits.
@@ -219,6 +234,9 @@ pub struct ProjectAsset {
     pub content_byte_len: u64,
     /// Its import settings.
     pub import_settings: Map<String, Value>,
+    /// The dependency's asset it is a fork of, when it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<ProjectAssetForkOrigin>,
 }
 
 impl ProjectAsset {
@@ -231,6 +249,7 @@ impl ProjectAsset {
             content_sha256: sidecar.content_sha256,
             content_byte_len: sidecar.content_byte_len,
             import_settings: sidecar.import_settings,
+            forked_from: sidecar.forked_from,
         }
     }
 
@@ -242,6 +261,7 @@ impl ProjectAsset {
             content_sha256: self.content_sha256.clone(),
             content_byte_len: self.content_byte_len,
             import_settings: self.import_settings.clone(),
+            forked_from: self.forked_from.clone(),
         }
     }
 
@@ -351,6 +371,91 @@ pub fn the_content_path_of_an_asset(
     let content_store =
         crate::project_content_store::ProjectContentStore::of_project(project_directory)?;
     content_store.stored_content(&held_asset.content_sha256)?;
+    Ok(content_store.content_path(&held_asset.content_sha256))
+}
+
+/// Where a project records the assets each of its dependencies holds at each commit fetched,
+/// relative to the project: `<dependency project UUID>/<commit>.json`, every one of them with
+/// its sidecar and path, so a reader with no history resolves a dependency's asset at its pin.
+pub const PROJECT_DEPENDENCY_ASSET_RECORDS_DIRECTORY: &str = ".tatolab/dependency-assets";
+
+/// Where the project at `project_directory` records the assets the dependency `project` holds
+/// at `commit`.
+pub fn the_dependency_asset_record_path(
+    project_directory: &Path,
+    project: Uuid,
+    commit: &str,
+) -> PathBuf {
+    project_directory
+        .join(PROJECT_DEPENDENCY_ASSET_RECORDS_DIRECTORY)
+        .join(project.to_string())
+        .join(format!("{commit}.json"))
+}
+
+/// Every asset the dependency `project` holds at `commit`, as the project at
+/// `project_directory` recorded them when it fetched that commit.
+pub fn the_dependency_assets_recorded_at(
+    project_directory: &Path,
+    project: Uuid,
+    commit: &str,
+) -> Result<Vec<ProjectAsset>, ProjectRepositoryRefusal> {
+    let record_path = the_dependency_asset_record_path(project_directory, project, commit);
+    let bytes = match std::fs::read(&record_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(
+                ProjectRepositoryRefusal::DependencyAssetsNotRecordedAtThePin {
+                    project,
+                    revision: commit.to_owned(),
+                },
+            );
+        }
+        Err(error) => return Err(error.into()),
+    };
+    serde_json::from_slice(&bytes).map_err(|error| {
+        ProjectRepositoryRefusal::AssetSidecarUnreadable {
+            path: record_path,
+            why: error.to_string(),
+        }
+    })
+}
+
+/// Where the bytes of the asset `asset` of the dependency `project` sit, as its pin in the
+/// project at `project_directory` names them: a content-addressed file of this project's own
+/// content store, which a reader opens and never writes. Refused when the project does not
+/// depend on `project`, when the dependency holds no such asset at the pin, or when its bytes
+/// were never fetched.
+pub fn the_content_path_of_a_dependency_asset(
+    project_directory: &Path,
+    project: Uuid,
+    asset: Uuid,
+) -> Result<PathBuf, ProjectRepositoryRefusal> {
+    let pinned =
+        crate::project_file::TatolabProjectFile::read_from_project_directory(project_directory)?
+            .dependencies
+            .into_iter()
+            .find(|pinned| pinned.project == project)
+            .ok_or(ProjectRepositoryRefusal::NoSuchDependency(project))?;
+    let held_asset =
+        the_dependency_assets_recorded_at(project_directory, project, &pinned.revision)?
+            .into_iter()
+            .find(|held| held.asset == asset)
+            .ok_or_else(|| ProjectRepositoryRefusal::DependencyHoldsNoAsset {
+                project,
+                asset,
+                commit: pinned.revision.clone(),
+            })?;
+    let content_store =
+        crate::project_content_store::ProjectContentStore::of_project(project_directory)?;
+    content_store
+        .stored_content(&held_asset.content_sha256)
+        .map_err(
+            |_| ProjectRepositoryRefusal::DependencyAssetContentNotFetched {
+                project,
+                asset,
+                dependency_source: pinned.source.clone(),
+            },
+        )?;
     Ok(content_store.content_path(&held_asset.content_sha256))
 }
 

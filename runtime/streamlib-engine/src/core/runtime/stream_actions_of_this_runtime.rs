@@ -4014,6 +4014,7 @@ mod tests {
             content_sha256: "0".repeat(64),
             content_byte_len: 0,
             import_settings: serde_json::Map::new(),
+            forked_from: None,
         };
         let sidecar = project.path().join(image.path.sidecar_path());
         std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();

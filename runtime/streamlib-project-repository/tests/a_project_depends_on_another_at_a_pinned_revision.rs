@@ -3,10 +3,12 @@
 
 use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
-    ProjectOperation, ProjectRelativeAssetPath, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectAssetChangeRequest, ProjectAssetForkOrigin, ProjectAssetImportSource, ProjectOperation,
+    ProjectRelativeAssetPath, ProjectRepository, ProjectRepositoryRefusal,
     ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
     ProjectTransactionLineage, StreamGraphDocumentNode, StreamGraphOperation,
-    StreamGraphOperationOnAStream,
+    StreamGraphOperationOnAStream, the_content_path_of_a_dependency_asset,
+    the_content_path_of_an_asset,
 };
 use uuid::Uuid;
 
@@ -251,7 +253,7 @@ fn a_forked_stream_is_an_editable_copy_the_dependencys_next_revision_no_longer_r
 
     let (fork, _) = cell
         .repository
-        .fork_dependency_stream(&a_person(), arm_project, arm.stream, None)
+        .fork_dependency_asset(&a_person(), arm_project, arm.stream, None)
         .unwrap();
     let second_revision = arm.add_a_node_named("elbow");
     cell.repository
@@ -311,7 +313,7 @@ fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_depen
 
     let (fork, _) = cell
         .repository
-        .fork_dependency_stream(
+        .fork_dependency_asset(
             &a_person(),
             arm_project,
             arm.stream,
@@ -344,8 +346,8 @@ fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_depen
     ));
     assert!(matches!(
         cell.repository
-            .fork_dependency_stream(&a_person(), arm_project, Uuid::new_v4(), None),
-        Err(ProjectRepositoryRefusal::DependencyHoldsNoStream { .. })
+            .fork_dependency_asset(&a_person(), arm_project, Uuid::new_v4(), None),
+        Err(ProjectRepositoryRefusal::DependencyHoldsNoAsset { .. })
     ));
 }
 
@@ -377,7 +379,7 @@ fn a_forked_stream_references_the_dependencys_own_assets_into_the_dependency() {
 
     let (fork, _) = cell
         .repository
-        .fork_dependency_stream(&a_person(), arm_project, arm.stream, None)
+        .fork_dependency_asset(&a_person(), arm_project, arm.stream, None)
         .unwrap();
 
     let copy = cell.repository.stream_graph_document(fork.copy).unwrap();
@@ -538,7 +540,7 @@ fn a_clone_without_the_fetched_history_fetches_it_again_from_the_source_and_keep
     std::fs::remove_dir_all(cell_directory.join(".tatolab/dependencies")).unwrap();
     let (fork, _) = clone
         .repository
-        .fork_dependency_stream(
+        .fork_dependency_asset(
             &a_person(),
             depending.arm_project,
             depending.arm.stream,
@@ -593,7 +595,7 @@ fn undo_of_a_fork_is_refused_once_its_copy_has_been_edited() {
     let (fork, _) = depending
         .cell
         .repository
-        .fork_dependency_stream(
+        .fork_dependency_asset(
             &a_person(),
             depending.arm_project,
             depending.arm.stream,
@@ -662,7 +664,7 @@ fn a_fork_points_a_reference_inside_a_stored_fragment_at_the_copy_and_undo_point
     let (fork, _) = depending
         .cell
         .repository
-        .fork_dependency_stream(
+        .fork_dependency_asset(
             &a_person(),
             depending.arm_project,
             depending.arm.stream,
@@ -715,7 +717,7 @@ fn a_fork_is_refused_while_a_referencing_node_holds_no_uuid() {
     let refusal = depending
         .cell
         .repository
-        .fork_dependency_stream(
+        .fork_dependency_asset(
             &a_person(),
             depending.arm_project,
             depending.arm.stream,
@@ -1017,5 +1019,152 @@ fn a_dependency_is_removed_only_once_no_node_references_it_and_undo_puts_its_pin
     assert_eq!(
         node_names_of_the_main_stream_at_the_pin(&cell.repository, arm_project),
         vec!["shoulder"]
+    );
+}
+
+impl ProjectWithOneStream {
+    /// Import `bytes` as the asset at `asset_path`, answering its UUID and the commit.
+    fn import_an_asset(&mut self, asset_path: &str, bytes: &[u8]) -> (Uuid, String) {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), bytes).unwrap();
+        let applied = self
+            .repository
+            .apply_asset_changes(
+                &a_person(),
+                vec![ProjectAssetChangeRequest::ImportAsset {
+                    source: ProjectAssetImportSource::FileOnThisMachine(
+                        source.path().to_path_buf(),
+                    ),
+                    asset_path: asset_path.to_owned(),
+                    kind: None,
+                    import_settings: Map::new(),
+                }],
+            )
+            .unwrap();
+        let imported = self
+            .repository
+            .assets()
+            .unwrap()
+            .into_iter()
+            .find(|asset| asset.path.to_string() == asset_path)
+            .unwrap();
+        (imported.asset, applied.commit)
+    }
+}
+
+#[test]
+fn a_dependencys_asset_bytes_are_copied_in_at_each_fetch_and_read_at_its_pin() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let (grade, first_revision) = arm.import_an_asset("looks/grade.cube", b"grade lut");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+    let cell_directory = cell.repository.project_directory().to_path_buf();
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &first_revision, None)
+        .unwrap();
+    let (night, second_revision) = arm.import_an_asset("looks/night.cube", b"night lut");
+
+    let grade_path =
+        the_content_path_of_a_dependency_asset(&cell_directory, arm_project, grade).unwrap();
+    assert!(grade_path.starts_with(cell_directory.join(".tatolab/content")));
+    assert_eq!(std::fs::read(&grade_path).unwrap(), b"grade lut");
+    assert!(matches!(
+        the_content_path_of_a_dependency_asset(&cell_directory, arm_project, night),
+        Err(ProjectRepositoryRefusal::DependencyHoldsNoAsset { .. })
+    ));
+
+    cell.repository
+        .update_dependency(&a_person(), arm_project, &second_revision, None)
+        .unwrap();
+    std::fs::remove_dir_all(arm.repository.project_directory()).unwrap();
+    assert_eq!(
+        std::fs::read(
+            the_content_path_of_a_dependency_asset(&cell_directory, arm_project, night).unwrap()
+        )
+        .unwrap(),
+        b"night lut"
+    );
+
+    cell.undo().unwrap();
+    assert!(matches!(
+        the_content_path_of_a_dependency_asset(&cell_directory, arm_project, night),
+        Err(ProjectRepositoryRefusal::DependencyHoldsNoAsset { .. })
+    ));
+    assert!(matches!(
+        the_content_path_of_a_dependency_asset(&cell_directory, Uuid::new_v4(), grade),
+        Err(ProjectRepositoryRefusal::NoSuchDependency(_))
+    ));
+}
+
+#[test]
+fn a_forked_data_asset_is_this_projects_own_file_and_undo_points_each_reference_back() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let (grade, revision) = arm.import_an_asset("looks/grade.cube", b"grade lut");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+    let cell_directory = cell.repository.project_directory().to_path_buf();
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &revision, None)
+        .unwrap();
+    let dependency_reference = json!({ "lut": { "asset": grade, "from": arm_project } });
+    let (grader, _) = cell.add_a_node("grader", dependency_reference.clone(), None);
+
+    let (fork, _) = cell
+        .repository
+        .fork_dependency_asset(&a_person(), arm_project, grade, None)
+        .unwrap();
+
+    let copy = cell.repository.asset(fork.copy).unwrap();
+    assert_eq!(copy.path.to_string(), "looks/grade-fork.cube");
+    assert_eq!(
+        copy.forked_from,
+        Some(ProjectAssetForkOrigin {
+            asset: grade,
+            from: arm_project,
+            revision: revision.clone(),
+        })
+    );
+    assert_eq!(
+        std::fs::read(cell_directory.join("looks/grade-fork.cube")).unwrap(),
+        b"grade lut"
+    );
+    let sidecar: Value = serde_json::from_slice(
+        &std::fs::read(cell_directory.join("looks/grade-fork.cube.asset.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        sidecar["forked_from"],
+        json!({ "asset": grade, "from": arm_project, "revision": revision })
+    );
+    assert_eq!(
+        std::fs::read(the_content_path_of_an_asset(&cell_directory, fork.copy).unwrap()).unwrap(),
+        b"grade lut"
+    );
+    assert_eq!(
+        cell.repository
+            .stream_graph_document(cell.stream)
+            .unwrap()
+            .node(grader)
+            .unwrap()
+            .config,
+        json!({ "lut": { "asset": fork.copy } })
+    );
+
+    cell.undo().unwrap();
+    assert!(!cell_directory.join("looks/grade-fork.cube").exists());
+    assert!(matches!(
+        cell.repository.asset(fork.copy),
+        Err(ProjectRepositoryRefusal::NoSuchAsset(_))
+    ));
+    assert_eq!(
+        cell.repository
+            .stream_graph_document(cell.stream)
+            .unwrap()
+            .node(grader)
+            .unwrap()
+            .config,
+        dependency_reference
     );
 }

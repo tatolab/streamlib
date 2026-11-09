@@ -14,7 +14,7 @@ use rmcp::{Peer, RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::Value;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, DependencyStreamFork, PinnedProjectDependency,
+    AppliedProjectTransaction, DependencyAssetFork, PinnedProjectDependency,
     ProjectDependencyOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
     ProjectRepository, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
 };
@@ -131,11 +131,11 @@ struct ForkAssetToolArguments {
     #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
     project: String,
     #[schemars(
-        description = "The depended-on project's asset to copy, by its UUID; a stream, by the `asset` its graph document holds."
+        description = "The depended-on project's asset to copy, by its UUID: a stream, by the `asset` its graph document holds, or a media, scene or data asset, by its sidecar's."
     )]
     asset: String,
     #[schemars(
-        description = "Where the copy's graph document is written, relative to the project; `streams/<name>-fork.graph.json` when omitted."
+        description = "Where the copy is written, relative to the project: a stream's graph document, `streams/<name>-fork.graph.json` when omitted, or another asset's file, beside the dependency's path as `<name>-fork.<extension>` when omitted."
     )]
     path: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
@@ -145,7 +145,7 @@ struct ForkAssetToolArguments {
 #[tool_router(router = project_dependency_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Depend on another project, pinned at a revision, as one transaction by `author`: its history is fetched from `source` — a project directory, a package installed in this project's venv that ships a project, or a Git remote, sent `bearer_token` when it needs one — into `.tatolab/dependencies/<project uuid>/` and the pin, the commit `revision` names, is recorded in `tatolab-project.json`. A project directory or a package needs no network; a Git remote needs it only to fetch. A clone of the project carries the pin without the fetched history, which is fetched again from the recorded `source` the first time it is read, the pin left where it is. Its assets are then referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read at the pin; its streams are placed with `use_dependency_stream`. Answers the `dependency` with its pinned `revision`. Refused, nothing pinned, for a revision the source does not hold, a source holding no project, the project itself, or a project already depended on."
+        description = "Depend on another project, pinned at a revision, as one transaction by `author`: its history is fetched from `source` — a project directory, a package installed in this project's venv that ships a project, or a Git remote, sent `bearer_token` when it needs one — into `.tatolab/dependencies/<project uuid>/` and the pin, the commit `revision` names, is recorded in `tatolab-project.json`. A project directory or a package needs no network; a Git remote needs it only to fetch. A clone of the project carries the pin without the fetched history, which is fetched again from the recorded `source` the first time it is read, the pin left where it is. Its assets are then referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read at the pin: each fetch also copies the bytes of its media, scene and data assets into this project's content store from the source's, which a project directory or a package holds and a Git remote does not; its streams are placed with `use_dependency_stream`. Answers the `dependency` with its pinned `revision`. Refused, nothing pinned, for a revision the source does not hold, a source holding no project, the project itself, or a project already depended on."
     )]
     async fn add_dependency(
         &self,
@@ -404,7 +404,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Fork a stream of a project this one depends on into this project, as one transaction by `author`: its graph document at the pin is copied to `path` under a new stream asset UUID, recording the stream, project and commit it came from under `forked_from`, and every node of this project that referenced it as `{\"asset\", \"from\"}`, in its config or at any level of a stored fragment, is made to reference the copy, so a later `update_dependency` no longer reaches it. The copy is this project's own, edited like any of its streams; each committed edit to it refreshes every fragment holding it in this project's streams in the same transaction, loaded or not, each node keeping its UUID by name. Answers the copy as an asset, `forked_from`, and the `graph_operations` applied to loaded streams; undo points each reference back, takes the copy out and unloads its stream, refused once the copy has been edited. Refused for an asset the dependency's history holds no graph document of, since only a stream is forked, and for a referencing node of a graph document that holds no UUID yet."
+        description = "Fork an asset of a project this one depends on into this project, as one transaction by `author`, recording the asset, project and commit it came from under `forked_from`: a stream's graph document at the pin is copied to `path` under a new stream asset UUID; a media, scene or data asset gets a new UUID and its own file at `path`, beside a sidecar holding `forked_from`, from the bytes the fetch copied into this project's content store. Every node of this project that referenced the asset as `{\"asset\", \"from\"}`, in its config or at any level of a stored fragment, is made to reference the copy, so a later `update_dependency` no longer reaches it. The copy is this project's own; each committed edit to a stream copy refreshes every fragment holding it in this project's streams in the same transaction, loaded or not, each node keeping its UUID by name. Answers the copy as an asset, `forked_from`, and the `graph_operations` applied to loaded streams; undo points each reference back and takes the copy out, unloading a stream copy, refused once a stream copy has been edited. Refused for an asset the dependency holds neither a graph document nor a sidecar of at the pin, for one whose bytes were never fetched — a Git remote carries no content store — and for a referencing node of a graph document that holds no UUID yet."
     )]
     async fn fork_asset(
         &self,
@@ -439,7 +439,7 @@ impl LocalApiMcpServerHandler {
                 &author,
                 |project_repository_held, stream_id_of_each_stream_asset| {
                     let fork = project_repository_held
-                        .the_fork_of_a_dependency_stream(project, asset, path.as_deref())
+                        .the_fork_of_a_dependency_asset(project, asset, path.as_deref())
                         .map_err(|refusal| refusal.to_string())?;
                     let forked_at = project_repository_held
                         .dependency(project)
@@ -593,13 +593,11 @@ fn the_refresh_of_each_fragment_holding_a_stream_of(
 /// `fork` as the operation pointing each reference on a loaded stream at the copy, and the
 /// operations applied before them: the copy, then each reference on a stream not loaded.
 fn the_fork_split_by_loaded_stream(
-    fork: &DependencyStreamFork,
+    fork: &DependencyAssetFork,
     stream_id_of_each_stream_asset: &HashMap<Uuid, String>,
 ) -> (Vec<GraphTransactionStep>, Vec<ProjectOperation>) {
     let mut references_on_loaded_streams = Vec::new();
-    let mut project_operations_first = vec![ProjectOperation::StreamDocument(
-        fork.create_the_copy.clone(),
-    )];
+    let mut project_operations_first = vec![fork.create_the_copy.clone()];
     for reference in &fork.references_made_local {
         match stream_id_of_each_stream_asset.get(&reference.stream) {
             Some(stream_id) => references_on_loaded_streams.push(GraphTransactionStep::Prepared {

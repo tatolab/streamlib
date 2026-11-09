@@ -107,6 +107,27 @@ pub enum ProjectRepositoryRefusal {
         stream: Uuid,
         commit: String,
     },
+    #[error("the dependency {project} holds no asset {asset} at {commit}")]
+    DependencyHoldsNoAsset {
+        project: Uuid,
+        asset: Uuid,
+        commit: String,
+    },
+    #[error(
+        "the assets of the dependency {project} at {revision} are not recorded in this project; \
+         `update_dependency` to that revision fetches them"
+    )]
+    DependencyAssetsNotRecordedAtThePin { project: Uuid, revision: String },
+    #[error(
+        "the bytes of the asset {asset} of the dependency {project} are not in this project's \
+         content store: its source {dependency_source} held none of them, and a Git remote carries \
+         no content store"
+    )]
+    DependencyAssetContentNotFetched {
+        project: Uuid,
+        asset: Uuid,
+        dependency_source: String,
+    },
     #[error(
         "the graph document {path} was edited after the transaction being reversed wrote it; \
          taking it out would lose those edits"

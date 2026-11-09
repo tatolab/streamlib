@@ -1892,7 +1892,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   graph edit live, and the unit of undo and history. Each project's history is a Git repository
   the runtime writes with a Git engine it carries, never the person's own Git, in a form Cloudflare
   Artifacts takes as a remote; a project works fully offline, and a remote is optional. Another project's asset is used as a linked dependency pinned to a
-  revision, updated when the person chooses and copied only when they fork it. Python stays the
+  revision, updated when the person chooses and copied only when they fork it. A dependency's
+  assets travel with it: each fetch copies the bytes of its media, scene and data assets into the
+  depending project's content store from the source's own, so the project reads them at the pin
+  offline and a fork of one needs no second copy; a Git remote carries no content store yet, so its
+  bytes are refused by name until content storage beside a remote lands (owner, 2026-11-09). Python stays the
   language of nodes: a `@graph_generator` function, replacing `@stream`, builds graph, and its
   output is stored as a frozen, read-only fragment, never one-to-one with a stream, and nothing writes a graph edit back into Python. Data on links and runtime
   state are never saved. Single player first; the cloud hub, branches, roles and releases build on
