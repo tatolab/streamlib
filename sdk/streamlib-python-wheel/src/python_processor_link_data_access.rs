@@ -94,6 +94,8 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// Whether the runtime drives `process()` from this node's inputs, which
     /// would race native code waiting on a lent input for the same wakeups.
     runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool,
+    values_last_read_off_links_into_its_function_node_islands:
+        crate::python_function_node_island::ValuesLastReadOffLinksFromOutsideIslands,
 }
 
 /// The data plane a module host table reaches a helper's lent ports through.
@@ -119,7 +121,16 @@ impl PythonProcessorLinkDataAccess {
             input_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
             output_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
             runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool::new(false),
+            values_last_read_off_links_into_its_function_node_islands: Arc::default(),
         }
+    }
+
+    /// The control value or record each reader input port of this helper last
+    /// carried into an island, which an island replacing it starts from.
+    pub(crate) fn values_last_read_off_links_into_its_function_node_islands(
+        &self,
+    ) -> crate::python_function_node_island::ValuesLastReadOffLinksFromOutsideIslands {
+        Arc::clone(&self.values_last_read_off_links_into_its_function_node_islands)
     }
 
     /// This helper's input mailboxes; `None` before a link wired one.

@@ -118,6 +118,20 @@ impl PythonProcessorDeclaration {
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
+        for output in &descriptor.outputs {
+            if let Some(followed_input_port) = output.family.family_follows_input_port.as_deref()
+                && !descriptor
+                    .inputs
+                    .iter()
+                    .any(|input| input.name == followed_input_port)
+            {
+                return Err(format!(
+                    "output port {:?} follows the family of input port {followed_input_port:?}, \
+                     which the node does not declare",
+                    output.name
+                ));
+            }
+        }
 
         Ok(Self {
             descriptor,
@@ -950,6 +964,19 @@ mod tests {
         }])));
         assert!(
             refusal.contains("\"video\"") && refusal.contains("`requires=`"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn an_output_following_an_input_the_node_does_not_declare_is_refused_naming_both() {
+        let refusal = refusal_of(&described_node_type_with_output_ports(serde_json::json!([{
+            "name": "result",
+            "description": "",
+            "family": {"family": "image", "family_follows_input_port": "value"},
+        }])));
+        assert!(
+            refusal.contains("\"result\"") && refusal.contains("input port \"value\""),
             "got {refusal}"
         );
     }

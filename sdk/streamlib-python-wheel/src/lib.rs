@@ -114,6 +114,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module
         .add_class::<python_function_node_island::FunctionNodeEvaluatedAsItsHelpersProcessor>()?;
+    module.add_class::<python_function_node_island::UnreadMessageAFunctionNodeHandsOn>()?;
     module.add_function(wrap_pyfunction!(
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
         module

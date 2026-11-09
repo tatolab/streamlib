@@ -13,6 +13,37 @@ use streamlib_ipc_types::{
     ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
 };
 
+/// A message one of an island's inputs read off a channel, as it arrived, which
+/// the island hands its reader on unread.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MessageAFunctionNodeIslandHandsOnUnread {
+    /// The payload's bytes; an Image frame's payload is empty, its slot named
+    /// by its descriptor.
+    pub payload_bytes: Vec<u8>,
+    /// What the payload is, exactly as its producer described it.
+    pub payload_descriptor: DataChannelPayloadDescriptor,
+    /// Its producer's publish stamp.
+    pub timestamp_ns: i64,
+    /// Whether it opens a group.
+    pub group_boundary: MessageGroupBoundary,
+    /// What its link lost between the message read before it and this one.
+    pub lost_since_last_read: u64,
+}
+
+impl MessageAFunctionNodeIslandHandsOnUnread {
+    /// `message` as an island holds it, its payload copied out of the sample
+    /// it arrived in.
+    pub fn read_off_its_channel(message: &MessageReadFromInputPort) -> Self {
+        Self {
+            payload_bytes: message.payload.to_vec(),
+            payload_descriptor: message.payload_descriptor,
+            timestamp_ns: message.timestamp_ns,
+            group_boundary: message.group_boundary,
+            lost_since_last_read: message.lost_since_last_read,
+        }
+    }
+}
+
 /// The value an island's output took for one read, by the family its port
 /// carries.
 #[derive(Debug, Clone, PartialEq)]
@@ -21,6 +52,10 @@ pub enum FunctionNodeIslandOutputValue {
     ControlValue(f64),
     /// A `dict`, as a Records message's msgpack payload.
     RecordsMessage(Vec<u8>),
+    /// A message the island read off a channel and hands on unread.
+    MessageHandedOnUnread(MessageAFunctionNodeIslandHandsOnUnread),
+    /// Nothing at this read: the reader reads no message from the port.
+    Nothing,
 }
 
 /// The value an island's output took for one read, and the reader's time it
@@ -136,35 +171,48 @@ impl InputPortFedByAFunctionNodeIsland {
             .the_state_each_stateful_function_node_last_returned()
     }
 
-    /// The island's output for this read. A control value is carried as a
-    /// Channels block of one f64 sample on one channel, at rate 0, which states
-    /// no regular rate; a `dict` as a Records message.
-    pub(crate) fn read_the_island_output(&self) -> Result<MessageReadFromInputPort> {
+    /// The island's output for this read, or `None` when it hands out nothing.
+    /// A control value is carried as a Channels block of one f64 sample on one
+    /// channel, at rate 0, which states no regular rate; a `dict` as a Records
+    /// message; a message handed on unread as it arrived.
+    pub(crate) fn read_the_island_output(&self) -> Result<Option<MessageReadFromInputPort>> {
         let output = self.island.evaluate_the_island_output_for_this_read()?;
-        let reads_answered_before = self.reads_answered.fetch_add(1, Ordering::Relaxed);
         let (payload_bytes, payload_descriptor) = match output.value {
+            FunctionNodeIslandOutputValue::Nothing => return Ok(None),
+            FunctionNodeIslandOutputValue::MessageHandedOnUnread(message) => {
+                return Ok(Some(MessageReadFromInputPort {
+                    payload: InputPortMessagePayload::OwnedBytes(message.payload_bytes),
+                    timestamp_ns: message.timestamp_ns,
+                    group_boundary: message.group_boundary,
+                    lost_since_last_read: message.lost_since_last_read,
+                    payload_descriptor: message.payload_descriptor,
+                }));
+            }
             FunctionNodeIslandOutputValue::ControlValue(control_value) => (
                 control_value.to_le_bytes().to_vec(),
                 DataChannelPayloadDescriptor::channels_block(ChannelsBlockDescriptorBody {
-                    start_sample: reads_answered_before,
+                    start_sample: self.reads_answered.fetch_add(1, Ordering::Relaxed),
                     sample_rate: 0,
                     channel_count: 1,
                     samples_per_channel: 1,
                     sample_type: ChannelsBlockSampleType::F64 as u32,
                 }),
             ),
-            FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload) => (
-                records_message_payload,
-                DataChannelPayloadDescriptor::records_message(),
-            ),
+            FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload) => {
+                self.reads_answered.fetch_add(1, Ordering::Relaxed);
+                (
+                    records_message_payload,
+                    DataChannelPayloadDescriptor::records_message(),
+                )
+            }
         };
-        Ok(MessageReadFromInputPort {
+        Ok(Some(MessageReadFromInputPort {
             payload: InputPortMessagePayload::OwnedBytes(payload_bytes),
             timestamp_ns: output.evaluated_at_ns,
             group_boundary: MessageGroupBoundary::StartsGroup,
             lost_since_last_read: 0,
             payload_descriptor,
-        })
+        }))
     }
 }
 
@@ -198,7 +246,7 @@ mod tests {
         let port = InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(
             IslandAnsweringOneValue(FunctionNodeIslandOutputValue::ControlValue(0.25)),
         ));
-        let message = port.read_the_island_output().unwrap();
+        let message = port.read_the_island_output().unwrap().unwrap();
         assert_eq!(message.payload.bytes(), 0.25f64.to_le_bytes());
         assert_eq!(message.timestamp_ns, 42);
         let block =
@@ -212,6 +260,7 @@ mod tests {
             ChannelsBlockDescriptorBody::from_descriptor_body(
                 &port
                     .read_the_island_output()
+                    .unwrap()
                     .unwrap()
                     .payload_descriptor
                     .body
@@ -228,7 +277,7 @@ mod tests {
             InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(IslandAnsweringOneValue(
                 FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload.clone()),
             )));
-        let message = port.read_the_island_output().unwrap();
+        let message = port.read_the_island_output().unwrap().unwrap();
         assert_eq!(message.payload.bytes(), records_message_payload);
         assert_eq!(message.timestamp_ns, 42);
         assert_eq!(
