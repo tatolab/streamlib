@@ -1191,33 +1191,14 @@ impl GraphTransactionInFlight<'_> {
             self.the_stream_id_of_each_loaded_stream_asset(project);
         let (steps, project_operations_first) =
             prepare(&project_repository_held, &stream_id_of_each_stream_asset)?;
-        if !steps.is_empty() {
-            return self.apply_the_steps(
-                steps,
-                project_operations_first,
-                GraphEditMode::Commit,
-                author,
-                &stream_locations,
-                Some(&mut *project_repository_held),
-            );
-        }
-        let applied = project_repository_held
-            .apply_project_operations(
-                author,
-                project_operations_first,
-                ProjectTransactionLineage::NewEdit,
-            )
-            .map_err(|refusal| refusal.to_string())?;
-        self.project_repositories
-            .announce_applied_transaction(&project_repository_held, applied.clone());
-        Ok(self.the_answer_of_a_graph_transaction(
+        self.apply_the_steps(
+            steps,
+            project_operations_first,
             GraphEditMode::Commit,
-            Some(applied.transaction.transaction.to_string()),
-            Some(applied.commit),
-            &BTreeMap::new(),
-            Vec::new(),
-            &HashMap::new(),
-        ))
+            author,
+            &stream_locations,
+            Some(&mut *project_repository_held),
+        )
     }
 
     /// The location of each loaded stream by its stream id, `None` for one of no project.
@@ -1420,6 +1401,7 @@ impl GraphTransactionInFlight<'_> {
         if let Some(project_repository) = project_repository_held.as_deref() {
             match self.refresh_each_fragment_holding_an_edited_stream(
                 project_repository,
+                &project_operations_first,
                 &mut streams,
                 &mut applied_live,
             ) {
@@ -1484,32 +1466,20 @@ impl GraphTransactionInFlight<'_> {
     }
 
     /// Refresh each top-level fragment of the project's streams that holds one of its own
-    /// streams the transaction edited, `{"stream": {"asset"}}`, from that stream as the
-    /// transaction leaves it, and in turn each fragment holding a stream such a refresh changed:
-    /// a loaded stream's live and staged beside the transaction's edits, answering one not
-    /// loaded as the project operations that refresh its graph document.
+    /// streams the transaction changes, `{"stream": {"asset"}}`, from that stream as the
+    /// transaction leaves it, each holder once every stream it holds has settled: a loaded
+    /// stream's live and staged beside the transaction's edits, answering one not loaded as the
+    /// project operations that refresh its graph document. A stream the transaction changes is
+    /// one a step edited live or one of `project_operations_first` edits in its graph document.
+    /// Refused when the holders the change reaches hold one another in a cycle.
     fn refresh_each_fragment_holding_an_edited_stream(
         &self,
         project_repository: &ProjectRepository,
+        project_operations_first: &[ProjectOperation],
         streams: &mut BTreeMap<String, StreamATransactionEdits>,
         applied_live: &mut Vec<(String, StreamGraphOperation)>,
     ) -> Result<Vec<ProjectOperation>, String> {
         let project = project_repository.project_file().project;
-        let mut edited_stream_assets: Vec<Uuid> = Vec::new();
-        for (stream_id, _) in applied_live.iter() {
-            let Some(stream_location) = streams
-                .get(stream_id)
-                .and_then(|stream| stream.stream_location.as_ref())
-            else {
-                continue;
-            };
-            if !edited_stream_assets.contains(&stream_location.stream_asset) {
-                edited_stream_assets.push(stream_location.stream_asset);
-            }
-        }
-        if edited_stream_assets.is_empty() {
-            return Ok(Vec::new());
-        }
         let loaded_stream_id_of_each_stream_asset: HashMap<Uuid, (String, StreamLocation)> = self
             .operations_on_the_loaded_streams
             .list_streams()
@@ -1523,45 +1493,228 @@ impl GraphTransactionInFlight<'_> {
                 ))
             })
             .collect();
-        let stream_assets: Vec<Uuid> = project_repository
+
+        let mut changed_stream_assets: BTreeSet<Uuid> = BTreeSet::new();
+        for (stream_id, _) in applied_live.iter() {
+            if let Some(stream_location) = streams
+                .get(stream_id)
+                .and_then(|stream| stream.stream_location.as_ref())
+            {
+                changed_stream_assets.insert(stream_location.stream_asset);
+            }
+        }
+        let mut documents_of_streams_not_loaded: BTreeMap<Uuid, StreamGraphDocument> =
+            BTreeMap::new();
+        for project_operation in project_operations_first {
+            let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+                stream,
+                graph_operation,
+            }) = project_operation
+            else {
+                continue;
+            };
+            if loaded_stream_id_of_each_stream_asset.contains_key(stream) {
+                continue;
+            }
+            let document = match documents_of_streams_not_loaded.entry(*stream) {
+                std::collections::btree_map::Entry::Occupied(read) => read.into_mut(),
+                std::collections::btree_map::Entry::Vacant(unread) => unread.insert(
+                    project_repository
+                        .stream_graph_document(*stream)
+                        .map_err(|refusal| refusal.to_string())?,
+                ),
+            };
+            document.apply(graph_operation)?;
+            changed_stream_assets.insert(*stream);
+        }
+        if changed_stream_assets.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut documents_of_loaded_streams_outside_the_transaction: BTreeMap<
+            Uuid,
+            StreamGraphDocument,
+        > = BTreeMap::new();
+        let stream_id_in_the_transaction_of =
+            |stream_asset: Uuid, streams: &BTreeMap<String, StreamATransactionEdits>| {
+                streams
+                    .iter()
+                    .find(|(_, stream)| {
+                        stream
+                            .stream_location
+                            .as_ref()
+                            .map(|location| location.stream_asset)
+                            == Some(stream_asset)
+                    })
+                    .map(|(stream_id, _)| stream_id.clone())
+            };
+        let mut local_streams_each_stream_holds: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
+        for asset in project_repository
             .assets()
             .map_err(|refusal| refusal.to_string())?
             .into_iter()
             .filter(|asset| asset.kind == ProjectAssetKind::Stream)
-            .map(|asset| asset.asset)
-            .collect();
-        let mut staged_documents_of_streams_not_loaded: BTreeMap<Uuid, StreamGraphDocument> =
-            BTreeMap::new();
-        let mut refreshes_of_streams_not_loaded = Vec::new();
-        let mut refreshed_from: BTreeSet<Uuid> = BTreeSet::new();
-        while let Some(edited_stream) = edited_stream_assets.pop() {
-            if !refreshed_from.insert(edited_stream) {
-                continue;
-            }
-            let edited_document = match streams.values().find(|stream| {
-                stream
-                    .stream_location
-                    .as_ref()
-                    .map(|location| location.stream_asset)
-                    == Some(edited_stream)
-            }) {
-                Some(stream) => stream.staged_graph.to_value(),
-                None => match staged_documents_of_streams_not_loaded.get(&edited_stream) {
-                    Some(staged_document) => staged_document.to_value(),
-                    None => project_repository
-                        .stream_graph_document(edited_stream)
-                        .map_err(|refusal| refusal.to_string())?
-                        .to_value(),
+        {
+            let stream_asset = asset.asset;
+            let document = match stream_id_in_the_transaction_of(stream_asset, streams) {
+                Some(stream_id) => streams[&stream_id].staged_graph.clone(),
+                None => match documents_of_streams_not_loaded.get(&stream_asset) {
+                    Some(document) => document.clone(),
+                    None => match project_repository.stream_graph_document(stream_asset) {
+                        Ok(document) => document,
+                        Err(refusal) => {
+                            tracing::warn!(
+                                %stream_asset,
+                                %refusal,
+                                "a stream whose graph document cannot be read is not refreshed \
+                                 from the streams it holds"
+                            );
+                            continue;
+                        }
+                    },
                 },
             };
-            let held_stream = json!({ "asset": edited_stream.to_string() });
-            for &holder in stream_assets
-                .iter()
-                .filter(|holder| **holder != edited_stream)
+            let held_local_streams: BTreeSet<Uuid> = document
+                .fragment_nodes()
+                .into_iter()
+                .filter(|fragment_node| fragment_node.node_type == STREAM_FRAGMENT_NODE_TYPE)
+                .filter_map(|fragment_node| {
+                    let held_stream = fragment_node
+                        .config
+                        .get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY)?
+                        .as_object()?;
+                    if held_stream.len() != 1 {
+                        return None;
+                    }
+                    Uuid::parse_str(held_stream.get("asset")?.as_str()?).ok()
+                })
+                .filter(|held| *held != stream_asset)
+                .collect();
+            local_streams_each_stream_holds.insert(stream_asset, held_local_streams);
+            if loaded_stream_id_of_each_stream_asset.contains_key(&stream_asset) {
+                documents_of_loaded_streams_outside_the_transaction.insert(stream_asset, document);
+            } else {
+                documents_of_streams_not_loaded
+                    .entry(stream_asset)
+                    .or_insert(document);
+            }
+        }
+
+        let mut holders_of_each_stream: BTreeMap<Uuid, BTreeSet<Uuid>> = BTreeMap::new();
+        for (holder, held_streams) in &local_streams_each_stream_holds {
+            for held in held_streams {
+                holders_of_each_stream
+                    .entry(*held)
+                    .or_default()
+                    .insert(*holder);
+            }
+        }
+        let mut streams_the_change_reaches: BTreeSet<Uuid> = changed_stream_assets.clone();
+        let mut unvisited: Vec<Uuid> = changed_stream_assets.iter().copied().collect();
+        while let Some(stream_asset) = unvisited.pop() {
+            for holder in holders_of_each_stream
+                .get(&stream_asset)
+                .into_iter()
+                .flatten()
             {
-                let refreshed = match loaded_stream_id_of_each_stream_asset.get(&holder) {
+                if streams_the_change_reaches.insert(*holder) {
+                    unvisited.push(*holder);
+                }
+            }
+        }
+        let mut unsettled_held_streams_of_each_reached_stream: BTreeMap<Uuid, usize> =
+            streams_the_change_reaches
+                .iter()
+                .map(|stream_asset| {
+                    let unsettled = local_streams_each_stream_holds
+                        .get(stream_asset)
+                        .into_iter()
+                        .flatten()
+                        .filter(|held| streams_the_change_reaches.contains(held))
+                        .count();
+                    (*stream_asset, unsettled)
+                })
+                .collect();
+        let mut settled_in_order: Vec<Uuid> = Vec::new();
+        let mut ready: Vec<Uuid> = unsettled_held_streams_of_each_reached_stream
+            .iter()
+            .filter(|(_, unsettled)| **unsettled == 0)
+            .map(|(stream_asset, _)| *stream_asset)
+            .collect();
+        while let Some(stream_asset) = ready.pop() {
+            settled_in_order.push(stream_asset);
+            for holder in holders_of_each_stream
+                .get(&stream_asset)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(unsettled) =
+                    unsettled_held_streams_of_each_reached_stream.get_mut(holder)
+                {
+                    *unsettled -= 1;
+                    if *unsettled == 0 {
+                        ready.push(*holder);
+                    }
+                }
+            }
+        }
+        if settled_in_order.len() != streams_the_change_reaches.len() {
+            let streams_in_a_cycle: Vec<String> = unsettled_held_streams_of_each_reached_stream
+                .iter()
+                .filter(|(_, unsettled)| **unsettled > 0)
+                .map(|(stream_asset, _)| stream_asset.to_string())
+                .collect();
+            return Err(format!(
+                "the streams {} hold one another as fragments in a cycle, so no order refreshes \
+                 each from the streams it holds",
+                streams_in_a_cycle.join(", ")
+            ));
+        }
+
+        let mut refreshes_of_streams_not_loaded = Vec::new();
+        for holder in settled_in_order {
+            let held_changed_streams: Vec<Uuid> = local_streams_each_stream_holds
+                .get(&holder)
+                .into_iter()
+                .flatten()
+                .filter(|held| changed_stream_assets.contains(held))
+                .copied()
+                .collect();
+            let mut holder_changed = false;
+            for held in held_changed_streams {
+                let held_document = match stream_id_in_the_transaction_of(held, streams) {
+                    Some(stream_id) => streams[&stream_id].staged_graph.to_value(),
+                    None => documents_of_streams_not_loaded
+                        .get(&held)
+                        .or_else(|| documents_of_loaded_streams_outside_the_transaction.get(&held))
+                        .ok_or_else(|| format!("stream `{held}`'s graph document was not read"))?
+                        .to_value(),
+                };
+                let held_stream = json!({ "asset": held.to_string() });
+                match loaded_stream_id_of_each_stream_asset.get(&holder) {
                     Some((stream_id, stream_location)) => {
+                        let holder_document = match streams.get(stream_id) {
+                            Some(stream) => &stream.staged_graph,
+                            None => documents_of_loaded_streams_outside_the_transaction
+                                .get(&holder)
+                                .ok_or_else(|| {
+                                    format!("stream `{holder}`'s graph document was not read")
+                                })?,
+                        };
+                        let refreshes = the_refresh_of_each_fragment_holding_a_stream(
+                            holder_document,
+                            &held_stream,
+                            &held_document,
+                        )?;
+                        if refreshes.is_empty() {
+                            continue;
+                        }
                         if !streams.contains_key(stream_id) {
+                            let staged_graph = documents_of_loaded_streams_outside_the_transaction
+                                .remove(&holder)
+                                .ok_or_else(|| {
+                                    format!("stream `{holder}`'s graph document was not read")
+                                })?;
                             streams.insert(
                                 stream_id.clone(),
                                 StreamATransactionEdits {
@@ -1570,21 +1723,13 @@ impl GraphTransactionInFlight<'_> {
                                         .runtime_operations_of_the_stream_a_call_names(stream_id)
                                         .map_err(|refusal| refusal.to_string())?,
                                     stream_location: Some(stream_location.clone()),
-                                    staged_graph: project_repository
-                                        .stream_graph_document(holder)
-                                        .map_err(|refusal| refusal.to_string())?,
+                                    staged_graph,
                                 },
                             );
                         }
                         let stream = streams
                             .get_mut(stream_id)
                             .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
-                        let refreshes = the_refresh_of_each_fragment_holding_a_stream(
-                            &stream.staged_graph,
-                            &held_stream,
-                            &edited_document,
-                        )?;
-                        let refreshed = !refreshes.is_empty();
                         for refresh in refreshes {
                             let applied = self
                                 .async_runtime
@@ -1597,42 +1742,34 @@ impl GraphTransactionInFlight<'_> {
                             stream.staged_graph.apply(&applied)?;
                             applied_live.push((stream_id.clone(), applied));
                         }
-                        refreshed
+                        holder_changed = true;
                     }
                     None => {
-                        let staged_document =
-                            match staged_documents_of_streams_not_loaded.entry(holder) {
-                                std::collections::btree_map::Entry::Occupied(staged) => {
-                                    staged.into_mut()
-                                }
-                                std::collections::btree_map::Entry::Vacant(unstaged) => unstaged
-                                    .insert(
-                                        project_repository
-                                            .stream_graph_document(holder)
-                                            .map_err(|refusal| refusal.to_string())?,
-                                    ),
-                            };
+                        let holder_document = documents_of_streams_not_loaded
+                            .get_mut(&holder)
+                            .ok_or_else(|| {
+                                format!("stream `{holder}`'s graph document was not read")
+                            })?;
                         let refreshes = the_refresh_of_each_fragment_holding_a_stream(
-                            staged_document,
+                            holder_document,
                             &held_stream,
-                            &edited_document,
+                            &held_document,
                         )?;
-                        let refreshed = !refreshes.is_empty();
                         for refresh in refreshes {
-                            staged_document.apply(&refresh)?;
+                            holder_document.apply(&refresh)?;
                             refreshes_of_streams_not_loaded.push(ProjectOperation::StreamGraph(
                                 StreamGraphOperationOnAStream {
                                     stream: holder,
                                     graph_operation: refresh,
                                 },
                             ));
+                            holder_changed = true;
                         }
-                        refreshed
                     }
-                };
-                if refreshed {
-                    edited_stream_assets.push(holder);
                 }
+            }
+            if holder_changed {
+                changed_stream_assets.insert(holder);
             }
         }
         Ok(refreshes_of_streams_not_loaded)
