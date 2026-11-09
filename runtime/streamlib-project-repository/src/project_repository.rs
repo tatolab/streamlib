@@ -30,9 +30,9 @@ use crate::project_transaction::{
     ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{
-    StreamGraphDocument, StreamGraphOperation,
-    asset_references_made_references_into_the_dependency, assets_a_node_config_references,
-    config_with_a_dependency_asset_reference_made_local,
+    StreamGraphDocument, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
+    StreamGraphOperation, asset_references_made_references_into_the_dependency,
+    assets_a_node_config_references, config_with_a_dependency_asset_reference_made_local,
 };
 
 /// Where each dependency's history is fetched to, relative to the project: one bare Git
@@ -49,8 +49,8 @@ pub struct DependencyStreamFork {
     pub copy: Uuid,
     /// The copy's graph document, written into this project.
     pub create_the_copy: ProjectStreamDocumentOperation,
-    /// Each of this project's node configs that referenced the dependency's stream, made to
-    /// reference the copy.
+    /// Each node of this project that referenced the dependency's stream, in its config or a
+    /// stored fragment, made to reference the copy.
     pub references_made_local: Vec<StreamGraphOperationOnAStream>,
 }
 
@@ -507,38 +507,26 @@ impl ProjectRepository {
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
         refuse_a_project_directory_source_named_by_a_relative_path(source)?;
-        let dependencies_directory = self.project_directory.join(PROJECT_DEPENDENCIES_DIRECTORY);
-        let fetching_directory =
-            dependencies_directory.join(format!(".fetching-{}", Uuid::new_v4()));
-        let fetched = (|| {
-            let fetching = ProjectHistoryRepository::open_or_create_at(&fetching_directory)?;
-            fetching.fetch_every_branch_and_tag_from(&the_remote_a_source_names(source))?;
-            let commit = fetching.commit_a_revision_names(revision)?;
-            let project_file_at_the_pin =
-                project_file_in(&fetching.files_at_commit(&commit)?, source)?;
-            apply_operation_to_dependencies(
-                &mut self.project_file.clone(),
-                &ProjectDependencyOperation::AddDependency {
-                    dependency: PinnedProjectDependency {
-                        project: project_file_at_the_pin.project,
-                        source: source.to_owned(),
-                        revision: commit.clone(),
+        let (commit, project_file_at_the_pin) =
+            self.a_dependency_history_fetched_into_place(source, |fetched| {
+                let commit = fetched.commit_a_revision_names(revision)?;
+                let project_file_at_the_pin =
+                    project_file_in(&fetched.files_at_commit(&commit)?, source)?;
+                apply_operation_to_dependencies(
+                    &mut self.project_file.clone(),
+                    &ProjectDependencyOperation::AddDependency {
+                        dependency: PinnedProjectDependency {
+                            project: project_file_at_the_pin.project,
+                            source: source.to_owned(),
+                            revision: commit.clone(),
+                        },
                     },
-                },
-            )?;
-            Ok::<_, ProjectRepositoryRefusal>((commit, project_file_at_the_pin))
-        })();
-        let (commit, project_file_at_the_pin) = match fetched {
-            Ok(fetched) => fetched,
-            Err(refusal) => {
-                let _ = std::fs::remove_dir_all(&fetching_directory);
-                return Err(refusal);
-            }
-        };
-        let dependency_history_directory =
-            dependencies_directory.join(project_file_at_the_pin.project.to_string());
-        let _ = std::fs::remove_dir_all(&dependency_history_directory);
-        std::fs::rename(&fetching_directory, &dependency_history_directory)?;
+                )?;
+                Ok((
+                    project_file_at_the_pin.project,
+                    (commit, project_file_at_the_pin),
+                ))
+            })?;
         self.apply_project_operations(
             author,
             vec![ProjectOperation::Dependency(
@@ -664,8 +652,9 @@ impl ProjectRepository {
 
     /// What a fork of the dependency `project`'s stream `stream`, at its pin, into this project
     /// makes: its graph document copied to `path` under a new stream asset UUID, recording the
-    /// stream, project and commit it came from under `forked_from`, and every top-level node of
-    /// this project's streams that referenced it made to reference the copy.
+    /// stream, project and commit it came from under `forked_from`, and every node of this
+    /// project's streams that referenced it, at any level of a stored fragment, made to
+    /// reference the copy. Refused when a node referencing it holds no UUID to name it by.
     pub fn the_fork_of_a_dependency_stream(
         &self,
         project: Uuid,
@@ -715,22 +704,34 @@ impl ProjectRepository {
             .values()
             .filter(|asset| asset.kind == ProjectAssetKind::Stream)
         {
-            let (_, stream_document) =
+            let (stream_path, stream_document) =
                 self.read_stream_graph_document(&assets, this_projects_stream.asset)?;
+            if let Some((node_name, _)) =
+                stream_document
+                    .nodes_holding_no_uuid()
+                    .into_iter()
+                    .find(|(_, node_object)| {
+                        config_with_a_dependency_asset_reference_made_local(
+                            node_object,
+                            project,
+                            stream,
+                            copy,
+                        )
+                        .is_some()
+                    })
+            {
+                return Err(ProjectRepositoryRefusal::ForkReachesANodeHoldingNoUuid {
+                    path: stream_path.to_string(),
+                    node_name,
+                });
+            }
             for node in stream_document.nodes() {
-                if let Some(to) = config_with_a_dependency_asset_reference_made_local(
-                    &node.config,
-                    project,
-                    stream,
-                    copy,
-                ) {
+                if let Some(graph_operation) =
+                    the_operation_pointing_a_node_at_a_forked_copy(&node, project, stream, copy)
+                {
                     references_made_local.push(StreamGraphOperationOnAStream {
                         stream: this_projects_stream.asset,
-                        graph_operation: StreamGraphOperation::SetNodeConfig {
-                            node: node.id,
-                            from: node.config,
-                            to,
-                        },
+                        graph_operation,
                     });
                 }
             }
@@ -764,21 +765,82 @@ impl ProjectRepository {
         Ok((fork, applied))
     }
 
+    /// The fetched history of the dependency `project`, fetched again from the source its pin
+    /// records when it is missing, as in a clone of the project, the pin left where it is.
     fn dependency_history(
         &self,
         project: Uuid,
     ) -> Result<ProjectHistoryRepository, ProjectRepositoryRefusal> {
-        let history_directory = self
-            .project_directory
-            .join(PROJECT_DEPENDENCIES_DIRECTORY)
-            .join(project.to_string());
+        let history_directory = self.dependency_history_directory(project);
         if !history_directory.exists() {
-            return Err(ProjectRepositoryRefusal::DependencyNotFetched {
-                project,
-                history_directory,
-            });
+            let pinned = self.dependency(project)?;
+            self.a_dependency_history_fetched_into_place(&pinned.source, |fetched| {
+                let commit = fetched.commit_a_revision_names(&pinned.revision)?;
+                let project_file_at_the_pin =
+                    project_file_in(&fetched.files_at_commit(&commit)?, &pinned.source)?;
+                if project_file_at_the_pin.project != project {
+                    return Err(
+                        ProjectRepositoryRefusal::DependencySourceHoldsAnotherProject {
+                            dependency_source: pinned.source.clone(),
+                            expected: project,
+                            held: project_file_at_the_pin.project,
+                        },
+                    );
+                }
+                Ok((project, ()))
+            })?;
+            tracing::info!(
+                project = %self.project_directory.display(),
+                dependency = %project,
+                "fetched a pinned dependency's missing history again from its source"
+            );
         }
         ProjectHistoryRepository::open_or_create_at(&history_directory)
+    }
+
+    fn dependency_history_directory(&self, project: Uuid) -> PathBuf {
+        self.project_directory
+            .join(PROJECT_DEPENDENCIES_DIRECTORY)
+            .join(project.to_string())
+    }
+
+    /// Fetch every branch and tag of `source` into a directory of its own and answer what
+    /// `read_the_fetched_history` reads of it, then put it in place as the fetched history of
+    /// the project that read names; nothing is left behind when the fetch or the read refuses.
+    fn a_dependency_history_fetched_into_place<WhatTheFetchedHistoryHolds>(
+        &self,
+        source: &str,
+        read_the_fetched_history: impl FnOnce(
+            &ProjectHistoryRepository,
+        ) -> Result<
+            (Uuid, WhatTheFetchedHistoryHolds),
+            ProjectRepositoryRefusal,
+        >,
+    ) -> Result<WhatTheFetchedHistoryHolds, ProjectRepositoryRefusal> {
+        let fetching_directory = self
+            .project_directory
+            .join(PROJECT_DEPENDENCIES_DIRECTORY)
+            .join(format!(".fetching-{}", Uuid::new_v4()));
+        let fetched =
+            ProjectHistoryRepository::open_or_create_at(&fetching_directory).and_then(|fetching| {
+                fetching.fetch_every_branch_and_tag_from(&the_remote_a_source_names(source))?;
+                read_the_fetched_history(&fetching)
+            });
+        let (project, what_the_fetched_history_holds) = match fetched {
+            Ok(fetched) => fetched,
+            Err(refusal) => {
+                let _ = std::fs::remove_dir_all(&fetching_directory);
+                return Err(refusal);
+            }
+        };
+        let dependency_history_directory = self.dependency_history_directory(project);
+        let _ = std::fs::remove_dir_all(&dependency_history_directory);
+        if let Err(not_placed) = std::fs::rename(&fetching_directory, &dependency_history_directory)
+        {
+            let _ = std::fs::remove_dir_all(&fetching_directory);
+            return Err(not_placed.into());
+        }
+        Ok(what_the_fetched_history_holds)
     }
 
     /// The undo `author`'s latest transaction not yet undone asks for: its inverse.
@@ -955,6 +1017,13 @@ impl ProjectRepository {
                 let staged_document =
                     StreamGraphDocument::from_value(document.clone()).map_err(unreadable)?;
                 let bytes = staged_document.canonical_bytes()?;
+                for (node, config) in staged_document.configs_of_every_node_at_every_level() {
+                    refuse_a_config_referencing_an_asset_the_project_does_not_hold(
+                        staged_assets,
+                        node,
+                        config,
+                    )?;
+                }
                 staged_assets.insert(
                     *stream,
                     ProjectAsset {
@@ -969,12 +1038,34 @@ impl ProjectRepository {
                 staged_documents.insert(*stream, staged_document);
                 stream_documents_taken_out.remove(path);
             }
-            ProjectStreamDocumentOperation::DeleteStreamDocument { stream, path, .. } => {
+            ProjectStreamDocumentOperation::DeleteStreamDocument {
+                stream,
+                path,
+                document,
+            } => {
                 let stream_asset = staged_assets
                     .get(stream)
                     .filter(|asset| asset.kind == ProjectAssetKind::Stream && asset.path == *path)
                     .cloned()
                     .ok_or(ProjectRepositoryRefusal::NoSuchStream(*stream))?;
+                let document_as_it_is = match staged_documents.get(stream) {
+                    Some(staged_document) => staged_document.clone(),
+                    None => self.read_stream_graph_document(staged_assets, *stream)?.1,
+                };
+                let document_as_it_was_written = StreamGraphDocument::from_value(document.clone())
+                    .map_err(|why| ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                        path: path.to_string(),
+                        why,
+                    })?;
+                if document_as_it_is.canonical_bytes()?
+                    != document_as_it_was_written.canonical_bytes()?
+                {
+                    return Err(
+                        ProjectRepositoryRefusal::StreamDocumentEditedSinceItWasWritten {
+                            path: path.to_string(),
+                        },
+                    );
+                }
                 self.refuse_deleting_an_asset_a_graph_references(
                     &stream_asset,
                     staged_assets,
@@ -1477,6 +1568,44 @@ fn apply_operation_to_assets(
                 changed.import_settings = to.clone();
             }
         }
+    }
+}
+
+/// The operation pointing `node` at the copy `copy` of the dependency `project`'s stream
+/// `stream`, wherever it references that stream: its config alone, or, for a fragment node
+/// whose stored nodes reference it at any level, a refresh of the fragment with both rewritten.
+fn the_operation_pointing_a_node_at_a_forked_copy(
+    node: &StreamGraphDocumentNode,
+    project: Uuid,
+    stream: Uuid,
+    copy: Uuid,
+) -> Option<StreamGraphOperation> {
+    let config_made_local =
+        config_with_a_dependency_asset_reference_made_local(&node.config, project, stream, copy);
+    let fragment_made_local = node.fragment.as_deref().and_then(|fragment| {
+        config_with_a_dependency_asset_reference_made_local(fragment, project, stream, copy)
+    });
+    match (node.fragment.as_deref(), fragment_made_local) {
+        (Some(fragment), Some(fragment_made_local)) => {
+            Some(StreamGraphOperation::RefreshFragment {
+                node: node.id,
+                from: StreamGraphFragmentPlacement {
+                    generator: node.node_type.clone(),
+                    config: node.config.clone(),
+                    fragment: fragment.clone(),
+                },
+                to: StreamGraphFragmentPlacement {
+                    generator: node.node_type.clone(),
+                    config: config_made_local.unwrap_or_else(|| node.config.clone()),
+                    fragment: fragment_made_local,
+                },
+            })
+        }
+        _ => config_made_local.map(|to| StreamGraphOperation::SetNodeConfig {
+            node: node.id,
+            from: node.config.clone(),
+            to,
+        }),
     }
 }
 

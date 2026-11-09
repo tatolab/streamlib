@@ -3,9 +3,10 @@
 
 use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
-    ProjectOperation, ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, StreamGraphDocumentNode,
-    StreamGraphOperation, StreamGraphOperationOnAStream,
+    ProjectOperation, ProjectRelativeAssetPath, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionLineage, StreamGraphDocumentNode, StreamGraphOperation,
+    StreamGraphOperationOnAStream,
 };
 use uuid::Uuid;
 
@@ -44,7 +45,15 @@ impl ProjectWithOneStream {
     }
 
     fn add_a_node_named(&mut self, name: &str) -> String {
-        self.repository
+        self.add_a_node(name, json!({}), None).1
+    }
+
+    /// Add a node named `name` holding `config` and, for a fragment, `fragment`, answering its
+    /// UUID and the commit.
+    fn add_a_node(&mut self, name: &str, config: Value, fragment: Option<Value>) -> (Uuid, String) {
+        let node = Uuid::new_v4();
+        let commit = self
+            .repository
             .apply_project_operations(
                 &a_person(),
                 vec![ProjectOperation::StreamGraph(
@@ -52,14 +61,14 @@ impl ProjectWithOneStream {
                         stream: self.stream,
                         graph_operation: StreamGraphOperation::AddNode {
                             node: StreamGraphDocumentNode {
-                                id: Uuid::new_v4(),
+                                id: node,
                                 name: name.to_owned(),
                                 node_type: "nodes.arm:Joint".to_owned(),
-                                config: json!({}),
+                                config,
                                 pins: Map::new(),
                                 exposed_config_fields: Vec::new(),
                                 studio: Map::new(),
-                                fragment: None,
+                                fragment: fragment.map(Box::new),
                             },
                             links: Vec::new(),
                         },
@@ -68,7 +77,15 @@ impl ProjectWithOneStream {
                 ProjectTransactionLineage::NewEdit,
             )
             .unwrap()
-            .commit
+            .commit;
+        (node, commit)
+    }
+
+    fn undo(&mut self) -> Result<(), ProjectRepositoryRefusal> {
+        let reversal = self.repository.undo_by(&a_person())?;
+        self.repository
+            .apply_project_operations(&a_person(), reversal.operations, reversal.lineage)
+            .map(|_| ())
     }
 
     fn source(&self) -> String {
@@ -289,6 +306,8 @@ fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_depen
     cell.repository
         .add_dependency(&a_person(), &arm.source(), &revision)
         .unwrap();
+    let arm_stream_reference = json!({ "stream": { "asset": arm.stream, "from": arm_project } });
+    let (user_of_the_arm, _) = cell.add_a_node("arm", arm_stream_reference.clone(), None);
 
     let (fork, _) = cell
         .repository
@@ -300,10 +319,17 @@ fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_depen
         )
         .unwrap();
     assert!(cell.repository.asset(fork.copy).is_ok());
-    let reversal = cell.repository.undo_by(&a_person()).unwrap();
-    cell.repository
-        .apply_project_operations(&a_person(), reversal.operations, reversal.lineage)
-        .unwrap();
+    cell.undo().unwrap();
+
+    assert_eq!(
+        cell.repository
+            .stream_graph_document(cell.stream)
+            .unwrap()
+            .node(user_of_the_arm)
+            .unwrap()
+            .config,
+        arm_stream_reference
+    );
 
     assert!(
         !cell
@@ -432,4 +458,330 @@ fn pathdiff_from_the_working_directory(directory: &std::path::Path) -> String {
     }
     relative.push(directory.strip_prefix("/").unwrap());
     relative.display().to_string()
+}
+
+/// Project `cell` depending on project `arm` at its first revision, `arm`'s one stream holding
+/// a node named `shoulder`.
+struct CellDependingOnArm {
+    _root: tempfile::TempDir,
+    arm: ProjectWithOneStream,
+    arm_project: Uuid,
+    pinned_revision: String,
+    cell: ProjectWithOneStream,
+}
+
+impl CellDependingOnArm {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+        let pinned_revision = arm.add_a_node_named("shoulder");
+        let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+        let arm_project = arm.repository.project_file().project;
+        cell.repository
+            .add_dependency(&a_person(), &arm.source(), &pinned_revision)
+            .unwrap();
+        Self {
+            _root: root,
+            arm,
+            arm_project,
+            pinned_revision,
+            cell,
+        }
+    }
+
+    fn arm_stream_reference(&self) -> Value {
+        json!({ "asset": self.arm.stream, "from": self.arm_project })
+    }
+}
+
+#[test]
+fn a_clone_without_the_fetched_history_fetches_it_again_from_the_source_and_keeps_the_pin() {
+    let mut depending = CellDependingOnArm::new();
+    depending.arm.add_a_node_named("elbow");
+    let cell_directory = depending.cell.repository.project_directory().to_path_buf();
+    std::fs::remove_dir_all(cell_directory.join(".tatolab/dependencies")).unwrap();
+    let mut clone = ProjectWithOneStream {
+        repository: ProjectRepository::open(&cell_directory).unwrap(),
+        stream: depending.cell.stream,
+    };
+
+    assert_eq!(
+        node_names_of_the_main_stream_at_the_pin(&clone.repository, depending.arm_project),
+        ["shoulder"]
+    );
+    assert_eq!(
+        clone
+            .repository
+            .dependency(depending.arm_project)
+            .unwrap()
+            .revision,
+        depending.pinned_revision
+    );
+    assert!(
+        cell_directory
+            .join(".tatolab/dependencies")
+            .join(depending.arm_project.to_string())
+            .is_dir()
+    );
+    let stray_fetches: Vec<_> = std::fs::read_dir(cell_directory.join(".tatolab/dependencies"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".fetching-")
+        })
+        .collect();
+    assert!(stray_fetches.is_empty());
+
+    std::fs::remove_dir_all(cell_directory.join(".tatolab/dependencies")).unwrap();
+    let (fork, _) = clone
+        .repository
+        .fork_dependency_stream(
+            &a_person(),
+            depending.arm_project,
+            depending.arm.stream,
+            None,
+        )
+        .unwrap();
+    assert!(clone.repository.asset(fork.copy).is_ok());
+}
+
+#[test]
+fn a_clone_whose_source_no_longer_holds_the_pinned_commit_is_refused_and_keeps_the_pin() {
+    let depending = CellDependingOnArm::new();
+    let cell_directory = depending.cell.repository.project_directory().to_path_buf();
+    std::fs::remove_dir_all(cell_directory.join(".tatolab/dependencies")).unwrap();
+    std::fs::remove_dir_all(
+        depending
+            .arm
+            .repository
+            .project_directory()
+            .join(".tatolab/history.git"),
+    )
+    .unwrap();
+    streamlib_project_repository::ProjectHistoryRepository::create_for_project(
+        depending.arm.repository.project_directory(),
+    )
+    .unwrap();
+    let clone = ProjectRepository::open(&cell_directory).unwrap();
+
+    let refusal = clone
+        .dependency_files_at_its_pin(depending.arm_project)
+        .unwrap_err();
+
+    assert!(
+        matches!(refusal, ProjectRepositoryRefusal::NoSuchRevision { .. }),
+        "{refusal}"
+    );
+    assert_eq!(
+        clone.dependency(depending.arm_project).unwrap().revision,
+        depending.pinned_revision
+    );
+    assert!(
+        !cell_directory
+            .join(".tatolab/dependencies")
+            .join(depending.arm_project.to_string())
+            .exists()
+    );
+}
+
+#[test]
+fn undo_of_a_fork_is_refused_once_its_copy_has_been_edited() {
+    let mut depending = CellDependingOnArm::new();
+    let (fork, _) = depending
+        .cell
+        .repository
+        .fork_dependency_stream(
+            &a_person(),
+            depending.arm_project,
+            depending.arm.stream,
+            None,
+        )
+        .unwrap();
+    let gripper = Uuid::new_v4();
+    depending
+        .cell
+        .repository
+        .apply_project_operations(
+            &another_person(),
+            vec![ProjectOperation::StreamGraph(
+                StreamGraphOperationOnAStream {
+                    stream: fork.copy,
+                    graph_operation: StreamGraphOperation::AddNode {
+                        node: StreamGraphDocumentNode {
+                            id: gripper,
+                            name: "gripper".to_owned(),
+                            node_type: "nodes.arm:Joint".to_owned(),
+                            config: json!({}),
+                            pins: Map::new(),
+                            exposed_config_fields: Vec::new(),
+                            studio: Map::new(),
+                            fragment: None,
+                        },
+                        links: Vec::new(),
+                    },
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+
+    let refusal = depending.cell.undo().unwrap_err();
+
+    assert!(
+        matches!(
+            refusal,
+            ProjectRepositoryRefusal::StreamDocumentEditedSinceItWasWritten { .. }
+        ),
+        "{refusal}"
+    );
+    let copy = depending
+        .cell
+        .repository
+        .stream_graph_document(fork.copy)
+        .unwrap();
+    assert!(copy.node(gripper).is_ok());
+}
+
+#[test]
+fn a_fork_points_a_reference_inside_a_stored_fragment_at_the_copy_and_undo_points_it_back() {
+    let mut depending = CellDependingOnArm::new();
+    let stored_fragment_referencing_the_arm = json!({
+        "nodes": [{ "id": Uuid::new_v4(), "name": "inner", "type": "nodes.arm:ArmUser",
+                    "config": { "stream": depending.arm_stream_reference() } }],
+        "links": [],
+    });
+    let (generated, _) = depending.cell.add_a_node(
+        "generated",
+        json!({ "size": 3 }),
+        Some(stored_fragment_referencing_the_arm.clone()),
+    );
+
+    let (fork, _) = depending
+        .cell
+        .repository
+        .fork_dependency_stream(
+            &a_person(),
+            depending.arm_project,
+            depending.arm.stream,
+            None,
+        )
+        .unwrap();
+
+    let forked = depending
+        .cell
+        .repository
+        .stream_graph_document(depending.cell.stream)
+        .unwrap()
+        .node(generated)
+        .unwrap();
+    assert_eq!(forked.config, json!({ "size": 3 }));
+    assert_eq!(
+        forked.fragment.unwrap()["nodes"][0]["config"],
+        json!({ "stream": { "asset": fork.copy } })
+    );
+    depending.cell.undo().unwrap();
+    let restored = depending
+        .cell
+        .repository
+        .stream_graph_document(depending.cell.stream)
+        .unwrap()
+        .node(generated)
+        .unwrap();
+    assert_eq!(
+        restored.fragment.map(|fragment| *fragment),
+        Some(stored_fragment_referencing_the_arm)
+    );
+}
+
+#[test]
+fn a_fork_is_refused_while_a_referencing_node_holds_no_uuid() {
+    let mut depending = CellDependingOnArm::new();
+    std::fs::write(
+        depending
+            .cell
+            .repository
+            .project_directory()
+            .join("streams/main.graph.json"),
+        json!({ "asset": depending.cell.stream, "nodes": [{
+            "name": "arm", "type": "nodes.arm:ArmUser",
+            "config": { "stream": depending.arm_stream_reference() } }], "links": [] })
+        .to_string(),
+    )
+    .unwrap();
+
+    let refusal = depending
+        .cell
+        .repository
+        .fork_dependency_stream(
+            &a_person(),
+            depending.arm_project,
+            depending.arm.stream,
+            None,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            refusal,
+            ProjectRepositoryRefusal::ForkReachesANodeHoldingNoUuid { ref node_name, .. }
+                if node_name == "arm"
+        ),
+        "{refusal}"
+    );
+    assert!(
+        !depending
+            .cell
+            .repository
+            .project_directory()
+            .join("streams/main-fork.graph.json")
+            .exists()
+    );
+}
+
+#[test]
+fn a_created_stream_document_referencing_an_asset_the_project_does_not_hold_is_refused() {
+    let mut depending = CellDependingOnArm::new();
+    let stream = Uuid::new_v4();
+    let missing_asset = Uuid::new_v4();
+    let nested_node = Uuid::new_v4();
+
+    let refusal = depending
+        .cell
+        .repository
+        .apply_project_operations(
+            &a_person(),
+            vec![ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::CreateStreamDocument {
+                    stream,
+                    path: ProjectRelativeAssetPath::parse("streams/made.graph.json").unwrap(),
+                    document: json!({ "asset": stream, "links": [], "nodes": [{
+                        "id": Uuid::new_v4(), "name": "generated", "type": "generators:Look",
+                        "config": {}, "fragment": { "links": [], "nodes": [{
+                            "id": nested_node, "name": "lut", "type": "nodes:Lut",
+                            "config": { "lut": { "asset": missing_asset } } }] } }] }),
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            refusal,
+            ProjectRepositoryRefusal::ConfigReferencesNoAsset { node, asset }
+                if node == nested_node && asset == missing_asset
+        ),
+        "{refusal}"
+    );
+    assert!(
+        !depending
+            .cell
+            .repository
+            .project_directory()
+            .join("streams/made.graph.json")
+            .exists()
+    );
 }

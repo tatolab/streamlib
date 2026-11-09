@@ -107,11 +107,16 @@ pub enum ProjectRepositoryRefusal {
         stream: Uuid,
         commit: String,
     },
-    #[error("the dependency {project} has no fetched history at {history_directory}; add it again")]
-    DependencyNotFetched {
-        project: Uuid,
-        history_directory: PathBuf,
-    },
+    #[error(
+        "the graph document {path} was edited after the transaction being reversed wrote it; \
+         taking it out would lose those edits"
+    )]
+    StreamDocumentEditedSinceItWasWritten { path: String },
+    #[error(
+        "node `{node_name}` of the graph document {path} references the stream being forked and \
+         holds no UUID, so no operation can point it at the copy; load the stream, then fork"
+    )]
+    ForkReachesANodeHoldingNoUuid { path: String, node_name: String },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "history")]

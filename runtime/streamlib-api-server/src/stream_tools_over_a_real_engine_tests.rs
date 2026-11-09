@@ -1869,14 +1869,33 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         project: &ProjectWithGraphDocuments,
         stream_name: &str,
     ) -> String {
-        let stream_id = project.stream_id_of(stream_name);
+        self.a_stream_loaded_from_the_graph_document_of_the_stream_asset(
+            project,
+            stream_name,
+            project.stream_asset_of(stream_name),
+        )
+    }
+
+    /// Load `project`'s stream `stream_name`, whose graph document holds the stream asset
+    /// `stream_asset`, as its library host would, not started; returns its id.
+    fn a_stream_loaded_from_the_graph_document_of_the_stream_asset(
+        &self,
+        project: &ProjectWithGraphDocuments,
+        stream_name: &str,
+        stream_asset: Uuid,
+    ) -> String {
+        let stream_location = StreamLocation {
+            stream_asset,
+            ..project.location_of(stream_name)
+        };
+        let stream_id = stream_location.stream_id_named(TEST_PROJECT_NAME, stream_name);
         self.engine
             .load_stream_from_graph_snapshot(
                 &GraphSnapshot::from_graph_document(project.the_graph_document_of(stream_name))
                     .expect("the graph document parses"),
                 OptionsForLoadingOneStream::in_stream_environment(project.stream_environment())
                     .with_display_name(stream_name)
-                    .at_stream_location(stream_id.clone(), project.location_of(stream_name)),
+                    .at_stream_location(stream_id.clone(), stream_location),
             )
             .expect("the stream loads");
         stream_id
@@ -2719,6 +2738,163 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
         )),
         ["source", "shoulder", "elbow"]
     );
+}
+
+/// Project `cell` forks project `arm`'s stream while one of its streams referencing it runs
+/// and another sits unloaded: the loaded copy keeps `forked_from` across an edit and a reload,
+/// and undo points both references back, the unloaded one through its graph document alone,
+/// takes the copy out and unloads the stream running it.
+#[tokio::test(flavor = "multi_thread")]
+async fn undo_of_a_fork_reaches_an_unloaded_stream_and_unloads_the_running_copy() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let revision = arm.commit_a_sink_named("shoulder");
+    let arm_stream = arm.stream_asset_of("main").to_string();
+    let arm_stream_reference = json!({ "stream": { "asset": arm_stream, "from": arm.project } });
+    let cell = a_project_whose_main_stream_holds_one_source();
+    let unloaded_user_of_the_arm = Uuid::new_v4();
+    let mut side = the_graph_of_a_stream_named("side");
+    side["nodes"][0]["id"] = json!(unloaded_user_of_the_arm);
+    side["nodes"][0]["config"] = arm_stream_reference.clone();
+    cell.write_the_graph_document(side);
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                "revision": revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm is depended on");
+    call(
+        "use_dependency_stream",
+        json!({ "stream": stream_id, "project": arm.project, "dependency_stream": arm_stream,
+                "name": "arm", "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm's stream is placed");
+    let placed_config =
+        the_node_named(&cell.the_graph_document_of("main"), "arm")["config"].clone();
+
+    let forked = call(
+        "fork_asset",
+        json!({ "project_directory": cell.path(), "project": arm.project, "asset": arm_stream,
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm's stream is forked");
+    let copy = Uuid::parse_str(forked["asset"]["asset"].as_str().expect("the copy's UUID"))
+        .expect("the copy's UUID parses");
+    let unloaded_user = |document: &Value| {
+        document["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|node| node["id"] == json!(unloaded_user_of_the_arm))
+            .cloned()
+            .expect("the side stream holds its user of the arm")
+    };
+    assert_eq!(
+        unloaded_user(&cell.the_graph_document_of("side"))["config"],
+        json!({ "stream": { "asset": copy } })
+    );
+    assert_eq!(
+        the_node_named(&engine.the_live_graph_of(&stream_id), "arm")["config"],
+        json!({ "stream": { "asset": copy } })
+    );
+
+    let forked_from = json!({ "asset": arm_stream, "from": arm.project, "revision": revision });
+    let copy_stream_id = engine.a_stream_loaded_from_the_graph_document_of_the_stream_asset(
+        &cell,
+        "main-fork",
+        copy,
+    );
+    engine
+        .stream_records()
+        .write(&StreamRecord::of_a_running_stream(
+            copy_stream_id.clone(),
+            StreamLocation {
+                stream_asset: copy,
+                ..cell.location_of("main-fork")
+            },
+            "main-fork",
+            &cell.stream_environment(),
+        ))
+        .expect("the copy's stream is recorded as a run records it");
+    assert_eq!(
+        engine.the_live_graph_of(&copy_stream_id)["forked_from"],
+        forked_from
+    );
+    call(
+        "add_node",
+        json!({ "stream": copy_stream_id, "name": "gripper",
+                "type": StreamToolsTestSink::processor_class_import_path().as_str(),
+                "author": an_agent_named("bob") }),
+    )
+    .await
+    .expect("the copy is edited");
+    let edited = engine.the_live_graph_of(&copy_stream_id);
+    assert_eq!(edited["forked_from"], forked_from, "{edited}");
+    the_node_named(&edited, "gripper");
+    assert_eq!(
+        cell.the_graph_document_of("main-fork")["forked_from"],
+        forked_from
+    );
+    let restarted = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let reloaded_stream_id = restarted.a_stream_loaded_from_the_graph_document_of_the_stream_asset(
+        &cell,
+        "main-fork",
+        copy,
+    );
+    let reloaded = restarted.the_live_graph_of(&reloaded_stream_id);
+    assert_eq!(reloaded["forked_from"], forked_from, "{reloaded}");
+    the_node_named(&reloaded, "gripper");
+
+    let refused = call(
+        "undo",
+        json!({ "project_directory": cell.path(), "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect_err("undo of a fork whose copy was edited since is refused");
+    assert!(refused.contains("was edited after"), "{refused}");
+    call(
+        "undo",
+        json!({ "project_directory": cell.path(), "author": an_agent_named("bob") }),
+    )
+    .await
+    .expect("bob's edit of the copy is undone");
+
+    call(
+        "undo",
+        json!({ "project_directory": cell.path(), "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the fork is undone");
+
+    assert_eq!(
+        unloaded_user(&cell.the_graph_document_of("side"))["config"],
+        arm_stream_reference
+    );
+    assert_eq!(
+        the_node_named(&cell.the_graph_document_of("main"), "arm")["config"],
+        placed_config
+    );
+    assert_eq!(
+        the_node_named(&engine.the_live_graph_of(&stream_id), "arm")["config"],
+        placed_config
+    );
+    assert!(!cell.path().join("streams/main-fork.graph.json").exists());
+    let listed_ids: Vec<String> = engine
+        .engine
+        .list_streams()
+        .into_iter()
+        .map(|listing| listing.stream_id)
+        .collect();
+    assert!(!listed_ids.contains(&copy_stream_id), "{listed_ids:?}");
+    assert!(listed_ids.contains(&stream_id), "{listed_ids:?}");
 }
 
 /// A venv interpreter whose node type listing keeps the request it was sent in
