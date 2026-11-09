@@ -17,7 +17,9 @@ use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorInstanceComponent, ProcessorUniqueId, cast_exposed_name_to_url_safe,
 };
-use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotNode};
+use crate::core::graph_snapshot::{
+    GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
+};
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::processors::ProcessorSpec;
 use crate::core::pubsub::RuntimeEvent;
@@ -44,6 +46,14 @@ struct LiveNodeAsTheGraphHoldsIt {
     exposed_config_fields: Vec<String>,
 }
 
+/// A graph document a reconcile accepted: resolved and validated, each node's index in the graph
+/// the runtime runs by its UUID, and its links by node UUID.
+struct GraphDocumentAcceptedForAReconcile {
+    resolution: GraphSnapshotWithGraphOnlyNodesResolved,
+    document_node_index_by_uuid: HashMap<Uuid, usize>,
+    document_links: Vec<RunningLinkBetweenTwoNodesByUuid>,
+}
+
 /// The name a kept node holds between the two passes of a reconcile's renames while another
 /// kept node takes its name, unique by its UUID, so two nodes that swap names never meet.
 fn a_name_no_document_node_holds_while_renames_swap(node_uuid: Uuid) -> String {
@@ -64,59 +74,40 @@ impl LoadedStreamInThisRuntime {
         &self,
         graph_document: Value,
     ) -> Result<()> {
-        let resolution = GraphSnapshot::from_graph_document(graph_document)?
-            .with_a_uuid_minted_for_each_node_holding_none()
-            .with_graph_only_nodes_resolved()?;
-        let node_types_the_document_names: Vec<ProcessorClassImportPath> = resolution
-            .graph_the_runtime_runs
-            .nodes
-            .iter()
-            .map(|node| node.processor_type.clone())
-            .collect();
-        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
-        let lend_directory = self.lend_directory();
-        tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
-            launch_record.describe_and_register_every_type_a_load_names(
-                node_types_the_document_names.iter(),
-                lend_directory.as_deref(),
+        let graph_whose_every_node_holds_a_uuid =
+            GraphSnapshot::from_graph_document(graph_document)?
+                .with_a_uuid_minted_for_each_node_holding_none();
+        let node_types_the_document_names =
+            graph_whose_every_node_holds_a_uuid.node_types_its_running_nodes_name_at_every_level();
+        let described_node_types_before_the_document = self
+            .node_types_this_stream_resolves()
+            .the_described_node_types_as_they_stand_now(node_types_the_document_names.iter())?;
+        let accepted = match self
+            .the_graph_document_described_resolved_and_validated(
+                graph_whose_every_node_holds_a_uuid,
+                node_types_the_document_names,
             )
-        }))
-        .await
-        .map_err(|join_failure| {
-            Error::Runtime(format!(
-                "the describe of the graph's node types did not finish: {join_failure}"
-            ))
-        })??;
-        resolution.validate(self.node_types_this_stream_resolves())?;
-        let graph = &resolution.graph_the_runtime_runs;
-
-        let mut document_node_by_uuid: HashMap<Uuid, &GraphSnapshotNode> = HashMap::new();
-        let mut document_node_uuid_by_name_cast: HashMap<String, Uuid> = HashMap::new();
-        for node in &graph.nodes {
-            let node_uuid = node
-                .id
-                .ok_or_else(|| Error::GraphError(format!("node `{}` holds no UUID", node.name)))?;
-            document_node_by_uuid.insert(node_uuid, node);
-            document_node_uuid_by_name_cast.insert(cast_name(&node.name)?, node_uuid);
-        }
-        let document_node_uuid_named = |node_name: &str| -> Result<Uuid> {
-            document_node_uuid_by_name_cast
-                .get(&cast_name(node_name)?)
-                .copied()
-                .ok_or_else(|| Error::GraphError(format!("the graph holds no node `{node_name}`")))
+            .await
+        {
+            Ok(accepted) => accepted,
+            Err(refusal) => {
+                self.node_types_this_stream_resolves()
+                    .put_back_the_described_node_types_as_they_stood(
+                        described_node_types_before_the_document,
+                    );
+                return Err(refusal);
+            }
         };
-        let document_links = graph
-            .links
-            .iter()
-            .map(|link| {
-                Ok(RunningLinkBetweenTwoNodesByUuid {
-                    source_node: document_node_uuid_named(&link.source.node)?,
-                    source_port: cast_name(&link.source.port)?,
-                    target_node: document_node_uuid_named(&link.target.node)?,
-                    target_port: cast_name(&link.target.port)?,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let GraphDocumentAcceptedForAReconcile {
+            resolution,
+            document_node_index_by_uuid,
+            document_links,
+        } = accepted;
+        let graph = &resolution.graph_the_runtime_runs;
+        let document_node_by_uuid: HashMap<Uuid, &GraphSnapshotNode> = document_node_index_by_uuid
+            .into_iter()
+            .map(|(node_uuid, node_index)| (node_uuid, &graph.nodes[node_index]))
+            .collect();
         let document_link_set: HashSet<&RunningLinkBetweenTwoNodesByUuid> =
             document_links.iter().collect();
 
@@ -265,6 +256,66 @@ impl LoadedStreamInThisRuntime {
         }
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
+    }
+
+    /// Describe each type `graph_whose_every_node_holds_a_uuid` names into this stream, then
+    /// resolve its graph-only nodes and validate it, as a load does, touching no live node.
+    async fn the_graph_document_described_resolved_and_validated(
+        &self,
+        graph_whose_every_node_holds_a_uuid: GraphSnapshot,
+        node_types_the_document_names: Vec<ProcessorClassImportPath>,
+    ) -> Result<GraphDocumentAcceptedForAReconcile> {
+        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
+        let lend_directory = self.lend_directory();
+        tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
+            launch_record.describe_and_register_every_type_a_load_names(
+                node_types_the_document_names.iter(),
+                lend_directory.as_deref(),
+            )
+        }))
+        .await
+        .map_err(|join_failure| {
+            Error::Runtime(format!(
+                "the describe of the graph's node types did not finish: {join_failure}"
+            ))
+        })??;
+        let resolution = graph_whose_every_node_holds_a_uuid
+            .with_graph_only_nodes_resolved(self.node_types_this_stream_resolves())?;
+        resolution.validate(self.node_types_this_stream_resolves())?;
+        let graph = &resolution.graph_the_runtime_runs;
+
+        let mut document_node_index_by_uuid: HashMap<Uuid, usize> = HashMap::new();
+        let mut document_node_uuid_by_name_cast: HashMap<String, Uuid> = HashMap::new();
+        for (node_index, node) in graph.nodes.iter().enumerate() {
+            let node_uuid = node
+                .id
+                .ok_or_else(|| Error::GraphError(format!("node `{}` holds no UUID", node.name)))?;
+            document_node_index_by_uuid.insert(node_uuid, node_index);
+            document_node_uuid_by_name_cast.insert(cast_name(&node.name)?, node_uuid);
+        }
+        let document_node_uuid_named = |node_name: &str| -> Result<Uuid> {
+            document_node_uuid_by_name_cast
+                .get(&cast_name(node_name)?)
+                .copied()
+                .ok_or_else(|| Error::GraphError(format!("the graph holds no node `{node_name}`")))
+        };
+        let document_links = graph
+            .links
+            .iter()
+            .map(|link| {
+                Ok(RunningLinkBetweenTwoNodesByUuid {
+                    source_node: document_node_uuid_named(&link.source.node)?,
+                    source_port: cast_name(&link.source.port)?,
+                    target_node: document_node_uuid_named(&link.target.node)?,
+                    target_port: cast_name(&link.target.port)?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(GraphDocumentAcceptedForAReconcile {
+            resolution,
+            document_node_index_by_uuid,
+            document_links,
+        })
     }
 
     /// On a stream no commit has built, take each node and link pending deletion out of the
@@ -565,6 +616,129 @@ mod tests {
                         if *id == replaced_processor
                 )),
             "the start builds nothing of the replaced node"
+        );
+    }
+
+    /// A stand-in venv interpreter in `project_directory` that answers every describe with
+    /// what `describe_answer` holds when it runs, so a test can change the answer between
+    /// describes.
+    fn an_interpreter_answering_each_describe_from(
+        project_directory: &tempfile::TempDir,
+        describe_answer: &std::path::Path,
+    ) -> crate::core::runtime::StreamEnvironment {
+        let interpreter = project_directory.path().join("stub-python");
+        crate::core::test_support::write_an_executable_script_from_a_child_process(
+            &interpreter,
+            &format!("#!/bin/sh\ncat '{}'\n", describe_answer.display()),
+        );
+        crate::core::runtime::StreamEnvironment {
+            project_directory: project_directory.path().to_path_buf(),
+            interpreter,
+        }
+    }
+
+    fn a_describe_answer_of(described_node_types: &[(&ProcessorClassImportPath, &str)]) -> String {
+        json!({
+            "described_node_types": described_node_types
+                .iter()
+                .map(|(node_type, input_port)| json!({
+                    "import_path": node_type.as_str(),
+                    "short_name": "Blur",
+                    "description": "blurs",
+                    "kind": "process",
+                    "execution": {"mode": "reactive"},
+                    "scheduling_priority": null,
+                    "paced_by_real_time": false,
+                    "config_schema": {"type": "object"},
+                    "input_ports": [{"name": input_port, "description": "", "family": {"family": "records"}}],
+                    "output_ports": [],
+                }))
+                .collect::<Vec<_>>(),
+            "refused_node_types": [],
+        })
+        .to_string()
+    }
+
+    /// A document refused after its describe leaves every node type the stream resolves as it
+    /// was: a type it re-described keeps its earlier ports, and a type it newly described is
+    /// not resolved at all.
+    #[test]
+    #[serial]
+    fn a_refused_document_leaves_the_node_types_the_stream_resolves_as_they_were() {
+        ensure_test_mocks_registered();
+        let kept_type = ProcessorClassImportPath::new("my_app.kept_across_a_refused_reload:Blur")
+            .expect("the test path names a class");
+        let newly_named_type =
+            ProcessorClassImportPath::new("my_app.named_by_a_refused_reload:Blur")
+                .expect("the test path names a class");
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let describe_answer = project_directory.path().join("describe-answer.json");
+        std::fs::write(
+            &describe_answer,
+            a_describe_answer_of(&[(&kept_type, "video")]),
+        )
+        .expect("the first describe answer is written");
+        let stream_environment =
+            an_interpreter_answering_each_describe_from(&project_directory, &describe_answer);
+        let runner = Runner::new().expect("Runner::new");
+        runner
+            .set_processor_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into())
+            .expect("the runner's first lend directory");
+        let stream = runner
+            .load_stream_from_graph_snapshot(
+                &GraphSnapshot::from_graph_document(json!({
+                    "nodes": [{ "id": NODE_A, "name": "kept", "type": kept_type.as_str() }],
+                }))
+                .expect("the document reads"),
+                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
+                    .with_stream_id("main"),
+            )
+            .expect("the stream loads");
+
+        std::fs::write(
+            &describe_answer,
+            a_describe_answer_of(&[(&kept_type, "frames"), (&newly_named_type, "audio")]),
+        )
+        .expect("the later describe answer is written");
+        let refusal = reconcile(
+            &stream,
+            json!({
+                "nodes": [
+                    { "id": NODE_A, "name": "kept", "type": kept_type.as_str() },
+                    { "id": NODE_B, "name": "added", "type": newly_named_type.as_str() },
+                    {
+                        "name": "source",
+                        "type": MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+                    },
+                ],
+                "links": [{
+                    "source": { "node": "source", "port": "out1" },
+                    "target": { "node": "added", "port": "no_such_port" },
+                }],
+            }),
+        )
+        .expect_err("a link into a port the type does not declare is refused");
+
+        let node_types = stream.node_types_this_stream_resolves();
+        let kept_input_names: Vec<String> = node_types
+            .descriptor(&kept_type)
+            .expect("the stream still resolves the kept type")
+            .inputs
+            .into_iter()
+            .map(|port| port.name)
+            .collect();
+        assert_eq!(kept_input_names, ["video"], "refused with: {refusal}");
+        assert!(
+            node_types.descriptor(&newly_named_type).is_none(),
+            "the refused document's new type stayed resolved; refused with: {refusal}"
+        );
+        assert_eq!(
+            the_live_graph_by_node_uuid(&stream).0,
+            vec![(
+                NODE_A.to_owned(),
+                "kept".to_owned(),
+                kept_type.as_str().to_owned()
+            )]
         );
     }
 }

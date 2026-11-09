@@ -67,7 +67,7 @@ _SCALAR_PIN_VALUE_TYPES: "dict[Any, str]" = {float: "float", int: "int", bool: "
 UNREAD_MESSAGE_VALUE_TYPE = "unread_message"
 
 # The family an `UnreadMessage` input is declared with, beside every other family it also takes.
-_UNREAD_MESSAGE_INPUT_FAMILY = {
+UNREAD_MESSAGE_INPUT_FAMILY = {
     "family": "image",
     "also_takes_families": ["array", "channels", "packets", "records"],
 }
@@ -491,7 +491,7 @@ class _FunctionNodeSignatureReading:
                 )
             return self._pin_value_type_and_family(annotated, what_it_types)
         if annotation is UnreadMessage:
-            return UNREAD_MESSAGE_VALUE_TYPE, dict(_UNREAD_MESSAGE_INPUT_FAMILY)
+            return UNREAD_MESSAGE_VALUE_TYPE, dict(UNREAD_MESSAGE_INPUT_FAMILY)
         if annotation in _SCALAR_PIN_VALUE_TYPES:
             return _SCALAR_PIN_VALUE_TYPES[annotation], {"family": "channels"}
         if annotation is dict or typing.get_origin(annotation) is dict:

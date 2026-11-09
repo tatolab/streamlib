@@ -11,7 +11,7 @@
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -455,6 +455,65 @@ fn a_saved_python_file_refreshes_the_fragments_it_defines_before_the_load() {
             "run_project",
             "run_project"
         ]
+    );
+    drop(running_tatolab);
+}
+
+/// A graph document saved while the runtime refreshes the fragments is on disk before the load
+/// that follows the refresh is queued, so that load reads the save.
+#[test]
+fn a_graph_document_saved_during_a_fragment_refresh_is_read_by_the_load_that_follows_it() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let stub_local_api_server =
+        isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+            tool_answers_by_name: HashMap::from([(
+                "run_project".to_owned(),
+                vec![
+                    queued_answer("Rabc-1", &scratch_project.canonical_path()),
+                    queued_answer("Rabc-2", &scratch_project.canonical_path()),
+                ],
+            )]),
+            stream_log_records: Some(StubStreamLogRecords {
+                records: Vec::new(),
+                page_size: 1,
+                first_written_by_a_run: true,
+            }),
+            tools_answered_once_released: HashSet::from(["refresh_fragments".to_owned()]),
+            ..StubLocalApiScript::default()
+        });
+    let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-1",
+        &scratch_project.canonical_path(),
+    ));
+
+    scratch_project.save_stream_py("# a generator edited, longer than the first version\n");
+    wait_until("the runtime is asked to refresh the fragments", || {
+        calls_to(&stub_local_api_server, "refresh_fragments") == 1
+    });
+    let streams_directory = scratch_project.canonical_path().join("streams");
+    std::fs::create_dir_all(&streams_directory).unwrap();
+    std::fs::write(
+        streams_directory.join("main.graph.json"),
+        r#"{"saved": "during the refresh"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        calls_to(&stub_local_api_server, "run_project"),
+        1,
+        "no load is queued while the refresh is unanswered"
+    );
+    stub_local_api_server.release_the_held_tool_answers();
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-2",
+        &scratch_project.canonical_path(),
+    ));
+
+    assert_eq!(
+        tool_calls_besides_logs(&stub_local_api_server),
+        ["run_project", "refresh_fragments", "run_project"],
+        "the load the refresh owed is queued after the save, so it reads it"
     );
     drop(running_tatolab);
 }

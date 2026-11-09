@@ -51,6 +51,9 @@ CONTROL_TOOL_NAMES = {
     "import_graph_generator",
     "refresh_fragments",
     "set_exposed_config_fields",
+    "add_group",
+    "set_group_fields",
+    "remove_group",
     "transact",
     "undo",
     "redo",
@@ -74,6 +77,10 @@ CONTROL_TOOL_NAMES = {
     "move_asset",
     "delete_asset",
     "set_asset_settings",
+    "add_dependency",
+    "update_dependency",
+    "use_dependency_stream",
+    "fork_asset",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"

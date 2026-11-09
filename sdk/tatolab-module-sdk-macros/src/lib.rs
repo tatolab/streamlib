@@ -39,7 +39,8 @@ pub fn function_node(attribute: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Implement `FunctionNodeRecord` and `FunctionNodeOutput` for a struct of
-/// `f64`, `i64` and `bool` fields.
+/// `f64`, `i64` and `bool` fields, or only `FunctionNodeOutput` when a field is
+/// an `Option` or an `UnreadMessage`.
 #[proc_macro_derive(FunctionNodeRecord)]
 pub fn derive_function_node_record(item: TokenStream) -> TokenStream {
     let record = parse_macro_input!(item as DeriveInput);
@@ -147,7 +148,7 @@ fn expand_function_node(mut function: ItemFn) -> syn::Result<TokenStream2> {
         FunctionNodeParameterRole::InputPin { input_index } => {
             let value_type = &input_pins[*input_index].value_type;
             quote! {
-            <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeValue>::from_function_node_f64(
+            <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeInputPinValue>::from_function_node_input_f64(
                 tatolab_function_node_input_values[#input_index],
             )
             }
@@ -192,9 +193,13 @@ fn expand_function_node(mut function: ItemFn) -> syn::Result<TokenStream2> {
             };
         }
     });
+    let output_slot_count = quote! {
+        ::tatolab_module_sdk::function_node::function_node_output_slot_count(
+            <#output_type as ::tatolab_module_sdk::function_node::FunctionNodeOutput>::OUTPUT_PORTS,
+        )
+    };
     let output_values_staged = quote! {
-        let mut tatolab_function_node_staged_output_values = [0.0_f64;
-            <#output_type as ::tatolab_module_sdk::function_node::FunctionNodeOutput>::OUTPUT_PORTS.len()];
+        let mut tatolab_function_node_staged_output_values = [0.0_f64; #output_slot_count];
     };
     let write_what_the_call_returned = match &state_record {
         Some(record) => quote! {
@@ -239,8 +244,10 @@ fn expand_function_node(mut function: ItemFn) -> syn::Result<TokenStream2> {
             ::tatolab_module_sdk::function_node::FunctionNodeInputPin {
                 port: #port,
                 value_type:
-                    <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeValue>::VALUE_TYPE,
+                    <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeInputPinValue>::VALUE_TYPE,
                 pin_default: #pin_default,
+                takes_none:
+                    <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeInputPinValue>::TAKES_NONE,
             }
         }
     });
@@ -254,6 +261,12 @@ fn expand_function_node(mut function: ItemFn) -> syn::Result<TokenStream2> {
         Some(parameter_name) => quote! { ::core::option::Option::Some(#parameter_name) },
         None => quote! { ::core::option::Option::None },
     };
+    let input_pin_value_types = input_pins.iter().map(|input_pin| {
+        let value_type = &input_pin.value_type;
+        quote! {
+            <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeInputPinValue>::VALUE_TYPE
+        }
+    });
     let stream_time_parameter = optional_parameter_name(stream_time_parameter);
     let state_parameter = optional_parameter_name(state_parameter);
     let config_parameter = optional_parameter_name(config_parameter);
@@ -265,6 +278,12 @@ fn expand_function_node(mut function: ItemFn) -> syn::Result<TokenStream2> {
 
         #[doc = concat!("The function node `", #short_name, "` declares, its evaluate entry beside it.")]
         #visibility fn #declaration_function_name() -> ::tatolab_module_sdk::function_node::FunctionNodeDeclaration {
+            const _: () =
+                ::tatolab_module_sdk::function_node::refuse_an_unread_message_output_following_no_one_input(
+                    &[#(#input_pin_value_types),*],
+                    <#output_type as ::tatolab_module_sdk::function_node::FunctionNodeOutput>::OUTPUT_PORTS,
+                );
+
             unsafe extern "C" fn evaluate_entry(
                 tatolab_function_node_input_values: *const f64,
                 tatolab_function_node_config_values: *const f64,
@@ -283,11 +302,11 @@ fn expand_function_node(mut function: ItemFn) -> syn::Result<TokenStream2> {
                     };
                     #config_values_handed
                     #state_values_handed
-                    // SAFETY: the read seam hands one f64 per output port, reached through nothing else for the call.
+                    // SAFETY: the read seam hands one f64 per output port and per handed-out flag, reached through nothing else for the call.
                     let tatolab_function_node_output_values = unsafe {
                         ::tatolab_module_sdk::function_node::function_node_values_the_evaluate_entry_writes(
                             tatolab_function_node_output_values,
-                            <#output_type as ::tatolab_module_sdk::function_node::FunctionNodeOutput>::OUTPUT_PORTS.len(),
+                            #output_slot_count,
                         )
                     };
                     let _ = &tatolab_function_node_input_values;
@@ -358,8 +377,8 @@ fn the_output_type(function: &ItemFn, state_record: Option<&Type>) -> syn::Resul
     let ReturnType::Type(_, returned_type) = &function.sig.output else {
         return Err(syn::Error::new(
             function.sig.span(),
-            "a function node returns its output: `-> f64`, or a `FunctionNodeRecord` for \
-             several outputs",
+            "a function node returns its output: `-> f64`, `-> Option<f64>` when it may hand \
+             out nothing, or a `FunctionNodeRecord` for several outputs",
         ));
     };
     match (stateful_output_and_state(returned_type), state_record) {
@@ -500,7 +519,8 @@ fn expand_function_node_record(record: DeriveInput) -> syn::Result<TokenStream2>
     let Data::Struct(record_struct) = &record.data else {
         return Err(syn::Error::new(
             record.ident.span(),
-            "a function node record is a struct of `f64`, `i64` and `bool` fields",
+            "a function node record is a struct of `f64`, `i64` and `bool` fields, or of outputs \
+             that may also be `Option`s and `UnreadMessage`s",
         ));
     };
     let Fields::Named(named_fields) = &record_struct.fields else {
@@ -521,6 +541,39 @@ fn expand_function_node_record(record: DeriveInput) -> syn::Result<TokenStream2>
         .iter()
         .filter_map(|field| field.ident.as_ref().map(|name| (name, &field.ty)))
         .collect();
+    let output_port_declarations = fields.iter().map(|(name, value_type)| {
+        let port_name = name.unraw().to_string();
+        quote! {
+            ::tatolab_module_sdk::function_node::FunctionNodeOutputPort::handing_out::<#value_type>(#port_name)
+        }
+    });
+    let output_port_writes = fields.iter().enumerate().map(|(index, (name, _))| {
+        quote! {
+            ::tatolab_module_sdk::function_node::write_one_function_node_output_value(
+                Self::OUTPUT_PORTS,
+                #index,
+                self.#name,
+                output_values,
+            );
+        }
+    });
+    let function_node_output_implementation = quote! {
+        impl ::tatolab_module_sdk::function_node::FunctionNodeOutput for #record_name {
+            const OUTPUT_PORTS: &'static [::tatolab_module_sdk::function_node::FunctionNodeOutputPort] =
+                &[#(#output_port_declarations),*];
+
+            fn write_function_node_output_values(&self, output_values: &mut [f64]) {
+                #(#output_port_writes)*
+            }
+        }
+    };
+    let is_a_record_of_outputs_only = fields
+        .iter()
+        .any(|(_, value_type)| hands_out_nothing_or_an_unread_message(value_type));
+    if is_a_record_of_outputs_only {
+        return Ok(function_node_output_implementation);
+    }
+
     let field_declarations = fields.iter().map(|(name, value_type)| {
         let field_name = name.unraw().to_string();
         quote! {
@@ -558,16 +611,12 @@ fn expand_function_node_record(record: DeriveInput) -> syn::Result<TokenStream2>
             }
         }
 
-        impl ::tatolab_module_sdk::function_node::FunctionNodeOutput for #record_name {
-            const OUTPUT_PORTS: &'static [::tatolab_module_sdk::function_node::FunctionNodeNamedValue] =
-                <Self as ::tatolab_module_sdk::function_node::FunctionNodeRecord>::FIELDS;
-
-            fn write_function_node_output_values(&self, output_values: &mut [f64]) {
-                ::tatolab_module_sdk::function_node::FunctionNodeRecord::write_function_node_values(
-                    self,
-                    output_values,
-                );
-            }
-        }
+        #function_node_output_implementation
     })
+}
+
+/// Whether a field is typed `Option<...>` or `UnreadMessage`, which only a record of outputs carries.
+fn hands_out_nothing_or_an_unread_message(field_type: &Type) -> bool {
+    the_one_type_argument_of(field_type, "Option").is_some()
+        || is_the_bare_type_named(field_type, "UnreadMessage")
 }

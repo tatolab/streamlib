@@ -20,6 +20,7 @@ from tatolab.stream import (
     graph_generator,
     run_graph_generator,
 )
+from tatolab.stream._stream_graph_builder import place_graph_generator
 
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"
 BRIGHTNESS_READER_TYPE = "stream_graph_builder_nodes:BrightnessReader"
@@ -238,3 +239,50 @@ def test_a_generator_promoting_a_keyword_add_takes_itself_is_refused(
     assert f"promotes `{reserved_setting}`, which `stream_builder.add` takes itself" in str(
         refusal.value
     )
+
+
+@graph_generator
+def invert_twice_grouped(stream_builder: StreamBuilder) -> None:
+    first = stream_builder.add(FrameInverter, name="first")
+    second = stream_builder.add(FrameInverter, name="second")
+    stream_builder.connect(
+        first.output("video_to_downstream"), second.input("video_from_upstream")
+    )
+    stream_builder.group(
+        "invert", [first, second], description="inverts twice", colour="#f97316"
+    )
+
+
+@graph_generator
+def groups_a_node_twice(stream_builder: StreamBuilder) -> None:
+    first = stream_builder.add(FrameInverter, name="first")
+    stream_builder.group("invert", [first])
+    stream_builder.group("again", [first])
+
+
+def test_a_generator_groups_nodes_of_its_fragment_by_name_under_a_title() -> None:
+    placed = place_graph_generator(invert_twice_grouped)
+
+    assert placed["fragment"]["groups"] == [
+        {
+            "title": "invert",
+            "description": "inverts twice",
+            "colour": "#f97316",
+            "nodes": ["first", "second"],
+        }
+    ]
+
+
+def test_a_node_grouped_twice_is_refused_naming_the_group_it_belongs_to() -> None:
+    with pytest.raises(ValueError) as refusal:
+        place_graph_generator(groups_a_node_twice)
+
+    assert str(refusal.value) == (
+        "node `first` already belongs to group 'invert' of fragment `groups_a_node_twice`; "
+        "a node belongs to one group"
+    )
+
+
+def test_a_stream_groups_no_node_of_its_own() -> None:
+    with pytest.raises(ValueError, match="a stream's own groups are made with `add_group`"):
+        run_graph_generator(invert_twice_grouped)

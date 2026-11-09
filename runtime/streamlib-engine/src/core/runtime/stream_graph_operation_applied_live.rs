@@ -16,8 +16,8 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 impl LoadedStreamInThisRuntime {
     /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
     /// it as applied: an added node under the name it took. An operation on a node no
-    /// processor runs as, a fragment's above all, is applied to the graph as drawn and the live
-    /// graph reconciled to it.
+    /// processor runs as, a fragment's above all, or on a labelled group, is applied to the
+    /// graph as drawn and the live graph reconciled to it.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
         graph_operation: StreamGraphOperation,
@@ -104,7 +104,10 @@ impl LoadedStreamInThisRuntime {
                 self.set_studio_fields(&self.the_processor_of_the_node(node)?, to.clone())?;
                 Ok(StreamGraphOperation::SetStudioFields { node, from, to })
             }
-            StreamGraphOperation::RefreshFragment { .. } => {
+            StreamGraphOperation::RefreshFragment { .. }
+            | StreamGraphOperation::AddGroup { .. }
+            | StreamGraphOperation::SetGroupFields { .. }
+            | StreamGraphOperation::RemoveGroup { .. } => {
                 self.apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                     .await
             }
@@ -131,8 +134,11 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::Connect { link } | StreamGraphOperation::Disconnect { link } => {
                 no_processor_runs_as(link.source.node) || no_processor_runs_as(link.target.node)
             }
-            StreamGraphOperation::RefreshFragment { .. } => true,
-            other => no_processor_runs_as(other.node()),
+            StreamGraphOperation::RefreshFragment { .. }
+            | StreamGraphOperation::AddGroup { .. }
+            | StreamGraphOperation::SetGroupFields { .. }
+            | StreamGraphOperation::RemoveGroup { .. } => true,
+            other => other.node().is_some_and(no_processor_runs_as),
         }
     }
 

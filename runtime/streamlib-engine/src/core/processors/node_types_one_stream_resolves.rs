@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use parking_lot::RwLock;
 
 use crate::core::ProcessorDescriptor;
-use crate::core::compiler::compiler_ops::function_node_pool::is_the_function_node_pool_type;
+use crate::core::compiler::compiler_ops::function_node_pool::{
+    is_the_function_node_pool_type, the_function_node_pool_type,
+};
 use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
@@ -51,13 +54,29 @@ pub struct InstalledModuleOfANodeType {
     pub entry_point: String,
 }
 
+/// One type as a stream resolved it before a change that may be refused: its description and
+/// declared execution, each `None` when the stream had not described it.
+struct DescribedNodeTypeAsItStood {
+    node_type: ProcessorClassImportPath,
+    described: Option<Arc<NodeTypeDescribedInAStreamsProcessorInterpreter>>,
+    execution: Option<ProcessExecution>,
+}
+
+/// The types a change describes, as the stream resolved them before it, which
+/// [`NodeTypesOneStreamResolves::put_back_the_described_node_types_as_they_stood`] restores
+/// when the change is refused.
+pub(crate) struct DescribedNodeTypesAsTheyStoodBeforeARefusedChange {
+    each_node_type: Vec<DescribedNodeTypeAsItStood>,
+}
+
 /// The node types one loaded stream resolves: every natively compiled type in
 /// [`PROCESSOR_REGISTRY`], then the types described in the stream's own
 /// processor interpreter.
 #[derive(Default)]
 pub struct NodeTypesOneStreamResolves {
-    described_in_this_streams_processor_interpreter:
-        RwLock<HashMap<ProcessorClassImportPath, NodeTypeDescribedInAStreamsProcessorInterpreter>>,
+    described_in_this_streams_processor_interpreter: RwLock<
+        HashMap<ProcessorClassImportPath, Arc<NodeTypeDescribedInAStreamsProcessorInterpreter>>,
+    >,
     installed_module_declaring_each_described_type:
         RwLock<HashMap<ProcessorClassImportPath, InstalledModuleOfANodeType>>,
     execution_each_described_class_declares:
@@ -110,11 +129,11 @@ impl NodeTypesOneStreamResolves {
             .write()
             .insert(
                 node_type.clone(),
-                NodeTypeDescribedInAStreamsProcessorInterpreter {
+                Arc::new(NodeTypeDescribedInAStreamsProcessorInterpreter {
                     descriptor,
                     input_and_output_port_info,
                     how_its_nodes_run,
-                },
+                }),
             );
         if !is_the_function_node_pool_type(&node_type) {
             tracing::info!(
@@ -183,7 +202,7 @@ impl NodeTypesOneStreamResolves {
         self.described_in_this_streams_processor_interpreter
             .read()
             .get(node_type)
-            .map(project)
+            .map(|described| project(described))
     }
 
     /// Refuse a node this stream cannot add before anything is added: a
@@ -314,6 +333,60 @@ impl NodeTypesOneStreamResolves {
                 .cmp(right.processor_class_import_path.as_str())
         });
         node_types
+    }
+
+    /// What this stream resolves now for each type in `node_types` and for its function node
+    /// pool, which a describe of a function node registers, so a refused change can put it back.
+    pub(crate) fn the_described_node_types_as_they_stand_now<'a>(
+        &self,
+        node_types: impl IntoIterator<Item = &'a ProcessorClassImportPath>,
+    ) -> Result<DescribedNodeTypesAsTheyStoodBeforeARefusedChange> {
+        let mut node_types_to_hold: Vec<ProcessorClassImportPath> =
+            vec![the_function_node_pool_type()?];
+        for node_type in node_types {
+            if !self.is_a_natively_compiled_node_type(node_type)
+                && !node_types_to_hold.contains(node_type)
+            {
+                node_types_to_hold.push(node_type.clone());
+            }
+        }
+        let described = self.described_in_this_streams_processor_interpreter.read();
+        let executions = self.execution_each_described_class_declares.read();
+        Ok(DescribedNodeTypesAsTheyStoodBeforeARefusedChange {
+            each_node_type: node_types_to_hold
+                .into_iter()
+                .map(|node_type| DescribedNodeTypeAsItStood {
+                    described: described.get(&node_type).cloned(),
+                    execution: executions.get(&node_type).copied(),
+                    node_type,
+                })
+                .collect(),
+        })
+    }
+
+    /// Put each type `as_they_stood` holds back as it stood: re-registered as it was described
+    /// then, or taken out when it was not described then.
+    pub(crate) fn put_back_the_described_node_types_as_they_stood(
+        &self,
+        as_they_stood: DescribedNodeTypesAsTheyStoodBeforeARefusedChange,
+    ) {
+        let mut described = self.described_in_this_streams_processor_interpreter.write();
+        let mut executions = self.execution_each_described_class_declares.write();
+        for DescribedNodeTypeAsItStood {
+            node_type,
+            described: described_then,
+            execution: execution_then,
+        } in as_they_stood.each_node_type
+        {
+            match described_then {
+                Some(described_then) => described.insert(node_type.clone(), described_then),
+                None => described.remove(&node_type),
+            };
+            match execution_then {
+                Some(execution_then) => executions.insert(node_type, execution_then),
+                None => executions.remove(&node_type),
+            };
+        }
     }
 
     /// The native types, then the types described in this stream's processor

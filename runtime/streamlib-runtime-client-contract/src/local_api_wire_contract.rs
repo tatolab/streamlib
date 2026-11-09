@@ -458,6 +458,17 @@ pub struct GraphTransactionAddedNode {
     pub label: Option<String>,
 }
 
+/// A labelled group a graph transaction made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphTransactionAddedGroup {
+    /// The stream it was made in, by stream id.
+    pub stream: String,
+    /// The UUID the runtime made for it.
+    pub group: String,
+    /// Its title.
+    pub title: String,
+}
+
 /// A link a graph transaction made, with the state the stream's graph reads it in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphTransactionConnectedLink {
@@ -494,6 +505,9 @@ pub struct GraphTransactionToolResult {
     pub added_nodes: Vec<GraphTransactionAddedNode>,
     /// Each link it made.
     pub connected_links: Vec<GraphTransactionConnectedLink>,
+    /// Each labelled group it made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_groups: Vec<GraphTransactionAddedGroup>,
 }
 
 /// What a project's transactions resource holds: its newest transactions, newest first.
@@ -525,6 +539,61 @@ pub struct AssetTransactionToolResult {
     pub transaction: String,
     /// The commit on the project history's `main` that records it.
     pub commit: String,
+}
+
+/// A project this one depends on, as a dependency tool answers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectDependencyOnTheWire {
+    /// The depended-on project's UUID.
+    pub project: String,
+    /// Where its history is fetched from, as `add_dependency` was given it.
+    pub source: String,
+    /// The commit of its history it is pinned to.
+    pub revision: String,
+}
+
+/// The result of `add_dependency` and `update_dependency`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DependencyTransactionToolResult {
+    /// The dependency as the transaction left it.
+    pub dependency: ProjectDependencyOnTheWire,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+    /// Each graph operation the transaction applied to a loaded stream, as `transact` answers
+    /// them: each fragment refreshed from the dependency's new pin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graph_operations: Vec<serde_json::Value>,
+}
+
+/// The stream a fork copied, as `fork_asset` answers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForkedAssetOriginOnTheWire {
+    /// The UUID of the asset copied.
+    pub asset: String,
+    /// The UUID of the depended-on project that holds it.
+    pub from: String,
+    /// The commit of that project's history it was copied at.
+    pub revision: String,
+}
+
+/// The result of `fork_asset`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForkAssetToolResult {
+    /// The copy, an asset of this project under a UUID of its own.
+    pub asset: ProjectAssetOnTheWire,
+    /// What it was copied from, which its graph document records under `forked_from`.
+    pub forked_from: ForkedAssetOriginOnTheWire,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+    /// Each graph operation the transaction applied to a loaded stream, as `transact` answers
+    /// them: each node config that referenced the dependency's asset, made to reference the
+    /// copy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graph_operations: Vec<serde_json::Value>,
 }
 
 #[cfg(test)]
