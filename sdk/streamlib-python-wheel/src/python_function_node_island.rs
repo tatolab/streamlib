@@ -461,6 +461,7 @@ pub(crate) struct FunctionNodeIslandEvaluatedInThisHelper {
     island_output_node_index: usize,
     island_output_index: usize,
     first_function_node_it_runs_as_python: Option<String>,
+    reader_input_ports_its_links_from_outside_it_arrive_at: Vec<String>,
     evaluation: Mutex<FunctionNodeIslandEvaluation>,
     stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
 }
@@ -1075,6 +1076,10 @@ impl FunctionNodeIslandEvaluatedAtEachRead for FunctionNodeIslandEvaluatedInThis
             })
             .collect()
     }
+
+    fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
+        &self.reader_input_ports_its_links_from_outside_it_arrive_at
+    }
 }
 
 /// One function node as the bootstrap hands it over: its id, its breadcrumb
@@ -1262,10 +1267,26 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
             .iter()
             .find(|function_node| function_node.how_it_is_called.runs_as_python())
             .map(|function_node| function_node.node_id.clone());
+        let mut reader_input_ports_its_links_from_outside_it_arrive_at = Vec::new();
+        for function_node in &function_nodes_each_after_what_it_reads {
+            for where_it_takes_its_value in &function_node.where_each_input_takes_its_value {
+                if let WhereAFunctionNodeInputTakesItsValue::ALinkFromOutsideTheIsland {
+                    reader_input_port,
+                    ..
+                } = where_it_takes_its_value
+                    && !reader_input_ports_its_links_from_outside_it_arrive_at
+                        .contains(reader_input_port)
+                {
+                    reader_input_ports_its_links_from_outside_it_arrive_at
+                        .push(reader_input_port.clone());
+                }
+            }
+        }
         Ok(Self {
             island_output_node_index,
             island_output_index,
             first_function_node_it_runs_as_python,
+            reader_input_ports_its_links_from_outside_it_arrive_at,
             evaluation: Mutex::new(FunctionNodeIslandEvaluation {
                 function_nodes_each_after_what_it_reads,
                 last_evaluated_at_ns: None,
@@ -2330,6 +2351,12 @@ mod tests {
             stream_clock_now_ns,
             read_the_newest_message_at,
             Box::new(|_| Ok(None)),
+        );
+        assert_eq!(
+            island.the_reader_input_ports_its_links_from_outside_it_arrive_at(),
+            [READER_INPUT_PORT_OF_THE_LINK_FROM_OUTSIDE_THE_ISLAND.to_string()],
+            "the island names the reader input port its link arrives at, so a message there \
+             is judged by what the island hands out for it"
         );
         queued.lock().push(a_message_of(
             vec![1],
