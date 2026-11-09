@@ -890,10 +890,14 @@ const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION: u32
 /// helper calls, by the node's breadcrumb number.
 const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_STATE_SECTION: u32 = 4;
 
+/// The board section holding the helper's one function-node overrun entry.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_OVERRUN_SECTION: u32 = 5;
+
 /// The key of one entry on a helper process's loss-count blackboard: an
 /// inbound-link slot, a declared output port by its index, the helper's step
-/// progress, its function-node call breadcrumb, or the state of one stateful
-/// function node it calls.
+/// progress, its function-node call breadcrumb, the state of one stateful
+/// function node it calls, or the function node that overran its frame
+/// interval.
 ///
 /// The iceoryx2 type name is pinned for the reason
 /// [`DataChannelSampleUserHeader`]'s is: the parent creates the board
@@ -932,6 +936,12 @@ impl HelperProcessLossCountBoardKey {
     /// The key of the helper's function-node call breadcrumb.
     pub const FUNCTION_NODE_CALL_BREADCRUMB: Self = Self {
         section: HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_CALL_BREADCRUMB_SECTION,
+        index_within_section: 0,
+    };
+
+    /// The key of the helper's function-node overrun entry.
+    pub const FUNCTION_NODE_OVERRUN: Self = Self {
+        section: HELPER_PROCESS_LOSS_COUNT_BOARD_FUNCTION_NODE_OVERRUN_SECTION,
         index_within_section: 0,
     };
 
@@ -1019,6 +1029,35 @@ pub struct HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
     /// How many function-node calls the helper has under way, this oldest one
     /// among them; zero between calls.
     pub function_node_calls_under_way: u32,
+}
+
+/// How many calls running one function node may overrun the frame interval
+/// its helper was given before the helper names it on its overrun entry.
+pub const FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED: u32 = 3;
+
+/// The first function node whose calls overran the frame interval its helper
+/// was given [`FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED`]
+/// times running, as the helper wrote it: what its parent reads to end the
+/// helper and promote the node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("HelperProcessFunctionNodeOverrunBoardEntry")]
+#[repr(C)]
+pub struct HelperProcessFunctionNodeOverrunBoardEntry {
+    /// The longest of the overrunning calls, in nanoseconds; zero until a node
+    /// is named.
+    pub longest_overrunning_call_ns: u64,
+    /// The number the parent gave the node on the helper's setup command; read
+    /// only once a node is named.
+    pub function_node_breadcrumb_number: u32,
+    /// Always zero; keeps the entry a multiple of 8 bytes.
+    pub reserved: u32,
+}
+
+impl HelperProcessFunctionNodeOverrunBoardEntry {
+    /// The breadcrumb number of the node named, or `None` before one is.
+    pub fn function_node_that_overran(&self) -> Option<u32> {
+        (self.longest_overrunning_call_ns != 0).then_some(self.function_node_breadcrumb_number)
+    }
 }
 
 /// The most state values one function node's state entry holds: a state record
@@ -1538,6 +1577,50 @@ mod tests {
                 <HelperProcessFunctionNodeCallBreadcrumbBoardEntry as ZeroCopySend>::type_name()
             },
             "HelperProcessFunctionNodeCallBreadcrumbBoardEntry"
+        );
+    }
+
+    #[test]
+    fn a_helpers_function_node_overrun_entry_is_a_u64_and_two_u32s_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<HelperProcessFunctionNodeOverrunBoardEntry>(),
+            16
+        );
+        assert_eq!(
+            std::mem::align_of::<HelperProcessFunctionNodeOverrunBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeOverrunBoardEntry,
+                longest_overrunning_call_ns
+            ),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(
+                HelperProcessFunctionNodeOverrunBoardEntry,
+                function_node_breadcrumb_number
+            ),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessFunctionNodeOverrunBoardEntry, reserved),
+            12
+        );
+        assert_ne!(
+            HelperProcessLossCountBoardKey::FUNCTION_NODE_OVERRUN,
+            HelperProcessLossCountBoardKey::function_node_state(0),
+            "the overrun entry is in a section of its own"
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <HelperProcessFunctionNodeOverrunBoardEntry as ZeroCopySend>::type_name() },
+            "HelperProcessFunctionNodeOverrunBoardEntry"
+        );
+        assert_eq!(
+            HelperProcessFunctionNodeOverrunBoardEntry::default().function_node_that_overran(),
+            None
         );
     }
 

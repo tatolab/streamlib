@@ -20,22 +20,32 @@ import pytest
 from conftest import TatolabdUnderTest
 from helper_placement_processors import (
     MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE,
+    CALLS_RETURNED_BEFORE_A_CALL_HANGS,
     COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES,
     RAW_MESSAGE_PAYLOAD_BYTES,
     STEPPED_LFO_STEP_MS,
 )
 from helper_placement_streams import (
+    clamp_with_its_input_linked_to_nothing_into_python_sink,
     dies_abruptly_beside_a_survivor_pair,
     first_labelled_source_into_sink,
+    function_node_run_as_python_into_a_class_lending_it_to_native_code,
     function_node_run_as_python_into_python_records_sink,
     function_node_run_as_python_that_crashes_into_python_sink,
+    function_node_slower_than_the_pools_frame_interval_read_by_a_native_converter,
     function_node_that_spins_forever_into_python_sink,
     function_nodes_read_by_two_native_converters_into_python_records_sink,
+    held_level_read_by_two_python_sinks,
+    level_scaled_by_its_gain_into_python_sink,
+    lfo_into_python_sink_reporting_each_batch_it_reads,
+    python_class_reporting_its_configured_level,
+    python_sink_reading_the_pin_value_of_its_unlinked_input,
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
+    pooled_counter_beside_a_pooled_node_that_hangs,
     only_labelled_source_into_sink,
     raw_message_payload_source_into_sink,
     reaped_labelled_source_into_sink,
@@ -350,6 +360,244 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
         f"`Remap` maps the LFO onto 0..1, and the class read {levels}"
     )
     assert len(set(levels)) > 1, f"the pool evaluates the island on a moving clock: {levels}"
+
+
+def the_first_value_batch_read_after(
+    tatolabd: TatolabdUnderTest, monotonic_ns: int, *, from_occurrence: int
+) -> "tuple[dict, int]":
+    """The first batch the sink started reading after `monotonic_ns`, and its occurrence."""
+    occurrence = from_occurrence
+    while True:
+        batch = tatolabd.await_marker("FUNCTION_NODE_VALUE_BATCH_READ", occurrence=occurrence)
+        if batch["started_at_monotonic_ns"] > monotonic_ns:
+            return batch, occurrence
+        occurrence += 1
+
+
+def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_what_it_reads(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`Lfo -> <Python class>`, then `Remap` linked in between and taken out,
+    all while the class runs: each edit is handed to the running class as its
+    island, so what it reads swings -1..1, then stays in `Remap`'s 0..1, then
+    swings -1..1 again, in the one process the class started in.
+    """
+    tatolabd = start_tatolabd_running_stream(lfo_into_python_sink_reporting_each_batch_it_reads)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    direct, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    sink_pid = direct["sink_pid"]
+    assert direct["lowest"] < -0.5 and direct["highest"] > 0.5, (
+        f"a second of a 1 Hz `Lfo` swings -1..1, and the class read {direct}"
+    )
+
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    uuid_of = {node["name"]: node["id"] for node in graph["nodes"]}
+
+    def end_of(node_uuid: str, port: str) -> "dict[str, str]":
+        return {"node": node_uuid, "port": port}
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    def the_link_into_the_sink() -> str:
+        (link,) = [
+            link
+            for link in local_api.call_tool("graph", {"stream": stream_id})["links"]
+            if link["target"] == {"node": "sink", "port": "brightness"}
+        ]
+        return link["id"]
+
+    (remap,) = edit_live("add_node", {"type": "tatolab.ops:Remap", "name": "remap"})[
+        "added_nodes"
+    ]
+    edit_live(
+        "connect",
+        {"source": end_of(uuid_of["lfo"], "result"), "target": end_of(remap["node"], "x")},
+    )
+    edit_live(
+        "disconnect",
+        {
+            "source": end_of(uuid_of["lfo"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    edit_live(
+        "connect",
+        {
+            "source": end_of(remap["node"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    assert (
+        local_api.await_link_state(the_link_into_the_sink(), "wired", stream=stream_id)
+        == "wired"
+    )
+    remapped_from_ns = time.monotonic_ns()
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    hosts = {
+        node["name"]: node["components"].get("host")
+        for node in graph["nodes"]
+        if node["name"] in ("lfo", "remap")
+    }
+    assert hosts == {
+        "lfo": {"inside_the_read_of": ["sink"]},
+        "remap": {"inside_the_read_of": ["sink"]},
+    }, f"`graph` names the class each function node runs inside the read of: {hosts}"
+    remapped, occurrence = the_first_value_batch_read_after(
+        tatolabd, remapped_from_ns, from_occurrence=occurrence + 1
+    )
+    assert 0.0 <= remapped["lowest"] and remapped["highest"] <= 1.0, (
+        f"`Remap` maps the LFO's -1..1 onto 0..1, and the class read {remapped}"
+    )
+    assert remapped["highest"] - remapped["lowest"] > 0.5, (
+        f"the `Lfo` keeps swinging through `Remap`: {remapped}"
+    )
+
+    edit_live("remove_node", {"node": remap["node"]})
+    edit_live(
+        "connect",
+        {
+            "source": end_of(uuid_of["lfo"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    assert (
+        local_api.await_link_state(the_link_into_the_sink(), "wired", stream=stream_id)
+        == "wired"
+    )
+    direct_again, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert direct_again["lowest"] < -0.5 and direct_again["highest"] > 0.5, (
+        f"with `Remap` gone the class reads the `Lfo` directly again, and read {direct_again}"
+    )
+    assert {remapped["sink_pid"], direct_again["sink_pid"]} == {sink_pid}, (
+        "each edit reaches the running class; none restarts its helper"
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    assert helper_process_ids_started_in(tatolabd.stderr_text) == [sink_pid], (
+        f"the function nodes added and removed live got no process of their own:\n"
+        f"{tatolabd.recent_stderr()}"
+    )
+
+
+def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A Python body a native half reads runs in the pool, so the lend is taken.
+
+    `LabelsTheLevel` gives a `dict`, which no compiled body carries, and its
+    describe says so. Its reader is driven manually, as a class lending ports
+    to native code is, and a native read holds no Python interpreter lock, so
+    the stream places the node in its pool before it runs: the class's port is
+    fed by a channel from the pool, and lending it to native code is taken.
+
+    Fail-without-fix: the island stays inside the class's read, and the lend
+    is refused naming `labeller`.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        function_node_run_as_python_into_a_class_lending_it_to_native_code
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    lend = tatolabd.await_marker("LABEL_LEND")
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+
+    assert lend["refused"] is None, f"the lend was refused: {lend['refused']}"
+    assert len(helper_pids) == 2 and lend["pid"] in helper_pids, (
+        f"a Python body read by a native half started {helper_pids}; the class and one pool "
+        f"get a process:\n{tatolabd.recent_stderr()}"
+    )
+    pools = [
+        node
+        for node in graph["nodes"]
+        if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
+    ]
+    assert len(pools) == 1, f"`graph` shows the stream's one pool: {graph['nodes']}"
+    assert pools[0]["config"]["carries"] == [
+        {"input_port": "island_0", "output_port": "island_0_output", "family": "records"}
+    ], pools[0]
+
+
+def test_a_pooled_function_node_that_overruns_the_pools_frame_interval_three_times_moves_out_of_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A node slower than the pool's frame interval holds every island back, so it leaves the pool.
+
+    Each call of `sleeper` sleeps past the pool's 10 ms interval. On its third
+    such call running, the pool names it on its board; the engine ends the pool
+    and moves `sleeper` into a helper process of its own, which `graph` shows,
+    and the converter goes on reading its value from there.
+
+    Fail-without-fix: no call outlasts the stall watchdog's floor, so the pool
+    runs on at the sleeper's pace and `graph` shows no promotion.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        function_node_slower_than_the_pools_frame_interval_read_by_a_native_converter
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    overrun_line = tatolabd.await_stderr_containing("frame interval 3 times running")
+    tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
+    records_read = tatolabd.await_marker("LEVEL_RECORDS_READ")
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert "function node `sleeper` overran its island's 10 ms frame interval" in overrun_line, (
+        overrun_line
+    )
+    sleeper = next(node for node in graph["nodes"] if node["name"] == "sleeper")
+    promotion = sleeper["components"]["metrics"]["promoted_out_of_its_readers_islands"]
+    assert promotion["promotions"] == 1, promotion
+    assert "overran its island's 10 ms frame interval" in promotion["reason"], promotion
+    levels = [record["level"] for record in records_read["records"]]
+    assert all(level == pytest.approx(0.5) for level in levels), levels
+
+
+def test_a_hung_call_in_the_pool_respawns_it_and_its_stateful_nodes_keep_their_state(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A call that never returns ends the pool; its next process resumes every node's state.
+
+    `hanger` returns from its first calls and then never does, so the pool's
+    helper is ended as stalled and `hanger` moves into a helper process of its
+    own. The pool's next process resumes `counter` from the count its board
+    last held, so the counts the sink reads never start over.
+
+    Fail-without-fix: with the state kept only in the pool's process, the
+    count starts again from one after the respawn.
+    """
+    tatolabd = start_tatolabd_running_stream(pooled_counter_beside_a_pooled_node_that_hangs)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    tatolabd.await_marker("COUNT_RECORDS_READ")
+    stall_line = tatolabd.await_stderr_containing("stalled: its call had run for")
+    tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
+    reports_by_the_promotion = len(tatolabd.marker_payloads("COUNT_RECORDS_READ"))
+    tatolabd.await_marker("COUNT_RECORDS_READ", occurrence=reports_by_the_promotion + 2)
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert "function node `hanger` stalled" in stall_line, stall_line
+    counts = [
+        count
+        for report in tatolabd.marker_payloads("COUNT_RECORDS_READ")
+        for count in report["counts"]
+    ]
+    assert counts[-1] > CALLS_RETURNED_BEFORE_A_CALL_HANGS, (
+        f"the counter ran past the hanger's first calls and on after the respawn: {counts}"
+    )
+    assert all(later >= earlier for earlier, later in zip(counts, counts[1:])), (
+        f"the pool's next process resumes the count, and the sink read {counts}"
+    )
+    hanger = next(node for node in graph["nodes"] if node["name"] == "hanger")
+    promotion = hanger["components"]["metrics"]["promoted_out_of_its_readers_islands"]
+    assert promotion["promotions"] == 1, promotion
+    assert "function node `hanger` stalled" in promotion["reason"], promotion
 
 
 def test_a_function_node_call_that_never_returns_moves_the_node_out_of_its_reader(
@@ -866,3 +1114,350 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
         f"the processor started anyway: {processor_states}"
     )
 
+
+def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_set_live(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A Python class whose input is linked to nothing reads the 0.25 its port
+    declares; a live `set_pin_value` changes what it reads to the pin, in the
+    one process it started in, and taking the pin off reads the default again.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        python_sink_reading_the_pin_value_of_its_unlinked_input
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    defaulted, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert defaulted["lowest"] == defaulted["highest"] == pytest.approx(0.25), (
+        f"an unlinked input reads the default its port declares, and the class read {defaulted}"
+    )
+
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    (sink,) = [node for node in graph["nodes"] if node["name"] == "sink"]
+
+    def set_the_pin_live(value: "float | None") -> None:
+        local_api.call_tool(
+            "set_pin_value",
+            {
+                "stream": stream_id,
+                "node": sink["id"],
+                "input": "brightness",
+                "value": value,
+                "mode": "live",
+            },
+        )
+
+    set_the_pin_live(0.75)
+    pinned, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert pinned["lowest"] == pinned["highest"] == pytest.approx(0.75), (
+        f"a pin value set live is what the unlinked input reads next, and the class read {pinned}"
+    )
+    assert pinned["sink_pid"] == defaulted["sink_pid"], "a pin edit restarts nothing"
+    (sink_after_the_edit,) = [
+        node
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "sink"
+    ]
+    pins = sink_after_the_edit["pins"]
+    assert pins == {"brightness": 0.75}, f"`graph` shows the pin value set: {pins}"
+
+    set_the_pin_live(None)
+    defaulted_again, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert defaulted_again["lowest"] == defaulted_again["highest"] == pytest.approx(0.25), (
+        f"taking the pin off reads the declared default again, and the class read {defaulted_again}"
+    )
+
+
+def test_a_function_node_input_no_value_reaches_refuses_the_streams_start_naming_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`Clamp`'s `x` is linked to nothing, unpinned, and declares no default, so
+    the stream is refused as it starts, naming the node and the input."""
+    tatolabd = start_tatolabd_running_stream(clamp_with_its_input_linked_to_nothing_into_python_sink)
+    failed_stream = tatolabd.stream_runs[-1].failed_stream()
+    assert failed_stream is not None, "the stream must be recorded failed"
+    _, failed_because = failed_stream
+    assert "`clamp`'s input `x`" in failed_because, failed_because
+    assert "no value reaches" in failed_because, failed_because
+
+
+def test_a_function_node_linked_live_with_an_input_no_value_reaches_holds_until_its_pin_is_set(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`Clamp` linked live into a running Python class with its `x` linked to
+    nothing holds: `graph` names `x` as waiting, and the class reads nothing
+    from it. Setting `x`'s pin live is what the class reads next, and linking
+    the `Lfo` into `x` takes the waiting input off `graph`.
+    """
+    tatolabd = start_tatolabd_running_stream(lfo_into_python_sink_reporting_each_batch_it_reads)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    _, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    uuid_of = {
+        node["name"]: node["id"]
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+    }
+
+    def end_of(node_uuid: str, port: str) -> "dict[str, str]":
+        return {"node": node_uuid, "port": port}
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    def the_clamp_node() -> dict:
+        (clamp_node,) = [
+            node
+            for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+            if node["name"] == "clamp"
+        ]
+        return clamp_node
+
+    (clamp,) = edit_live("add_node", {"type": "tatolab.ops:Clamp", "name": "clamp"})[
+        "added_nodes"
+    ]
+    edit_live(
+        "disconnect",
+        {
+            "source": end_of(uuid_of["lfo"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    edit_live(
+        "connect",
+        {
+            "source": end_of(clamp["node"], "result"),
+            "target": end_of(uuid_of["sink"], "brightness"),
+        },
+    )
+    assert the_clamp_node().get("inputs_waiting_for_a_value") == ["x"], (
+        f"`graph` names the input the held node waits on: {the_clamp_node()}"
+    )
+
+    pinned_from_ns = time.monotonic_ns()
+    edit_live("set_pin_value", {"node": clamp["node"], "input": "x", "value": 0.3})
+    pinned, occurrence = the_first_value_batch_read_after(
+        tatolabd, pinned_from_ns, from_occurrence=occurrence + 1
+    )
+    assert pinned["lowest"] == pinned["highest"] == pytest.approx(0.3), (
+        f"the held node evaluates once its input has a value, and the class read {pinned}"
+    )
+    assert "inputs_waiting_for_a_value" not in the_clamp_node()
+
+    edit_live(
+        "connect",
+        {"source": end_of(uuid_of["lfo"], "result"), "target": end_of(clamp["node"], "x")},
+    )
+    clamped, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert 0.0 <= clamped["lowest"] and clamped["highest"] <= 1.0 and (
+        clamped["highest"] - clamped["lowest"] > 0.5
+    ), f"a link into `x` wins over its pin, clamped to 0..1, and the class read {clamped}"
+
+
+def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`LevelScaledByItsGain`, its config's `gain` 0.25, read by a running Python
+    class. Exposing `gain` live adds a `gain` input that `graph` shows, and with
+    nothing linked into it the node still reads the config. Linking an `Lfo` into
+    `gain` drives the field, so the class reads the level scaled by the `Lfo`'s
+    -1..1 in place of 0.25, and disconnecting it reads the config's 0.25 again.
+    """
+    tatolabd = start_tatolabd_running_stream(level_scaled_by_its_gain_into_python_sink)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), (
+        f"the level 1.0 scaled by the config's gain 0.25, and the class read {configured}"
+    )
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    def the_scaled_node() -> dict:
+        (scaled_node,) = [
+            node
+            for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+            if node["name"] == "scaled"
+        ]
+        return scaled_node
+
+    edit_live(
+        "set_exposed_config_fields",
+        {"node": the_scaled_node()["id"], "exposed_config_fields": ["gain"]},
+    )
+    scaled_node = the_scaled_node()
+    assert scaled_node.get("exposed_config_fields") == ["gain"], scaled_node
+    assert "gain" in [port["name"] for port in scaled_node["ports"]["inputs"]], scaled_node
+    assert "inputs_waiting_for_a_value" not in scaled_node, (
+        f"an exposed field no link drives reads the config, so nothing waits: {scaled_node}"
+    )
+    exposed_unlinked, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert exposed_unlinked["lowest"] == exposed_unlinked["highest"] == pytest.approx(0.25), (
+        f"an exposed field no link drives reads the config, and the class read {exposed_unlinked}"
+    )
+
+    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    edit_live(
+        "connect",
+        {
+            "source": {"node": lfo["node"], "port": "result"},
+            "target": {"node": scaled_node["id"], "port": "gain"},
+        },
+    )
+    driven, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert driven["highest"] - driven["lowest"] > 0.5, (
+        f"the `Lfo` linked into `gain` drives the field in place of 0.25, and the class read {driven}"
+    )
+
+    edit_live(
+        "disconnect",
+        {
+            "source": {"node": lfo["node"], "port": "result"},
+            "target": {"node": scaled_node["id"], "port": "gain"},
+        },
+    )
+    unlinked_again, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert unlinked_again["lowest"] == unlinked_again["highest"] == pytest.approx(0.25), (
+        f"a field its link stops driving reads the config again, and the class read {unlinked_again}"
+    )
+
+
+def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_a_link_drives_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`HoldsItsConfiguredLevelCountingItsCalls`, its config's `level` 0.25, is
+    stateful and read by two Python classes, so it runs in a helper of its own.
+    Exposing `level` live with nothing linked into it leaves the node reading the
+    config. Linking an `Lfo` into `level` drives the field, so the classes read
+    the `Lfo`'s -1..1 in place of 0.25, and disconnecting it reads the config's
+    0.25 again.
+
+    Fail-without-fix: the promoted node keeps its config's 0.25 with the `Lfo`
+    linked, and its helper logs that it cannot be reconfigured while running.
+    """
+    tatolabd = start_tatolabd_running_stream(held_level_read_by_two_python_sinks)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), (
+        f"the config's level 0.25, and a class read {configured}"
+    )
+    assert len(set(helper_process_ids_started_in(tatolabd.stderr_text))) == 3, (
+        f"the two readers and the held node each get a helper:\n{tatolabd.recent_stderr()}"
+    )
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    (held_node,) = [
+        node
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "held"
+    ]
+    edit_live(
+        "set_exposed_config_fields",
+        {"node": held_node["id"], "exposed_config_fields": ["level"]},
+    )
+    exposed_unlinked, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert exposed_unlinked["lowest"] == exposed_unlinked["highest"] == pytest.approx(0.25), (
+        f"an exposed field no link drives reads the config, and a class read {exposed_unlinked}"
+    )
+
+    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    edit_live(
+        "connect",
+        {
+            "source": {"node": lfo["node"], "port": "result"},
+            "target": {"node": held_node["id"], "port": "level"},
+        },
+    )
+    driven, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    edit_live(
+        "disconnect",
+        {
+            "source": {"node": lfo["node"], "port": "result"},
+            "target": {"node": held_node["id"], "port": "level"},
+        },
+    )
+    unlinked_again, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert driven["highest"] - driven["lowest"] > 0.5, (
+        f"the `Lfo` linked into `level` drives the field in place of 0.25, and a class read {driven}"
+    )
+    assert unlinked_again["lowest"] == unlinked_again["highest"] == pytest.approx(0.25), (
+        f"a field its link stops driving reads the config again, and a class read {unlinked_again}"
+    )
+    assert "cannot be reconfigured while running" not in tatolabd.stderr_text, (
+        f"the promoted node takes the linked value as its config:\n{tatolabd.recent_stderr()}"
+    )
+
+
+def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_link_is_removed(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A Python class taking live config updates, its config's `level` 0.25.
+    Exposing `level` live and linking an `Lfo` into it drives the field, and
+    disconnecting the `Lfo` hands the class its config's 0.25 again.
+
+    Fail-without-fix: the class keeps the last value the `Lfo` gave it.
+    """
+    tatolabd = start_tatolabd_running_stream(python_class_reporting_its_configured_level)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    configured, occurrence = the_first_value_batch_read_after(tatolabd, 0, from_occurrence=1)
+    assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), configured
+
+    def edit_live(tool: str, arguments: dict) -> dict:
+        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+
+    (configured_node,) = [
+        node
+        for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
+        if node["name"] == "configured"
+    ]
+    edit_live(
+        "set_exposed_config_fields",
+        {"node": configured_node["id"], "exposed_config_fields": ["level"]},
+    )
+    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    lfo_into_the_level = {
+        "source": {"node": lfo["node"], "port": "result"},
+        "target": {"node": configured_node["id"], "port": "level"},
+    }
+    edit_live("connect", lfo_into_the_level)
+    driven, occurrence = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    edit_live("disconnect", lfo_into_the_level)
+    unlinked_again, _ = the_first_value_batch_read_after(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert driven["highest"] - driven["lowest"] > 0.5, (
+        f"the `Lfo` linked into `level` drives the field in place of 0.25, and the class read {driven}"
+    )
+    assert unlinked_again["lowest"] == unlinked_again["highest"] == pytest.approx(0.25), (
+        f"a field its link stops driving reads the config again, and the class read {unlinked_again}"
+    )

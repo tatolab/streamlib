@@ -591,6 +591,14 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
+      # Each `tatolab-ops` node as Python, then compiled by the unit's own wheel
+      # and held to that Python.
+      - name: tatolab-ops suite
+        working-directory: packages/tatolab-ops
+        run: |
+          VIRTUAL_ENV="$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv" uv pip install --no-deps .
+          "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python" -m pytest tests -v
+
       - name: Driver-search tests against the lend
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream

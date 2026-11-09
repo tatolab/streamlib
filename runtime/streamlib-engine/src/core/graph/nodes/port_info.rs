@@ -37,6 +37,11 @@ pub struct PortInfo {
     /// The port family this port declares. Mirrors the field on
     /// [`crate::core::descriptors::PortDescriptor`].
     pub family: crate::core::descriptors::PortFamilyDeclaration,
+    /// The value this input reads while nothing is linked into it and no pin
+    /// value is set on its node. Mirrors the field on
+    /// [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_default: Option<serde_json::Value>,
 }
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
@@ -49,6 +54,7 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             family: port.family.clone(),
+            pin_default: port.pin_default.clone(),
         }
     }
 }

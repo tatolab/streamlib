@@ -6,6 +6,7 @@ mod config_node_reference_edges;
 mod data_structure;
 
 mod edges;
+mod exposed_config_field_input_ports;
 mod graph_readiness;
 mod nodes;
 mod port_family_link_checks;
@@ -29,6 +30,7 @@ pub(crate) use data_structure::{
     names_listed_for_a_refusal, node_named_or_refused, node_names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
 };
+pub(crate) use exposed_config_field_input_ports::the_input_ports_of_the_exposed_config_fields;
 pub use graph_readiness::ObservableGraphReadiness;
 pub(crate) use port_family_link_checks::{
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,

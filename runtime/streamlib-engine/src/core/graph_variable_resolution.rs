@@ -216,6 +216,7 @@ impl GraphVariablesAsDrawn {
                 stream_facts: None,
                 values_checked: None,
                 family: None,
+                pin_default: None,
             };
             let is_a_setter = variable_node.processor_type.as_str() == SET_VARIABLE_NODE_TYPE;
             let position = (*drawn_position).min(graph_response.nodes.len());
@@ -233,7 +234,9 @@ impl GraphVariablesAsDrawn {
                     config: Some(variable_node.config.clone()),
                     config_checksum: compute_json_checksum(&variable_node.config),
                     pins: variable_node.pins.clone(),
+                    exposed_config_fields: variable_node.exposed_config_fields.clone(),
                     studio: variable_node.studio.clone(),
+                    inputs_waiting_for_a_value: Vec::new(),
                     ports: ProcessorNodePortsOutput {
                         inputs: if is_a_setter {
                             vec![value_port.clone()]
@@ -1009,7 +1012,9 @@ mod tests {
             },
             components: serde_json::Map::new(),
             pins: serde_json::Map::new(),
+            exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
+            inputs_waiting_for_a_value: Vec::new(),
             fragment: None,
         }
     }

@@ -112,8 +112,9 @@ API's addressing, the processor model's load path, and adds the project as a sto
   transaction commit (the default) or live; live is applied to the running stream only and is gone
   on the next load. A continuous gesture is sent as one transaction when it ends.
 - **The graph operations.** `add_node` (answers the UUID), `remove_node`, `connect`,
-  `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, and
-  `transact` batching any operations of a project. Each validates inside the transaction as today;
+  `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`,
+  `set_exposed_config_fields` (lightweight-node-kinds DECIDED 10), and `transact` batching any
+  operations of a project. Each validates inside the transaction as today;
   rules that refuse only at start stay at start, so a graph can be wired one input at a time.
 - **Undo and redo.** `undo {project, author}` applies the inverse of that author's latest
   transaction as a new one; `redo` reapplies it. Undo reverses only its own author's edits.

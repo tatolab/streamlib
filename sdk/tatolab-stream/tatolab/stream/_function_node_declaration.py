@@ -21,6 +21,7 @@ import typing
 from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
 
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
+from ._function_node_side_effect_check import refuse_a_function_node_body_with_side_effects
 from ._node_config_schema import (
     derive_config_class_json_schema,
     json_schema_for_a_node_declaring_no_config,
@@ -85,6 +86,7 @@ def declare_function_node(
     function: Callable[_FunctionNodeParameters, _FunctionNodeReturn],
     *,
     description: str,
+    category: str,
     declaration_stamps: "dict[str, str]",
 ) -> FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]:
     """Read `function`'s signature into a function node, refusing by name what is not one.
@@ -94,6 +96,7 @@ def declare_function_node(
     """
     _refuse_what_is_not_a_plain_module_level_function(function)
     signature_reading = _FunctionNodeSignatureReading(function)
+    refuse_a_function_node_body_with_side_effects(function)
     function_node = FunctionNode(function)
     config_class = signature_reading.config_class
     stamps: "dict[str, Any]" = {
@@ -107,6 +110,7 @@ def declare_function_node(
             else derive_config_class_json_schema(config_class)
         ),
         declaration_stamps["description"]: description or inspect.getdoc(function) or "",
+        declaration_stamps["category"]: category or function.__module__,
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
@@ -312,14 +316,15 @@ class _FunctionNodeSignatureReading:
         elif parameter.default is not inspect.Parameter.empty:
             signature_input["default"] = self._pin_default(parameter, pin_value_type)
         self._signature_inputs.append(signature_input)
-        self.input_ports.append(
-            {
-                "name": port_name,
-                "description": "",
-                "delivery_profile": "newest",
-                "family": {"family": family_declaration["family"]},
-            }
-        )
+        input_port: "dict[str, Any]" = {
+            "name": port_name,
+            "description": "",
+            "delivery_profile": "newest",
+            "family": {"family": family_declaration["family"]},
+        }
+        if "default" in signature_input:
+            input_port["pin_default"] = signature_input["default"]
+        self.input_ports.append(input_port)
 
     def _pin_default(self, parameter: inspect.Parameter, pin_value_type: str) -> Any:
         default = parameter.default

@@ -95,6 +95,24 @@ def test_a_channels_input_requires_names_and_takes_a_window():
     assert declared_input["audio_window"]["window_size"] == 960
 
 
+def test_a_channels_input_declares_the_number_it_reads_while_unlinked():
+    @node.process(execution="continuous", interval_ms=10)
+    class Dimmer:
+        level = Input(Channels, delivery="newest", default=1)
+        gain = Input(Channels, delivery="newest")
+
+    ports = Dimmer.__tatolab_node_input_ports__
+    assert _the_port_named(ports, "level")["pin_default"] == 1.0
+    assert "pin_default" not in _the_port_named(ports, "gain")
+
+
+def test_a_default_that_is_not_a_number_is_refused():
+    with pytest.raises(TypeError, match="`default=` takes a number"):
+        Input(Channels, delivery="newest", default="loud")  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError, match="`default=` takes a number"):
+        Input(Channels, delivery="newest", default=True)
+
+
 def test_a_packets_pair_declares_its_codec_and_the_codecs_an_input_decodes():
     @node.process
     class Repackager:
@@ -167,6 +185,7 @@ def test_a_mistyped_key_is_refused_at_import():
         lambda: type(
             "RecordsWithFormats", (), {"events": Input(Records, delivery="ordered", formats=("rgba8_unorm",))}
         ),
+        lambda: type("ImageWithADefault", (), {"video": Input(Image, delivery="newest", default=0.5)}),
     ],
 )
 def test_a_key_the_family_does_not_take_is_refused_naming_the_port_and_the_key(declare_the_class):

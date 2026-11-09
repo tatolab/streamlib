@@ -96,6 +96,8 @@ pub(crate) enum StreamGraphOperationToolArgument {
         config: Option<Map<String, Value>>,
         #[schemars(description = "The value on each unlinked input, by input name.")]
         pins: Option<Map<String, Value>>,
+        #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
+        exposed_config_fields: Option<Vec<String>>,
         #[schemars(
             description = "What the studio draws the node with: canvas position, group, comment, colour."
         )]
@@ -194,7 +196,19 @@ pub(crate) enum StreamGraphOperationToolArgument {
         )]
         label: Option<String>,
     },
+    /// Replace the config fields a node takes as inputs whole.
+    SetExposedConfigFields {
+        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+        stream: String,
+        #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
+        node: String,
+        #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
+        exposed_config_fields: Vec<String>,
+    },
 }
+
+/// What a node's `exposed_config_fields` are, as every tool that takes them says.
+const EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION: &str = "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.";
 
 impl StreamGraphOperationToolArgument {
     fn stream(&self) -> &str {
@@ -207,7 +221,8 @@ impl StreamGraphOperationToolArgument {
             | Self::SetPinValue { stream, .. }
             | Self::RenameNode { stream, .. }
             | Self::SetStudioFields { stream, .. }
-            | Self::ImportGraphGenerator { stream, .. } => stream,
+            | Self::ImportGraphGenerator { stream, .. }
+            | Self::SetExposedConfigFields { stream, .. } => stream,
         }
     }
 }
@@ -217,7 +232,7 @@ impl StreamGraphOperationToolArgument {
 #[serde(deny_unknown_fields)]
 struct TransactToolArguments {
     #[schemars(
-        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields` or `import_graph_generator` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields` or `import_graph_generator` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
     operations: Vec<StreamGraphOperationToolArgument>,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -247,6 +262,8 @@ struct AddNodeToolArguments {
     config: Option<Map<String, Value>>,
     #[schemars(description = "The value on each unlinked input, by input name.")]
     pins: Option<Map<String, Value>>,
+    #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
+    exposed_config_fields: Option<Vec<String>>,
     #[schemars(
         description = "What the studio draws the node with: canvas position, group, comment, colour."
     )]
@@ -388,6 +405,22 @@ struct ImportGraphGeneratorToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
+struct SetExposedConfigFieldsToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
+    node: String,
+    #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
+    exposed_config_fields: Vec<String>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct UndoOrRedoToolArguments {
     #[schemars(
         description = "The project, by absolute path: a folder holding `tatolab-project.json`."
@@ -461,6 +494,7 @@ impl LocalApiMcpServerHandler {
             name,
             config,
             pins,
+            exposed_config_fields,
             studio,
             mode,
             author,
@@ -472,6 +506,7 @@ impl LocalApiMcpServerHandler {
             name,
             config,
             pins,
+            exposed_config_fields,
             studio,
             label: None,
         };
@@ -631,6 +666,35 @@ impl LocalApiMcpServerHandler {
         };
         self.one_graph_transaction("set_studio_fields", vec![operation], mode, author, &peer)
             .await
+    }
+
+    #[tool(
+        description = "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off."
+    )]
+    async fn set_exposed_config_fields(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(SetExposedConfigFieldsToolArguments {
+            stream,
+            node,
+            exposed_config_fields,
+            mode,
+            author,
+        }): Parameters<SetExposedConfigFieldsToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphOperationToolArgument::SetExposedConfigFields {
+            stream,
+            node,
+            exposed_config_fields,
+        };
+        self.one_graph_transaction(
+            "set_exposed_config_fields",
+            vec![operation],
+            mode,
+            author,
+            &peer,
+        )
+        .await
     }
 
     #[tool(
@@ -1272,6 +1336,7 @@ fn graph_operation_for_the_request(
                             node_type: placed.generator,
                             config: placed.config,
                             pins: Map::new(),
+                            exposed_config_fields: Vec::new(),
                             studio: Map::new(),
                             fragment: Some(Box::new(fragment)),
                         },
@@ -1320,6 +1385,7 @@ fn graph_operation_for_the_request(
             name,
             config,
             pins,
+            exposed_config_fields,
             studio,
             label,
             ..
@@ -1333,6 +1399,7 @@ fn graph_operation_for_the_request(
                     node_type,
                     config: Value::Object(config.unwrap_or_default()),
                     pins: pins.unwrap_or_default(),
+                    exposed_config_fields: exposed_config_fields.unwrap_or_default(),
                     studio: studio.unwrap_or_default(),
                     fragment: None,
                 },
@@ -1389,6 +1456,18 @@ fn graph_operation_for_the_request(
                 node,
                 from: staged_graph.node(node)?.studio,
                 to: studio,
+            })
+        }
+        StreamGraphOperationToolArgument::SetExposedConfigFields {
+            node,
+            exposed_config_fields,
+            ..
+        } => {
+            let node = node_named(&node, node_by_label)?;
+            Ok(StreamGraphOperation::SetExposedConfigFields {
+                node,
+                from: staged_graph.node(node)?.exposed_config_fields,
+                to: exposed_config_fields,
             })
         }
     }

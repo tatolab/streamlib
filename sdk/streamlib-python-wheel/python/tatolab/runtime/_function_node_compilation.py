@@ -39,6 +39,7 @@ from tatolab.runtime._engine import (
     MODULE_HOST_TABLE_ABI_MAJOR,
     MODULE_HOST_TABLE_ABI_MINOR,
     feed_an_input_port_from_a_function_node_island,
+    stop_feeding_an_input_port_from_a_function_node_island,
 )
 
 # The scalar value types an evaluate entry carries, each as an f64.
@@ -99,12 +100,185 @@ FunctionNodeReadyToEvaluate = typing.Union[
 ]
 
 
-@dataclasses.dataclass(frozen=True)
 class FunctionNodeIslandsFedToTheirPorts:
-    """What feeding a helper's islands prepared, kept for as long as the ports are read, and how each node runs."""
+    """The islands a helper's input ports are fed from, kept for as long as the ports are read, and how each node runs.
 
-    function_node_types_kept_alive: "list[FunctionNodeReadyToEvaluate]"
-    ran_compiled_by_node_id: "dict[str, bool]"
+    The native evaluator calls into what each feed prepared, so it is kept
+    here. A port fed again is fed the new island in place of the old one: a
+    node run as Python keeps its body object, so its state carries on, and the
+    native evaluator carries on each other stateful node's state.
+    """
+
+    def __init__(
+        self, link_data_access: NodeLinkDataAccess, load_function_node: Callable[[str], Any]
+    ) -> None:
+        self._link_data_access = link_data_access
+        self._load_function_node = load_function_node
+        self._prepared_by_import_path: "dict[str, FunctionNodeReadyToEvaluate]" = {}
+        self._island_by_input_port: "dict[str, dict[str, Any]]" = {}
+        self._body_run_as_python_by_input_port_and_node_id: (
+            "dict[tuple[str, str], FunctionNodeBodyRunAsPython]"
+        ) = {}
+
+    @property
+    def function_node_types_kept_alive(self) -> "list[FunctionNodeReadyToEvaluate]":
+        """Every function node type a feed prepared."""
+        return list(self._prepared_by_import_path.values())
+
+    @property
+    def ran_compiled_by_node_id(self) -> "dict[str, bool]":
+        """Whether each node of a fed island runs compiled (`True`) or as Python (`False`)."""
+        return {
+            island_node["node"]: isinstance(
+                self._prepared_by_import_path[island_node["import_path"]],
+                FunctionNodeCompiledToItsEvaluateEntry,
+            )
+            for island in self._island_by_input_port.values()
+            for island_node in island["nodes"]
+        }
+
+    def feed_an_input_port_from_its_island(self, island: "dict[str, Any]") -> None:
+        """Prepare every node of `island` and feed it to its input port, in place of any island feeding it.
+
+        An island with a node input that no value reaches holds instead: its
+        port is fed nothing until a later feed gives each input a value.
+        """
+        input_port = island["input_port"]
+        self._refuse_a_stateful_node_another_port_holds(island)
+        prepared_by_node_id = {
+            island_node["node"]: self._prepared(island_node["import_path"])
+            for island_node in island["nodes"]
+        }
+        inputs_waiting_for_a_value = _the_island_node_inputs_no_value_reaches(
+            island["nodes"], prepared_by_node_id
+        )
+        if inputs_waiting_for_a_value:
+            self.stop_feeding_an_input_port(input_port)
+            log.info(
+                "the island feeding this input port holds until each of its function node "
+                "inputs has a value",
+                input_port=input_port,
+                inputs_waiting_for_a_value=inputs_waiting_for_a_value,
+            )
+            return
+        node_index_by_node_id = {
+            island_node["node"]: node_index for node_index, island_node in enumerate(island["nodes"])
+        }
+        output_ports_by_node_id = {
+            node_id: prepared.output_ports for node_id, prepared in prepared_by_node_id.items()
+        }
+        function_nodes_handed_over: "list[Any]" = []
+        bodies_run_as_python: "dict[tuple[str, str], FunctionNodeBodyRunAsPython]" = {}
+        for island_node in island["nodes"]:
+            node_id = island_node["node"]
+            prepared = prepared_by_node_id[node_id]
+            linked_exposed_config_fields = _the_exposed_config_fields_a_link_drives(island_node)
+            called_through, config_values, config_value_indices = (
+                self._how_one_function_node_is_called(
+                    prepared,
+                    input_port,
+                    node_id,
+                    island_node.get("config"),
+                    linked_exposed_config_fields,
+                )
+            )
+            if isinstance(called_through, FunctionNodeBodyRunAsPython):
+                bodies_run_as_python[(input_port, node_id)] = called_through
+            function_nodes_handed_over.append(
+                (
+                    node_id,
+                    island_node["breadcrumb_number"],
+                    called_through,
+                    _where_each_input_takes_its_value(
+                        prepared,
+                        node_id,
+                        island_node["links_into"],
+                        island_node.get("pins") or {},
+                        node_index_by_node_id,
+                        output_ports_by_node_id,
+                    )
+                    + _where_each_linked_exposed_config_field_takes_its_value(
+                        island_node["links_into"],
+                        linked_exposed_config_fields,
+                        node_index_by_node_id,
+                        output_ports_by_node_id,
+                    ),
+                    config_values,
+                    list(prepared.initial_state_values),
+                    len(prepared.output_ports),
+                    config_value_indices,
+                )
+            )
+        island_output = island["output"]
+        feed_an_input_port_from_a_function_node_island(
+            link_data_access=self._link_data_access,
+            input_port=input_port,
+            function_nodes=function_nodes_handed_over,
+            island_output=(
+                node_index_by_node_id[island_output["node"]],
+                _output_index(output_ports_by_node_id, island_output["node"], island_output["port"]),
+            ),
+        )
+        self._forget_the_bodies_run_as_python_for(input_port)
+        self._body_run_as_python_by_input_port_and_node_id.update(bodies_run_as_python)
+        self._island_by_input_port[input_port] = island
+
+    def stop_feeding_an_input_port(self, input_port: str) -> bool:
+        """Stop feeding `input_port` from its island; whether an island fed it."""
+        self._island_by_input_port.pop(input_port, None)
+        self._forget_the_bodies_run_as_python_for(input_port)
+        return stop_feeding_an_input_port_from_a_function_node_island(
+            link_data_access=self._link_data_access, input_port=input_port
+        )
+
+    def _prepared(self, import_path: str) -> FunctionNodeReadyToEvaluate:
+        if import_path not in self._prepared_by_import_path:
+            self._prepared_by_import_path[import_path] = prepare_function_node_to_evaluate(
+                self._load_function_node(import_path), import_path
+            )
+        return self._prepared_by_import_path[import_path]
+
+    def _how_one_function_node_is_called(
+        self,
+        prepared: FunctionNodeReadyToEvaluate,
+        input_port: str,
+        node_id: str,
+        config: Any,
+        linked_exposed_config_fields: "tuple[str, ...]",
+    ) -> "tuple[Any, list[float], list[int]]":
+        body_run_as_python = self._body_run_as_python_by_input_port_and_node_id.get(
+            (input_port, node_id)
+        )
+        if body_run_as_python is not None and body_run_as_python.runs(prepared):
+            body_run_as_python.config_fields_set_by_the_inputs_past_its_own = (
+                linked_exposed_config_fields
+            )
+            return body_run_as_python, [], []
+        return how_one_function_node_is_called(
+            prepared, node_id, config, linked_exposed_config_fields
+        )
+
+    def _refuse_a_stateful_node_another_port_holds(self, island: "dict[str, Any]") -> None:
+        input_port_of_the_island_holding_each_stateful_node = {
+            island_node["node"]: held_input_port
+            for held_input_port, held_island in self._island_by_input_port.items()
+            if held_input_port != island["input_port"]
+            for island_node in held_island["nodes"]
+            if self._prepared(island_node["import_path"]).is_stateful
+        }
+        for island_node in island["nodes"]:
+            if self._prepared(island_node["import_path"]).is_stateful:
+                _refuse_a_stateful_node_two_islands_hold(
+                    island_node["node"],
+                    island["input_port"],
+                    input_port_of_the_island_holding_each_stateful_node,
+                )
+
+    def _forget_the_bodies_run_as_python_for(self, input_port: str) -> None:
+        for input_port_and_node_id in [
+            key for key in self._body_run_as_python_by_input_port_and_node_id if key[0] == input_port
+        ]:
+            del self._body_run_as_python_by_input_port_and_node_id[input_port_and_node_id]
 
 
 def feed_each_input_port_from_its_function_node_island(
@@ -115,84 +289,82 @@ def feed_each_input_port_from_its_function_node_island(
     """Prepare every function node the setup command's `islands` carry and feed each to its port.
 
     A node is compiled when its body compiles, and run as Python otherwise.
-    The caller keeps what was prepared for as long as the ports are read: the
-    native evaluator calls into it.
     """
-    prepared_by_import_path: "dict[str, FunctionNodeReadyToEvaluate]" = {}
-    input_port_of_the_island_holding_each_stateful_node: "dict[str, str]" = {}
-    ran_compiled_by_node_id: "dict[str, bool]" = {}
+    fed = FunctionNodeIslandsFedToTheirPorts(link_data_access, load_function_node)
     for island in islands:
-        function_nodes_handed_over: "list[Any]" = []
-        node_index_by_node_id: "dict[str, int]" = {}
-        output_ports_by_node_id: "dict[str, tuple[str, ...]]" = {}
-        for island_node in island["nodes"]:
-            node_id = island_node["node"]
-            import_path = island_node["import_path"]
-            if import_path not in prepared_by_import_path:
-                prepared_by_import_path[import_path] = prepare_function_node_to_evaluate(
-                    load_function_node(import_path), import_path
-                )
-            prepared = prepared_by_import_path[import_path]
-            if prepared.is_stateful:
-                _refuse_a_stateful_node_two_islands_hold(
-                    node_id,
-                    island["input_port"],
-                    input_port_of_the_island_holding_each_stateful_node,
-                )
-            called_through, config_values = how_one_function_node_is_called(
-                prepared, node_id, island_node.get("config")
-            )
-            function_nodes_handed_over.append(
-                (
-                    node_id,
-                    island_node["breadcrumb_number"],
-                    called_through,
-                    _where_each_input_takes_its_value(
-                        prepared,
-                        node_id,
-                        island_node["links_into"],
-                        node_index_by_node_id,
-                        output_ports_by_node_id,
-                    ),
-                    config_values,
-                    list(prepared.initial_state_values),
-                    len(prepared.output_ports),
-                )
-            )
-            ran_compiled_by_node_id[node_id] = isinstance(
-                prepared, FunctionNodeCompiledToItsEvaluateEntry
-            )
-            node_index_by_node_id[node_id] = len(node_index_by_node_id)
-            output_ports_by_node_id[node_id] = prepared.output_ports
-        island_output = island["output"]
-        feed_an_input_port_from_a_function_node_island(
-            link_data_access=link_data_access,
-            input_port=island["input_port"],
-            function_nodes=function_nodes_handed_over,
-            island_output=(
-                node_index_by_node_id[island_output["node"]],
-                _output_index(output_ports_by_node_id, island_output["node"], island_output["port"]),
-            ),
-        )
-    return FunctionNodeIslandsFedToTheirPorts(
-        function_node_types_kept_alive=list(prepared_by_import_path.values()),
-        ran_compiled_by_node_id=ran_compiled_by_node_id,
-    )
+        fed.feed_an_input_port_from_its_island(island)
+    return fed
 
 
 def how_one_function_node_is_called(
-    prepared: FunctionNodeReadyToEvaluate, node_id: str, config: Any
-) -> "tuple[Any, list[float]]":
-    """What the native evaluator calls `node_id` through, and the config values it hands the call.
+    prepared: FunctionNodeReadyToEvaluate,
+    node_id: str,
+    config: Any,
+    linked_exposed_config_fields: "tuple[str, ...]" = (),
+) -> "tuple[Any, list[float], list[int]]":
+    """What the native evaluator calls `node_id` through, the config values it hands the call,
+    and the index among them each input past the node's own sets.
 
     A compiled node is called through its entry's address with its config as
     f64s; a node run as Python through an object holding its config and state.
+    Each of `linked_exposed_config_fields` is an input past the node's own, in
+    that order, setting the config field of its name at each evaluation.
     """
     if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
-        return prepared.evaluate_entry_address, config_values_of_one_function_node(
-            prepared, node_id, config
+        return (
+            prepared.evaluate_entry_address,
+            config_values_of_one_function_node(prepared, node_id, config),
+            [
+                _the_config_value_index_of(prepared, node_id, field)
+                for field in linked_exposed_config_fields
+            ],
         )
-    return FunctionNodeBodyRunAsPython(prepared, node_id, config), []
+    body_run_as_python = FunctionNodeBodyRunAsPython(prepared, node_id, config)
+    body_run_as_python.config_fields_set_by_the_inputs_past_its_own = linked_exposed_config_fields
+    return body_run_as_python, [], []
+
+
+def _the_config_value_index_of(
+    compiled: FunctionNodeCompiledToItsEvaluateEntry, node_id: str, field: str
+) -> int:
+    if field not in compiled.config_fields:
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}` exposes `{field}` as an input, which its config class "
+            f"does not declare; its fields are {', '.join(compiled.config_fields) or 'none'}"
+        )
+    return compiled.config_fields.index(field)
+
+
+def _the_exposed_config_fields_a_link_drives(island_node: "dict[str, Any]") -> "tuple[str, ...]":
+    linked_input_ports = {link["port"] for link in island_node["links_into"]}
+    return tuple(
+        field
+        for field in island_node.get("exposed_config_fields") or ()
+        if field in linked_input_ports
+    )
+
+
+def _where_each_linked_exposed_config_field_takes_its_value(
+    links_into: "list[dict[str, Any]]",
+    linked_exposed_config_fields: "tuple[str, ...]",
+    node_index_by_node_id: "dict[str, int]",
+    output_ports_by_node_id: "dict[str, tuple[str, ...]]",
+) -> "list[tuple[Optional[tuple[int, int]], float]]":
+    linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
+    return [
+        (
+            (
+                node_index_by_node_id[linked_from_by_input_port[field]["node"]],
+                _output_index(
+                    output_ports_by_node_id,
+                    linked_from_by_input_port[field]["node"],
+                    linked_from_by_input_port[field]["port"],
+                ),
+            ),
+            0.0,
+        )
+        for field in linked_exposed_config_fields
+    ]
 
 
 def prepare_function_node_to_evaluate(function_node: Any, import_path: str) -> FunctionNodeReadyToEvaluate:
@@ -277,6 +449,7 @@ class FunctionNodeBodyRunAsPython:
         self._run_as_python = run_as_python
         self._node_id = node_id
         self._config = _config_record_of_one_function_node(run_as_python, node_id, config)
+        self.config_fields_set_by_the_inputs_past_its_own: "tuple[str, ...]" = ()
         state_record_class = run_as_python.state_record_class
         self._state = state_record_class() if state_record_class is not None else None
         signature = run_as_python.function_signature
@@ -290,6 +463,14 @@ class FunctionNodeBodyRunAsPython:
             if parameter.kind is inspect.Parameter.POSITIONAL_ONLY
         ]
 
+    def take_the_config(self, config: Any) -> None:
+        """Call the body with `config` from the next evaluation on."""
+        self._config = _config_record_of_one_function_node(self._run_as_python, self._node_id, config)
+
+    def runs(self, run_as_python: FunctionNodeReadyToEvaluate) -> bool:
+        """Whether this is the body of `run_as_python`, so an island fed again can call it with its state."""
+        return self._run_as_python is run_as_python
+
     def evaluate(self, input_values: "list[Any]", now_ns: int) -> "list[Any]":
         """Call the body with `input_values` in port order at `now_ns`, answering its outputs in port order.
 
@@ -297,6 +478,9 @@ class FunctionNodeBodyRunAsPython:
         The new state is kept only once every output is answered.
         """
         signature = self._run_as_python.function_signature
+        self._take_the_config_fields_its_inputs_past_its_own_set(
+            input_values[len(self._input_parameters) :]
+        )
         arguments: "dict[str, Any]" = {}
         for parameter_name, input_value in zip(self._input_parameters, input_values):
             arguments[parameter_name] = self._the_input_the_body_takes(
@@ -328,6 +512,15 @@ class FunctionNodeBodyRunAsPython:
         self._the_state_values_of(new_state)
         self._state = new_state
         return answered
+
+    def _take_the_config_fields_its_inputs_past_its_own_set(self, input_values: "list[Any]") -> None:
+        changed_fields: "dict[str, Any]" = {}
+        for field, input_value in zip(self.config_fields_set_by_the_inputs_past_its_own, input_values):
+            value = the_value_a_config_field_takes(getattr(self._config, field), float(input_value))
+            if value != getattr(self._config, field):
+                changed_fields[field] = value
+        if changed_fields:
+            self._config = dataclasses.replace(self._config, **changed_fields)
 
     def state_values(self) -> "list[float]":
         """The node's state as the f64s its stream carries, one per field of a state record of numbers and bools."""
@@ -374,6 +567,15 @@ class FunctionNodeBodyRunAsPython:
                 f"{type(output_value).__name__}"
             )
         return _exactly_as_f64(output_value, what_it_is)
+
+
+def the_value_a_config_field_takes(value_it_holds: Any, input_value: float) -> Any:
+    """`input_value` as the type of the value the config field holds: a bool, an int when it is whole, else a float."""
+    if isinstance(value_it_holds, bool):
+        return input_value != 0.0
+    if isinstance(value_it_holds, int) and input_value.is_integer():
+        return int(input_value)
+    return input_value
 
 
 def _config_record_of_one_function_node(
@@ -470,13 +672,36 @@ def _refuse_a_stateful_node_two_islands_hold(
         )
 
 
+def _the_island_node_inputs_no_value_reaches(
+    island_nodes: "list[dict[str, Any]]",
+    prepared_by_node_id: "dict[str, FunctionNodeReadyToEvaluate]",
+) -> "list[str]":
+    """Each `node.input` of `island_nodes` linked to nothing, with no pin value and declaring no default."""
+    inputs_no_value_reaches: "list[str]" = []
+    for island_node in island_nodes:
+        node_id = island_node["node"]
+        prepared = prepared_by_node_id[node_id]
+        linked_input_ports = {link["port"] for link in island_node["links_into"]}
+        pinned_input_ports = set(island_node.get("pins") or {})
+        inputs_no_value_reaches.extend(
+            f"{island_node.get('name') or node_id}.{input_port}"
+            for input_port in prepared.input_ports
+            if input_port not in linked_input_ports
+            and input_port not in pinned_input_ports
+            and input_port not in prepared.pin_defaults_by_input_port
+        )
+    return inputs_no_value_reaches
+
+
 def _where_each_input_takes_its_value(
     prepared: FunctionNodeReadyToEvaluate,
     node_id: str,
     links_into: "list[dict[str, Any]]",
+    pin_values_by_input_port: "dict[str, Any]",
     node_index_by_node_id: "dict[str, int]",
     output_ports_by_node_id: "dict[str, tuple[str, ...]]",
 ) -> "list[tuple[Optional[tuple[int, int]], float]]":
+    """Each input's earlier node output, or else its pin value, or else its declared default."""
     linked_from_by_input_port = {link["port"]: link["from"] for link in links_into}
     where_each_input_takes_its_value: "list[tuple[Optional[tuple[int, int]], float]]" = []
     for input_port in prepared.input_ports:
@@ -492,15 +717,13 @@ def _where_each_input_takes_its_value(
                     0.0,
                 )
             )
-        elif input_port in prepared.pin_defaults_by_input_port:
+        elif input_port in pin_values_by_input_port:
             where_each_input_takes_its_value.append(
-                (None, prepared.pin_defaults_by_input_port[input_port])
+                (None, _a_pin_value_as_f64(node_id, input_port, pin_values_by_input_port[input_port]))
             )
         else:
-            raise FunctionNodeDoesNotCompile(
-                f"function node `{node_id}`'s input `{input_port}` is linked to nothing and "
-                f"declares no default, so it has no value to evaluate with. To fix: link it, or "
-                f"give its parameter a default."
+            where_each_input_takes_its_value.append(
+                (None, prepared.pin_defaults_by_input_port[input_port])
             )
     return where_each_input_takes_its_value
 
@@ -904,6 +1127,16 @@ def _evaluate_entry_wrapper_source(
         lines.append(f"    outputs[0] = {output_value}")
     lines.append("    return 0")
     return "\n".join(lines) + "\n", wrapper_globals
+
+
+def _a_pin_value_as_f64(node_id: str, input_port: str, pin_value: Any) -> float:
+    what_it_is = f"function node `{node_id}`'s pin on input `{input_port}`"
+    if not isinstance(pin_value, (bool, int, float)):
+        raise FunctionNodeDoesNotCompile(
+            f"{what_it_is} is {pin_value!r}, and an island input takes a number or a bool. "
+            f"To fix: set the pin to a number, or link the input."
+        )
+    return _exactly_as_f64(pin_value, what_it_is)
 
 
 def _exactly_as_f64(value: Any, what_it_is: str) -> float:

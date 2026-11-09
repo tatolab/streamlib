@@ -49,6 +49,7 @@ CONTROL_TOOL_NAMES = {
     "rename_node",
     "set_studio_fields",
     "import_graph_generator",
+    "set_exposed_config_fields",
     "transact",
     "undo",
     "redo",

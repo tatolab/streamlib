@@ -112,8 +112,9 @@ The order is: the families, then variables, then the gateway and track nodes.
   in `tatolab-module-sdk` exports it directly, for code outside Numba's subset that still needs
   native speed. A Python body that does not compile runs as Python (§`@node.function` in Python).
 - **Compilation** happens at load and is cached by a hash of the source, the signature and the
-  Numba version, so a reload or a live edit of another node pays nothing; a module ships its
-  function nodes pre-compiled in its wheel. `graph` shows whether each function node ran compiled.
+  Numba version, so a reload or a live edit of another node pays nothing; a module's function
+  nodes compile on first use and are cached the same way (DECIDED 8). `graph` shows whether each
+  function node ran compiled.
 - **Compiled state** is a typed record Numba can lower (`State[T]` with `T` a record of numbers
   and arrays); a state outside that keeps the node in Python.
 - **Measured** (2026-11-06, one scalar ease function and a 10M-element loop, C `-O2` as the
@@ -124,8 +125,8 @@ The order is: the families, then variables, then the gateway and track nodes.
 
 ### `tatolab-ops`
 
-- A first-party module of `@node.function` functions, bundled with the runtime, pre-compiled in its
-  wheel, and built exactly the way a third party builds one; nothing in the engine knows their
+- A first-party module of `@node.function` functions, bundled with the runtime, compiled on first
+  use (DECIDED 8), and built exactly the way a third party builds one; nothing in the engine knows their
   names (`tatolab.ops:Lerp`). It carries:
   - Math: `Add`, `Subtract`, `Multiply`, `Divide`, `Power`, `Minimum`, `Maximum`, `Absolute`,
     `Modulo`.
@@ -178,8 +179,8 @@ The order is: the families, then variables, then the gateway and track nodes.
   `Random` agree. See DECIDED 2.
 - **Time.** `now` is the reader's `ctx.time` at the read, in integer nanoseconds on the
   stream's monotonic clock. Reproducible in stepped mode; read-time in real-time mode.
-- **Cycles.** The island pass refuses a cycle unless it passes through a delay node (`Lag`,
-  `SampleAndHold`), which reads the last evaluation's state.
+- **Cycles.** The island pass refuses a cycle unless it closes through a `Feedback` node, which
+  hands out its input as it was at the last evaluation. See DECIDED 9.
 - **Literal pins.** An unlinked input takes the value set on its pin, else its default
   (§Inputs and config).
 - **A control value on a wire.** An island edge carrying one value is Channels with an
@@ -408,6 +409,26 @@ All seven were settled by the owner on 2026-11-06 and 2026-11-07.
 - **DECIDED 7 — Inputs and config (owner, 2026-11-06).** A value that changes freely is an input
   with a pin value; config is for what needs a rebuild, and any config field may be exposed as
   a pin (§Inputs and config).
+- **DECIDED 8 — How a module's function nodes reach native code (owner, 2026-11-08).** They
+  compile on first use and are cached, `tatolab-ops` included, so it stays one pure-Python
+  wheel built exactly as a third party builds one; the cost is about 0.1 to 0.5 s per node on
+  a stream's first load. Rejected: per-platform wheels pre-compiled with Numba's `pycc`, which
+  Numba has marked for deprecation and no third party could use; and rewriting `tatolab-ops` in
+  Rust, which stops it showing how a user writes a function node.
+- **DECIDED 9 — How a loop closes (owner, 2026-11-08).** One built-in node, `Feedback`, closes a
+  loop of function nodes: it hands out its input as it was at the last evaluation, starting at 0,
+  and the island evaluates it before what it reads. Any other cycle is refused by name. It is
+  `tatolab.ops:Feedback`, the one `tatolab-ops` name the engine knows. Rejected: a
+  `delay=True` flag on `@node.function`, which makes every author and agent learn a new kind of
+  node; letting any stateful node close a loop, which changes what `Lfo` or a counter means
+  inside one; and the engine inserting the delay itself. TouchDesigner (Feedback CHOP/TOP),
+  Houdini (Solver SOP), Pure Data (`delwrite~`/`delread~`) and Simulink (Unit Delay) each close a
+  loop through one dedicated node.
+- **DECIDED 10 — How a saved graph records an exposed config field (owner, 2026-11-08).** A list
+  on the node, `exposed_config_fields`, beside `config` and `pins`: each field is an input of its
+  name from the moment it is listed, so the editor draws the pin before anything is linked. The
+  list is set through the graph operation `set_exposed_config_fields`. Rejected: exposing a field
+  by linking to it, with no new key, which leaves the editor nothing to draw while it is unlinked.
 
 Assumed unless overruled:
 - A function's single output is named `result`; plain parameters are pins by default; a node's
@@ -430,8 +451,9 @@ Assumed unless overruled:
 
 - `Lfo → Remap → <Python class>` runs with exactly one child process, the class's, beside the
   class case in `tests/stream-on-runtime/test_helper_placement.py`.
-- `connect` and `disconnect` re-island live, and a cycle without a delay node is refused by name.
-- `Lfo → Remap` from `tatolab-ops` runs compiled, from the wheel's pre-compiled code, and is
+- `connect` and `disconnect` re-island live, and a cycle that does not close through `Feedback` is
+  refused by name.
+- `Lfo → Remap` from `tatolab-ops` runs compiled, compiled on first use and cached, and is
   read by a module's native half with no GIL.
 - A user's numeric `@node.function` compiles on load, is cached, and matches its Python output; a
   non-numeric one runs as Python, and `graph` shows which.
@@ -456,7 +478,7 @@ Assumed unless overruled:
    1. `kind` in the descriptor, catalog and `graph`; bare `@node` retired for `@node.process`
       across the engine tree; the one run loop; the function-node contract;
       `@node.function` with `Time` and `State` compiled by Numba, with its cache; `tatolab-ops` with
-      `Lfo`, `Remap`, `Clamp`, pre-compiled in its wheel.
+      `Lfo`, `Remap`, `Clamp`, compiled on first use.
    2. The crash breadcrumb, the stall watchdog and promotion, for compiled and Rust function
       nodes, before phase 1 is released.
    3. The island pass on live edits, with cycle refusal.

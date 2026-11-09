@@ -46,6 +46,49 @@ pub trait FunctionNodeIslandEvaluatedAtEachRead: Send + Sync {
     /// read holding the Python interpreter's lock can call; `None` when every
     /// node runs as native code.
     fn the_first_function_node_it_runs_as_python(&self) -> Option<&str>;
+
+    /// The state each stateful node of the island last returned, by its
+    /// breadcrumb number, which an island replacing this one resumes from.
+    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)>;
+}
+
+/// The pin value an input port reads while nothing is linked into it: the
+/// island of no function nodes, stamped with the reader's time at each read.
+pub(crate) struct PinValueReadByAnUnlinkedInputPort {
+    pin_value: f64,
+    stream_clock_now_ns: Arc<dyn Fn() -> i64 + Send + Sync>,
+}
+
+impl PinValueReadByAnUnlinkedInputPort {
+    /// `pin_value`, read at the time `stream_clock_now_ns` gives.
+    pub(crate) fn read_at_the_time_of(
+        pin_value: f64,
+        stream_clock_now_ns: Arc<dyn Fn() -> i64 + Send + Sync>,
+    ) -> Self {
+        Self {
+            pin_value,
+            stream_clock_now_ns,
+        }
+    }
+}
+
+impl FunctionNodeIslandEvaluatedAtEachRead for PinValueReadByAnUnlinkedInputPort {
+    fn evaluate_the_island_output_for_this_read(
+        &self,
+    ) -> Result<FunctionNodeIslandOutputForOneRead> {
+        Ok(FunctionNodeIslandOutputForOneRead {
+            value: FunctionNodeIslandOutputValue::ControlValue(self.pin_value),
+            evaluated_at_ns: (self.stream_clock_now_ns)(),
+        })
+    }
+
+    fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
+        None
+    }
+
+    fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
+        Vec::new()
+    }
 }
 
 /// One input port an island feeds, and how many reads it has answered.
@@ -62,9 +105,35 @@ impl InputPortFedByAFunctionNodeIsland {
         }
     }
 
+    /// The port fed by `island` in place of the island that fed it before,
+    /// counting reads on from where that one stopped, so the reader's sample
+    /// positions never step back.
+    pub(crate) fn evaluated_by_in_place_of(
+        island: Arc<dyn FunctionNodeIslandEvaluatedAtEachRead>,
+        island_port_it_replaces: &Self,
+    ) -> Self {
+        Self {
+            island,
+            reads_answered: AtomicU64::new(
+                island_port_it_replaces
+                    .reads_answered
+                    .load(Ordering::Relaxed),
+            ),
+        }
+    }
+
     /// The first function node the island runs as Python, if any.
     pub(crate) fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
         self.island.the_first_function_node_it_runs_as_python()
+    }
+
+    /// The state each stateful node of the island last returned, by its
+    /// breadcrumb number.
+    pub(crate) fn the_state_each_stateful_function_node_last_returned(
+        &self,
+    ) -> Vec<(u32, Vec<f64>)> {
+        self.island
+            .the_state_each_stateful_function_node_last_returned()
     }
 
     /// The island's output for this read. A control value is carried as a
@@ -117,6 +186,10 @@ mod tests {
 
         fn the_first_function_node_it_runs_as_python(&self) -> Option<&str> {
             None
+        }
+
+        fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
+            Vec::new()
         }
     }
 

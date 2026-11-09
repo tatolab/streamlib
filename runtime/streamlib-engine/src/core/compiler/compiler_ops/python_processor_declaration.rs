@@ -22,8 +22,10 @@ use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
 const DESCRIBED_DESCRIPTION_KEY: &str = "description";
+const DESCRIBED_CATEGORY_KEY: &str = "category";
 const DESCRIBED_KIND_KEY: &str = "kind";
 const DESCRIBED_LANGUAGE_KEY: &str = "language";
+const DESCRIBED_RUNS_AS_PYTHON_KEY: &str = "runs_as_python";
 const DESCRIBED_EXECUTION_KEY: &str = "execution";
 const DESCRIBED_SCHEDULING_PRIORITY_KEY: &str = "scheduling_priority";
 const DESCRIBED_PACED_BY_REAL_TIME_KEY: &str = "paced_by_real_time";
@@ -79,6 +81,9 @@ impl PythonProcessorDeclaration {
         .with_runtime(ProcessorRuntime::Python)
         .with_entrypoint(requested_import_path.as_str())
         .with_config_schema(read_config_schema_document(described_node_type)?);
+        if let Some(category) = read_category(described_node_type)? {
+            descriptor = descriptor.with_category(category);
+        }
         let how_a_python_node_of_the_type_runs =
             match read_described_node_kind(described_node_type)? {
                 NodeKind::Process => {
@@ -96,6 +101,11 @@ impl PythonProcessorDeclaration {
                     descriptor.node_kind = function_kind;
                     descriptor.function_node_state_fields =
                         read_function_node_state_fields(described_node_type)?;
+                    descriptor.function_node_runs_as_python =
+                        read_whether_a_function_node_runs_as_python(
+                            described_node_type,
+                            function_kind,
+                        )?;
                     HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
                 }
                 NodeKind::Shader => {
@@ -114,6 +124,41 @@ impl PythonProcessorDeclaration {
             how_a_python_node_of_the_type_runs,
         })
     }
+}
+
+/// The palette category a described node type declares, refused when it is
+/// not a non-blank string; none when it declares none.
+fn read_category(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<Option<String>, String> {
+    match described_node_type.get(DESCRIBED_CATEGORY_KEY) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(category)) if !category.trim().is_empty() => {
+            Ok(Some(category.clone()))
+        }
+        Some(other) => Err(format!(
+            "{DESCRIBED_CATEGORY_KEY} must be a non-blank string, got {}",
+            json_kind_name(other)
+        )),
+    }
+}
+
+/// Whether a described Python function node's body does not compile, as the
+/// describe found by compiling it; a Rust function node is native code.
+fn read_whether_a_function_node_runs_as_python(
+    described_node_type: &serde_json::Value,
+    function_kind: NodeKind,
+) -> std::result::Result<bool, String> {
+    if function_kind
+        != (NodeKind::Function {
+            language: FunctionNodeLanguage::Python,
+        })
+    {
+        return Ok(false);
+    }
+    described_field(described_node_type, DESCRIBED_RUNS_AS_PYTHON_KEY)?
+        .as_bool()
+        .ok_or_else(|| format!("{DESCRIBED_RUNS_AS_PYTHON_KEY} must be a bool"))
 }
 
 /// The fields of a described function node's state record, refused past what
@@ -347,9 +392,48 @@ fn read_port_descriptors(
             )?;
             port = port.with_audio_window_contract(contract);
         }
+        if let Some(pin_default) = declaration.get("pin_default") {
+            let pin_default = read_pin_default(pin_default, &port, direction)?;
+            port = port.with_pin_default(pin_default);
+        }
         ports.push(port);
     }
     Ok(ports)
+}
+
+/// Read the value an input port reads while nothing is linked into it: a
+/// number or a bool on a Channels input, or `null` on an optional function
+/// node input of any family.
+fn read_pin_default(
+    pin_default: &serde_json::Value,
+    port: &PortDescriptor,
+    direction: PortDirection,
+) -> std::result::Result<serde_json::Value, String> {
+    if matches!(direction, PortDirection::Output) {
+        return Err(format!(
+            "output port {:?} declares a pin default, and only an input reads one",
+            port.name
+        ));
+    }
+    if !pin_default.is_null()
+        && port.family.family != crate::core::descriptors::PortFamily::Channels
+    {
+        return Err(format!(
+            "input port {:?} of family {} declares a pin default, and only a Channels input \
+             carries a control value",
+            port.name, port.family.family
+        ));
+    }
+    match pin_default {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Ok(pin_default.clone())
+        }
+        other => Err(format!(
+            "input port {:?}: pin_default must be a number or a bool, got {}",
+            port.name,
+            json_kind_name(other)
+        )),
+    }
 }
 
 /// Read one `family` declaration off a described port, refusing a key its
@@ -699,6 +783,7 @@ mod tests {
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("python");
         described["state_fields"] = serde_json::json!([]);
+        described["runs_as_python"] = serde_json::json!(false);
         for process_only_field in ["execution", "scheduling_priority", "paced_by_real_time"] {
             described
                 .as_object_mut()
@@ -719,12 +804,35 @@ mod tests {
     }
 
     #[test]
+    fn a_described_python_function_node_says_whether_its_body_runs_as_python() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("python");
+        described["state_fields"] = serde_json::json!([]);
+        described["runs_as_python"] = serde_json::json!(true);
+        assert!(
+            read(&described)
+                .expect("reads")
+                .descriptor
+                .function_node_runs_as_python
+        );
+        described["runs_as_python"] = serde_json::json!("sometimes");
+        assert!(refusal_of(&described).contains("runs_as_python"));
+        described
+            .as_object_mut()
+            .expect("a described node type is an object")
+            .remove("runs_as_python");
+        assert!(refusal_of(&described).contains("runs_as_python"));
+    }
+
+    #[test]
     fn a_described_function_nodes_state_fields_read_into_its_descriptor_up_to_what_an_entry_holds()
     {
         let mut described = described_node_type_with_input_ports(serde_json::json!([]));
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("python");
         described["state_fields"] = serde_json::json!(["phase", "cycles"]);
+        described["runs_as_python"] = serde_json::json!(false);
         assert_eq!(
             read(&described)
                 .expect("reads")
@@ -880,6 +988,68 @@ mod tests {
             refusal.contains("\"frames\"") && refusal.contains("borrow_quota"),
             "got {refusal}"
         );
+    }
+
+    #[test]
+    fn a_declared_pin_default_reaches_the_descriptor_and_one_off_a_channels_input_is_refused() {
+        let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
+            {"name": "level", "family": {"family": "channels"}, "description": "",
+             "delivery_profile": "newest", "pin_default": 0.5},
+            {"name": "maybe", "family": {"family": "records"}, "description": "",
+             "delivery_profile": "newest", "pin_default": null},
+        ])))
+        .unwrap_or_else(|refusal| panic!("a number and a null default read: {refusal}"));
+        assert_eq!(
+            declaration.descriptor.inputs[0].pin_default,
+            Some(serde_json::json!(0.5))
+        );
+        assert_eq!(
+            declaration.descriptor.inputs[1].pin_default,
+            Some(serde_json::Value::Null)
+        );
+
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "frames", "family": {"family": "records"}, "description": "",
+            "delivery_profile": "newest", "pin_default": 1,
+        }])));
+        assert!(
+            refusal.contains("\"frames\"") && refusal.contains("Channels"),
+            "got {refusal}"
+        );
+        let refusal = refusal_of(&described_node_type_with_input_ports(serde_json::json!([{
+            "name": "level", "family": {"family": "channels"}, "description": "",
+            "delivery_profile": "newest", "pin_default": "loud",
+        }])));
+        assert!(
+            refusal.contains("\"level\"") && refusal.contains("a number or a bool"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_declared_category_reaches_the_catalog_and_one_that_is_no_string_is_refused() {
+        let mut described_node_type = described_node_type_with_input_ports(serde_json::json!([]));
+        assert_eq!(
+            read(&described_node_type).unwrap().descriptor.category,
+            None
+        );
+
+        described_node_type["category"] = serde_json::json!("audio meters");
+        let descriptor = read(&described_node_type).unwrap().descriptor;
+        assert_eq!(descriptor.category.as_deref(), Some("audio meters"));
+        assert_eq!(
+            serde_json::to_value(crate::core::json_schema::ProcessorDescriptorOutput::from(
+                &descriptor
+            ))
+            .unwrap()["category"],
+            "audio meters"
+        );
+
+        for not_a_category in [serde_json::json!(7), serde_json::json!("  ")] {
+            described_node_type["category"] = not_a_category;
+            let refusal = refusal_of(&described_node_type);
+            assert!(refusal.contains("category"), "got {refusal}");
+        }
     }
 
     #[test]

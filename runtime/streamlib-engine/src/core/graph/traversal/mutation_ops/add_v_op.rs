@@ -11,7 +11,7 @@ use crate::core::graph::{
     EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessorFailureReasonComponent,
     ProcessorNode, ProcessorTraversalMut, ProcessorUniqueId, StateComponent, TraversalSourceMut,
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
-    config_node_reference_edges_of_one_node,
+    config_node_reference_edges_of_one_node, the_input_ports_of_the_exposed_config_fields,
 };
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 
@@ -58,7 +58,17 @@ impl<'a> TraversalSourceMut<'a> {
 
         // A missed node carries the requested path verbatim, so
         // `GET /api/graph` names exactly what the caller asked for.
-        let (inputs, outputs) = resolved_ports.unwrap_or_default();
+        let (mut inputs, outputs) = resolved_ports.unwrap_or_default();
+        if !registry_miss {
+            let declared_ports: Vec<_> = inputs.iter().chain(&outputs).cloned().collect();
+            inputs.extend(the_input_ports_of_the_exposed_config_fields(
+                &name,
+                &spec.name,
+                node_types,
+                &declared_ports,
+                &spec.exposed_config_fields,
+            )?);
+        }
 
         if let Some(node_uuid) = spec.node_uuid
             && let Some(holder) = self
@@ -84,6 +94,7 @@ impl<'a> TraversalSourceMut<'a> {
             node.node_uuid = node_uuid;
         }
         node.pins = spec.pins;
+        node.exposed_config_fields = spec.exposed_config_fields;
         node.studio = spec.studio;
 
         let node_idx = self.graph.add_node(node);

@@ -235,6 +235,7 @@ mod tests {
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
+            pin_default: None,
             family,
         }
     }

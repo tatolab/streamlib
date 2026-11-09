@@ -98,9 +98,6 @@ if [ "$PLATFORM" != Darwin ] && ! "$HERE/virtual_audio_device.sh" check >&2; the
 fi
 
 PROJECT_DIR="$OUTPUT_DIR/audio-loopback"
-write_a_one_stream_fixture_project "$PROJECT_DIR" "$HERE/audio_loopback_stream.py" \
-    known_signal_played_and_captured_back audio_loopback_fixture "$FIXTURE_VENV_DIRECTORY"
-STREAM_ID="$(stream_id_of_the_fixture_project_stream "$PROJECT_DIR" audio_loopback_fixture)"
 # The runtime's output — the engine's log mirror, the stream's records among
 # it — with `tatolab run`'s beside it.
 NODE_LOG="$OUTPUT_DIR/node.log"
@@ -214,38 +211,46 @@ if [ -n "$INJECT_BUG" ]; then
 fi
 
 CAPTURED_WAVEFORM="$OUTPUT_DIR/captured.wav"
-# A stream takes no argv, so the devices, the fault and where the capture goes
-# travel in the runtime's environment, which every processor interpreter
-# inherits.
+# A graph generator takes no argv, so the devices reach it in the environment
+# its graph is built in.
 if [ "$PLATFORM" = Darwin ]; then
+    LOOPBACK_SINK="$SPEAKER_DEVICE_ID"
+    LOOPBACK_CAPTURE_DEVICE_ID="$CAPTURE_DEVICE_ID"
     echo "starting the runtime ($LOOPBACK_PATH): speaker $SPEAKER_DEVICE_ID," \
         "microphone $CAPTURE_DEVICE_ID" >&2
-    STREAMLIB_AUDIO_SINK="$SPEAKER_DEVICE_ID" \
-        STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$CAPTURE_DEVICE_ID" \
-        STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
-        STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
-        start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"
 else
+    LOOPBACK_SINK="$SINK"
+    LOOPBACK_CAPTURE_DEVICE_ID=""
     echo "starting the runtime against $SINK" >&2
-    STREAMLIB_AUDIO_SINK="$SINK" \
-        STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
-        STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
-        start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"
 fi
+if ! STREAMLIB_AUDIO_SINK="$LOOPBACK_SINK" \
+    STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$LOOPBACK_CAPTURE_DEVICE_ID" \
+        write_a_one_stream_fixture_project "$PROJECT_DIR" "$HERE/audio_loopback_stream.py" \
+            known_signal_played_and_captured_back audio_loopback_fixture "$FIXTURE_VENV_DIRECTORY"; then
+    echo "ERROR: the loopback graph could not be built" >&2
+    exit 1
+fi
+# The fault and where the capture goes travel in the runtime's environment,
+# which every processor interpreter inherits.
+STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
+    STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
+    start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"
 RUNTIME_START_STATUS=$?
 if [ "$RUNTIME_START_STATUS" -ne 0 ]; then
     echo "ERROR: the fixture could not start its runtime" >&2
     exit 1
 fi
-echo "loading the loopback stream as $STREAM_ID" >&2
-# Polled rather than slept: the stream compiles and the engine brings up a GPU
-# context and an iceoryx2 node, and a fixed sleep is either flaky or slow.
-if ! start_the_fixture_project "$PROJECT_DIR" "$STREAM_ID" "$STREAM_RUN_LOG"; then
+echo "loading the loopback stream" >&2
+# Polled rather than slept: the engine brings up a GPU context and an iceoryx2
+# node, and a fixed sleep is either flaky or slow.
+if ! start_the_fixture_project "$PROJECT_DIR" "$STREAM_RUN_LOG"; then
     echo "ERROR: the loopback stream never ran — it never answered over the local API socket with every node Running" >&2
     tail -40 "$STREAM_RUN_LOG" >&2
     tail -40 "$NODE_LOG" >&2
     exit 1
 fi
+STREAM_ID="$FIXTURE_PROJECT_STREAM_ID"
+echo "the loopback stream runs as $STREAM_ID" >&2
 
 # The first line in node.log matching `pattern`, polled for while the stream is
 # loaded: the audio built-ins probe and open their devices in setup, which can

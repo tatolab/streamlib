@@ -46,6 +46,25 @@ pub struct PortDescriptor {
     pub audio_window: Option<AudioWindowContract>,
     /// The port family the port declares and its family's keys.
     pub family: PortFamilyDeclaration,
+    /// The value an *input* port reads while nothing is linked into it and no
+    /// pin value is set on its node; `None` when it declares none, and on
+    /// every output port. A JSON `null` is a default of no value, which an
+    /// optional function node input declares.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_a_pin_default_that_may_be_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pin_default: Option<serde_json::Value>,
+}
+
+fn deserialize_a_pin_default_that_may_be_null<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 impl PortDescriptor {
@@ -63,7 +82,15 @@ impl PortDescriptor {
             borrow_quota: None,
             audio_window: None,
             family,
+            pin_default: None,
         }
+    }
+
+    /// Builder-style override for the value an unlinked input port reads.
+    /// Meaningful only on an input port.
+    pub fn with_pin_default(mut self, pin_default: serde_json::Value) -> Self {
+        self.pin_default = Some(pin_default);
+        self
     }
 
     /// Builder-style override for the delivery profile. Meaningful only on
@@ -141,6 +168,14 @@ pub struct ProcessorDescriptor {
     /// values travel in; empty for every other node type.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub function_node_state_fields: Vec<String>,
+    /// The palette category an editor files the node type under; absent on a
+    /// type that declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    /// Whether a Python function node's body does not compile, so it runs as
+    /// Python and only a reader holding the interpreter's lock can call it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub function_node_runs_as_python: bool,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -164,6 +199,8 @@ impl ProcessorDescriptor {
             scheduling: ProcessorScheduling::default(),
             paced_by_real_time: false,
             function_node_state_fields: Vec::new(),
+            category: None,
+            function_node_runs_as_python: false,
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
@@ -182,6 +219,12 @@ impl ProcessorDescriptor {
 
     pub fn with_entrypoint(mut self, entrypoint: impl Into<String>) -> Self {
         self.entrypoint = Some(entrypoint.into());
+        self
+    }
+
+    /// Declare the palette category an editor files the node type under.
+    pub fn with_category(mut self, category: impl Into<String>) -> Self {
+        self.category = Some(category.into());
         self
     }
 

@@ -49,6 +49,7 @@ NODE_DECLARATION_KIND_STAMP = "__tatolab_node_kind__"
 NODE_DECLARATION_CONFIG_CLASS_STAMP = "__tatolab_node_config_class__"
 NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
 NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
+NODE_DECLARATION_CATEGORY_STAMP = "__tatolab_node_category__"
 NODE_DECLARATION_EXECUTION_STAMP = "__tatolab_node_execution__"
 NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority__"
 NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP = "__tatolab_node_paced_by_real_time__"
@@ -64,6 +65,7 @@ _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES = {
     "config_class": NODE_DECLARATION_CONFIG_CLASS_STAMP,
     "config_schema": NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     "description": NODE_DECLARATION_DESCRIPTION_STAMP,
+    "category": NODE_DECLARATION_CATEGORY_STAMP,
     "input_ports": NODE_DECLARATION_INPUT_PORTS_STAMP,
     "output_ports": NODE_DECLARATION_OUTPUT_PORTS_STAMP,
 }
@@ -297,19 +299,25 @@ class NodeDeclarationDecorator:
         node_function: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]",
         *,
         description: str = "",
+        category: str = "",
     ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
 
     @overload
     def function(
-        self, node_function: None = None, *, description: str = ""
+        self, node_function: None = None, *, description: str = "", category: str = ""
     ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]]": ...
 
     def function(
-        self, node_function: "Optional[Callable[..., Any]]" = None, *, description: str = ""
+        self,
+        node_function: "Optional[Callable[..., Any]]" = None,
+        *,
+        description: str = "",
+        category: str = "",
     ) -> Any:
         """Mark a function as a function node: one that computes its outputs from its inputs.
 
-        Usable bare (`@node.function`) or with `description=`. The signature is
+        Usable bare (`@node.function`) or with `description=` and `category=`,
+        the palette category, which defaults to the function's module. The signature is
         the node: each plain parameter is an input pin, its default the pin's
         value when nothing is wired, and `T | None = None` an optional input.
         The return annotation is the output `result`, or one output per field
@@ -327,6 +335,7 @@ class NodeDeclarationDecorator:
             return declare_function_node(
                 function_under_decoration,
                 description=description,
+                category=category,
                 declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
             )
 
@@ -356,6 +365,7 @@ class NodeDeclarationDecorator:
         scheduling: Optional[str] = None,
         paced_by_real_time: bool = False,
         description: str = "",
+        category: str = "",
     ) -> Any:
         """Mark a class as a process node: one that runs in a process of its own.
 
@@ -384,7 +394,8 @@ class NodeDeclarationDecorator:
 
         Decorating registers nothing: it stamps the declaration on the class, and
         the class reaches the node catalog when a stream that uses it loads.
-        `description` falls back to the class's docstring when it is not given.
+        `description` falls back to the class's docstring when it is not given,
+        and `category`, the palette category, to the class's module.
 
         `paced_by_real_time=True` declares a node that paces itself on real time,
         as a live device does. It loads in a stream on any clock: what it writes
@@ -400,6 +411,7 @@ class NodeDeclarationDecorator:
                 scheduling=scheduling,
                 paced_by_real_time=paced_by_real_time,
                 description=description,
+                category=category,
             )
 
         if isinstance(node_class, type):
@@ -434,6 +446,7 @@ def _declare_node(
     scheduling: Optional[str],
     paced_by_real_time: bool,
     description: str,
+    category: str,
 ) -> NodeClassUnderDeclaration:
     input_ports, output_ports = _collect_declared_ports(node_class)
     config_class = _config_class_named_by_the_init_annotation(node_class)
@@ -453,6 +466,7 @@ def _declare_node(
         NODE_DECLARATION_DESCRIPTION_STAMP,
         description or inspect.getdoc(node_class) or "",
     )
+    setattr(node_class, NODE_DECLARATION_CATEGORY_STAMP, category or node_class.__module__)
     setattr(
         node_class,
         NODE_DECLARATION_EXECUTION_STAMP,
@@ -614,6 +628,8 @@ def _collect_declared_ports(
                 declared_input["audio_window"] = marker["audio_window"]
             if "family" in marker:
                 declared_input["family"] = marker["family"]
+            if "pin_default" in marker:
+                declared_input["pin_default"] = marker["pin_default"]
             input_ports.append(declared_input)
         else:
             declared_output: "dict[str, Any]" = {

@@ -18,6 +18,7 @@ from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_LANGUAGE_STAMP,
 )
 from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -51,7 +52,7 @@ class SplitColour:
     green: float
 
 
-@node.function(description="Split a grey level into two channels.")
+@node.function(description="Split a grey level into two channels.", category="Colour")
 def split(grey: float) -> SplitColour:
     return SplitColour(red=grey, green=grey)
 
@@ -84,6 +85,11 @@ def test_a_function_node_carries_kind_function_and_language_python():
     assert remap.__qualname__ == "remap"
 
 
+def test_a_function_node_is_filed_under_its_module_unless_it_names_a_category():
+    assert getattr(remap, NODE_DECLARATION_CATEGORY_STAMP) == __name__
+    assert getattr(split, NODE_DECLARATION_CATEGORY_STAMP) == "Colour"
+
+
 def test_each_plain_parameter_is_a_newest_channels_input_and_the_return_is_result():
     assert getattr(remap, NODE_DECLARATION_INPUT_PORTS_STAMP) == [
         {
@@ -91,8 +97,9 @@ def test_each_plain_parameter_is_a_newest_channels_input_and_the_return_is_resul
             "description": "",
             "delivery_profile": "newest",
             "family": {"family": "channels"},
+            **pin_default,
         }
-        for name in ("x", "low", "high")
+        for name, pin_default in (("x", {}), ("low", {"pin_default": 0.0}), ("high", {"pin_default": 1.0}))
     ]
     assert getattr(remap, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == [
         {

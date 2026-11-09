@@ -9,6 +9,7 @@ use crate::core::ProcessorDescriptor;
 use crate::core::compiler::compiler_ops::function_node_pool::is_the_function_node_pool_type;
 use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
+use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents, PortInfo, ProcessorNode,
 };
@@ -59,6 +60,8 @@ pub struct NodeTypesOneStreamResolves {
         RwLock<HashMap<ProcessorClassImportPath, NodeTypeDescribedInAStreamsProcessorInterpreter>>,
     installed_module_declaring_each_described_type:
         RwLock<HashMap<ProcessorClassImportPath, InstalledModuleOfANodeType>>,
+    execution_each_described_class_declares:
+        RwLock<HashMap<ProcessorClassImportPath, ProcessExecution>>,
 }
 
 impl NodeTypesOneStreamResolves {
@@ -244,6 +247,29 @@ impl NodeTypesOneStreamResolves {
             .collect()
     }
 
+    /// Record how a described class `node_type` declares it is driven.
+    pub(crate) fn record_the_execution_a_described_class_declares(
+        &self,
+        node_type: ProcessorClassImportPath,
+        execution: ProcessExecution,
+    ) {
+        self.execution_each_described_class_declares
+            .write()
+            .insert(node_type, execution);
+    }
+
+    /// How a described class `node_type` declares it is driven; `None` for a
+    /// native type, a function node or a type never described.
+    pub(crate) fn the_execution_a_described_class_declares(
+        &self,
+        node_type: &ProcessorClassImportPath,
+    ) -> Option<ProcessExecution> {
+        self.execution_each_described_class_declares
+            .read()
+            .get(node_type)
+            .copied()
+    }
+
     /// Record that `installed_module` declares the described type `node_type`.
     pub(crate) fn record_the_installed_module_declaring(
         &self,
@@ -327,6 +353,7 @@ mod tests {
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
+            pin_default: None,
         }
     }
 

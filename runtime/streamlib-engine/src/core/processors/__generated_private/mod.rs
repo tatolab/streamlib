@@ -15,4 +15,5 @@ pub use generated_processor_impl::{
 };
 pub(crate) use generated_processor_impl::{
     FunctionNodeCallUnderWayInTheFarSide, FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
+    FunctionNodeThatOverranItsFarSidesFrameInterval,
 };

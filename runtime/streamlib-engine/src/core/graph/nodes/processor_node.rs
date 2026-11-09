@@ -27,6 +27,9 @@ pub struct ProcessorNode {
     /// The values the graph document sets on the node's unlinked inputs, by input name.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub pins: serde_json::Map<String, serde_json::Value>,
+    /// The config fields the node takes as inputs too, each an input port of the field's name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposed_config_fields: Vec<String>,
     /// What the studio draws the node with.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub studio: serde_json::Map<String, serde_json::Value>,
@@ -66,6 +69,7 @@ impl PartialEq for ProcessorNode {
         self.id == other.id
             && self.node_uuid == other.node_uuid
             && self.pins == other.pins
+            && self.exposed_config_fields == other.exposed_config_fields
             && self.studio == other.studio
             && self.processor_type == other.processor_type
             && self.display_name == other.display_name
@@ -111,6 +115,7 @@ impl ProcessorNode {
             id: ProcessorUniqueId::new(),
             node_uuid: uuid::Uuid::new_v4(),
             pins: serde_json::Map::new(),
+            exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
             processor_type,
             display_name: display_name.into(),
@@ -160,6 +165,26 @@ impl ProcessorNode {
     /// How the node's type runs; `None` when nothing registers its type.
     pub fn node_kind(&self) -> Option<NodeKind> {
         self.node_kind
+    }
+
+    /// Take `exposed_config_fields` as the config fields this node takes as inputs, each with
+    /// its port of `exposed_config_field_input_ports`, in place of those it took before.
+    pub(crate) fn replace_the_exposed_config_fields(
+        &mut self,
+        exposed_config_fields: Vec<String>,
+        exposed_config_field_input_ports: Vec<PortInfo>,
+    ) {
+        let exposed_before =
+            std::mem::replace(&mut self.exposed_config_fields, exposed_config_fields);
+        self.ports
+            .inputs
+            .retain(|port| !exposed_before.contains(&port.name));
+        self.ports.inputs.extend(exposed_config_field_input_ports);
+    }
+
+    /// Whether input `name` is a config field this node exposes as an input.
+    pub fn is_an_exposed_config_field_input(&self, name: &str) -> bool {
+        self.exposed_config_fields.iter().any(|field| field == name)
     }
 
     pub fn has_input(&self, name: &str) -> bool {

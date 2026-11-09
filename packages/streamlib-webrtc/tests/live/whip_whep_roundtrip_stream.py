@@ -19,9 +19,9 @@ The two URLs arrive in the environment and never in argv: Cloudflare Stream
 carries the stream key as a path segment, and argv is world-readable through
 `/proc`. Neither is logged, printed, or written to the output directory.
 
-`whip_whep_roundtrip.sh` loads each as a project of its own with `tatolab run
---dir`, which hands a stream no argv, so the audio device arrives in the runtime's environment, which the
-compile inherits: `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` names the device to
+`whip_whep_roundtrip.sh` builds each graph into a project of its own and loads
+it with `tatolab run --dir`; a generator takes no argv, so its settings arrive
+in the environment the graph is built in: `STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` names the device to
 capture from — the driver passes the fixture sink's monitor, so the known
 signal played into that sink is what crosses the network (else the backend's
 own default device). `STREAMLIB_FIXTURE_RELAY_URL` names the relay the

@@ -251,6 +251,14 @@ impl PythonProcessorLinkDataAccess {
         })
     }
 
+    /// Whether `input_port_name` is lent to the node's native code, whose
+    /// reads hold no Python interpreter lock.
+    pub(crate) fn input_port_is_lent_to_native_code(&self, input_port_name: &str) -> bool {
+        self.input_ports_lent_to_native_code
+            .lock()
+            .contains(input_port_name)
+    }
+
     fn cast_and_check_ports_to_lend(
         direction: &str,
         port_names: &[String],
@@ -1111,14 +1119,22 @@ impl PythonProcessorLinkDataAccess {
     /// `output_port_names` is the board's output-port section in key order, as
     /// the setup command lists it; `function_node_states` names each stateful
     /// function node's entry by breadcrumb number, beside the state it resumes
-    /// from as f64 bit patterns, `None` for its state record's defaults.
-    #[pyo3(signature = (service_name, output_port_names, function_node_states = Vec::new()))]
+    /// from as f64 bit patterns, `None` for its state record's defaults;
+    /// `function_node_frame_interval_ns` is the interval each function-node call
+    /// is timed against.
+    #[pyo3(signature = (
+        service_name,
+        output_port_names,
+        function_node_states = Vec::new(),
+        function_node_frame_interval_ns = None,
+    ))]
     fn open_loss_count_board(
         &self,
         python: Python<'_>,
         service_name: &str,
         output_port_names: Vec<String>,
         function_node_states: Vec<(u32, Option<Vec<u64>>)>,
+        function_node_frame_interval_ns: Option<u64>,
     ) -> PyResult<()> {
         let Some(node) = self.iceoryx2_node.get() else {
             return Err(not_a_helper_process_data_plane_error());
@@ -1136,6 +1152,11 @@ impl PythonProcessorLinkDataAccess {
                 )
             })
             .map_err(|open_failure| PyRuntimeError::new_err(open_failure.to_string()))?;
+        if let Some(frame_interval_ns) = function_node_frame_interval_ns {
+            board_writer.time_each_function_node_call_against_the_frame_interval(
+                std::time::Duration::from_nanos(frame_interval_ns),
+            );
+        }
         self.loss_count_board_writer
             .set(Arc::new(board_writer))
             .map_err(|_| {
@@ -3702,7 +3723,7 @@ mod tests {
                 .unwrap();
             let helper = helper_plane();
             helper
-                .open_loss_count_board(python, &board_name, Vec::new(), Vec::new())
+                .open_loss_count_board(python, &board_name, Vec::new(), Vec::new(), None)
                 .expect("the helper opens the board its parent named");
 
             helper.note_a_step_callback_started();
@@ -3792,7 +3813,7 @@ mod tests {
             let source = helper_plane();
             let destination = helper_plane();
             destination
-                .open_loss_count_board(python, &board_name, output_ports, Vec::new())
+                .open_loss_count_board(python, &board_name, output_ports, Vec::new(), None)
                 .expect("the helper opens the board its parent named");
 
             destination

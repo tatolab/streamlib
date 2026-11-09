@@ -277,6 +277,85 @@ class ReportsTheFunctionNodeValuesItReadSink:
             )
 
 
+#: How many reads a batch-reporting sink makes into each batch: past a second at
+#: its interval, so a batch of a 1 Hz `Lfo` read directly spans -1..1.
+FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH = 120
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfFunctionNodeValuesItReadSink:
+    """Reads the value an island feeds `brightness`, and reports the range of
+    each batch of reads with its own pid and when the batch started."""
+
+    def __init__(self) -> None:
+        self.values_in_this_batch: "list[float]" = []
+        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+
+    brightness = Input(Channels, delivery="newest")
+
+    def process(self, ctx) -> None:
+        block = ctx.inputs.read(self.brightness)
+        if block is None:
+            return
+        if not self.values_in_this_batch:
+            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        self.values_in_this_batch.append(float(numpy.from_dlpack(block)[0][0]))
+        if len(self.values_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
+            report(
+                "FUNCTION_NODE_VALUE_BATCH_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
+                    "lowest": min(self.values_in_this_batch),
+                    "highest": max(self.values_in_this_batch),
+                },
+            )
+            self.values_in_this_batch = []
+
+
+@dataclasses.dataclass
+class ReportsEachBatchOfItsConfiguredLevelConfig:
+    level: float = 0.25
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfItsConfiguredLevel:
+    """Reads the `level` of the config it was last handed at each run, a field a
+    link can drive once it is exposed, and reports the range of each batch."""
+
+    def __init__(self, config: ReportsEachBatchOfItsConfiguredLevelConfig) -> None:
+        self.level = config.level
+        self.levels_in_this_batch: "list[float]" = []
+        self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+
+    def configure(self, config: ReportsEachBatchOfItsConfiguredLevelConfig) -> None:
+        self.level = config.level
+
+    def process(self, ctx) -> None:
+        if not self.levels_in_this_batch:
+            self.this_batch_started_at_monotonic_ns = time.monotonic_ns()
+        self.levels_in_this_batch.append(float(self.level))
+        if len(self.levels_in_this_batch) == FUNCTION_NODE_ISLAND_READS_PER_REPORTED_BATCH:
+            report(
+                "FUNCTION_NODE_VALUE_BATCH_READ",
+                {
+                    "sink_pid": os.getpid(),
+                    "started_at_monotonic_ns": self.this_batch_started_at_monotonic_ns,
+                    "lowest": min(self.levels_in_this_batch),
+                    "highest": max(self.levels_in_this_batch),
+                },
+            )
+            self.levels_in_this_batch = []
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsEachBatchOfPinValuesItReadSink(ReportsEachBatchOfFunctionNodeValuesItReadSink):
+    """Reads `brightness`, which nothing is linked into and which declares 0.25,
+    and reports the range of each batch of reads."""
+
+    brightness = Input(Channels, delivery="newest", default=0.25)
+
+
 @node.function
 def SpinsForever(start: float = 1.0) -> float:  # noqa: N802
     """Never returns: a compiled call no thread can pre-empt, which only the watchdog ends."""
@@ -298,6 +377,33 @@ def CountsItsOwnCalls(  # noqa: N802
     """The number of times it has been called, carried between calls in its state."""
     calls = previous.calls + step
     return calls, CallsCountedSoFar(calls)
+
+
+@dataclasses.dataclass(frozen=True)
+class LevelScaledByItsGainConfig:
+    gain: float = 0.25
+
+
+@node.function
+def LevelScaledByItsGain(  # noqa: N802
+    level: float = 1.0, *, config: LevelScaledByItsGainConfig
+) -> float:
+    """Its level scaled by the `gain` of its config, a field a link can drive once it is exposed."""
+    return level * config.gain
+
+
+@dataclasses.dataclass(frozen=True)
+class HeldLevelConfig:
+    level: float = 0.25
+
+
+@node.function
+def HoldsItsConfiguredLevelCountingItsCalls(  # noqa: N802
+    step: float = 1.0, *, config: HeldLevelConfig, previous: State[CallsCountedSoFar]
+) -> Stateful[float, CallsCountedSoFar]:
+    """The `level` of its config, a field a link can drive once it is exposed;
+    stateful, so two readers move it into a helper of its own."""
+    return config.level, CallsCountedSoFar(previous.calls + step)
 
 
 #: The count at which a sink whose count started fresh takes its own helper down.
@@ -454,3 +560,70 @@ class ReportsTheLevelRecordsItReadSink:
         self.records_read.append(record)
         if len(self.records_read) == LEVEL_RECORDS_READ_BEFORE_REPORTING:
             report("LEVEL_RECORDS_READ", {"sink_pid": os.getpid(), "records": self.records_read})
+
+
+@node.process(execution="manual")
+class LendsTheLabelToItsNativeHalf:
+    """Lends `label` to native code at setup, as a module's native half does,
+    and reports whether the lend was taken."""
+
+    label = Input(Records, delivery="newest")
+
+    def setup(self, ctx) -> None:
+        try:
+            ctx.open_module_host_table(input_ports=["label"])
+        except ValueError as refused:
+            report("LABEL_LEND", {"pid": os.getpid(), "refused": str(refused)})
+            return
+        report("LABEL_LEND", {"pid": os.getpid(), "refused": None})
+
+
+#: How long each call of `SleepsPastThePoolsFrameInterval` sleeps, past the pool's 10 ms interval.
+SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS = 0.02
+
+
+@node.function
+def SleepsPastThePoolsFrameInterval(level: float = 0.5) -> float:  # noqa: N802
+    """Gives `level` after a sleep longer than the pool's frame interval: a body that sleeps, which runs as Python."""
+    time.sleep(SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS)
+    return level
+
+
+#: How many calls `HangsAfterItsFirstCalls` returns from in each process before one never returns.
+CALLS_RETURNED_BEFORE_A_CALL_HANGS = 100
+
+_calls_of_hangs_after_its_first_calls_in_this_process = 0
+
+
+@node.function
+def HangsAfterItsFirstCalls(level: float = 0.25) -> float:  # noqa: N802
+    """Gives `level` for its first calls in a process, then never returns: a body counting in a module global, which runs as Python."""
+    global _calls_of_hangs_after_its_first_calls_in_this_process
+    _calls_of_hangs_after_its_first_calls_in_this_process += 1
+    while _calls_of_hangs_after_its_first_calls_in_this_process > CALLS_RETURNED_BEFORE_A_CALL_HANGS:
+        time.sleep(1.0)
+    return level
+
+
+#: How many count records a sink reads between reports.
+COUNT_RECORDS_READ_BETWEEN_REPORTS = 25
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheCountRecordsItReadSink:
+    """Reads the records a native converter makes of a pooled counter, and
+    reports each `COUNT_RECORDS_READ_BETWEEN_REPORTS` counts it read."""
+
+    def __init__(self) -> None:
+        self.counts_since_the_last_report: "list[float]" = []
+
+    count_records = Input(Records, delivery="newest")
+
+    def process(self, ctx) -> None:
+        record = ctx.inputs.read(self.count_records)
+        if record is None:
+            return
+        self.counts_since_the_last_report.append(record["count"])
+        if len(self.counts_since_the_last_report) == COUNT_RECORDS_READ_BETWEEN_REPORTS:
+            report("COUNT_RECORDS_READ", {"pid": os.getpid(), "counts": self.counts_since_the_last_report})
+            self.counts_since_the_last_report = []

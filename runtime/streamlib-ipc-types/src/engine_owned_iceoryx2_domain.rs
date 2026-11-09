@@ -11,23 +11,11 @@ use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use iceoryx2::service::builder::publish_subscribe::Builder as PublishSubscribeServiceBuilder;
 pub use iceoryx2::service::builder::publish_subscribe::PublishSubscribeOpenError as ChannelDataServiceOpenError;
-use streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid;
+pub use streamlib_runtime_client_contract::streamlib_runtime_directory::{
+    ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, engine_owned_iceoryx2_prefix_for_this_user,
+};
 
 use crate::{DataChannelPayloadCacheLine, DataChannelSampleUserHeader};
-
-/// The most bytes a domain root and its prefix may take together.
-///
-/// iceoryx2 names its Unix sockets `<root>/<prefix><entity file name>`, and a
-/// socket path must fit `sun_path` (108 bytes on Linux, 104 on macOS) with room
-/// for the longest name iceoryx2 appends. Past this the first listener fails late
-/// as an opaque `ResourceCreationFailed`.
-pub const ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES: usize =
-    if cfg!(target_os = "macos") { 58 } else { 63 };
-
-/// The file prefix every engine-owned iceoryx2 node of this OS user shares.
-pub fn engine_owned_iceoryx2_prefix_for_this_user() -> String {
-    format!("sl{}_", current_process_uid())
-}
 
 /// Why the configuration of an iceoryx2 domain, or a node in it, was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,4 +180,97 @@ pub fn create_the_reserved_slot_subscriber_of(
             }
             other => ChannelReservedSlotSubscribeError::Transport(format!("{other:?}")),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
+        OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+    };
+
+    /// A directory under `/tmp` named for this test and process, removed on drop.
+    struct DirectoryUnderTmpRemovedOnDrop(std::path::PathBuf);
+
+    impl Drop for DirectoryUnderTmpRemovedOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A test machine root too long for its socket paths keeps its domain behind
+    /// a short symlink in `/tmp`; iceoryx2 binds its listener socket and maps its
+    /// channel through that link, with the files landing in the long directory.
+    #[test]
+    fn a_domain_root_behind_a_short_link_to_a_directory_past_the_budget_carries_an_event_and_a_channel()
+     {
+        let scratch = DirectoryUnderTmpRemovedOnDrop(std::path::PathBuf::from(format!(
+            "/tmp/sl-link-test-{}",
+            std::process::id()
+        )));
+        let directory_past_the_budget = scratch
+            .0
+            .join("r".repeat(ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES))
+            .join("run")
+            .join("iox2");
+        create_directory_and_its_missing_parents_at_mode(
+            &directory_past_the_budget,
+            OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .unwrap();
+        let domain_root = scratch.0.join("iox2");
+        std::os::unix::fs::symlink(&directory_past_the_budget, &domain_root).unwrap();
+        let prefix = engine_owned_iceoryx2_prefix_for_this_user();
+
+        let node =
+            create_iceoryx2_node_in_domain(&domain_root, &prefix, "streamlib-test/behind-a-link")
+                .expect("a node opens in a domain behind a short link");
+        let event_service = node
+            .service_builder(&ServiceName::new("test/behind-a-link/event").unwrap())
+            .event()
+            .open_or_create()
+            .expect("open the event service");
+        let listener = event_service
+            .listener_builder()
+            .create()
+            .expect("a listener binds its socket behind the link");
+        let notifier = event_service
+            .notifier_builder()
+            .create()
+            .expect("a notifier");
+        notifier.notify().expect("notify");
+        let mut activations_heard = 0;
+        listener
+            .timed_wait(
+                |_| activations_heard += 1,
+                core::time::Duration::from_secs(5),
+            )
+            .expect("the listener waits");
+        assert_eq!(
+            activations_heard, 1,
+            "the listener behind the link hears the notifier"
+        );
+
+        let channel = node
+            .service_builder(&ServiceName::new("test/behind-a-link/channel").unwrap())
+            .publish_subscribe::<u64>()
+            .open_or_create()
+            .expect("open the channel");
+        let publisher = channel.publisher_builder().create().expect("a publisher");
+        let subscriber = channel.subscriber_builder().create().expect("a subscriber");
+        publisher.send_copy(7).expect("send");
+        let sample = subscriber
+            .receive()
+            .expect("receive")
+            .expect("the published sample arrives");
+        assert_eq!(*sample, 7);
+
+        assert!(
+            std::fs::read_dir(&directory_past_the_budget)
+                .unwrap()
+                .next()
+                .is_some(),
+            "the domain's files land in the directory the link names"
+        );
+    }
 }

@@ -315,10 +315,11 @@ impl ConsumerVulkanTexture {
             stated_memory_type_index,
         )
         .and_then(|()| {
-            vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
+            vulkan_device.import_opaque_fd_memory_dedicated_to_image_at_stated_memory_type_index(
                 fd,
                 alloc_size,
                 stated_memory_type_index,
+                image,
             )
         })
         .inspect_err(|_| unsafe { device.destroy_image(image, None) })?;

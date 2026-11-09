@@ -14,10 +14,18 @@ from helper_placement_processors import (
     CountsItsOwnCalls,
     CrashesItsHelper,
     DiesAbruptlyProbe,
+    HoldsItsConfiguredLevelCountingItsCalls,
+    HangsAfterItsFirstCalls,
     LabelsTheLevel,
+    LevelScaledByItsGain,
+    LendsTheLabelToItsNativeHalf,
     ForksAWorkerThatOutlivesItProbe,
+    ReportsEachBatchOfFunctionNodeValuesItReadSink,
+    ReportsEachBatchOfItsConfiguredLevel,
+    ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
+    ReportsTheCountRecordsItReadSink,
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
     ReportsTheCountsItReadInOrderSink,
     ReportsTheFunctionNodeValuesItReadSink,
@@ -26,6 +34,7 @@ from helper_placement_processors import (
     ReportsTheRawMessagePayloadItReadSink,
     ReportsTheRecordsItReadSink,
     ReportsUpstreamProcessSink,
+    SleepsPastThePoolsFrameInterval,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
     SpinsForever,
@@ -153,6 +162,77 @@ def function_nodes_read_by_two_native_converters_into_python_records_sink(
 
 
 @graph_generator
+def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Lfo` read directly by a Python class reporting each batch of values."""
+    lfo = stream_builder.add(Lfo, name="lfo")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(lfo.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def clamp_with_its_input_linked_to_nothing_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """`tatolab.ops`' `Clamp`, its `x` linked to nothing and unpinned, read by a Python class."""
+    clamp = stream_builder.add(Clamp, name="clamp")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(clamp.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def level_scaled_by_its_gain_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A function node scaling its level by the `gain` of its config, read by a Python class."""
+    scaled = stream_builder.add(LevelScaledByItsGain, name="scaled")
+    sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
+    stream_builder.connect(scaled.output("result"), sink.input("brightness"))
+
+
+@graph_generator
+def python_sink_reading_the_pin_value_of_its_unlinked_input(stream_builder: StreamBuilder) -> None:
+    """A Python class whose one input is linked to nothing, so it reads its pin value."""
+    stream_builder.add(ReportsEachBatchOfPinValuesItReadSink, name="sink")
+
+
+@graph_generator
+def function_node_run_as_python_into_a_class_lending_it_to_native_code(
+    stream_builder: StreamBuilder,
+) -> None:
+    """A function node that runs as Python, read by a manual class whose native half reads it."""
+    labeller = stream_builder.add(LabelsTheLevel, name="labeller")
+    lender = stream_builder.add(LendsTheLabelToItsNativeHalf, name="lender")
+    stream_builder.connect(labeller.output("result"), lender.input("label"))
+
+
+@graph_generator
+def function_node_slower_than_the_pools_frame_interval_read_by_a_native_converter(
+    stream_builder: StreamBuilder,
+) -> None:
+    """A function node whose every call outlasts the pool's frame interval, read by a native `ChannelsToRecords` into a Python class."""
+    sleeper = stream_builder.add(SleepsPastThePoolsFrameInterval, name="sleeper")
+    converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["level"]}, name="converter"
+    )
+    sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
+    stream_builder.connect(sleeper.output("result"), converter.input("channels"))
+    stream_builder.connect(converter.output("records"), sink.input("level_records"))
+
+
+@graph_generator
+def pooled_counter_beside_a_pooled_node_that_hangs(stream_builder: StreamBuilder) -> None:
+    """A stateful counter and a node that hangs after its first calls, each read by a native `ChannelsToRecords`, so both run in the pool."""
+    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
+    count_converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["count"]}, name="count-converter"
+    )
+    sink = stream_builder.add(ReportsTheCountRecordsItReadSink, name="sink")
+    hanger = stream_builder.add(HangsAfterItsFirstCalls, name="hanger")
+    hanger_converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["level"]}, name="hanger-converter"
+    )
+    stream_builder.connect(counter.output("result"), count_converter.input("channels"))
+    stream_builder.connect(count_converter.output("records"), sink.input("count_records"))
+    stream_builder.connect(hanger.output("result"), hanger_converter.input("channels"))
+
+
+@graph_generator
 def function_node_that_spins_forever_into_python_sink(stream_builder: StreamBuilder) -> None:
     """A function node whose compiled call never returns, inside the read of a Python class."""
     spinner = stream_builder.add(SpinsForever, name="spinner")
@@ -192,6 +272,21 @@ def stateful_counter_read_by_two_python_sinks(stream_builder: StreamBuilder) -> 
     for reader_name in ("first_reader", "second_reader"):
         reader = stream_builder.add(ReportsTheCountsItReadInOrderSink, name=reader_name)
         stream_builder.connect(counter.output("result"), reader.input("count"))
+
+
+@graph_generator
+def python_class_reporting_its_configured_level(stream_builder: StreamBuilder) -> None:
+    """A Python class reading the `level` of its config at each run."""
+    stream_builder.add(ReportsEachBatchOfItsConfiguredLevel, name="configured")
+
+
+@graph_generator
+def held_level_read_by_two_python_sinks(stream_builder: StreamBuilder) -> None:
+    """A stateful function node holding the `level` of its config, read by two Python classes."""
+    held = stream_builder.add(HoldsItsConfiguredLevelCountingItsCalls, name="held")
+    for reader_name in ("first_reader", "second_reader"):
+        reader = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name=reader_name)
+        stream_builder.connect(held.output("result"), reader.input("brightness"))
 
 
 @graph_generator

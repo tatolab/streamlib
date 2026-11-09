@@ -41,6 +41,7 @@ struct LiveNodeAsTheGraphHoldsIt {
     config: Value,
     pins: Map<String, Value>,
     studio: Map<String, Value>,
+    exposed_config_fields: Vec<String>,
 }
 
 fn cast_name(name: &str) -> Result<String> {
@@ -164,6 +165,7 @@ impl LoadedStreamInThisRuntime {
             )
             .with_display_name(document_node.name.clone())
             .with_pins_and_studio_fields(document_node.pins.clone(), document_node.studio.clone())
+            .with_exposed_config_fields(document_node.exposed_config_fields.clone())
             .with_node_uuid(node_uuid);
             add_processor_impl(
                 self.live_graph_change(),
@@ -178,6 +180,12 @@ impl LoadedStreamInThisRuntime {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
             if live_node.config != document_node.config {
                 self.update_processor_config(&live_node.processor_id, &document_node.config)?;
+            }
+            if live_node.exposed_config_fields != document_node.exposed_config_fields {
+                self.set_exposed_config_fields(
+                    &live_node.processor_id,
+                    document_node.exposed_config_fields.clone(),
+                )?;
             }
             if live_node.pins != document_node.pins || live_node.studio != document_node.studio {
                 self.compiler.scope(|this_streams_graph, _tx| {
@@ -247,6 +255,7 @@ impl LoadedStreamInThisRuntime {
                     config: node.config.clone().unwrap_or_default(),
                     pins: node.pins.clone(),
                     studio: node.studio.clone(),
+                    exposed_config_fields: node.exposed_config_fields.clone(),
                 })
                 .collect()
         })

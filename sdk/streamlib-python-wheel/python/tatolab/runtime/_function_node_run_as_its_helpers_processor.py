@@ -5,8 +5,10 @@
 
 Each input reads the newest value its link carries, an island its own helper
 evaluates or a channel from another promoted node, and keeps its pin value
-until one arrives. A number or bool output is written as a control value, one
-f64 sample on one channel at rate 0, and a `dict` output as a Records message.
+until one arrives. A live config update, and so each value a link gives a
+field the node exposes, reaches the next call. A number or bool output is
+written as a control value, one f64 sample on one channel at rate 0, and a
+`dict` output as a Records message.
 """
 
 from __future__ import annotations
@@ -20,9 +22,11 @@ from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
 from tatolab.runtime._engine import FunctionNodeEvaluatedAsItsHelpersProcessor
 from tatolab.runtime._function_node_compilation import (
+    FunctionNodeBodyRunAsPython,
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
     FunctionNodeReadyToEvaluate,
+    config_values_of_one_function_node,
     how_one_function_node_is_called,
     prepare_function_node_to_evaluate,
 )
@@ -104,6 +108,8 @@ class _FunctionNodeRunAsItsHelpersProcessor:
     _node_id: str
     _link_data_access: NodeLinkDataAccess
     _input_values: "list[Any]"
+    _compiled_config_values_handed_to_each_call: "list[float]"
+    _body_run_as_python: Optional[FunctionNodeBodyRunAsPython]
     _control_values_written: int
     _evaluation: FunctionNodeEvaluatedAsItsHelpersProcessor
 
@@ -114,18 +120,35 @@ class _FunctionNodeRunAsItsHelpersProcessor:
             prepared.pin_defaults_by_input_port.get(input_port) for input_port in prepared.input_ports
         ]
         self._control_values_written = 0
-        called_through, config_values = how_one_function_node_is_called(
-            prepared, self._node_id, _config_as_a_mapping(prepared, config)
+        compiled_config_fields = _compiled_config_fields(prepared)
+        called_through, config_values, compiled_config_value_indices = how_one_function_node_is_called(
+            prepared, self._node_id, _config_as_a_mapping(prepared, config), compiled_config_fields
+        )
+        self._compiled_config_values_handed_to_each_call = list(config_values)
+        self._body_run_as_python = (
+            called_through if isinstance(called_through, FunctionNodeBodyRunAsPython) else None
         )
         self._evaluation = FunctionNodeEvaluatedAsItsHelpersProcessor(
             link_data_access=self._link_data_access,
             node_id=self._node_id,
             called_through=called_through,
-            input_count=len(prepared.input_ports),
+            input_count=len(prepared.input_ports) + len(compiled_config_fields),
             config_values=config_values,
+            config_value_indices_set_by_the_inputs_past_its_own=compiled_config_value_indices,
             initial_state_values=list(prepared.initial_state_values),
             output_count=len(prepared.output_ports),
         )
+
+    def configure(self, config: Any) -> None:
+        """Call the node with `config` from the next run on, keeping its state."""
+        prepared = self._prepared
+        config_as_a_mapping = _config_as_a_mapping(prepared, config)
+        if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
+            self._compiled_config_values_handed_to_each_call = config_values_of_one_function_node(
+                prepared, self._node_id, config_as_a_mapping
+            )
+        elif self._body_run_as_python is not None:
+            self._body_run_as_python.take_the_config(config_as_a_mapping)
 
     def process(self, ctx: Any) -> None:
         prepared = self._prepared
@@ -144,7 +167,9 @@ class _FunctionNodeRunAsItsHelpersProcessor:
         input_values = [value for value in self._input_values if value is not None]
         if len(input_values) != len(self._input_values):
             return
-        output_values = self._evaluation.evaluate(input_values)
+        output_values = self._evaluation.evaluate(
+            [*input_values, *self._compiled_config_values_handed_to_each_call]
+        )
         for output_port, output_value in zip(prepared.output_ports, output_values):
             if output_port in ports_carrying_records:
                 ctx.outputs.write(getattr(type(self), output_port), output_value)
@@ -162,6 +187,12 @@ def _ports_carrying_records(prepared: FunctionNodeReadyToEvaluate) -> "frozenset
     if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
         return frozenset()
     return prepared.ports_carrying_records
+
+
+def _compiled_config_fields(prepared: FunctionNodeReadyToEvaluate) -> "tuple[str, ...]":
+    if isinstance(prepared, FunctionNodeCompiledToItsEvaluateEntry):
+        return prepared.config_fields
+    return ()
 
 
 def _config_fields(prepared: FunctionNodeReadyToEvaluate) -> "tuple[str, ...]":
