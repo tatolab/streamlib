@@ -25,6 +25,7 @@ from runtime_unit_under_test import (
 )
 from stream_runs_on_tatolabd import (
     PROJECT_FILE_NAME,
+    SUITE_FILES_THE_SUITE_VENV_IS_SYNCED_FROM,
     StreamFunctionNotRunnableFromTheSuiteProject,
     TatolabRunOfAProject,
     graph_document_path_of,
@@ -74,6 +75,26 @@ def test_a_suite_stream_function_runs_as_a_one_stream_project_holding_its_graph_
     ) == stream_id_named(
         "project", "named_pattern_into_a_named_sink", project_file["project"], stream_asset
     )
+
+
+def test_a_written_project_holds_nothing_the_runtime_would_sync_the_suite_venv_from(
+    tmp_path: Path,
+):
+    """The runtime syncs a project's `.venv` again from its own `pyproject.toml`, `uv.lock`
+    and `.python-version`; the suite's, read from a project under the test's tmp directory,
+    name path sources that are not there."""
+    one_stream_project = tmp_path / "one-stream"
+    write_a_one_stream_project_of_a_suite_stream_function(
+        one_stream_project, named_pattern_into_a_named_sink
+    )
+    hand_written_project = write_a_hand_written_graph_project(
+        tmp_path / "hand-written", '{"nodes": []}'
+    ).tatolab_run.working_directory
+
+    for suite_file in SUITE_FILES_THE_SUITE_VENV_IS_SYNCED_FROM:
+        assert (STREAM_ON_RUNTIME_SUITE_DIRECTORY / suite_file).is_file(), suite_file
+        assert not (one_stream_project / suite_file).exists(), suite_file
+        assert not (hand_written_project / suite_file).exists(), suite_file
 
 
 def test_the_stream_id_oracle_is_the_project_name_the_stream_name_and_six_hex_of_the_two_uuids():
