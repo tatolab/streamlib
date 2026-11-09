@@ -783,6 +783,21 @@ impl Runner {
         })
     }
 
+    /// Whether the last `run_project` load or stop under way on the project in
+    /// `project_directory` is the load, so every stream of it runs once those actions have run.
+    fn is_a_run_the_last_action_queued_on_the_project(&self, project_directory: &Path) -> bool {
+        self.stream_actions
+            .stream_action_queue_of_each_project
+            .actions_under_way()
+            .iter()
+            .rev()
+            .find(|action| {
+                the_same_directory(&action.project_directory, project_directory)
+                    && matches!(action.kind, StreamActionKind::Load | StreamActionKind::Stop)
+            })
+            .is_some_and(|action| action.kind == StreamActionKind::Load)
+    }
+
     /// Queue a stop of the whole project in `project_directory` on its queue, and answer the
     /// action: it unloads every loaded stream of the project and records each recorded one
     /// stopped, so the runtime leaves the project stopped across its restarts until a
@@ -804,6 +819,8 @@ impl Runner {
         let mut streams: Vec<StreamOfAStreamAction> = Vec::new();
         let ids_of_the_projects_records =
             self.ids_of_every_record_of_the_project(&project_directory);
+        let the_project_runs_once_its_queued_actions_run =
+            self.is_a_run_the_last_action_queued_on_the_project(&project_directory);
         let take_the_marks_off = |streams: &[StreamOfAStreamAction]| {
             for stream_marked_already in streams {
                 self.finish_the_pending_stream_action_on_the_record(
@@ -817,8 +834,9 @@ impl Runner {
                 let marked = stream_records.update(stream_id, |record| match record {
                     Some(record) => {
                         refuse_a_stream_whose_project_removal_is_queued(stream_id, record)?;
-                        if record.is_failed()
-                            || record.is_stopped_once_its_pending_stream_actions_run()
+                        if !the_project_runs_once_its_queued_actions_run
+                            && (record.is_failed()
+                                || record.is_stopped_once_its_pending_stream_actions_run())
                         {
                             return Ok(None);
                         }
@@ -2385,7 +2403,7 @@ impl Runner {
 
     /// Cancel the stream action `action_id`. One still queued is dropped,
     /// its pending marks taken off its streams' records, and finished
-    /// cancelled. A running load or start stops at the step it is on and
+    /// cancelled. A running load stops at the step it is on and
     /// finishes cancelled once it sees the cancel: a stream it was loading is
     /// recorded failed, and the streams it had not reached stay as recorded.
     /// Refused for a running stop or removal, whose unload cannot be cut
@@ -6412,6 +6430,67 @@ mod tests {
         assert!(!record.stopped);
         assert!(record.pending_stream_actions.is_empty(), "{record:?}");
         assert_eq!(runner.ids_of_the_loaded_streams(), [camera]);
+    }
+
+    #[test]
+    #[serial]
+    fn a_stop_queued_behind_a_run_queued_behind_a_stop_stops_the_project_last() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        let camera = project.stream_id_of("camera");
+        a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera"),
+        );
+        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+        stub_uv.handed_to(&runner);
+        let run_ahead_of_them = runner
+            .run_project(run_project_request_of(project.path()))
+            .unwrap();
+        the_stream_action_once(&runner, &run_ahead_of_them.action_id, |action| {
+            action.step == Some(StreamActionStep::MakingTheVenv)
+        });
+
+        let first_stop = runner.stop_project(project.path()).unwrap();
+        let run_between_the_stops = runner
+            .run_project(run_project_request_of(project.path()))
+            .unwrap();
+        let last_stop = runner.stop_project(project.path()).unwrap();
+
+        assert_eq!(
+            the_pending_stream_actions_on(state_directory.path(), &camera),
+            [
+                (first_stop.action_id.clone(), PendingStreamActionKind::Stop),
+                (last_stop.action_id.clone(), PendingStreamActionKind::Stop),
+            ]
+        );
+
+        std::fs::write(&gate, "").unwrap();
+        the_stream_action_once_finished(&runner, &first_stop.action_id);
+        let run_between =
+            the_stream_action_once_finished(&runner, &run_between_the_stops.action_id);
+        let stopped_last = the_stream_action_once_finished(&runner, &last_stop.action_id);
+
+        assert_eq!(
+            run_between.state,
+            StreamActionState::Done,
+            "{run_between:?}"
+        );
+        assert_eq!(
+            stopped_last.state,
+            StreamActionState::Done,
+            "{stopped_last:?}"
+        );
+        assert_eq!(
+            stopped_last.streams[0].state,
+            Some(StreamListingState::Stopped)
+        );
+        let record = the_record_of(state_directory.path(), &camera);
+        assert!(record.stopped);
+        assert!(record.pending_stream_actions.is_empty(), "{record:?}");
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
 
     #[test]

@@ -42,4 +42,4 @@ Wait up to ~15 s for `$TATOLAB_TEST_MACHINE_ROOT/tatolabd.exit` to appear and re
 
 ## Notes
 - One camera consumer per `/dev/videoN` — unloading the stream that opened it is what frees the device.
-- A runtime refuses to stop nothing: `stop` / `rm` of a name it does not hold is refused, naming the streams it does hold.
+- A runtime refuses to stop nothing: `stop` of a project none of whose streams runs, or `rm` of a project it holds no stream of, is refused, naming the streams it does hold.

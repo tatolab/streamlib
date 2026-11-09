@@ -459,19 +459,20 @@ tatolab enable-virtual-camera [--print]
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
-- **`STREAM`**, in `stop`, `start`, `rename`, `clock` and `logs --stream`, is a stream id,
+- **`STREAM`**, in `rename`, `clock` and `logs --stream`, is a stream id,
   or a display name exactly one stream holds. Omitted, it is the one stream loaded from the
   working directory, stopped and failed ones included. An argument several streams match, or none,
   is refused listing each candidate's id and display name. `graph --stream` is the exception: it
   takes a stream id, and omitted it means every loaded stream.
-- **`stop`** unloads a stream, which stays stopped across the runtime's restarts until
-  **`start`** loads it again. `start` also retries a failed stream. **`rm`** unloads every stream
-  of the project in `--dir`, or the working directory, and forgets them. Each queues its action on
-  the project's queue and prints its id at once: `tatolab streams` shows the stream `stopping` or
-  `preparing` until it has run, and a runtime that crashes first finishes it at its next start.
-- **`cancel`** takes back the action whose id `run`, `dev`, `stop`, `start` or `rm` printed. A
+- **`stop`** unloads every stream of the project in `--dir`, or the working directory, and the
+  project stays stopped across the runtime's restarts until **`run`** runs it again; `run` also
+  retries a failed stream. **`rm`** unloads every stream of the project and forgets them. Each
+  queues its action on the project's queue and prints its id at once: `tatolab streams` shows the
+  streams `stopping` until it has run, and a runtime that crashes first finishes it at its next
+  start.
+- **`cancel`** takes back the action whose id `run`, `dev`, `stop` or `rm` printed. A
   queued action is dropped, its streams' records left as they were, and `cancel` prints
-  `<action> cancelled`. A running load or start stops at the step it is on: its uv sync is
+  `<action> cancelled`. A running load stops at the step it is on: its uv sync is
   killed and a half-made `.venv` removed, a stream it was loading is recorded failed,
   and the streams it had not reached stay as they were; `cancel` prints `<action> cancelling`.
   A running stop or `rm` has begun unloading and cannot be cut short, so `cancel` is refused and

@@ -51,7 +51,7 @@ pub struct StreamRecord {
     /// How many of the runtime's crashes in a row, the last included, the
     /// stream was implicated in.
     pub runtime_crashes_in_a_row_implicating_it: u32,
-    /// The stop, remove and start actions queued on the stream and not yet
+    /// The stop and remove actions queued on the stream and not yet
     /// finished, in queue order; each is finalised only by its own action.
     #[serde(default)]
     pub pending_stream_actions: Vec<PendingStreamActionOnTheRecord>,
