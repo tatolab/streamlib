@@ -208,7 +208,7 @@ impl RuntimeContext {
         from_project: Option<uuid::Uuid>,
     ) -> crate::core::Result<std::path::PathBuf> {
         match from_project {
-            None => streamlib_project_repository::the_content_path_of_an_asset(
+            None => streamlib_project_repository::the_file_of_an_asset(
                 self.stream_project_directory(),
                 asset,
             ),

@@ -109,7 +109,7 @@ struct ImportAssetToolArguments {
     #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
     #[schemars(
-        description = "Where the bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of bytes the project's content store already holds."
+        description = "Where the bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of an upload in the project's `.tatolab/uploads/`."
     )]
     source: String,
     #[schemars(
@@ -223,7 +223,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of its bytes, its import settings, and `content_held`, whether the project's content store holds its bytes."
+        description = "Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of its bytes, its import settings, and `file_at_its_path`, whether a file is at its path."
     )]
     async fn describe_asset(
         &self,
@@ -240,9 +240,9 @@ impl LocalApiMcpServerHandler {
                 move |project_repository| {
                     let described_asset = project_repository.asset(asset)?;
                     Ok(DescribeAssetToolResult {
-                        content_held: project_repository
-                            .content_store()
-                            .content_path(&described_asset.content_sha256)
+                        file_at_its_path: described_asset
+                            .path
+                            .on_disk_under(project_repository.project_directory())
                             .is_file(),
                         asset: project_asset_on_the_wire(&described_asset),
                     })
@@ -253,7 +253,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later rename and move keeps, and the `transaction` and `commit` that record it. The bytes are copied into the project's content store under their SHA-256 before the transaction, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, or bytes the content store already holds by their SHA-256; a file already at `asset_path` is imported in place. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
+        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later rename and move keeps, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Undoing the import removes the file at `asset_path`, one imported in place included, and nothing keeps its bytes. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
     )]
     async fn import_asset(
         &self,
@@ -333,7 +333,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Stop tracking an asset as one transaction: its file and sidecar leave the project, and its bytes stay in the content store, so undoing the transaction brings it back. A stream asset's graph document leaves the project, and its stream is unloaded and forgotten. Refused while a stream's graph document references the asset, the refusal naming each document. Answers the asset as it was, with the `transaction` and `commit`."
+        description = "Stop tracking an asset as one transaction: its file and sidecar leave the project, and nothing keeps its bytes, so undoing the transaction brings back its sidecar and the asset reads missing until its file is at its path again. A stream asset's graph document leaves the project, recorded in the transaction so an undo writes it back, and its stream is unloaded and forgotten. Refused while a stream's graph document references the asset, the refusal naming each document. Answers the asset as it was, with the `transaction` and `commit`."
     )]
     async fn delete_asset(
         &self,
@@ -543,7 +543,7 @@ fn project_asset_import_source(source: &str) -> Result<ProjectAssetImportSource,
             .bytes()
             .all(|digit| digit.is_ascii_digit() || (b'a'..=b'f').contains(&digit))
     {
-        return Ok(ProjectAssetImportSource::StoredContent(source.to_owned()));
+        return Ok(ProjectAssetImportSource::UploadedContent(source.to_owned()));
     }
     Err(format!(
         "import_asset failed: `source` must be an absolute path or a SHA-256 in 64 lowercase hex digits; got `{source}`"

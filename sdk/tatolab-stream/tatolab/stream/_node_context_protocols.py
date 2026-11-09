@@ -508,8 +508,7 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
         its file inside the import's folder, as a config's `{"asset": ..., "from": ...}` names it.
 
         Raises `ValueError` for a string that is not a UUID, and `LookupError` when no such asset
-        is held there, the project's content store lacks its bytes, or an import's file is
-        missing.
+        is held there, or no file is at its path.
         """
         ...
 

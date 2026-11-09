@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-project-repository"
-description = "A StreamLib project as a versioned repository of assets: its project file, asset sidecars with UUIDs, its imports, its content store, transactions and its own local Git history"
+description = "A StreamLib project as a versioned repository of assets: its project file, asset sidecars with UUIDs, its imports, transactions and its own local Git history"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

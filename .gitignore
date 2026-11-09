@@ -80,7 +80,7 @@ yarn-debug.log*
 yarn-error.log*
 examples/camera-display/no_window_camera.log
 
-# What the runtime keeps in each example and sample project: its history and content store.
+# What the runtime keeps in each example and sample project: its history and uploads.
 examples/*/.tatolab/
 packages/*/streams/*/.tatolab/
 
