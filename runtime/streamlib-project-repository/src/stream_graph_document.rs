@@ -234,14 +234,25 @@ impl StreamGraphOperation {
         }
     }
 
-    /// The config the operation leaves its node with, when it sets one.
-    pub fn config_it_sets(&self) -> Option<&Value> {
+    /// Each config the operation leaves a node with, by that node's UUID: its own node's, and
+    /// that of every node at every level of a fragment it places.
+    pub fn configs_it_sets(&self) -> Vec<(Uuid, &Value)> {
+        let mut configs = Vec::new();
         match self {
-            Self::AddNode { node, .. } => Some(&node.config),
-            Self::SetNodeConfig { to, .. } => Some(to),
-            Self::RefreshFragment { to, .. } => Some(&to.config),
-            _ => None,
+            Self::AddNode { node, .. } => {
+                configs.push((node.id, &node.config));
+                if let Some(fragment) = &node.fragment {
+                    push_the_config_of_each_node_at_every_level(fragment, &mut configs);
+                }
+            }
+            Self::SetNodeConfig { node, to, .. } => configs.push((*node, to)),
+            Self::RefreshFragment { node, to, .. } => {
+                configs.push((*node, &to.config));
+                push_the_config_of_each_node_at_every_level(&to.fragment, &mut configs);
+            }
+            _ => {}
         }
+        configs
     }
 }
 
@@ -670,6 +681,23 @@ pub fn fragment_with_each_node_uuid_kept_by_its_name(
     kept_level.insert("nodes".to_owned(), Value::Array(nodes));
     kept_level.insert("links".to_owned(), Value::Array(links));
     Ok(Value::Object(kept_level))
+}
+
+fn push_the_config_of_each_node_at_every_level<'fragment>(
+    fragment: &'fragment Value,
+    configs: &mut Vec<(Uuid, &'fragment Value)>,
+) {
+    let Some(nodes) = fragment.get("nodes").and_then(Value::as_array) else {
+        return;
+    };
+    for node in nodes.iter().filter_map(Value::as_object) {
+        if let (Some(node_uuid), Some(config)) = (node_uuid_of(node), node.get("config")) {
+            configs.push((node_uuid, config));
+        }
+        if let Some(inner_fragment) = node.get("fragment") {
+            push_the_config_of_each_node_at_every_level(inner_fragment, configs);
+        }
+    }
 }
 
 /// Every asset of this project a node's config references, `{"asset": "<uuid>"}`, by UUID;
