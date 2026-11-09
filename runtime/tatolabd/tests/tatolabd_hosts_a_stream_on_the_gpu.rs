@@ -144,10 +144,10 @@ fn a_third_interrupt_ends_the_process_with_status_130() {
 }
 
 /// A recorded stream crashing the runtime as it loads, twice in a row, is failed
-/// at the next start while the other recorded stream comes back running; `start`
-/// brings it back once it no longer crashes.
+/// at the next start while the other recorded stream comes back running; a run of
+/// the project brings it back once it no longer crashes.
 #[test]
-fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_start_retries_it() {
+fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_a_run_retries_it() {
     let _one_at_a_time = ONE_STREAM_ON_THE_GPU_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -188,17 +188,24 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
     )
     .json();
     std::fs::remove_file(&crash_trigger).unwrap();
+    let venv_bin = machine_root.project_directory().join(".venv/bin");
+    std::fs::create_dir_all(&venv_bin).unwrap();
+    std::os::unix::fs::symlink(
+        an_executable_standing_in_for_the_interpreter(),
+        venv_bin.join("python"),
+    )
+    .unwrap();
     let started = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
-        "start_stream",
-        serde_json::json!({"stream": crasher.stream_id}),
+        "run_project",
+        serde_json::json!({"project_directory": machine_root.project_directory()}),
     )
     .json();
     let start_once_ended = the_stream_action_once_ended(
         &machine_root.local_api_socket_path(),
         started["action"]
             .as_str()
-            .expect("`start_stream` answers its action"),
+            .expect("`run_project` answers its action"),
     );
     let listed_after_the_retry = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
@@ -238,10 +245,9 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_star
         ),
         "{listed_after_two_crashes}"
     );
-    assert_eq!(started["stream"], crasher.stream_id.as_str(), "{started}");
     assert_eq!(
         (&start_once_ended["kind"], &start_once_ended["state"]),
-        (&"start".into(), &"done".into()),
+        (&"load".into(), &"done".into()),
         "{start_once_ended}"
     );
     let retried_crasher = &listed_after_the_retry["streams"][0];

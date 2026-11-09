@@ -84,7 +84,6 @@ fn help_lists_exactly_the_served_verbs() {
             "run",
             "dev",
             "stop",
-            "start",
             "rm",
             "cancel",
             "rename",

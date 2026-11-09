@@ -3,8 +3,8 @@
 
 //! The stream actions a runtime takes for its owner: run a project's stream assets, each
 //! loaded from its graph document and recorded under the id its project and stream asset
-//! give it — failed when its document does not read or its load is refused; stop, start,
-//! remove and rename a stream; list what the runtime holds; and re-load the recorded streams
+//! give it — failed when its document does not read or its load is refused; stop and
+//! remove a project; rename a stream; list what the runtime holds; and re-load the recorded streams
 //! at start.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -347,15 +347,6 @@ pub(crate) struct StreamStopOutcome {
     pub stop_not_recorded_because: Option<String>,
 }
 
-/// A recorded stream [`Runner::start_stream`] loaded and started.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct StreamStartOutcome {
-    /// The stream's id.
-    pub stream_id: String,
-    /// How many nodes the loaded graph holds.
-    pub node_count: usize,
-}
-
 /// A stream [`Runner::rename_stream`] shows under a new display name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamRenameOutcome {
@@ -371,10 +362,10 @@ pub enum StreamListingState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the
     /// runtime's next start.
     Running,
-    /// Stopped by its owner, and left unloaded until `start_stream`.
+    /// Stopped with its project, and left unloaded until `run_project`.
     Stopped,
     /// It kept crashing the runtime or could not re-load at its start, and is
-    /// skipped at the start until `start_stream` retries it; or it was
+    /// skipped at the start until a `run_project` retries it; or it was
     /// recorded by an earlier runtime, and is never loaded.
     Failed,
     /// A stream action queued or running loads it.
@@ -419,7 +410,7 @@ pub struct StreamListing {
     /// Why it is failed; `None` when it is not.
     pub failed_because: Option<String>,
     /// Each capture device a node of the loaded stream refused because nobody
-    /// had asked the user for its access; a stop and start of it asks. Empty
+    /// had asked the user for its access; a stop and run of its project asks. Empty
     /// when it is not loaded.
     pub capture_devices_whose_access_was_never_asked_for: Vec<PrivacyGatedCaptureDevice>,
     /// The stream action working on it while one is queued or running.
@@ -792,73 +783,114 @@ impl Runner {
         })
     }
 
-    /// Queue a stop of the stream whose id is `stream_id` on its project's
-    /// queue, and answer the action. A recorded stream carries the stop as a
-    /// pending mark until the action records it stopped, so a crash finishes
-    /// it at the next start. Refused — with nothing queued — naming the
-    /// streams the runtime holds when it holds none of that id, and for a
-    /// stream stopped or failed once the actions queued before run.
-    pub fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
-        self.queue_a_stream_action_on_one_stream(
-            stream_id,
-            StreamActionKind::Stop,
-            PendingStreamActionKind::Stop,
-            |record, _loaded| {
-                refuse_a_stream_whose_project_removal_is_queued(stream_id, record)?;
-                if record.is_failed_once_its_pending_stream_actions_run() {
-                    return Err(Error::Runtime(format!(
-                        "the stream `{stream_id}` is failed, so it is not loaded to stop: {}. \
-                         `start` retries it, `rm` forgets its project",
-                        record.failed_because.as_deref().unwrap_or_default()
-                    )));
-                }
-                if record.is_stopped_once_its_pending_stream_actions_run() {
-                    return Err(Error::Runtime(format!(
-                        "the stream `{stream_id}` is already stopped; `start` loads it again"
-                    )));
-                }
-                Ok(())
-            },
-            |runner, action_id, stream_id| {
-                runner.stop_the_stream_for_its_stream_action(action_id, stream_id)
-            },
-        )
-    }
-
-    /// Queue a start of the stopped or failed recorded stream whose id is
-    /// `stream_id` on its project's queue, and answer the action; the start
-    /// is a pending mark on the record until the action has run. Refused —
-    /// with nothing queued — for a stream loaded once the actions queued
-    /// before run, an id no record holds, and a record an earlier runtime
-    /// wrote.
-    pub fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
-        if self.current_stream_record_of_the_id(stream_id)?.is_none() {
-            if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(stream_id) {
-                return Err(a_start_of_a_loaded_stream_refusal(stream_id, &loaded));
+    /// Queue a stop of the whole project in `project_directory` on its queue, and answer the
+    /// action: it unloads every loaded stream of the project and records each recorded one
+    /// stopped, so the runtime leaves the project stopped across its restarts until a
+    /// `run_project`. Each record running once the actions queued before run carries the stop
+    /// as a pending mark until the action records it stopped, so a crash finishes it at the
+    /// next start. Refused — with nothing queued — for a directory not named by its absolute
+    /// path, a project whose removal is queued, and a project none of whose streams runs once
+    /// the actions queued before run.
+    pub fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        if !project_directory.is_absolute() {
+            return Err(Error::Configuration(format!(
+                "`project_directory` must be an absolute path; got `{}`",
+                project_directory.display()
+            )));
+        }
+        let project_directory = std::fs::canonicalize(project_directory)
+            .unwrap_or_else(|_| project_directory.to_path_buf());
+        let action_id = self.next_stream_action_id();
+        let mut streams: Vec<StreamOfAStreamAction> = Vec::new();
+        let ids_of_the_projects_records =
+            self.ids_of_every_record_of_the_project(&project_directory);
+        let take_the_marks_off = |streams: &[StreamOfAStreamAction]| {
+            for stream_marked_already in streams {
+                self.finish_the_pending_stream_action_on_the_record(
+                    &stream_marked_already.stream_id,
+                    &action_id,
+                );
             }
-            return Err(Error::NotFound(format!(
-                "no stream with the id `{stream_id}` is recorded in this runtime, so there is \
-                 none to start. Recorded: {}",
+        };
+        if let Some(stream_records) = self.stream_records() {
+            for stream_id in &ids_of_the_projects_records {
+                let marked = stream_records.update(stream_id, |record| match record {
+                    Some(record) => {
+                        refuse_a_stream_whose_project_removal_is_queued(stream_id, record)?;
+                        if record.is_failed()
+                            || record.is_stopped_once_its_pending_stream_actions_run()
+                        {
+                            return Ok(None);
+                        }
+                        record.queue_the_pending_stream_action(
+                            &action_id,
+                            PendingStreamActionKind::Stop,
+                        );
+                        Ok::<_, Error>(Some(record.clone()))
+                    }
+                    None => Ok(None),
+                });
+                match marked {
+                    Ok(Ok(Some(record))) => streams.push(StreamOfAStreamAction {
+                        stream_id: record.stream_id,
+                        display_name: record.display_name,
+                        stream_location: Some(record.location),
+                        state: None,
+                    }),
+                    Ok(Ok(None)) => {}
+                    Ok(Err(refusal)) | Err(refusal) => {
+                        take_the_marks_off(&streams);
+                        return Err(refusal);
+                    }
+                }
+            }
+        }
+        for loaded in self.every_loaded_stream() {
+            if the_same_directory(loaded.project_directory(), &project_directory)
+                && !ids_of_the_projects_records
+                    .iter()
+                    .any(|recorded| recorded == loaded.stream_id())
+            {
+                streams.push(StreamOfAStreamAction {
+                    stream_id: loaded.stream_id().to_string(),
+                    display_name: loaded.display_name(),
+                    stream_location: loaded.stream_location().cloned(),
+                    state: None,
+                });
+            }
+        }
+        if streams.is_empty() {
+            return Err(Error::Runtime(format!(
+                "no stream of the project in {} runs, so there is none to stop; `run` runs it. \
+                 Loaded: {}. Recorded: {}",
+                project_directory.display(),
+                self.loaded_stream_ids_listed_for_a_refusal(),
                 self.recorded_stream_ids_listed_for_a_refusal()
             )));
         }
-        self.queue_a_stream_action_on_one_stream(
-            stream_id,
-            StreamActionKind::Start,
-            PendingStreamActionKind::Start,
-            |record, loaded| {
-                refuse_a_stream_whose_project_removal_is_queued(stream_id, record)?;
-                match loaded {
-                    Some(loaded) if !record.is_stopped_once_its_pending_stream_actions_run() => {
-                        Err(a_start_of_a_loaded_stream_refusal(stream_id, loaded))
-                    }
-                    _ => Ok(()),
-                }
-            },
-            |runner, action_id, stream_id| {
-                runner.start_the_stream_for_its_stream_action(action_id, stream_id)
-            },
-        )
+        let stream_ids: Vec<String> = streams
+            .iter()
+            .map(|stream| stream.stream_id.clone())
+            .collect();
+        let action = StreamAction {
+            action_id: action_id.clone(),
+            project_directory,
+            kind: StreamActionKind::Stop,
+            state: StreamActionState::Queued,
+            step: None,
+            streams,
+            failed_because: None,
+        };
+        Ok(self
+            .stream_actions
+            .stream_action_queue_of_each_project
+            .queue_the_stream_action(
+                action,
+                Box::new(move |runner: &Runner| {
+                    runner.stop_the_project_for_its_stream_action(&action_id, &stream_ids);
+                }),
+                &self.tokio_handle(),
+            ))
     }
 
     /// Queue the removal of the whole project in `project_directory` on its
@@ -954,75 +986,6 @@ impl Runner {
             ))
     }
 
-    /// Queue the action `kind` on the one stream `stream_id` names, on its
-    /// project's queue: a recorded stream is marked pending with
-    /// `pending_kind` once `refuse` lets its record — handed the stream when
-    /// loaded — through; a loaded stream with no record carries no mark.
-    /// `body` runs the action once the project's earlier actions finished.
-    fn queue_a_stream_action_on_one_stream(
-        &self,
-        stream_id: &str,
-        kind: StreamActionKind,
-        pending_kind: PendingStreamActionKind,
-        refuse: impl FnOnce(&StreamRecord, Option<&Arc<LoadedStreamInThisRuntime>>) -> Result<()>,
-        body: fn(&Runner, &str, &str),
-    ) -> Result<StreamActionQueued> {
-        let loaded = self.loaded_stream_of_the_id_when_loaded(stream_id);
-        self.current_stream_record_of_the_id(stream_id)?;
-        let action_id = self.next_stream_action_id();
-        let marked = match self.stream_records() {
-            Some(stream_records) => stream_records.update(stream_id, |record| match record {
-                Some(record) => {
-                    refuse(record, loaded.as_ref())?;
-                    record.queue_the_pending_stream_action(&action_id, pending_kind);
-                    Ok::<_, Error>(Some(record.clone()))
-                }
-                None => Ok(None),
-            })??,
-            None => None,
-        };
-        let stream = match (marked, &loaded) {
-            (Some(record), _) => StreamOfAStreamAction {
-                stream_id: record.stream_id,
-                display_name: record.display_name,
-                stream_location: Some(record.location),
-                state: None,
-            },
-            (None, Some(loaded)) => StreamOfAStreamAction {
-                stream_id: loaded.stream_id().to_string(),
-                display_name: loaded.display_name(),
-                stream_location: loaded.stream_location().cloned(),
-                state: None,
-            },
-            (None, None) => return Err(self.a_stream_this_runtime_does_not_hold(stream_id)),
-        };
-        let project_directory = match (&stream.stream_location, &loaded) {
-            (Some(location), _) => location.project_directory.clone(),
-            (None, Some(loaded)) => loaded.project_directory().to_path_buf(),
-            (None, None) => return Err(self.a_stream_this_runtime_does_not_hold(stream_id)),
-        };
-        let project_directory =
-            std::fs::canonicalize(&project_directory).unwrap_or(project_directory);
-        let action = StreamAction {
-            action_id: action_id.clone(),
-            project_directory,
-            kind,
-            state: StreamActionState::Queued,
-            step: None,
-            streams: vec![stream],
-            failed_because: None,
-        };
-        let stream_id = stream_id.to_string();
-        Ok(self
-            .stream_actions
-            .stream_action_queue_of_each_project
-            .queue_the_stream_action(
-                action,
-                Box::new(move |runner: &Runner| body(runner, &action_id, &stream_id)),
-                &self.tokio_handle(),
-            ))
-    }
-
     /// The next stream action id of this runtime.
     fn next_stream_action_id(&self) -> String {
         self.stream_actions
@@ -1067,48 +1030,50 @@ impl Runner {
             .collect()
     }
 
-    /// Run the stop the stream action `action_id` queued of `stream_id`, and
-    /// finish the action done, or failed when the stream was unloaded and its
-    /// stop not recorded.
-    fn stop_the_stream_for_its_stream_action(&self, action_id: &str, stream_id: &str) {
+    /// Run the stop the stream action `action_id` queued of the streams `stream_ids` of one
+    /// project, and finish the action done with each stream stopped, or failed naming each
+    /// stream unloaded and not recorded stopped. A stream that is no longer loaded and is
+    /// recorded failed or stopped when the stop reaches it is left as it is.
+    fn stop_the_project_for_its_stream_action(&self, action_id: &str, stream_ids: &[String]) {
         let progress = self.progress_of_the_stream_action(action_id);
         progress.is_on(StreamActionStep::Stopping);
-        let stopped = self.stop_the_stream_finishing_its_pending_stop(stream_id, Some(action_id));
-        if stopped.is_err() {
-            self.finish_the_pending_stream_action_on_the_record(stream_id, action_id);
-        }
-        progress.finish(match stopped {
-            Ok(StreamStopOutcome {
-                stop_not_recorded_because: None,
-                ..
-            }) => Ok(vec![(stream_id.to_string(), StreamListingState::Stopped)]),
-            Ok(StreamStopOutcome {
-                stop_not_recorded_because: Some(not_recorded_because),
-                ..
-            }) => Err(format!(
-                "the stream `{stream_id}` is unloaded and was not recorded stopped, so the \
-                 runtime's restart loads it again: {not_recorded_because}"
-            )),
-            Err(refusal) => Err(refusal.to_string()),
-        });
-    }
-
-    /// Run the start the stream action `action_id` queued of `stream_id`, and
-    /// finish the action done with the stream running or failed, or failed
-    /// for a start refused before the stream was tried.
-    fn start_the_stream_for_its_stream_action(&self, action_id: &str, stream_id: &str) {
-        let progress = self.progress_of_the_stream_action(action_id);
-        let started = self.start_the_stream_finishing_its_pending_start(stream_id, Some(&progress));
-        let state_once_tried = |state| Ok(vec![(stream_id.to_string(), state)]);
-        progress.finish(match started {
-            Ok(_) => state_once_tried(StreamListingState::Running),
-            Err(refusal) => match self.current_stream_record_of_the_id(stream_id) {
-                Ok(Some(record)) if record.is_failed() => {
-                    tracing::error!("the stream `{stream_id}` did not start: {refusal}");
-                    state_once_tried(StreamListingState::Failed)
+        let mut states = Vec::with_capacity(stream_ids.len());
+        let mut not_stopped = Vec::new();
+        for stream_id in stream_ids {
+            let left_as_it_is = self
+                .loaded_stream_of_the_id_when_loaded(stream_id)
+                .is_none()
+                && self
+                    .current_stream_record_of_the_id(stream_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|record| record.is_failed() || record.stopped);
+            if left_as_it_is {
+                self.finish_the_pending_stream_action_on_the_record(stream_id, action_id);
+                continue;
+            }
+            match self.stop_the_stream_finishing_its_pending_stop(stream_id, Some(action_id)) {
+                Ok(StreamStopOutcome {
+                    stop_not_recorded_because: None,
+                    ..
+                }) => states.push((stream_id.clone(), StreamListingState::Stopped)),
+                Ok(StreamStopOutcome {
+                    stop_not_recorded_because: Some(not_recorded_because),
+                    ..
+                }) => not_stopped.push(format!(
+                    "the stream `{stream_id}` is unloaded and was not recorded stopped, so the \
+                     runtime's restart loads it again: {not_recorded_because}"
+                )),
+                Err(refusal) => {
+                    self.finish_the_pending_stream_action_on_the_record(stream_id, action_id);
+                    not_stopped.push(refusal.to_string());
                 }
-                _ => Err(refusal.to_string()),
-            },
+            }
+        }
+        progress.finish(if not_stopped.is_empty() {
+            Ok(states)
+        } else {
+            Err(not_stopped.join("; "))
         });
     }
 
@@ -1202,12 +1167,12 @@ impl Runner {
         match (loaded, record) {
             (None, None) => Err(self.a_stream_this_runtime_does_not_hold(stream_id)),
             (None, Some(record)) if record.is_failed() => Err(Error::Runtime(format!(
-                "the stream `{stream_id}` is failed, so it is not loaded to stop: {}. `start` \
+                "the stream `{stream_id}` is failed, so it is not loaded to stop: {}. `run` \
                  retries it, `rm` forgets its project",
                 record.failed_because.as_deref().unwrap_or_default()
             ))),
             (None, Some(record)) if record.stopped => Err(Error::Runtime(format!(
-                "the stream `{stream_id}` is already stopped; `start` loads it again"
+                "the stream `{stream_id}` is already stopped; `run` loads its project again"
             ))),
             (None, Some(_)) => {
                 self.record_the_stream_stopped_finishing_its_pending_stop(stream_id, action_id)?;
@@ -1256,30 +1221,6 @@ impl Runner {
         })
     }
 
-    /// Make the recorded stream's project `.venv` unless its interpreter runs,
-    /// finishing the pending start of `progress`'s action on its record, then load and start the recorded stream whose id is `stream_id` from its
-    /// record, and record it neither stopped nor
-    /// failed, its crash count reset. A `.venv` that cannot be made records it
-    /// failed for why, and refuses the start. A record holding no graph — its compile
-    /// failed — is compiled from its location as a load of its project compiles
-    /// it, and the project's own `<folder>-<hash>` record is a run of the
-    /// project. Refused for a stream already loaded, an id no record holds,
-    /// and a record an earlier runtime wrote. A failed stream whose retry is
-    /// refused stays failed for the retry's reason, its crash count reset — or
-    /// as it was, when the refusal was the engine's own; one whose retry
-    /// crashes the runtime stays failed as it was.
-    fn start_the_stream_finishing_its_pending_start(
-        &self,
-        stream_id: &str,
-        progress: Option<&StreamActionProgress<'_>>,
-    ) -> Result<StreamStartOutcome> {
-        let started = self.start_the_recorded_stream(stream_id, progress);
-        if let Some(progress) = progress {
-            self.finish_the_pending_stream_action_on_the_record(stream_id, &progress.action_id);
-        }
-        started
-    }
-
     /// Take the pending mark of the action `action_id` off the record of
     /// `stream_id`, when it has one.
     fn finish_the_pending_stream_action_on_the_record(&self, stream_id: &str, action_id: &str) {
@@ -1294,104 +1235,6 @@ impl Runner {
                  `{stream_id}`: {not_finished}"
             );
         }
-    }
-
-    /// [`Self::start_the_stream_finishing_its_pending_start`] before the
-    /// pending start is finished.
-    fn start_the_recorded_stream(
-        &self,
-        stream_id: &str,
-        progress: Option<&StreamActionProgress<'_>>,
-    ) -> Result<StreamStartOutcome> {
-        let report_the_step = |step: StreamActionStep| {
-            if let Some(progress) = progress {
-                progress.is_on(step);
-            }
-        };
-        let _in_the_projects_log = self
-            .current_stream_record_of_the_id(stream_id)
-            .ok()
-            .flatten()
-            .and_then(|record| {
-                self.enter_the_log_of_the_project_a_load_takes_in(
-                    &record.location.project_directory,
-                    progress.map(|progress| progress.action_id.as_str()),
-                )
-            });
-        let is_interrupted = || {
-            progress.map_or_else(
-                is_the_machines_shutdown_requested,
-                StreamActionProgress::is_interrupted,
-            )
-        };
-        report_the_step(StreamActionStep::MakingTheVenv);
-        self.make_the_venv_of_a_recorded_stream_before_its_start(stream_id, &is_interrupted)?;
-        report_the_step(StreamActionStep::Starting);
-        let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
-        if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(stream_id) {
-            return Err(a_start_of_a_loaded_stream_refusal(stream_id, &loaded));
-        }
-        let record = self
-            .current_stream_record_of_the_id(stream_id)
-            .map_err(|unreadable| {
-                Error::Runtime(format!(
-                    "the stream `{stream_id}` was not started: {unreadable}"
-                ))
-            })?;
-        let Some(mut record) = record else {
-            return Err(Error::NotFound(format!(
-                "no stream with the id `{stream_id}` is recorded in this runtime, so there is \
-                 none to start. Recorded: {}",
-                self.recorded_stream_ids_listed_for_a_refusal()
-            )));
-        };
-        let graph = match the_graph_the_recorded_stream_holds(&record) {
-            Ok(graph) => graph,
-            Err(no_graph) => {
-                self.record_a_refused_start_failed_resetting_its_crash_count(
-                    &mut record,
-                    format!("`start` read it again, and {no_graph}"),
-                );
-                return Err(Error::Runtime(format!(
-                    "the stream `{stream_id}` was not started: {no_graph}"
-                )));
-            }
-        };
-        let stream = match self.load_a_recorded_stream_from_its_record(
-            &record,
-            &graph,
-            CaptureDeviceAccessPrompting::MayAskTheUser,
-            &is_interrupted,
-        ) {
-            Ok(stream) => stream,
-            Err(retry_refusal)
-                if record.is_failed()
-                    && !is_interrupted()
-                    && !matches!(
-                        retry_refusal,
-                        Error::EngineResourceRefusedAtAStreamsStart(_)
-                    ) =>
-            {
-                self.record_a_refused_start_failed_resetting_its_crash_count(
-                    &mut record,
-                    format!("`start` retried it, and it did not load: {retry_refusal}"),
-                );
-                return Err(retry_refusal);
-            }
-            Err(start_refusal) => return Err(start_refusal),
-        };
-        if record.mark_running_resetting_its_crash_count()
-            && let Err(write_refusal) = self.change_the_record_of_the_stream(stream_id, |record| {
-                record.mark_running_resetting_its_crash_count();
-            })
-        {
-            unload_a_stream_an_action_took_back(&stream, "its record was not written");
-            return Err(write_refusal);
-        }
-        Ok(StreamStartOutcome {
-            node_count: stream.node_count(),
-            stream_id: stream_id.to_string(),
-        })
     }
 
     /// Show the stream whose id is `stream_id` under `display_name`, leaving
@@ -1510,8 +1353,7 @@ impl Runner {
     }
 
     /// Finish, in order, every pending stream action a crash left on a
-    /// record — a stop recorded stopped, a removal forgotten, a start recorded
-    /// neither stopped nor failed, its crash count kept — before the runtime
+    /// record — a stop recorded stopped, a removal forgotten — before the runtime
     /// counts its previous run's end and serves any call.
     pub fn finish_the_pending_stream_actions_a_crash_left(&self) {
         if let Some(stream_records) = self.stream_records() {
@@ -1548,7 +1390,7 @@ impl Runner {
             if let Some(failed_because) = &record.failed_because {
                 tracing::warn!(
                     "the stream `{}` is failed, so it is not re-loaded: {failed_because}; \
-                     `tatolab start` retries it",
+                     `tatolab run` retries it",
                     record.stream_id
                 );
                 continue;
@@ -1715,7 +1557,7 @@ impl Runner {
             if let Some(failed_because) = record.failed_because {
                 tracing::warn!(
                     "the stream `{stream_id}` is failed, so it is not re-loaded: \
-                     {failed_because}; `tatolab start` retries it"
+                     {failed_because}; `tatolab run` retries it"
                 );
                 reloads.push(StreamReloadAtTheStart::SkippedAsFailed {
                     stream_id,
@@ -1789,7 +1631,7 @@ impl Runner {
                     }) {
                         Ok(_) => tracing::error!(
                             "the stream `{stream_id}` did not re-load, and is failed: \
-                             {reload_refusal}; `tatolab start` retries it"
+                             {reload_refusal}; `tatolab run` retries it"
                         ),
                         Err(not_written) => tracing::error!(
                             "the stream `{stream_id}` did not re-load: {reload_refusal}; and it \
@@ -1872,7 +1714,7 @@ impl Runner {
             if let Some(failed_because) = &record.failed_because {
                 tracing::error!(
                     "the stream `{}` is failed: {failed_because}; it is not re-loaded until \
-                     `tatolab start` retries it",
+                     `tatolab run` retries it",
                     record.stream_id
                 );
                 streams_failed.push(record.stream_id);
@@ -2292,62 +2134,6 @@ impl Runner {
             return Ok(());
         };
         Ok(self.make_the_projects_venv(&project_directory, is_interrupted)?)
-    }
-
-    /// Before `start_stream` takes the one-action lock: make the `.venv` of the
-    /// recorded stream `stream_id` and, when it cannot be made, record the stream failed for
-    /// why and refuse the start.
-    fn make_the_venv_of_a_recorded_stream_before_its_start(
-        &self,
-        stream_id: &str,
-        is_interrupted: &dyn Fn() -> bool,
-    ) -> Result<()> {
-        let Ok(Some(StreamRecordAsRead::Current(record))) = self.stream_record_of_the_id(stream_id)
-        else {
-            return Ok(());
-        };
-        let Err(venv_not_made) = self.make_the_venv_of_a_recorded_stream(&record, is_interrupted)
-        else {
-            return Ok(());
-        };
-        let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
-        if let Ok(Some(mut record)) = self.current_stream_record_of_the_id(stream_id)
-            && self
-                .loaded_stream_of_the_id_when_loaded(stream_id)
-                .is_none()
-            && !is_interrupted()
-        {
-            self.record_a_refused_start_failed_resetting_its_crash_count(
-                &mut record,
-                format!(
-                    "`start` found its project's .venv not running, and it was not made: \
-                     {venv_not_made}"
-                ),
-            );
-        }
-        Err(venv_not_made)
-    }
-
-    /// Record `record` failed for `failed_because`, a start of it refused, its
-    /// crash count reset; a record that cannot be written is logged.
-    fn record_a_refused_start_failed_resetting_its_crash_count(
-        &self,
-        record: &mut StreamRecord,
-        failed_because: String,
-    ) {
-        record.failed_because = Some(failed_because.clone());
-        record.runtime_crashes_in_a_row_implicating_it = 0;
-        if let Err(not_written) =
-            self.change_the_record_of_the_stream(&record.stream_id, |recorded| {
-                recorded.failed_because = Some(failed_because);
-                recorded.runtime_crashes_in_a_row_implicating_it = 0;
-            })
-        {
-            tracing::warn!(
-                "the stream `{}` was not started, and its failure was not recorded: {not_written}",
-                record.stream_id
-            );
-        }
     }
 
     /// Load and start a recorded stream from `record` and the graph `graph` its document
@@ -3022,8 +2808,8 @@ fn record_a_refused_load_failed(
     Ok(StreamStateAfterItsRun::Failed { failed_because })
 }
 
-/// Refuse a stop or a start of `stream_id`, whose record is `record`, once
-/// a removal of its project is queued.
+/// Refuse a stop of `stream_id`, whose record is `record`, once a removal of
+/// its project is queued.
 fn refuse_a_stream_whose_project_removal_is_queued(
     stream_id: &str,
     record: &StreamRecord,
@@ -3034,16 +2820,16 @@ fn refuse_a_stream_whose_project_removal_is_queued(
         .any(|pending| pending.kind == PendingStreamActionKind::Remove)
     {
         return Err(Error::Runtime(format!(
-            "the stream `{stream_id}` is being removed with its project, so it is neither \
-             stopped nor started"
+            "the stream `{stream_id}` is being removed with its project, so it is not \
+             stopped"
         )));
     }
     Ok(())
 }
 
 /// Finish, in order, every pending stream action a crash left on a record
-/// of `stream_records`: a removal forgets the record, a stop records it
-/// stopped, and a start records it neither stopped nor failed.
+/// of `stream_records`: a removal forgets the record, and a stop records it
+/// stopped.
 fn finish_the_pending_stream_actions_a_crash_left_on_the_records(
     stream_records: &StreamRecordsInTheStateDirectory,
 ) {
@@ -3078,10 +2864,6 @@ fn finish_the_pending_stream_actions_a_crash_left_on_the_records(
             for pending in pending_stream_actions {
                 match pending.kind {
                     PendingStreamActionKind::Stop => record.stopped = true,
-                    PendingStreamActionKind::Start => {
-                        record.stopped = false;
-                        record.failed_because = None;
-                    }
                     PendingStreamActionKind::Remove => {}
                 }
             }
@@ -3093,18 +2875,6 @@ fn finish_the_pending_stream_actions_a_crash_left_on_the_records(
             );
         }
     }
-}
-
-/// The refusal of a start of the stream `stream_id`, which is loaded.
-fn a_start_of_a_loaded_stream_refusal(
-    stream_id: &str,
-    loaded: &LoadedStreamInThisRuntime,
-) -> Error {
-    Error::Runtime(format!(
-        "the stream `{stream_id}` is already loaded in this runtime, {}; only a stopped or \
-         failed stream starts",
-        loaded.holding()
-    ))
 }
 
 /// Refuse a display name that is empty or only whitespace: a stream is always
@@ -4333,68 +4103,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn starting_a_failed_stream_reads_its_graph_document_again() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
-        project.write_an_unloadable_graph_document("camera");
-        let camera = project.stream_id_of("camera");
-        runner
-            .load_the_project_off_its_queue(project.run_request())
-            .unwrap();
-
-        let refusal =
-            refusal_of(runner.start_the_stream_finishing_its_pending_start(&camera, None));
-
-        assert!(refusal.contains("does not load"), "{refusal}");
-        assert!(
-            the_record_of(state_directory.path(), &camera)
-                .failed_because
-                .is_some_and(|failed_because| failed_because.contains("`start` read it again")),
-        );
-
-        project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
-        let started = runner
-            .start_the_stream_finishing_its_pending_start(&camera, None)
-            .expect("the fixed document starts");
-
-        assert_eq!(started.stream_id, camera);
-        assert_eq!(
-            runner.ids_of_the_loaded_streams(),
-            std::slice::from_ref(&camera)
-        );
-        assert_eq!(
-            the_record_of(state_directory.path(), &camera).failed_because,
-            None
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn starting_a_stream_whose_graph_document_is_gone_is_refused_and_records_it_failed() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
-        let camera = project.stream_id_of("camera");
-        records_in(state_directory.path())
-            .write(&a_record_of(&project, "camera"))
-            .unwrap();
-        project.remove_the_graph_document("camera");
-
-        let refusal =
-            refusal_of(runner.start_the_stream_finishing_its_pending_start(&camera, None));
-
-        assert!(refusal.contains("no graph document"), "{refusal}");
-        assert!(runner.ids_of_the_loaded_streams().is_empty());
-        assert!(
-            the_record_of(state_directory.path(), &camera)
-                .failed_because
-                .is_some_and(|failed_because| failed_because.contains("no graph document"))
-        );
-    }
-
-    #[test]
-    #[serial]
     fn the_reload_at_the_start_reads_each_records_graph_document_and_fails_one_that_does_not_load()
     {
         let state_directory = tempfile::tempdir().unwrap();
@@ -4613,31 +4321,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn starting_a_recorded_stream_whose_record_is_unreadable_is_refused_naming_the_record() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithGraphDocuments::with_no_venv();
-        let camera = project.stream_id_of("camera");
-        let mut stopped = a_record_of(&project, "camera");
-        stopped.stopped = true;
-        records_in(state_directory.path()).write(&stopped).unwrap();
-
-        for_each_unreadable_record_of(state_directory.path(), &camera, |record_path, _| {
-            let refusal =
-                refusal_of(runner.start_the_stream_finishing_its_pending_start(&camera, None));
-
-            assert!(refusal.contains(&format!("`{camera}`")), "{refusal}");
-            assert!(refusal.contains("not started"), "{refusal}");
-            assert!(
-                refusal.contains(&record_path.display().to_string()),
-                "{refusal}"
-            );
-            assert!(runner.ids_of_the_loaded_streams().is_empty());
-        });
-    }
-
-    #[test]
-    #[serial]
     fn stopping_a_stream_its_host_loaded_unloads_it_and_records_nothing() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
@@ -4680,15 +4363,6 @@ mod tests {
                 "{refusal}"
             );
         }
-        let start_refusal =
-            refusal_of(runner.start_the_stream_finishing_its_pending_start(&hosted_one, None));
-        assert!(
-            start_refusal.contains("living with its host process"),
-            "{start_refusal}"
-        );
-        let start_refusal =
-            refusal_of(runner.start_the_stream_finishing_its_pending_start("absent", None));
-        assert!(start_refusal.contains(&recorded_one), "{start_refusal}");
     }
 
     #[test]
@@ -4711,13 +4385,6 @@ mod tests {
         ] {
             let refusal = refusal_of(
                 runner.stop_the_stream_finishing_its_pending_stop(&spelled_otherwise, None),
-            );
-
-            assert!(refusal.contains("no stream with the id"), "{refusal}");
-        }
-        for spelled_otherwise in [microphone.to_uppercase(), "microphone".to_string()] {
-            let refusal = refusal_of(
-                runner.start_the_stream_finishing_its_pending_start(&spelled_otherwise, None),
             );
 
             assert!(refusal.contains("no stream with the id"), "{refusal}");
@@ -4829,7 +4496,7 @@ mod tests {
             (camera, "Hello camera".to_string()),
             (microphone, "  Desk mic ✨  ".to_string()),
         ];
-        expected.sort();
+        expected.sort_by(|first, second| first.0.cmp(&second.0));
         assert_eq!(shown_as, expected);
     }
 
@@ -5052,15 +4719,11 @@ mod tests {
                 && listed_failed_because.contains("/home/someone/hello"),
             "{listed_failed_because}"
         );
-        for refusal in [
-            refusal_of(runner.start_the_stream_finishing_its_pending_start("main", None)),
-            refusal_of(runner.stop_the_stream_finishing_its_pending_stop("main", None)),
-        ] {
-            assert!(
-                refusal.contains("an earlier runtime recorded it"),
-                "{refusal}"
-            );
-        }
+        let refusal = refusal_of(runner.stop_the_stream_finishing_its_pending_stop("main", None));
+        assert!(
+            refusal.contains("an earlier runtime recorded it"),
+            "{refusal}"
+        );
         assert!(runner.ids_of_the_loaded_streams().is_empty());
 
         assert_eq!(
@@ -5440,7 +5103,7 @@ mod tests {
     )]
     #[test]
     #[serial]
-    fn a_stopped_recorded_stream_starts_again_and_re_loads_at_a_restart() {
+    fn a_stopped_project_runs_again_and_re_loads_at_a_restart() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
         let camera = project.stream_id_of("camera");
@@ -5453,22 +5116,15 @@ mod tests {
                 .stop_the_stream_finishing_its_pending_stop(&camera, None)
                 .unwrap();
 
-            let started = runner
-                .start_the_stream_finishing_its_pending_start(&camera, None)
-                .expect("the stream starts again");
+            let run = runner
+                .load_the_project_off_its_queue(project.run_request())
+                .expect("the stopped project runs again");
 
-            assert_eq!(
-                started,
-                StreamStartOutcome {
-                    stream_id: camera.clone(),
-                    node_count: 1,
-                }
-            );
+            let (stream, _, node_count) = the_one_running_stream_of(&run);
+            assert_eq!(stream.stream_id, camera);
+            assert_eq!(node_count, 1);
             assert!(runner.loaded_stream_of_the_id(&camera).is_ok());
             assert!(!the_record_of(state_directory.path(), &camera).stopped);
-            let refusal =
-                refusal_of(runner.start_the_stream_finishing_its_pending_start(&camera, None));
-            assert!(refusal.contains("already loaded"), "{refusal}");
         }
 
         let restarted = a_runner_recording_its_streams_in(Some(state_directory.path()));
@@ -5780,40 +5436,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    #[serial]
-    fn a_refused_retry_of_a_failed_stream_keeps_it_failed_for_the_retrys_reason_its_count_reset() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("crasher"));
-        let crasher = project.stream_id_of("crasher");
-        project.write_the_graph_document(serde_json::json!({
-            "stream": "crasher",
-            "nodes": [{"name": "source", "type": "NoSuchBuiltInNodeType", "config": {}}],
-            "links": [],
-        }));
-        let mut failed = a_record_of(&project, "crasher");
-        failed.failed_because = Some("it crashed the runtime".to_string());
-        failed.runtime_crashes_in_a_row_implicating_it = 2;
-        records_in(state_directory.path()).write(&failed).unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-
-        let refusal =
-            refusal_of(runner.start_the_stream_finishing_its_pending_start(&crasher, None));
-
-        assert!(
-            refusal.contains("no node type `NoSuchBuiltInNodeType`"),
-            "{refusal}"
-        );
-        let retried = the_record_of(state_directory.path(), &crasher);
-        assert_eq!(retried.runtime_crashes_in_a_row_implicating_it, 0);
-        let failed_because = retried.failed_because.expect("the stream stays failed");
-        assert!(
-            failed_because.contains("`start` retried it"),
-            "{failed_because}"
-        );
-        assert!(failed_because.contains(&refusal), "{failed_because}");
-    }
-
     /// A stub of the runtime unit's uv, outside every project, that counts its
     /// runs.
     struct StubRuntimeUnitUv {
@@ -6092,70 +5714,6 @@ mod tests {
 
     #[test]
     #[serial]
-    fn starting_a_stopped_stream_whose_venv_is_gone_makes_it_with_the_runtime_unit_uv() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
-        let camera = project.stream_id_of("camera");
-        runner
-            .load_the_project_off_its_queue(project.run_request())
-            .unwrap();
-        runner
-            .stop_the_stream_finishing_its_pending_stop(&camera, None)
-            .unwrap();
-        let stub_uv = StubRuntimeUnitUv::making_the_venv_moved_aside_from(&project);
-        stub_uv.handed_to(&runner);
-
-        let started = runner
-            .start_the_stream_finishing_its_pending_start(&camera, None)
-            .expect("the stream starts");
-
-        assert_eq!(started.stream_id, camera);
-        assert_eq!(stub_uv.runs(), ["sync"]);
-        assert!(!the_record_of(state_directory.path(), &camera).stopped);
-    }
-
-    #[test]
-    #[serial]
-    fn starting_a_stream_whose_venv_uv_cannot_make_is_refused_and_records_it_failed_in_uvs_words() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
-        let camera = project.stream_id_of("camera");
-        runner
-            .load_the_project_off_its_queue(project.run_request())
-            .unwrap();
-        runner
-            .stop_the_stream_finishing_its_pending_stop(&camera, None)
-            .unwrap();
-        std::fs::remove_dir_all(project.path().join(".venv")).unwrap();
-        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
-        stub_uv.handed_to(&runner);
-
-        let refusal =
-            refusal_of(runner.start_the_stream_finishing_its_pending_start(&camera, None));
-
-        assert!(refusal.contains(UV_RESOLUTION_FAILURE), "{refusal}");
-        let failed_because = the_record_of(state_directory.path(), &camera)
-            .failed_because
-            .expect("the stream is failed");
-        assert!(
-            failed_because.contains(UV_RESOLUTION_FAILURE),
-            "{failed_because}"
-        );
-        assert!(
-            !project.path().join(".venv").exists(),
-            "the half-made venv was left"
-        );
-        assert!(
-            runner
-                .loaded_stream_of_the_id_when_loaded(&camera)
-                .is_none()
-        );
-    }
-
-    #[test]
-    #[serial]
     fn the_reload_at_the_start_makes_a_gone_venv_once_for_every_record_of_its_project() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -6240,7 +5798,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_start_after_the_reload_lets_the_node_ask_the_user() {
+    fn a_run_after_the_reload_lets_the_node_ask_the_user() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
         let camera = project.stream_id_of("camera");
@@ -6256,8 +5814,8 @@ mod tests {
             .stop_the_stream_finishing_its_pending_stop(&camera, None)
             .expect("the re-loaded stream stops");
         runner
-            .start_the_stream_finishing_its_pending_start(&camera, None)
-            .expect("the stopped stream starts");
+            .load_the_project_off_its_queue(project.run_request())
+            .expect("the stopped project runs");
 
         runner
             .loaded_stream_of_the_id_when_loaded(&camera)
@@ -6802,7 +6360,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_stop_then_a_start_queue_two_marks_each_finished_by_its_own_action_in_order() {
+    fn a_stop_then_a_run_of_the_project_each_finish_in_order_behind_the_run_ahead_of_them() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -6821,15 +6379,14 @@ mod tests {
             action.step == Some(StreamActionStep::MakingTheVenv)
         });
 
-        let stop = runner.stop_stream(&camera).unwrap();
-        let start = runner.start_stream(&camera).unwrap();
+        let stop = runner.stop_project(project.path()).unwrap();
+        let run_after_the_stop = runner
+            .run_project(run_project_request_of(project.path()))
+            .unwrap();
 
         assert_eq!(
             the_pending_stream_actions_on(state_directory.path(), &camera),
-            [
-                (stop.action_id.clone(), PendingStreamActionKind::Stop),
-                (start.action_id.clone(), PendingStreamActionKind::Start),
-            ]
+            [(stop.action_id.clone(), PendingStreamActionKind::Stop)]
         );
         assert_eq!(
             runner
@@ -6841,13 +6398,16 @@ mod tests {
 
         std::fs::write(&gate, "").unwrap();
         let stopped = the_stream_action_once_finished(&runner, &stop.action_id);
-        let started = the_stream_action_once_finished(&runner, &start.action_id);
+        let run_again = the_stream_action_once_finished(&runner, &run_after_the_stop.action_id);
 
         assert_eq!(stopped.kind, StreamActionKind::Stop);
         assert_eq!(stopped.state, StreamActionState::Done, "{stopped:?}");
         assert_eq!(stopped.streams[0].state, Some(StreamListingState::Stopped));
-        assert_eq!(started.state, StreamActionState::Done, "{started:?}");
-        assert_eq!(started.streams[0].state, Some(StreamListingState::Running));
+        assert_eq!(run_again.state, StreamActionState::Done, "{run_again:?}");
+        assert_eq!(
+            run_again.streams[0].state,
+            Some(StreamListingState::Running)
+        );
         let record = the_record_of(state_directory.path(), &camera);
         assert!(!record.stopped);
         assert!(record.pending_stream_actions.is_empty(), "{record:?}");
@@ -6874,7 +6434,7 @@ mod tests {
         the_stream_action_once(&runner, &load.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
         });
-        let stop = runner.stop_stream(&camera).unwrap();
+        let stop = runner.stop_project(project.path()).unwrap();
 
         let stop_cancelled = runner.cancel_stream_action(&stop.action_id).unwrap();
         let load_asked_to_cancel = runner.cancel_stream_action(&load.action_id).unwrap();
@@ -6900,7 +6460,7 @@ mod tests {
                 .contains("is already cancelled")
         );
         assert!(refusal_of(runner.cancel_stream_action("R-never")).contains("is not held"));
-        let follow_on = runner.stop_stream(&camera).unwrap();
+        let follow_on = runner.stop_project(project.path()).unwrap();
         assert_eq!(
             the_stream_action_once_finished(&runner, &follow_on.action_id).state,
             StreamActionState::Done
@@ -6908,7 +6468,7 @@ mod tests {
     }
 
     #[test]
-    fn a_running_stop_or_removal_refuses_its_cancel_and_a_running_load_or_start_takes_it() {
+    fn a_running_stop_or_removal_refuses_its_cancel_and_a_running_load_takes_it() {
         let running_of = |kind: StreamActionKind| StreamAction {
             action_id: "R-1".to_string(),
             project_directory: PathBuf::from("/srv/desk"),
@@ -6923,18 +6483,14 @@ mod tests {
             let refusal = refusal_of(refuse_the_cancel_of_a_running_unload(&running_of(unload)));
             assert!(refusal.contains("cannot be cut short"), "{refusal}");
         }
-        for load in [
-            StreamActionKind::Load,
-            StreamActionKind::Start,
-            StreamActionKind::ReloadAtStart,
-        ] {
+        for load in [StreamActionKind::Load, StreamActionKind::ReloadAtStart] {
             assert!(refuse_the_cancel_of_a_running_unload(&running_of(load)).is_ok());
         }
     }
 
     #[test]
     #[serial]
-    fn a_stop_of_a_stopped_stream_and_a_start_of_a_loaded_one_are_refused_with_nothing_queued() {
+    fn a_stop_of_a_stopped_project_is_refused_with_nothing_queued() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -6945,18 +6501,12 @@ mod tests {
             &a_record_of(&project, "camera"),
         );
 
-        let refusal = refusal_of(runner.start_stream(&camera));
-        assert!(refusal.contains("already loaded"), "{refusal}");
-        let stop = runner.stop_stream(&camera).unwrap();
-        let refusal = refusal_of(runner.stop_stream(&camera));
-        assert!(refusal.contains("already stopped"), "{refusal}");
-        assert!(
-            refusal_of(runner.stop_stream("nothing-here-0a1b2c")).contains("no stream with the id")
-        );
-        assert!(
-            refusal_of(runner.start_stream("nothing-here-0a1b2c"))
-                .contains("no stream with the id")
-        );
+        let stop = runner.stop_project(project.path()).unwrap();
+        let refusal = refusal_of(runner.stop_project(project.path()));
+        assert!(refusal.contains("none to stop"), "{refusal}");
+        let elsewhere = ProjectWithGraphDocuments::with_no_venv();
+        assert!(refusal_of(runner.stop_project(elsewhere.path())).contains("none to stop"));
+        assert!(refusal_of(runner.stop_project(Path::new("relative"))).contains("absolute"));
 
         the_stream_action_once_finished(&runner, &stop.action_id);
         assert!(the_pending_stream_actions_on(state_directory.path(), &camera).is_empty());
@@ -6965,122 +6515,115 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_failed_stream_a_start_retries_is_listed_preparing_with_no_failed_because_until_it_ends() {
+    fn a_stop_of_a_project_stops_each_running_stream_and_leaves_a_failed_one_as_it_is() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        project.write_the_graph_document(the_graph_of_a_stream_named("microphone"));
+        let camera = project.stream_id_of("camera");
+        let microphone = project.stream_id_of("microphone");
+        a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera"),
+        );
+        a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "microphone"),
+        );
         let failed = StreamRecord {
             failed_because: Some("it crashed the runtime".to_string()),
-            ..a_record_of(&project, "camera")
+            ..a_record_of(&project, "preview")
         };
         records_in(state_directory.path()).write(&failed).unwrap();
-        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
-        stub_uv.handed_to(&runner);
 
-        let start = runner.start_stream(&failed.stream_id).unwrap();
-        the_stream_action_once(&runner, &start.action_id, |action| {
-            action.step == Some(StreamActionStep::MakingTheVenv)
-        });
-        let listed_while_it_retries = runner.list_streams();
-        std::fs::write(&gate, "").unwrap();
-        the_stream_action_once_finished(&runner, &start.action_id);
+        let stop = runner.stop_project(project.path()).unwrap();
+        let stopped = the_stream_action_once_finished(&runner, &stop.action_id);
 
-        assert_eq!(
-            listed_while_it_retries.len(),
-            1,
-            "{listed_while_it_retries:?}"
-        );
-        assert_eq!(
-            (
-                listed_while_it_retries[0].state,
-                &listed_while_it_retries[0].failed_because
-            ),
-            (StreamListingState::Preparing, &None),
-            "{listed_while_it_retries:?}"
-        );
+        assert_eq!(stopped.state, StreamActionState::Done, "{stopped:?}");
+        let mut stream_states: Vec<_> = stopped
+            .streams
+            .iter()
+            .map(|stream| (stream.stream_id.clone(), stream.state))
+            .collect();
+        stream_states.sort_by(|first, second| first.0.cmp(&second.0));
+        let mut expected = vec![
+            (camera.clone(), Some(StreamListingState::Stopped)),
+            (microphone.clone(), Some(StreamListingState::Stopped)),
+        ];
+        expected.sort_by(|first, second| first.0.cmp(&second.0));
+        assert_eq!(stream_states, expected);
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        assert!(the_record_of(state_directory.path(), &camera).stopped);
+        assert!(the_record_of(state_directory.path(), &microphone).stopped);
+        let preview = the_record_of(state_directory.path(), &failed.stream_id);
+        assert!(preview.is_failed() && !preview.stopped, "{preview:?}");
+        assert!(preview.pending_stream_actions.is_empty(), "{preview:?}");
     }
 
     #[test]
     #[serial]
-    fn a_stop_refused_when_it_runs_takes_its_mark_off_the_record() {
+    fn a_stream_that_fails_before_the_stop_reaches_it_is_left_failed_with_its_mark_taken_off() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithGraphDocuments::with_no_venv();
-        let failed = StreamRecord {
-            failed_because: Some("it crashed the runtime".to_string()),
-            ..a_record_of(&project, "camera")
-        };
-        records_in(state_directory.path()).write(&failed).unwrap();
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        let camera = project.stream_id_of("camera");
+        records_in(state_directory.path())
+            .write(&a_record_of(&project, "camera"))
+            .unwrap();
+        project.write_an_unloadable_graph_document("camera");
+        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+        stub_uv.handed_to(&runner);
+        let run_ahead_of_it = runner
+            .run_project(run_project_request_of(project.path()))
+            .unwrap();
+        the_stream_action_once(&runner, &run_ahead_of_it.action_id, |action| {
+            action.step == Some(StreamActionStep::MakingTheVenv)
+        });
+        let stop = runner.stop_project(project.path()).unwrap();
 
-        let start = runner.start_stream(&failed.stream_id).unwrap();
-        let stop = runner.stop_stream(&failed.stream_id).unwrap();
-        the_stream_action_once_finished(&runner, &start.action_id);
+        std::fs::write(&gate, "").unwrap();
+        the_stream_action_once_finished(&runner, &run_ahead_of_it.action_id);
         let stop_once_finished = the_stream_action_once_finished(&runner, &stop.action_id);
 
         assert_eq!(
             stop_once_finished.state,
-            StreamActionState::Failed,
+            StreamActionState::Done,
             "{stop_once_finished:?}"
         );
-        let record = the_record_of(state_directory.path(), &failed.stream_id);
+        let record = the_record_of(state_directory.path(), &camera);
         assert!(record.pending_stream_actions.is_empty(), "{record:?}");
         assert!(record.is_failed() && !record.stopped, "{record:?}");
     }
 
     #[test]
     #[serial]
-    fn a_stop_or_a_start_queued_behind_a_removal_of_its_project_is_refused() {
+    fn a_stop_queued_behind_a_removal_of_its_project_is_refused() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
-        let stopped = StreamRecord {
-            stopped: true,
-            ..a_record_of(&project, "camera")
-        };
-        records_in(state_directory.path()).write(&stopped).unwrap();
-        let mut removed_with_its_project = stopped.clone();
+        let mut removed_with_its_project = a_record_of(&project, "camera");
         removed_with_its_project
             .queue_the_pending_stream_action("R-1", PendingStreamActionKind::Remove);
         records_in(state_directory.path())
             .write(&removed_with_its_project)
             .unwrap();
 
-        for refusal in [
-            refusal_of(runner.start_stream(&stopped.stream_id)),
-            refusal_of(runner.stop_stream(&stopped.stream_id)),
-        ] {
-            assert!(
-                refusal.contains("being removed with its project"),
-                "{refusal}"
-            );
-        }
+        let refusal = refusal_of(runner.stop_project(project.path()));
+
+        assert!(
+            refusal.contains("being removed with its project"),
+            "{refusal}"
+        );
         assert_eq!(
-            the_pending_stream_actions_on(state_directory.path(), &stopped.stream_id).len(),
+            the_pending_stream_actions_on(
+                state_directory.path(),
+                &removed_with_its_project.stream_id
+            )
+            .len(),
             1
         );
-    }
-
-    #[test]
-    #[serial]
-    fn a_start_a_crash_left_pending_clears_failed_and_stopped_and_keeps_the_crash_count() {
-        let state_directory = tempfile::tempdir().unwrap();
-        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
-        let mut retried = StreamRecord {
-            failed_because: Some("it crashed the runtime".to_string()),
-            stopped: true,
-            runtime_crashes_in_a_row_implicating_it: 1,
-            ..a_record_of(&project, "camera")
-        };
-        retried.queue_the_pending_stream_action("R-1", PendingStreamActionKind::Start);
-        records_in(state_directory.path()).write(&retried).unwrap();
-        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-
-        runner.finish_the_pending_stream_actions_a_crash_left();
-
-        let record = the_record_of(state_directory.path(), &retried.stream_id);
-        assert!(!record.is_failed() && !record.stopped, "{record:?}");
-        assert_eq!(record.runtime_crashes_in_a_row_implicating_it, 1);
-        assert!(record.pending_stream_actions.is_empty(), "{record:?}");
     }
 
     #[test]
@@ -7089,15 +6632,13 @@ mod tests {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
         let records = records_in(state_directory.path());
-        let mut stopped_then_started = a_record_of(&project, "camera");
-        stopped_then_started.queue_the_pending_stream_action("R-1", PendingStreamActionKind::Stop);
-        stopped_then_started.queue_the_pending_stream_action("R-2", PendingStreamActionKind::Start);
+        let running = a_record_of(&project, "camera");
         let mut stopped = a_record_of(&project, "mic");
         stopped.queue_the_pending_stream_action("R-3", PendingStreamActionKind::Stop);
         let mut removed = a_record_of(&project, "preview");
-        removed.queue_the_pending_stream_action("R-4", PendingStreamActionKind::Remove);
-        removed.queue_the_pending_stream_action("R-5", PendingStreamActionKind::Start);
-        for record in [&stopped_then_started, &stopped, &removed] {
+        removed.queue_the_pending_stream_action("R-4", PendingStreamActionKind::Stop);
+        removed.queue_the_pending_stream_action("R-5", PendingStreamActionKind::Remove);
+        for record in [&running, &stopped, &removed] {
             records.write(record).unwrap();
         }
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
@@ -7121,20 +6662,14 @@ mod tests {
                 .iter()
                 .map(|stream| (stream.stream_id.clone(), stream.state))
                 .collect::<Vec<_>>(),
-            [(
-                stopped_then_started.stream_id.clone(),
-                Some(StreamListingState::Running)
-            )]
+            [(running.stream_id.clone(), Some(StreamListingState::Running))]
         );
         assert!(
-            the_record_of(state_directory.path(), &stopped_then_started.stream_id)
+            the_record_of(state_directory.path(), &running.stream_id)
                 .pending_stream_actions
                 .is_empty()
         );
-        assert_eq!(
-            runner.ids_of_the_loaded_streams(),
-            [stopped_then_started.stream_id]
-        );
+        assert_eq!(runner.ids_of_the_loaded_streams(), [running.stream_id]);
     }
 
     #[test]
@@ -7242,10 +6777,11 @@ mod tests {
             state_directory.path(),
             &a_record_of(&project, "camera"),
         );
-        let stop = runner.stop_stream(&camera).unwrap();
+        let stop = runner.stop_project(project.path()).unwrap();
         let stopped = the_stream_action_once_finished(&runner, &stop.action_id);
 
         assert_eq!(stopped.state, StreamActionState::Done);
         assert_eq!(runner.list_streams()[0].state, StreamListingState::Stopped);
+        assert_eq!(runner.list_streams()[0].stream_id, camera);
     }
 }

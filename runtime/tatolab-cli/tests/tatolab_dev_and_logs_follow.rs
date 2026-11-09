@@ -247,7 +247,7 @@ fn dev_queues_a_load_of_the_project_and_prints_each_record_under_its_folder_name
     drop(running_tatolab);
 }
 
-/// Ctrl-C ends `dev`'s following and leaves the project's streams loaded: no `stop_stream`, no
+/// Ctrl-C ends `dev`'s following and leaves the project's streams loaded: no `stop_project`, no
 /// `remove_project`, exit 0.
 #[test]
 fn ctrl_c_on_dev_ends_the_following_and_never_stops_a_stream() {
@@ -563,7 +563,7 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-    assert_eq!(calls_to(&stub_local_api_server, "stop_stream"), 0);
+    assert_eq!(calls_to(&stub_local_api_server, "stop_project"), 0);
 }
 
 /// The runtime closing `dev`'s connection is a crash: `dev` names it and the log folder the
@@ -811,7 +811,7 @@ fn ctrl_c_on_logs_follow_exits_zero_and_never_stops_the_stream() {
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
 
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-    assert_eq!(calls_to(&stub_local_api_server, "stop_stream"), 0);
+    assert_eq!(calls_to(&stub_local_api_server, "stop_project"), 0);
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
         ["list_streams"]

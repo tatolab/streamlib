@@ -720,7 +720,7 @@ pub fn run_project_tool_result_text(action: &str, project_directory: &Path) -> S
     serde_json::json!({ "action": action, "project_directory": project_directory }).to_string()
 }
 
-/// The text a runtime's `stop_stream` answers with, the stop queued as the action `R-1`.
-pub fn stop_stream_tool_result_text(stream: &str) -> String {
-    serde_json::json!({ "action": "R-1", "stream": stream }).to_string()
+/// The text a runtime's `rename_stream` answers with, `stream` shown as `display_name`.
+pub fn rename_stream_tool_result_text(stream: &str, display_name: &str) -> String {
+    serde_json::json!({ "stream": stream, "display_name": display_name }).to_string()
 }

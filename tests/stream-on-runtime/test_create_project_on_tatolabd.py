@@ -159,17 +159,16 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
         project_log
     )
 
-    queued_stop = local_api.call_tool("stop_stream", {"stream": created["stream"]})
+    queued_stop = local_api.call_tool("stop_project", {"project_directory": str(project_directory)})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
     (project_directory / ".venv").unlink()
     point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory)
-    queued_start = local_api.call_tool("start_stream", {"stream": created["stream"]})
+    queued_start = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 
     assert start_once_ended["state"] == "done", start_once_ended
-    assert [stream["state"] for stream in start_once_ended["streams"]] == ["running"], (
-        start_once_ended
-    )
+    states_after_the_run = {stream["stream"]: stream["state"] for stream in start_once_ended["streams"]}
+    assert states_after_the_run[created["stream"]] == "running", start_once_ended
     assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
 
 

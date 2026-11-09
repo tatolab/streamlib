@@ -123,7 +123,7 @@ enum TatolabVerb {
                       until `tatolab stop` or `tatolab rm`. Loading the project again replaces \
                       each stream under the same id. A stream whose graph document fails to \
                       read or load is recorded failed, with why in the project's log, until a \
-                      load of the fixed document replaces it or `tatolab start` retries it. Prints `<action> queued: \
+                      load of the fixed document replaces it; a load of a stopped project runs it again. Prints `<action> queued: \
                       load of <project>` and how to follow it with `tatolab logs -f`; \
                       `tatolab streams` shows each stream `preparing` until the load has run. \
                       Exits 0 once queued, and 1 only when the request is refused or no runtime \
@@ -151,15 +151,20 @@ enum TatolabVerb {
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
-    /// Stop a stream: queue its unload, and keep it stopped across restarts.
+    /// Stop this project: queue the unload of every stream of it, kept stopped across restarts.
+    #[command(
+        long_about = "Queue a stop of the whole project on its stream action queue: once the \
+                      project's earlier actions have run, every stream of it is unloaded and \
+                      recorded stopped, so the runtime leaves the project stopped across its \
+                      restarts until `tatolab run` runs it again. A project runs and stops as a \
+                      whole; no verb stops one stream of it. Prints `<action> queued: stop of \
+                      <project>` and exits 0 once queued; `tatolab streams` shows the project's \
+                      streams `stopping` until it is done."
+    )]
     Stop {
-        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
-        stream: Option<String>,
-    },
-    /// Queue a load of a stopped stream, or a retry of a failed one.
-    Start {
-        #[arg(help = STREAM_ARGUMENT_HELP, long_help = STREAM_ARGUMENT_LONG_HELP)]
-        stream: Option<String>,
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
     },
     /// Remove this project from the runtime: unload every stream of it and forget them.
     #[command(
@@ -176,9 +181,9 @@ enum TatolabVerb {
     },
     /// Cancel a stream action: drop a queued one, or stop a running load at its step.
     #[command(
-        long_about = "Cancel the stream action ACTION, the id `run`, `dev`, `stop`, `start` or \
-                      `rm` printed. A queued action is dropped and its streams' records stay as \
-                      they were; prints `<action> cancelled`. A running load or start stops at \
+        long_about = "Cancel the stream action ACTION, the id `run`, `dev`, `stop` or `rm` \
+                      printed. A queued action is dropped and its streams' records stay as \
+                      they were; prints `<action> cancelled`. A running load stops at \
                       the step it is on — a running uv sync is killed and a half-made \
                       .venv removed — and the streams it had not reached stay as recorded; \
                       prints `<action> cancelling` and ends cancelled. A running stop or rm has \
@@ -337,11 +342,13 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
                 )
             })
         }
-        TatolabVerb::Stop { stream } => {
-            stream_actions_on_the_runtime::stop_stream(stream.as_deref())
-        }
-        TatolabVerb::Start { stream } => {
-            stream_actions_on_the_runtime::start_stream(stream.as_deref())
+        TatolabVerb::Stop { project_directory } => {
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_actions_on_the_runtime::stop_project(
+                    &caller_working_directory,
+                    project_directory.as_deref(),
+                )
+            })
         }
         TatolabVerb::Rm { project_directory } => {
             caller_working_directory().and_then(|caller_working_directory| {

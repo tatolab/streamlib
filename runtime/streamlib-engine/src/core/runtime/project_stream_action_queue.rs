@@ -26,9 +26,7 @@ pub const FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT: usize = 64;
 pub enum StreamActionKind {
     /// Loads every graph document of a project.
     Load,
-    /// Loads and starts one stopped or failed stream.
-    Start,
-    /// Unloads one stream and records it stopped.
+    /// Unloads every stream of a project and records each stopped.
     Stop,
     /// Unloads every stream of a project and forgets every record of it.
     Remove,
@@ -42,7 +40,6 @@ impl StreamActionKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Load => "load",
-            Self::Start => "start",
             Self::Stop => "stop",
             Self::Remove => "remove",
             Self::ReloadAtStart => "reload_at_start",

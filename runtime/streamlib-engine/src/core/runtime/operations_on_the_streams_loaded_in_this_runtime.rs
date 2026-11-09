@@ -22,7 +22,7 @@ use crate::core::processors::InstalledModuleOfANodeType;
 /// stream a call names, a stream's node catalog, and the stream
 /// actions.
 ///
-/// `run_project`, `start_stream`, `stop_stream` and `remove_project` answer at
+/// `run_project`, `stop_project` and `remove_project` answer at
 /// once, their actions running on the project's stream action queue; every
 /// other call may block on the stream table, so the local API calls each from a
 /// blocking task.
@@ -102,11 +102,8 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_asset: Uuid,
     ) -> Result<Option<String>>;
 
-    /// [`Runner::stop_stream`].
-    fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued>;
-
-    /// [`Runner::start_stream`].
-    fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued>;
+    /// [`Runner::stop_project`].
+    fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
     /// [`Runner::remove_project`].
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
@@ -225,12 +222,8 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::forget_the_stream_of_a_deleted_stream_asset(self, project, stream_asset)
     }
 
-    fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
-        Runner::stop_stream(self, stream_id)
-    }
-
-    fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
-        Runner::start_stream(self, stream_id)
+    fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::stop_project(self, project_directory)
     }
 
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {

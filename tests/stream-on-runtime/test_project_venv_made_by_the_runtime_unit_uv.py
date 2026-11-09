@@ -135,7 +135,7 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
     assert not (tmp_path / "another-venv").exists(), "uv made the venv VIRTUAL_ENV names"
 
     shutil.rmtree(project_directory / ".venv")
-    queued_start = local_api.call_tool("start_stream", {"stream": failed_stream["stream"]})
+    queued_start = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 
     assert start_once_ended["state"] == "done", start_once_ended

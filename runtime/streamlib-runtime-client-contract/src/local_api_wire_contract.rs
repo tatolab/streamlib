@@ -47,22 +47,13 @@ pub struct StreamLocationOnTheWire {
     pub stream_asset: uuid::Uuid,
 }
 
-/// The `stop_stream` tool's result: the stop queued on its stream's project.
+/// The `stop_project` tool's result: the stop of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StopStreamToolResult {
+pub struct StopProjectToolResult {
     /// The queued stop, as `describe_stream_action` takes it.
     pub action: String,
-    /// The stream's id.
-    pub stream: String,
-}
-
-/// The `start_stream` tool's result: the start queued on its stream's project.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StartStreamToolResult {
-    /// The queued start, as `describe_stream_action` takes it.
-    pub action: String,
-    /// The stream's id.
-    pub stream: String,
+    /// The project whose streams it unloads and records stopped, symlinks resolved.
+    pub project_directory: PathBuf,
 }
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
@@ -108,7 +99,7 @@ pub struct ListStreamsToolResultStream {
     pub failed_because: Option<String>,
     /// Each capture device a node of the loaded stream refused because nobody has asked the user
     /// for its access — the runtime re-loaded it on its own at its start — once each; a
-    /// `stop_stream` then `start_stream` of it asks. Empty when it is not loaded.
+    /// `stop_project` then `run_project` of its project asks. Empty when it is not loaded.
     pub capture_devices_whose_access_was_never_asked_for: Vec<CaptureDeviceOnTheWire>,
     /// The stream action preparing it, as `describe_stream_action` takes it; `null` unless it
     /// is `preparing`.
@@ -145,9 +136,9 @@ pub enum ListedStreamState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
     /// start.
     Running,
-    /// Stopped by its owner, and left unloaded until `start_stream`.
+    /// Stopped with its project, and left unloaded until `run_project`.
     Stopped,
-    /// Skipped at the runtime's start until `start_stream` retries it.
+    /// Skipped at the runtime's start until a `run_project` of its project retries it.
     Failed,
     /// A stream action of its project that loads it is queued or under way on it.
     Preparing,
@@ -200,9 +191,7 @@ pub struct CreateProjectToolResult {
 pub enum StreamActionKindOnTheWire {
     /// Loads every graph document of a project.
     Load,
-    /// Loads and starts one stopped or failed stream.
-    Start,
-    /// Unloads one stream and records it stopped.
+    /// Unloads every stream of a project and records each stopped.
     Stop,
     /// Unloads every stream of a project and forgets every record of it.
     Remove,
@@ -814,18 +803,11 @@ mod tests {
         }
 
         assert_eq!(
-            wire_text(&StartStreamToolResult {
-                action: "R-7".to_owned(),
-                stream: "camera".to_owned(),
-            }),
-            r#"{"action":"R-7","stream":"camera"}"#
-        );
-        assert_eq!(
-            wire_text(&StopStreamToolResult {
+            wire_text(&StopProjectToolResult {
                 action: "R-8".to_owned(),
-                stream: "camera".to_owned(),
+                project_directory: PathBuf::from("/srv/project"),
             }),
-            r#"{"action":"R-8","stream":"camera"}"#
+            r#"{"action":"R-8","project_directory":"/srv/project"}"#
         );
         assert_eq!(
             wire_text(&RemoveProjectToolResult {
