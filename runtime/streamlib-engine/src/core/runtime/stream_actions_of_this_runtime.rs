@@ -336,7 +336,7 @@ pub(crate) enum StreamStateAfterItsRun {
     },
 }
 
-/// A stream [`Runner::stop_stream`] unloaded.
+/// A stream [`Runner::stop_project`] unloaded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StreamStopOutcome {
     /// The stream's id.
