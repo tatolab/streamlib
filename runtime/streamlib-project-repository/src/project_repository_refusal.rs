@@ -74,8 +74,13 @@ pub enum ProjectRepositoryRefusal {
     ImportRequirementsUnresolvable { resolver_refusal: String },
     #[error("the import source {path} could not be read: {why}")]
     ImportSourceUnreadable { path: PathBuf, why: String },
-    #[error("the project's content store holds no content {0}")]
-    ContentNotInTheStore(String),
+    #[error("the project's uploads hold no upload {0}")]
+    NoSuchUpload(String),
+    #[error("the upload {content_sha256} holds bytes whose SHA-256 is {held_sha256}")]
+    UploadHoldsOtherBytes {
+        content_sha256: String,
+        held_sha256: String,
+    },
     #[error("a transaction must hold at least one change")]
     EmptyTransaction,
     #[error("the transaction's author needs a name")]

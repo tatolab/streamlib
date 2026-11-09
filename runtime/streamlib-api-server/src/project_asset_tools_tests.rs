@@ -152,7 +152,7 @@ async fn media_usd_and_an_fmu_are_imported_renamed_moved_and_deleted_one_commit_
         let described = served
             .answered("describe_asset", json!({ "asset": asset }))
             .await;
-        assert_eq!(described["content_held"], true);
+        assert_eq!(described["file_at_its_path"], true);
         assert_eq!(described["asset"]["path"], moved["asset"]["path"]);
 
         let deleted = served
@@ -222,7 +222,7 @@ async fn a_change_with_no_author_is_by_the_agent_its_client_is_and_kind_narrows_
 }
 
 #[tokio::test]
-async fn an_import_from_stored_content_reuses_the_bytes_by_their_hash() {
+async fn an_import_of_an_upload_moves_it_to_the_assets_path_by_its_hash() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
     let source = served.a_file_outside_the_project("intro.mp4", b"video bytes");
     let first = served
@@ -235,18 +235,27 @@ async fn an_import_from_stored_content_reuses_the_bytes_by_their_hash() {
         .as_str()
         .unwrap()
         .to_owned();
+    let upload = streamlib_project_repository::the_upload_file_of(
+        &served.project_directory(),
+        &content_sha256,
+    );
+    std::fs::create_dir_all(upload.parent().unwrap()).unwrap();
+    std::fs::write(&upload, b"video bytes").unwrap();
+
     let second = served
         .answered(
             "import_asset",
             json!({ "source": content_sha256, "asset_path": "media/intro-copy.mp4" }),
         )
         .await;
+
     assert_eq!(second["asset"]["content_sha256"], content_sha256.as_str());
     assert_ne!(second["asset"]["asset"], first["asset"]["asset"]);
     assert_eq!(
         std::fs::read(served.project_directory().join("media/intro-copy.mp4")).unwrap(),
         b"video bytes"
     );
+    assert!(!upload.exists());
 }
 
 #[tokio::test]

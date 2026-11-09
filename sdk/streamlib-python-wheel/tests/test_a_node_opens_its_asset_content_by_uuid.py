@@ -23,10 +23,8 @@ LUT_BYTES = b"LUT_3D_SIZE 2\n"
 def a_project_holding_one_data_asset(project_directory: Path) -> str:
     asset = str(uuid.uuid4())
     content_sha256 = hashlib.sha256(LUT_BYTES).hexdigest()
-    content_store = project_directory / ".tatolab" / "content"
-    content_store.mkdir(parents=True)
-    (content_store / content_sha256).write_bytes(LUT_BYTES)
     (project_directory / "looks").mkdir()
+    (project_directory / "looks" / "grade.cube").write_bytes(LUT_BYTES)
     (project_directory / "looks" / "grade.cube.asset.json").write_text(
         json.dumps(
             {

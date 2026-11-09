@@ -53,14 +53,15 @@ impl ProjectTransactionAuthor {
     }
 }
 
-/// Where an import's bytes come from; they reach the content store before the transaction, never inside it.
+/// Where an import's bytes come from; they reach the asset's path once, never the transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAssetImportSource {
     /// A file on this machine, by absolute path.
     FileOnThisMachine(PathBuf),
-    /// Bytes an upload already put in the content store, by their SHA-256.
-    StoredContent(String),
+    /// Bytes an upload put in the project's uploads, by their SHA-256, which the import moves
+    /// to the asset's path.
+    UploadedContent(String),
 }
 
 /// One change a caller asks of a project's assets.
@@ -79,7 +80,7 @@ pub enum ProjectAssetChangeRequest {
     RenameAsset { asset: Uuid, file_name: String },
     /// Put an asset in another folder of the project, `""` being its root.
     MoveAsset { asset: Uuid, into_directory: String },
-    /// Stop tracking an asset; its bytes stay in the content store.
+    /// Stop tracking an asset; its file leaves the project and nothing keeps its bytes.
     DeleteAsset { asset: Uuid },
     /// Replace an asset's import settings.
     SetAssetSettings {
