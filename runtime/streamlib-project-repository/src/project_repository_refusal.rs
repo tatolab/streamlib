@@ -135,6 +135,13 @@ pub enum ProjectRepositoryRefusal {
         distribution: String,
         project_directories: Vec<PathBuf>,
     },
+    #[error(
+        "the project still uses the dependency {project}: {referencing_nodes:?} reference its assets; remove or fork them first"
+    )]
+    DependencyStillReferenced {
+        project: Uuid,
+        referencing_nodes: Vec<String>,
+    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "history")]

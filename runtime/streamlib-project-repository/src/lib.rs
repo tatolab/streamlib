@@ -48,7 +48,9 @@ pub use project_repositories_open_in_this_runtime::{
     ProjectTransactionAnnouncement,
 };
 #[cfg(feature = "history")]
-pub use project_repository::{DependencyStreamFork, FORKED_FROM_KEY, ProjectRepository};
+pub use project_repository::{
+    DependencyStreamFork, FORKED_FROM_KEY, ProjectDependencyListed, ProjectRepository,
+};
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,

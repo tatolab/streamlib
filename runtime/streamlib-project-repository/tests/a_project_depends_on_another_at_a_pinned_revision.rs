@@ -895,3 +895,127 @@ fn a_package_that_ships_no_project_is_refused_by_name() {
         "{refused:?}"
     );
 }
+
+#[test]
+fn a_listing_checked_for_newer_answers_the_sources_newest_commit_beside_the_pin() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let pinned_revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &pinned_revision, None)
+        .unwrap();
+    let newer_revision = arm.add_a_node_named("elbow");
+
+    let unchecked = cell.repository.dependency_listing(false, None);
+    assert_eq!(unchecked.len(), 1);
+    assert_eq!(unchecked[0].dependency.revision, pinned_revision);
+    assert_eq!(unchecked[0].newest_on_the_source, None);
+
+    let checked = cell.repository.dependency_listing(true, None);
+    assert_eq!(checked[0].dependency.revision, pinned_revision);
+    assert_eq!(checked[0].newest_on_the_source, Some(Ok(newer_revision)));
+
+    std::fs::remove_dir_all(arm.repository.project_directory()).unwrap();
+    let source_gone = cell.repository.dependency_listing(true, None);
+    assert!(
+        matches!(source_gone[0].newest_on_the_source, Some(Err(_))),
+        "{source_gone:?}"
+    );
+}
+
+#[test]
+fn a_dependency_is_removed_only_once_no_node_references_it_and_undo_puts_its_pin_back() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &revision, None)
+        .unwrap();
+    let user = Uuid::new_v4();
+    let add_the_user = StreamGraphOperation::AddNode {
+        node: StreamGraphDocumentNode {
+            id: user,
+            name: "arm".to_owned(),
+            node_type: "tatolab.project:StreamFragment".to_owned(),
+            config: json!({ "stream": { "asset": arm.stream, "from": arm_project } }),
+            pins: Map::new(),
+            exposed_config_fields: Vec::new(),
+            studio: Map::new(),
+            fragment: None,
+        },
+        links: Vec::new(),
+    };
+    cell.repository
+        .apply_project_operations(
+            &a_person(),
+            vec![ProjectOperation::StreamGraph(
+                StreamGraphOperationOnAStream {
+                    stream: cell.stream,
+                    graph_operation: add_the_user,
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+
+    let refused = cell
+        .repository
+        .remove_dependency(&a_person(), arm_project)
+        .err()
+        .unwrap();
+    match &refused {
+        ProjectRepositoryRefusal::DependencyStillReferenced {
+            referencing_nodes, ..
+        } => {
+            assert_eq!(referencing_nodes.len(), 1);
+            assert!(referencing_nodes[0].contains("streams/main.graph.json"));
+            assert!(referencing_nodes[0].contains(&user.to_string()));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(cell.repository.dependency(arm_project).is_ok());
+
+    cell.repository
+        .apply_project_operations(
+            &a_person(),
+            vec![ProjectOperation::StreamGraph(
+                StreamGraphOperationOnAStream {
+                    stream: cell.stream,
+                    graph_operation: StreamGraphOperation::RemoveNode {
+                        node: cell
+                            .repository
+                            .stream_graph_document(cell.stream)
+                            .unwrap()
+                            .node_named("arm")
+                            .unwrap(),
+                        links: Vec::new(),
+                    },
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+    cell.repository
+        .remove_dependency(&a_person(), arm_project)
+        .unwrap();
+    assert!(matches!(
+        cell.repository.dependency(arm_project),
+        Err(ProjectRepositoryRefusal::NoSuchDependency(_))
+    ));
+
+    let reversal = cell.repository.undo_by(&a_person()).unwrap();
+    cell.repository
+        .apply_project_operations(&a_person(), reversal.operations, reversal.lineage)
+        .unwrap();
+    assert_eq!(
+        cell.repository.dependency(arm_project).unwrap().revision,
+        revision
+    );
+    assert_eq!(
+        node_names_of_the_main_stream_at_the_pin(&cell.repository, arm_project),
+        vec!["shoulder"]
+    );
+}

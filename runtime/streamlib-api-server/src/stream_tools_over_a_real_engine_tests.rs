@@ -2657,6 +2657,38 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
     let group = placed["studio"]["group"].clone();
 
     let second_revision = arm.commit_a_sink_named("elbow");
+    let listed = call(
+        "list_dependencies",
+        json!({ "project_directory": cell.path(), "check_for_newer": true }),
+    )
+    .await
+    .expect("the dependencies are listed");
+    assert_eq!(
+        listed["dependencies"][0]["dependency"]["revision"],
+        json!(first_revision),
+        "{listed}"
+    );
+    assert_eq!(
+        listed["dependencies"][0]["newest_revision"],
+        json!(second_revision),
+        "{listed}"
+    );
+    assert_eq!(
+        listed["dependencies"][0]["newer_revision_exists"],
+        json!(true),
+        "{listed}"
+    );
+    let refused_while_used = call(
+        "remove_dependency",
+        json!({ "project_directory": cell.path(), "project": arm.project,
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect_err("a dependency a fragment holds is not removed");
+    assert!(
+        refused_while_used.contains(&fragment.to_string()),
+        "{refused_while_used}"
+    );
     let updated = call(
         "update_dependency",
         json!({ "project_directory": cell.path(), "project": arm.project,
@@ -2738,6 +2770,26 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
         )),
         ["source", "shoulder", "elbow"]
     );
+
+    let removed = call(
+        "remove_dependency",
+        json!({ "project_directory": cell.path(), "project": arm.project,
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("a dependency no node references any longer is removed");
+    assert_eq!(
+        removed["dependency"]["revision"],
+        json!(third_revision),
+        "{removed}"
+    );
+    let listed_after = call(
+        "list_dependencies",
+        json!({ "project_directory": cell.path() }),
+    )
+    .await
+    .expect("the dependencies are listed");
+    assert_eq!(listed_after["dependencies"], json!([]), "{listed_after}");
 }
 
 /// Project `cell` forks project `arm`'s stream while one of its streams referencing it runs

@@ -552,7 +552,7 @@ pub struct ProjectDependencyOnTheWire {
     pub revision: String,
 }
 
-/// The result of `add_dependency` and `update_dependency`.
+/// The result of `add_dependency`, `update_dependency` and `remove_dependency`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DependencyTransactionToolResult {
     /// The dependency as the transaction left it.
@@ -565,6 +565,29 @@ pub struct DependencyTransactionToolResult {
     /// them: each fragment refreshed from the dependency's new pin.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graph_operations: Vec<serde_json::Value>,
+}
+
+/// One dependency as `list_dependencies` answers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListedProjectDependencyOnTheWire {
+    /// The pin as `tatolab-project.json` holds it.
+    pub dependency: ProjectDependencyOnTheWire,
+    /// With `check_for_newer`, the newest commit of the source's `main`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newest_revision: Option<String>,
+    /// With `check_for_newer`, whether `newest_revision` is not the pinned `revision`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newer_revision_exists: Option<bool>,
+    /// With `check_for_newer`, why the source could not be fetched, in the runtime's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_refused_because: Option<String>,
+}
+
+/// The result of `list_dependencies`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListDependenciesToolResult {
+    /// Each dependency of the project, in the order `tatolab-project.json` lists them.
+    pub dependencies: Vec<ListedProjectDependencyOnTheWire>,
 }
 
 /// The stream a fork copied, as `fork_asset` answers it.

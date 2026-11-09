@@ -79,6 +79,8 @@ CONTROL_TOOL_NAMES = {
     "set_asset_settings",
     "add_dependency",
     "update_dependency",
+    "list_dependencies",
+    "remove_dependency",
     "use_dependency_stream",
     "fork_asset",
     "list_project_node_types",
