@@ -5,11 +5,13 @@
 //! connection of this process's own, the project's log followed by cursor from where it ended
 //! when `dev` started — each record under the project's folder name, across every load and
 //! restart, since the log is the project's — and another load queued for every settled save,
-//! which replaces each stream, or records it failed with its traceback in the log. Ctrl-C ends
+//! which replaces each stream, or records it failed with its traceback in the log. A save of a
+//! `.py` file first refreshes every fragment whose graph generator that module defines. Ctrl-C ends
 //! the following and leaves the streams loaded. When the runtime goes away, `dev` waits for it
 //! and follows the log again while the restarted runtime re-loads the project from its records;
 //! it never queues a load for a crash.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,7 +32,7 @@ use crate::project_log_records_from_the_runtime::{
     DESCRIBE_RUNTIME_TOOL_NAME, LOGS_TOOL_NAME, PROJECT_LOG_RECORDS_FOLLOW_POLL_INTERVAL,
     ProjectLogRecordsAsked, project_log_records_page_from, render_project_log_records_page,
 };
-use crate::project_source_change_watcher::watch_project_sources;
+use crate::project_source_change_watcher::{ProjectSourceWatchHold, watch_project_sources};
 use crate::runtime_gone_while_following_a_stream::{
     RuntimeLogDirectoryAsDescribed, the_runtime_is_gone,
 };
@@ -46,16 +48,19 @@ use crate::verb_standard_output::{
 /// How often `dev` looks for the runtime's socket again after losing its connection.
 const RUNTIME_SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+/// The tool that refreshes every fragment whose graph generator a changed module defines.
+const REFRESH_FRAGMENTS_TOOL_NAME: &str = "refresh_fragments";
+
 /// What `dev` prefixes each of its notes on standard error with.
 const DEV_NOTE_PREFIX: &str = "tatolab dev";
 
 /// What reaches `dev`'s session besides the runtime's answers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum DevSessionEvent {
     /// SIGINT, SIGTERM or SIGHUP.
     StopSignalDelivered,
-    /// A save in the project settled.
-    ProjectSourcesChanged,
+    /// A save in the project settled, changing these files.
+    ProjectSourcesChanged { changed_files: Vec<PathBuf> },
 }
 
 /// A call that finished, or the stop signal that came first.
@@ -98,11 +103,11 @@ pub(crate) fn follow_the_project_log_and_load_the_project_on_every_save(
         TatolabCommandFailure::refused(format!("cannot listen for signals: {io_failure}"))
     })?;
     let local_api_socket_path = local_api_socket_of_the_running_runtime()?;
-    watch_project_sources(
+    let project_source_watch_hold = watch_project_sources(
         PathBuf::from(&project_load_request.project_directory),
-        move || {
+        move |changed_files| {
             dev_session_event_sender
-                .send(DevSessionEvent::ProjectSourcesChanged)
+                .send(DevSessionEvent::ProjectSourcesChanged { changed_files })
                 .is_ok()
         },
     )
@@ -117,6 +122,8 @@ pub(crate) fn follow_the_project_log_and_load_the_project_on_every_save(
             dev_session_events,
             dev_session_events_open: true,
             loads_owed: 1,
+            python_files_changed_before_the_owed_load: BTreeSet::new(),
+            project_source_watch_hold,
             runtime_log_directory: RuntimeLogDirectoryAsDescribed::NotDescribed,
             project_log_after: None,
             project_log_followed_from_its_start: false,
@@ -135,6 +142,10 @@ struct DevSession {
     dev_session_events_open: bool,
     /// Loads still to queue: the first, then one per settled save, never coalesced.
     loads_owed: usize,
+    /// The `.py` files saved since the last fragment refresh, refreshed before the next load.
+    python_files_changed_before_the_owed_load: BTreeSet<PathBuf>,
+    /// Quiets the watch while a refresh writes the project's graph documents.
+    project_source_watch_hold: ProjectSourceWatchHold,
     /// Where the runtime said its own log is, named when it goes away.
     runtime_log_directory: RuntimeLogDirectoryAsDescribed,
     /// The cursor the project's log is read on from; `None` until the session read to its end.
@@ -252,12 +263,91 @@ impl DevSession {
                     Some(DevSessionEvent::StopSignalDelivered) => {
                         return FinishedUnlessStopped::StopSignalDelivered;
                     }
-                    Some(DevSessionEvent::ProjectSourcesChanged) => self.loads_owed += 1,
+                    Some(DevSessionEvent::ProjectSourcesChanged { changed_files }) => {
+                        self.a_save_settled(changed_files);
+                    }
                     None => {}
                 },
                 call_outcome = &mut call => return FinishedUnlessStopped::Finished(call_outcome),
             }
         }
+    }
+
+    /// A settled save owes a load, and a refresh first of what its `.py` files define.
+    fn a_save_settled(&mut self, changed_files: Vec<PathBuf>) {
+        self.loads_owed += 1;
+        self.python_files_changed_before_the_owed_load.extend(
+            changed_files
+                .into_iter()
+                .filter(|changed_file| changed_file.extension().is_some_and(|ext| ext == "py")),
+        );
+    }
+
+    /// Refresh every fragment whose graph generator a saved `.py` file defines, the watch quiet
+    /// while the refresh writes the graph documents, so its own writes owe no load. A refusal
+    /// is noted and the load goes on.
+    async fn refresh_the_fragments_the_saved_modules_define(
+        &mut self,
+        connected_client: &LocalApiMcpToolClient,
+    ) -> Option<DevSessionStep> {
+        if self.python_files_changed_before_the_owed_load.is_empty() {
+            return None;
+        }
+        let mut refresh_arguments = serde_json::Map::new();
+        refresh_arguments.insert(
+            "project_directory".to_owned(),
+            self.project_load_request.project_directory.clone().into(),
+        );
+        refresh_arguments.insert(
+            "changed_files".to_owned(),
+            self.python_files_changed_before_the_owed_load
+                .iter()
+                .map(|changed_file| changed_file.display().to_string().into())
+                .collect::<Vec<serde_json::Value>>()
+                .into(),
+        );
+        self.project_source_watch_hold.hold_back_the_reports();
+        let refresh_outcome = self
+            .finish_unless_stopped(
+                connected_client.call_tool(REFRESH_FRAGMENTS_TOOL_NAME, refresh_arguments),
+            )
+            .await;
+        self.project_source_watch_hold
+            .release_taking_the_graph_documents_as_seen();
+        let refresh_outcome = match refresh_outcome {
+            FinishedUnlessStopped::Finished(refresh_outcome) => refresh_outcome,
+            FinishedUnlessStopped::StopSignalDelivered => {
+                self.note("stopped before the runtime answered the fragments' refresh");
+                return Some(DevSessionStep::Exit(Ok(0)));
+            }
+        };
+        if let Err(refresh_failure) = &refresh_outcome
+            && let Some(after_the_runtime_went_away) =
+                self.after_the_runtime_went_away(refresh_failure)
+        {
+            return Some(after_the_runtime_went_away);
+        }
+        self.python_files_changed_before_the_owed_load.clear();
+        match refresh_outcome {
+            Ok(refresh_result_text) => {
+                let fragments_refreshed =
+                    serde_json::from_str::<serde_json::Value>(&refresh_result_text)
+                        .ok()
+                        .and_then(|refresh_result| {
+                            refresh_result["operations"].as_array().map(Vec::len)
+                        })
+                        .unwrap_or(0);
+                if fragments_refreshed > 0 {
+                    self.note(&format!(
+                        "refreshed {fragments_refreshed} fragment(s) whose graph generator changed"
+                    ));
+                }
+            }
+            Err(refresh_failure) => self.note(&format!(
+                "{refresh_failure}; the fragments keep their last run, and the load goes on"
+            )),
+        }
+        None
     }
 
     /// The exit a stop signal earns while the log is followed: the project's streams run on.
@@ -293,6 +383,12 @@ impl DevSession {
                 }
                 FinishedUnlessStopped::StopSignalDelivered => return DevSessionStep::Exit(Ok(0)),
             }
+        }
+        if let Some(after_the_refresh) = self
+            .refresh_the_fragments_the_saved_modules_define(connected_client)
+            .await
+        {
+            return after_the_refresh;
         }
         let run_project_outcome = match self
             .finish_unless_stopped(connected_client.call_tool(
@@ -481,8 +577,8 @@ impl DevSession {
             return DevSessionStep::QueueALoad;
         }
         match self.next_event().await {
-            Some(DevSessionEvent::ProjectSourcesChanged) => {
-                self.loads_owed += 1;
+            Some(DevSessionEvent::ProjectSourcesChanged { changed_files }) => {
+                self.a_save_settled(changed_files);
                 DevSessionStep::QueueALoad
             }
             Some(DevSessionEvent::StopSignalDelivered) | None => DevSessionStep::Exit(Ok(0)),

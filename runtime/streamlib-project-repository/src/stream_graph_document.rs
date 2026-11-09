@@ -34,6 +34,29 @@ pub struct StreamGraphDocumentNode {
     pub fragment: Option<Box<Value>>,
 }
 
+impl StreamGraphDocumentNode {
+    /// The import path of each graph generator a refresh of this fragment node runs: its own
+    /// `type`, then the `type` of each fragment nested in it, at every level.
+    pub fn graph_generators_a_refresh_runs(&self) -> Vec<String> {
+        fn push_each_nested_generator(fragment: &Value, generators: &mut Vec<String>) {
+            for nested in fragment["nodes"].as_array().into_iter().flatten() {
+                if let (Some(nested_fragment), Some(generator)) =
+                    (nested.get("fragment"), nested["type"].as_str())
+                {
+                    generators.push(generator.to_owned());
+                    push_each_nested_generator(nested_fragment, generators);
+                }
+            }
+        }
+        let Some(fragment) = &self.fragment else {
+            return Vec::new();
+        };
+        let mut generators = vec![self.node_type.clone()];
+        push_each_nested_generator(fragment, &mut generators);
+        generators
+    }
+}
+
 fn a_config_naming_no_setting() -> Value {
     Value::Object(Map::new())
 }
@@ -287,6 +310,16 @@ impl StreamGraphDocument {
         self.node_objects()
             .find(|node_object| node_name_of(node_object) == Some(name))
             .and_then(|node_object| serde_json::from_value(Value::Object(node_object.clone())).ok())
+    }
+
+    /// Every top-level fragment node, as the document holds it.
+    pub fn fragment_nodes(&self) -> Vec<StreamGraphDocumentNode> {
+        self.node_objects()
+            .filter(|node_object| node_object.contains_key("fragment"))
+            .filter_map(|node_object| {
+                serde_json::from_value(Value::Object(node_object.clone())).ok()
+            })
+            .collect()
     }
 
     /// Every link with an end on the node whose UUID is `node`.
@@ -1020,6 +1053,35 @@ mod tests {
                 .unwrap()
                 .node(),
             node.id
+        );
+    }
+
+    #[test]
+    fn a_fragment_refresh_runs_its_own_generator_and_each_nested_ones() {
+        let document = StreamGraphDocument::from_value(json!({
+            "nodes": [
+                { "id": Uuid::new_v4(), "name": "camera", "type": "nodes.camera:Camera" },
+                {
+                    "id": Uuid::new_v4(), "name": "look", "type": "generators.looks:look",
+                    "fragment": { "nodes": [
+                        { "id": Uuid::new_v4(), "name": "blur", "type": "nodes.blur:Blur" },
+                        {
+                            "id": Uuid::new_v4(), "name": "soft", "type": "generators.soft:soft",
+                            "fragment": { "nodes": [], "links": [] },
+                        },
+                    ], "links": [] },
+                },
+            ],
+            "links": [],
+        }))
+        .unwrap();
+
+        let fragment_nodes = document.fragment_nodes();
+
+        assert_eq!(fragment_nodes.len(), 1);
+        assert_eq!(
+            fragment_nodes[0].graph_generators_a_refresh_runs(),
+            ["generators.looks:look", "generators.soft:soft"]
         );
     }
 }
