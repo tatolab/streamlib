@@ -840,3 +840,39 @@ fn an_asset_only_a_nested_copy_of_an_import_holds_resolves_to_that_copy() {
             .join("imports/robot-arm/imports/gripper/grade.cube")
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn an_import_folder_linked_back_to_its_enclosing_project_ends_the_search() {
+    let mut imports = CellImportingArm::new();
+    imports.import_the_arm();
+    let arm_folder = imports.cell.directory().join("imports/robot-arm");
+    std::fs::create_dir_all(arm_folder.join("imports")).unwrap();
+    std::os::unix::fs::symlink(imports.cell.directory(), arm_folder.join("imports/loop")).unwrap();
+    let mut arm_project_file: Value =
+        serde_json::from_slice(&std::fs::read(arm_folder.join("tatolab-project.json")).unwrap())
+            .unwrap();
+    arm_project_file["dependencies"] = json!([{
+        "project": imports.cell.project(),
+        "folder": "loop",
+        "source": "/elsewhere",
+        "version": "0".repeat(64),
+        "copied_files": {},
+    }]);
+    std::fs::write(
+        arm_folder.join("tatolab-project.json"),
+        serde_json::to_vec(&arm_project_file).unwrap(),
+    )
+    .unwrap();
+
+    let refusal = streamlib_project_repository::the_folder_of_an_import(
+        &imports.cell.directory(),
+        Uuid::new_v4(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(refusal, ProjectRepositoryRefusal::NoSuchImport(_)),
+        "{refusal}"
+    );
+}

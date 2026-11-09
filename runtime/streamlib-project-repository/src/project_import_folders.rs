@@ -30,7 +30,10 @@ fn each_folder_of_an_import_nearest_first(project_directory: &Path, project: Uui
     let mut projects_to_read = VecDeque::from([project_directory.to_path_buf()]);
     let mut directories_read = BTreeSet::new();
     while let Some(importing_directory) = projects_to_read.pop_front() {
-        if !directories_read.insert(importing_directory.clone()) {
+        let Ok(directory_on_disk) = importing_directory.canonicalize() else {
+            continue;
+        };
+        if !directories_read.insert(directory_on_disk) {
             continue;
         }
         let Ok(importing_project) =
