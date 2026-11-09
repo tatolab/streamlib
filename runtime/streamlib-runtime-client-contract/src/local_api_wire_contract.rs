@@ -541,44 +541,64 @@ pub struct AssetTransactionToolResult {
     pub commit: String,
 }
 
-/// A project this one depends on, as a dependency tool answers it.
+/// A project this one imports, as a dependency tool answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectDependencyOnTheWire {
-    /// The depended-on project's UUID.
+    /// The imported project's UUID.
     pub project: String,
-    /// Where its history is fetched from, as `add_dependency` was given it.
+    /// The folder under `imports/` that holds its copy.
+    pub folder: String,
+    /// Where it was copied from, as `add_dependency` or `update_dependency` was given it.
     pub source: String,
-    /// The commit of its history it is pinned to.
-    pub revision: String,
+    /// The SHA-256 naming the version its copy carried.
+    pub version: String,
 }
 
-/// The result of `add_dependency`, `update_dependency` and `remove_dependency`.
+/// The result of `add_dependency` and `remove_dependency`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DependencyTransactionToolResult {
-    /// The dependency as the transaction left it.
+    /// The import as the transaction left it; a removed one as it was.
     pub dependency: ProjectDependencyOnTheWire,
     /// The transaction's UUID.
     pub transaction: String,
     /// The commit on the project history's `main` that records it.
     pub commit: String,
-    /// Each graph operation the transaction applied to a loaded stream, as `transact` answers
-    /// them: each fragment refreshed from the dependency's new pin.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub graph_operations: Vec<serde_json::Value>,
 }
 
-/// One dependency as `list_dependencies` answers it.
+/// The result of `update_dependency`: the copy it committed, or, when the import's folder was
+/// edited since its copy and the overwrite was not confirmed, each edited file and no change.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UpdateDependencyToolResult {
+    /// The import as the update left it.
+    pub dependency: ProjectDependencyOnTheWire,
+    /// Each file of the import's folder edited since its copy, by its path inside the folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edited_files: Vec<String>,
+    /// Whether the update waits on `overwrite_edited_files` to overwrite `edited_files`.
+    pub overwrite_confirmation_needed: bool,
+    /// The transaction's UUID, when the update committed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction: Option<String>,
+    /// The commit on the project history's `main` that records it, when the update committed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+}
+
+/// One import as `list_dependencies` answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListedProjectDependencyOnTheWire {
-    /// The pin as `tatolab-project.json` holds it.
+    /// The import as `tatolab-project.json` records it.
     pub dependency: ProjectDependencyOnTheWire,
-    /// With `check_for_newer`, the newest commit of the source's `main`.
+    /// Each file of its folder edited since its copy, by its path inside the folder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edited_files: Vec<String>,
+    /// With `check_for_newer`, the version its source holds now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub newest_revision: Option<String>,
-    /// With `check_for_newer`, whether `newest_revision` is not the pinned `revision`.
+    pub version_on_the_source: Option<String>,
+    /// With `check_for_newer`, whether `version_on_the_source` is not the copy's `version`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub newer_revision_exists: Option<bool>,
-    /// With `check_for_newer`, why the source could not be fetched, in the runtime's words.
+    pub newer_version_exists: Option<bool>,
+    /// Why the source could not be read, or the folder's files listed, in the runtime's words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_refused_because: Option<String>,
 }
@@ -586,37 +606,8 @@ pub struct ListedProjectDependencyOnTheWire {
 /// The result of `list_dependencies`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListDependenciesToolResult {
-    /// Each dependency of the project, in the order `tatolab-project.json` lists them.
+    /// Each import of the project, in the order `tatolab-project.json` lists them.
     pub dependencies: Vec<ListedProjectDependencyOnTheWire>,
-}
-
-/// The stream a fork copied, as `fork_asset` answers it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ForkedAssetOriginOnTheWire {
-    /// The UUID of the asset copied.
-    pub asset: String,
-    /// The UUID of the depended-on project that holds it.
-    pub from: String,
-    /// The commit of that project's history it was copied at.
-    pub revision: String,
-}
-
-/// The result of `fork_asset`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ForkAssetToolResult {
-    /// The copy, an asset of this project under a UUID of its own.
-    pub asset: ProjectAssetOnTheWire,
-    /// What it was copied from, which its graph document records under `forked_from`.
-    pub forked_from: ForkedAssetOriginOnTheWire,
-    /// The transaction's UUID.
-    pub transaction: String,
-    /// The commit on the project history's `main` that records it.
-    pub commit: String,
-    /// Each graph operation the transaction applied to a loaded stream, as `transact` answers
-    /// them: each node config that referenced the dependency's asset, made to reference the
-    /// copy.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub graph_operations: Vec<serde_json::Value>,
 }
 
 /// The `list_project_node_types` tool's result: what a project and each source it draws node
@@ -629,7 +620,7 @@ pub struct ListProjectNodeTypesToolResult {
     pub project: String,
     /// The project's name.
     pub project_name: String,
-    /// The project first, then each linked dependency, then each installed distribution.
+    /// The project first, then each import, then each installed distribution.
     pub sources: Vec<NodeTypeSourceReadWithoutRunningIt>,
 }
 
@@ -637,14 +628,16 @@ pub struct ListProjectNodeTypesToolResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum NodeTypeSourceOrigin {
-    /// The project's own node code.
+    /// The project's own node code, outside `imports/`.
     Project,
-    /// A linked dependency's node code at the revision it is pinned to.
+    /// An import's node code as its folder under `imports/` holds it now.
     Dependency {
-        /// The depended-on project's UUID.
+        /// The imported project's UUID.
         project: String,
-        /// The commit or tag it is pinned to.
-        revision: String,
+        /// Its folder under `imports/`.
+        folder: String,
+        /// The version its copy carried.
+        version: String,
     },
     /// An installed distribution that declares `tatolab.nodes` entry points.
     InstalledDistribution {
@@ -996,7 +989,8 @@ mod tests {
         let wire = serde_json::json!({
             "source": "dependency",
             "project": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
-            "revision": "v1",
+            "folder": "gripper",
+            "version": "ab".repeat(32),
             "node_types": [{
                 "type": "nodes.gripper:Gripper",
                 "kind": "function",
@@ -1018,7 +1012,8 @@ mod tests {
             source.origin,
             NodeTypeSourceOrigin::Dependency {
                 project: "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11".to_owned(),
-                revision: "v1".to_owned(),
+                folder: "gripper".to_owned(),
+                version: "ab".repeat(32),
             }
         );
         assert_eq!(serde_json::to_value(&source).unwrap(), wire);

@@ -6,13 +6,12 @@
 mod canonical_project_json;
 mod project_asset;
 mod project_content_store;
-#[cfg(feature = "history")]
-mod project_dependency_source;
 mod project_file;
 #[cfg(feature = "history")]
 mod project_history_repository;
 #[cfg(feature = "history")]
-mod project_history_smart_http_transport;
+mod project_import_copy;
+mod project_import_folders;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
 #[cfg(feature = "history")]
@@ -20,59 +19,58 @@ mod project_repository;
 mod project_repository_refusal;
 mod project_stream_document;
 mod project_transaction;
+mod stream_fragment_references;
 mod stream_graph_document;
 
 pub use canonical_project_json::canonical_project_json_bytes;
 pub use project_asset::{
-    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX,
-    PROJECT_DEPENDENCY_ASSET_RECORDS_DIRECTORY, ProjectAsset, ProjectAssetForkOrigin,
+    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,
     ProjectAssetKind, ProjectAssetSidecar, ProjectRelativeAssetPath,
-    every_asset_uuid_the_project_holds, the_content_path_of_a_dependency_asset,
-    the_content_path_of_an_asset, the_dependency_asset_record_path,
-    the_dependency_assets_recorded_at,
+    every_asset_uuid_the_project_holds, the_content_path_of_an_asset,
 };
 pub use project_content_store::{
     PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,
 };
-#[cfg(feature = "history")]
-pub use project_dependency_source::{
-    PYTHON_PACKAGE_DEPENDENCY_SOURCE_PREFIX, ProjectDependencySource,
-    the_project_directory_an_installed_package_ships,
+pub use project_file::{
+    PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
-pub use project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjectFile};
 #[cfg(feature = "history")]
 pub use project_history_repository::{
     PROJECT_HISTORY_BRANCH, PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER,
-    ProjectHistoryCommit, ProjectHistoryRemote, ProjectHistoryRepository,
+    ProjectHistoryCommit, ProjectHistoryRepository,
 };
+pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
 #[cfg(feature = "history")]
 pub use project_repositories_open_in_this_runtime::{
     ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
     ProjectTransactionAnnouncement,
 };
 #[cfg(feature = "history")]
-pub use project_repository::{DependencyAssetFork, ProjectDependencyListed, ProjectRepository};
+pub use project_repository::{ProjectImportListed, ProjectRepository};
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{
-    FORKED_FROM_KEY, ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
-    the_fork_origin_a_graph_document_records,
+    ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
 };
 pub use project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation,
+    ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
     ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
     StreamGraphOperationOnAStream,
+};
+pub use stream_fragment_references::{
+    graph_document_holds_a_stream_fragment,
+    graph_document_with_each_stream_fragment_reference_resolved,
+    the_fragment_a_stream_fragment_places, the_stream_document_of_an_import,
 };
 pub use stream_graph_document::{
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
     StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
-    StreamGraphOperation, a_graph_document_as_a_fragment_run,
-    asset_references_made_references_into_the_dependency, assets_a_node_config_references,
-    config_with_a_dependency_asset_reference_made_local,
-    fragment_with_each_node_uuid_kept_by_its_name, the_refresh_of_each_fragment_holding_a_stream,
+    StreamGraphOperation, asset_references_made_references_into_the_import,
+    assets_a_node_config_references, fragment_with_each_node_uuid_kept_by_its_name,
 };
 
-/// The directory inside a project that holds what the runtime keeps for it: history, content and dependencies.
+/// The directory inside a project that holds what the runtime keeps for it: history, content and
+/// staged imports.
 pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";

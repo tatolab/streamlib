@@ -57,13 +57,11 @@ impl StreamAndNodeTheHelperHosts {
             None => {
                 streamlib_project_repository::the_content_path_of_an_asset(project_directory, asset)
             }
-            Some(from_project) => {
-                streamlib_project_repository::the_content_path_of_a_dependency_asset(
-                    project_directory,
-                    uuid_named_by(from_project, "a project")?,
-                    asset,
-                )
-            }
+            Some(from_project) => streamlib_project_repository::the_file_of_an_imported_asset(
+                project_directory,
+                uuid_named_by(from_project, "a project")?,
+                asset,
+            ),
         }
         .map_err(|refusal| pyo3::exceptions::PyLookupError::new_err(refusal.to_string()))?;
         Ok(content_path.to_string_lossy().into_owned())

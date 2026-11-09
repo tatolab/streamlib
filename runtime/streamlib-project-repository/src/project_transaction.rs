@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
-use crate::project_file::PinnedProjectDependency;
+use crate::project_file::ProjectImport;
 use crate::stream_graph_document::StreamGraphOperation;
 
 /// Who a transaction is by.
@@ -152,32 +152,58 @@ impl ProjectAssetOperation {
     }
 }
 
-/// One change to the projects this one depends on, recorded with everything its inverse needs.
+/// Where the files an import places come from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "operation", rename_all = "snake_case")]
-pub enum ProjectDependencyOperation {
-    /// The project began to be depended on, pinned to a commit.
-    AddDependency { dependency: PinnedProjectDependency },
-    /// The project stopped being depended on.
-    RemoveDependency { dependency: PinnedProjectDependency },
-    /// The dependency's pin moved from one commit to another.
-    MoveDependencyPin {
-        project: Uuid,
-        from: String,
-        to: String,
-    },
+#[serde(rename_all = "snake_case")]
+pub enum ProjectImportFiles {
+    /// A copy staged inside the project's runtime folder before the transaction, by its path
+    /// relative to the project; the transaction moves it into place.
+    StagedCopy { staged_at: String },
+    /// The import's folder as the project's history recorded it at `commit`.
+    RecordedAtCommit { commit: String },
 }
 
-impl ProjectDependencyOperation {
-    /// The operation that undoes this one.
-    pub fn inverse(&self) -> Self {
+/// One change to the projects this one imports, recorded with what its inverse needs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ProjectImportOperation {
+    /// The import's folder was placed, replacing the import `replacing` when it names one.
+    PlaceImport {
+        import: ProjectImport,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replacing: Option<ProjectImport>,
+        files: ProjectImportFiles,
+    },
+    /// The import's folder was taken out.
+    RemoveImport { import: ProjectImport },
+}
+
+impl ProjectImportOperation {
+    /// The operation that undoes this one, applied when history is at `parent_commit`: the
+    /// files it took out are read back from that commit.
+    pub fn inverse_at(&self, parent_commit: &str) -> Self {
+        let recorded_before = ProjectImportFiles::RecordedAtCommit {
+            commit: parent_commit.to_owned(),
+        };
         match self.clone() {
-            Self::AddDependency { dependency } => Self::RemoveDependency { dependency },
-            Self::RemoveDependency { dependency } => Self::AddDependency { dependency },
-            Self::MoveDependencyPin { project, from, to } => Self::MoveDependencyPin {
-                project,
-                from: to,
-                to: from,
+            Self::PlaceImport {
+                import,
+                replacing: None,
+                ..
+            } => Self::RemoveImport { import },
+            Self::PlaceImport {
+                import,
+                replacing: Some(replaced),
+                ..
+            } => Self::PlaceImport {
+                import: replaced,
+                replacing: Some(import),
+                files: recorded_before,
+            },
+            Self::RemoveImport { import } => Self::PlaceImport {
+                import,
+                replacing: None,
+                files: recorded_before,
             },
         }
     }
@@ -186,15 +212,16 @@ impl ProjectDependencyOperation {
     #[cfg(feature = "history")]
     pub(crate) fn summary(&self) -> String {
         match self {
-            Self::AddDependency { dependency } => format!(
-                "add_dependency {} at {}",
-                dependency.project, dependency.revision
-            ),
-            Self::RemoveDependency { dependency } => {
-                format!("remove_dependency {}", dependency.project)
+            Self::PlaceImport {
+                import,
+                replacing: None,
+                ..
+            } => format!("add_dependency imports/{}", import.folder),
+            Self::PlaceImport { import, .. } => {
+                format!("update_dependency imports/{}", import.folder)
             }
-            Self::MoveDependencyPin { project, to, .. } => {
-                format!("update_dependency {project} to {to}")
+            Self::RemoveImport { import } => {
+                format!("remove_dependency imports/{}", import.folder)
             }
         }
     }
@@ -272,15 +299,15 @@ pub enum ProjectOperation {
     Asset(ProjectAssetOperation),
     /// A change to one stream's graph.
     StreamGraph(StreamGraphOperationOnAStream),
-    /// A change to the projects this one depends on.
-    Dependency(ProjectDependencyOperation),
+    /// A change to the projects this one imports.
+    Import(ProjectImportOperation),
     /// A stream asset's graph document written or taken out whole.
     StreamDocument(ProjectStreamDocumentOperation),
 }
 
 impl ProjectOperation {
-    /// The operation that undoes this one.
-    pub fn inverse(&self) -> Self {
+    /// The operation that undoes this one, applied when history is at `parent_commit`.
+    pub fn inverse_at(&self, parent_commit: &str) -> Self {
         match self {
             Self::Asset(asset_operation) => Self::Asset(asset_operation.inverse()),
             Self::StreamGraph(StreamGraphOperationOnAStream {
@@ -290,8 +317,8 @@ impl ProjectOperation {
                 stream: *stream,
                 graph_operation: graph_operation.inverse(),
             }),
-            Self::Dependency(dependency_operation) => {
-                Self::Dependency(dependency_operation.inverse())
+            Self::Import(import_operation) => {
+                Self::Import(import_operation.inverse_at(parent_commit))
             }
             Self::StreamDocument(stream_document_operation) => {
                 Self::StreamDocument(stream_document_operation.inverse())
@@ -305,7 +332,7 @@ impl ProjectOperation {
         match self {
             Self::Asset(asset_operation) => asset_operation.summary(),
             Self::StreamGraph(on_a_stream) => on_a_stream.graph_operation.summary(),
-            Self::Dependency(dependency_operation) => dependency_operation.summary(),
+            Self::Import(import_operation) => import_operation.summary(),
             Self::StreamDocument(stream_document_operation) => stream_document_operation.summary(),
         }
     }

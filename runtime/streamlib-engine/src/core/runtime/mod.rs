@@ -37,7 +37,7 @@ mod stream_location_and_id;
 mod stream_step_coordinator;
 
 pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_source::{
-    LinkedDependencyPythonSourcesAtItsPin, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
+    ImportedProjectPythonSources, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
     list_a_projects_node_types_and_graph_generators_from_source,
 };
 pub use crate::core::compiler::{

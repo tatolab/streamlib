@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -342,11 +340,23 @@ impl StreamGraphDocument {
         };
         let node_values = array_under("nodes")?;
         let link_values = array_under("links")?;
-        Ok(Self {
+        let mut document = Self {
             node_values,
             link_values,
             every_other_key,
-        })
+        };
+        document.drop_the_graph_each_stream_fragment_places();
+        Ok(document)
+    }
+
+    /// Drop the `fragment` of each stream fragment node: a stream fragment is a reference, its
+    /// graph read from the stream it names at each load and never stored.
+    fn drop_the_graph_each_stream_fragment_places(&mut self) {
+        for node_object in self.node_values.iter_mut().filter_map(Value::as_object_mut) {
+            if node_object.get("type").and_then(Value::as_str) == Some(STREAM_FRAGMENT_NODE_TYPE) {
+                node_object.remove("fragment");
+            }
+        }
     }
 
     /// Read a graph document from its bytes.
@@ -523,6 +533,12 @@ impl StreamGraphDocument {
     /// Apply `operation`, refused in its own words when the document does not hold what it
     /// names or already holds what it adds.
     pub fn apply(&mut self, operation: &StreamGraphOperation) -> Result<(), String> {
+        self.apply_the_operation(operation)?;
+        self.drop_the_graph_each_stream_fragment_places();
+        Ok(())
+    }
+
+    fn apply_the_operation(&mut self, operation: &StreamGraphOperation) -> Result<(), String> {
         match operation {
             StreamGraphOperation::AddNode { node, links } => {
                 if self.node(node.id).is_ok() {
@@ -990,68 +1006,17 @@ fn groups_with_each_uuid_kept_by_its_title(
     Ok(groups)
 }
 
-/// The `type` of a fragment node holding a stored copy of a stream: a dependency's, or one a
-/// fork made this project's.
+/// The `type` of a fragment node that references a stream, this project's or an import's, whose
+/// graph each load reads from that stream's document.
 pub const STREAM_FRAGMENT_NODE_TYPE: &str = "tatolab.project:StreamFragment";
 
 /// The config key of a stream's fragment node naming the stream it holds.
 pub const STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: &str = "stream";
 
-/// The refresh of each top-level fragment node of `holder` that holds the stream `held_stream`
-/// — config `{"stream": held_stream}`, `{"asset"}` for a stream of this project or
-/// `{"asset", "from"}` for a dependency's — from `held_stream_document`, that stream's graph
-/// document now, each node keeping its UUID by name. A fragment already holding it is left out.
-pub fn the_refresh_of_each_fragment_holding_a_stream(
-    holder: &StreamGraphDocument,
-    held_stream: &Value,
-    held_stream_document: &Value,
-) -> Result<Vec<StreamGraphOperation>, String> {
-    let config = serde_json::json!({ STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: held_stream });
-    let mut fragment_run = a_graph_document_as_a_fragment_run(held_stream_document)?;
-    if let Some(project) = held_stream
-        .get("from")
-        .and_then(Value::as_str)
-        .and_then(|project| Uuid::parse_str(project).ok())
-    {
-        asset_references_made_references_into_the_dependency(&mut fragment_run, project);
-    }
-    let mut refreshes = Vec::new();
-    for fragment_node in holder.fragment_nodes() {
-        if fragment_node.node_type != STREAM_FRAGMENT_NODE_TYPE || fragment_node.config != config {
-            continue;
-        }
-        let Some(previous_fragment) = fragment_node.fragment else {
-            continue;
-        };
-        let refreshed_fragment = fragment_with_each_node_uuid_kept_by_its_name(
-            &fragment_run,
-            Some(&previous_fragment),
-            &mut Uuid::new_v4,
-        )?;
-        if refreshed_fragment == *previous_fragment {
-            continue;
-        }
-        refreshes.push(StreamGraphOperation::RefreshFragment {
-            node: fragment_node.id,
-            from: StreamGraphFragmentPlacement {
-                generator: fragment_node.node_type.clone(),
-                config: config.clone(),
-                fragment: *previous_fragment,
-            },
-            to: StreamGraphFragmentPlacement {
-                generator: fragment_node.node_type,
-                config: config.clone(),
-                fragment: refreshed_fragment,
-            },
-        });
-    }
-    Ok(refreshes)
-}
-
 /// Make each reference in `value` to an asset of the project it was written in,
-/// `{"asset": "<uuid>"}`, a reference into that project as a dependency, adding
+/// `{"asset": "<uuid>"}`, a reference into that project as an import, adding
 /// `"from": "<project>"`; a reference already naming a project is left as it is.
-pub fn asset_references_made_references_into_the_dependency(value: &mut Value, project: Uuid) {
+pub fn asset_references_made_references_into_the_import(value: &mut Value, project: Uuid) {
     match value {
         Value::Object(object) => {
             let names_an_asset = object
@@ -1064,171 +1029,15 @@ pub fn asset_references_made_references_into_the_dependency(value: &mut Value, p
                     .or_insert_with(|| Value::String(project.to_string()));
             }
             for entry in object.values_mut() {
-                asset_references_made_references_into_the_dependency(entry, project);
+                asset_references_made_references_into_the_import(entry, project);
             }
         }
         Value::Array(items) => {
             for item in items {
-                asset_references_made_references_into_the_dependency(item, project);
+                asset_references_made_references_into_the_import(item, project);
             }
         }
         _ => {}
-    }
-}
-
-/// `config` with each reference to the asset `asset` of the dependency `project`,
-/// `{"asset": <asset>, "from": <project>}`, made a reference to this project's asset `copy`, or
-/// `None` when it holds no such reference.
-pub fn config_with_a_dependency_asset_reference_made_local(
-    config: &Value,
-    project: Uuid,
-    asset: Uuid,
-    copy: Uuid,
-) -> Option<Value> {
-    let mut rewritten = config.clone();
-    rewrite_the_dependency_asset_references(&mut rewritten, project, asset, copy)
-        .then_some(rewritten)
-}
-
-fn rewrite_the_dependency_asset_references(
-    value: &mut Value,
-    project: Uuid,
-    asset: Uuid,
-    copy: Uuid,
-) -> bool {
-    match value {
-        Value::Object(object) => {
-            let names_the_dependency_asset = |key: &str, expected: Uuid| {
-                object
-                    .get(key)
-                    .and_then(Value::as_str)
-                    .and_then(|held| Uuid::parse_str(held).ok())
-                    == Some(expected)
-            };
-            if names_the_dependency_asset("asset", asset)
-                && names_the_dependency_asset("from", project)
-            {
-                object.remove("from");
-                object.insert("asset".to_owned(), Value::String(copy.to_string()));
-                return true;
-            }
-            let mut rewritten_any = false;
-            for entry in object.values_mut() {
-                rewritten_any |=
-                    rewrite_the_dependency_asset_references(entry, project, asset, copy);
-            }
-            rewritten_any
-        }
-        Value::Array(items) => {
-            let mut rewritten_any = false;
-            for item in items {
-                rewritten_any |=
-                    rewrite_the_dependency_asset_references(item, project, asset, copy);
-            }
-            rewritten_any
-        }
-        _ => false,
-    }
-}
-
-/// `graph_document`, another project's stream as its graph document holds it, as a graph
-/// generator's run would build it: each node and link end named by name at every level, each
-/// group naming its nodes, and no UUID, so
-/// [`fragment_with_each_node_uuid_kept_by_its_name`] places it as a fragment.
-pub fn a_graph_document_as_a_fragment_run(graph_document: &Value) -> Result<Value, String> {
-    let Value::Object(level) = graph_document else {
-        return Err("a graph document is a JSON object".to_owned());
-    };
-    let mut name_of_the_uuid: Map<String, Value> = Map::new();
-    let mut names_in_each_group: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    let mut nodes = Vec::new();
-    for node in a_graph_collection_of(level, "nodes")? {
-        let Value::Object(node) = node else {
-            return Err("a graph document's node is a JSON object".to_owned());
-        };
-        let mut run_node = node.clone();
-        let name = node_name_of(node)
-            .ok_or("a graph document's node holds its `name`")?
-            .to_owned();
-        if let Some(Value::String(node_uuid)) = run_node.remove("id") {
-            name_of_the_uuid.insert(node_uuid, Value::String(name.clone()));
-        }
-        if let Some(Value::Object(studio)) = run_node.get_mut("studio") {
-            if let Some(Value::String(group)) = studio.remove(STUDIO_GROUP_KEY) {
-                names_in_each_group
-                    .entry(group)
-                    .or_default()
-                    .push(Value::String(name.clone()));
-            }
-            if studio.is_empty() {
-                run_node.remove("studio");
-            }
-        }
-        if let Some(fragment) = node.get("fragment") {
-            run_node.insert(
-                "fragment".to_owned(),
-                a_graph_document_as_a_fragment_run(fragment)?,
-            );
-        }
-        nodes.push(Value::Object(run_node));
-    }
-    let mut links = Vec::new();
-    for link in a_graph_collection_of(level, "links")? {
-        let mut run_link = link.clone();
-        for end_key in ["source", "target"] {
-            if let Some(Value::Object(end)) = run_link.get_mut(end_key)
-                && let Some(name) = end
-                    .get("node")
-                    .and_then(Value::as_str)
-                    .and_then(|named| name_of_the_uuid.get(named))
-                    .cloned()
-            {
-                end.insert("node".to_owned(), name);
-            }
-        }
-        links.push(run_link);
-    }
-    let mut run = Map::new();
-    run.insert("nodes".to_owned(), Value::Array(nodes));
-    run.insert("links".to_owned(), Value::Array(links));
-    let groups: Vec<StreamGraphDocumentGroup> = match level.get(GROUPS_KEY) {
-        None => Vec::new(),
-        Some(groups) => serde_json::from_value(groups.clone())
-            .map_err(|not_read| format!("the graph's `groups` do not read: {not_read}"))?,
-    };
-    if !groups.is_empty() {
-        let mut run_groups = Vec::new();
-        for group in groups {
-            let Value::Object(mut run_group) = serde_json::to_value(&group.fields)
-                .map_err(|not_written| format!("a group does not write: {not_written}"))?
-            else {
-                continue;
-            };
-            run_group.insert(
-                "nodes".to_owned(),
-                Value::Array(
-                    names_in_each_group
-                        .remove(&group.id.to_string())
-                        .unwrap_or_default(),
-                ),
-            );
-            run_groups.push(Value::Object(run_group));
-        }
-        run.insert(GROUPS_KEY.to_owned(), Value::Array(run_groups));
-    }
-    Ok(Value::Object(run))
-}
-
-/// The `collection` list of a graph document's `level`, empty when absent; refused when present
-/// as anything but a list.
-fn a_graph_collection_of<'level>(
-    level: &'level Map<String, Value>,
-    collection: &str,
-) -> Result<&'level [Value], String> {
-    match level.get(collection) {
-        None => Ok(&[]),
-        Some(Value::Array(items)) => Ok(items),
-        Some(_) => Err(format!("a graph document's `{collection}` is a JSON list")),
     }
 }
 
@@ -1291,13 +1100,13 @@ fn collect_asset_references(value: &Value, referenced: &mut Vec<Uuid>) {
 mod tests {
 
     #[test]
-    fn an_asset_reference_nested_in_another_is_made_a_dependency_reference_too() {
+    fn an_asset_reference_nested_in_another_is_made_an_import_reference_too() {
         let project = Uuid::new_v4();
         let outer = Uuid::new_v4().to_string();
         let inner = Uuid::new_v4().to_string();
         let mut config = serde_json::json!({ "asset": outer, "lut": { "asset": inner } });
 
-        asset_references_made_references_into_the_dependency(&mut config, project);
+        asset_references_made_references_into_the_import(&mut config, project);
 
         assert_eq!(
             config,
@@ -1306,17 +1115,6 @@ mod tests {
                 "lut": { "asset": inner, "from": project.to_string() },
             })
         );
-    }
-
-    #[test]
-    fn a_graph_document_whose_nodes_or_links_are_no_list_is_refused_as_a_fragment_run() {
-        for collection in ["nodes", "links"] {
-            let refusal =
-                a_graph_document_as_a_fragment_run(&serde_json::json!({ collection: "invalid" }))
-                    .unwrap_err();
-
-            assert!(refusal.contains(collection), "{refusal}");
-        }
     }
 
     use serde_json::json;

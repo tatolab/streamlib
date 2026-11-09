@@ -84,6 +84,12 @@ pub trait RuntimeOperations: Send + Sync {
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
 
+    /// Bring each stream fragment of this stream's live graph to the stream it references, as
+    /// that stream's graph document, or its import's, is on disk now.
+    fn reconcile_each_stream_fragment_to_the_stream_it_references_live(
+        &self,
+    ) -> BoxFuture<'_, Result<()>>;
+
     /// Export graph state as JSON asynchronously.
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>>;
 

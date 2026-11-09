@@ -199,9 +199,9 @@ impl RuntimeContext {
     }
 
     /// Where the bytes of the asset `asset` sit — the stream's project's own, or with
-    /// `from_project` the asset of that dependency at its pin, as a config's
-    /// `{"asset", "from"}` names it: a content-addressed file to open and read, never to write.
-    /// Refused when no such asset is held there or its bytes are not in the project's store.
+    /// `from_project` the file of that import's asset inside its folder, as a config's
+    /// `{"asset", "from"}` names it: a file to open and read, never to write. Refused when no
+    /// such asset is held there or its file is missing.
     pub fn asset_content_path(
         &self,
         asset: uuid::Uuid,
@@ -212,13 +212,11 @@ impl RuntimeContext {
                 self.stream_project_directory(),
                 asset,
             ),
-            Some(from_project) => {
-                streamlib_project_repository::the_content_path_of_a_dependency_asset(
-                    self.stream_project_directory(),
-                    from_project,
-                    asset,
-                )
-            }
+            Some(from_project) => streamlib_project_repository::the_file_of_an_imported_asset(
+                self.stream_project_directory(),
+                from_project,
+                asset,
+            ),
         }
         .map_err(|refusal| crate::core::Error::Configuration(refusal.to_string()))
     }

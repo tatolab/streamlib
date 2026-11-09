@@ -14,7 +14,8 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 use streamlib_project_repository::{
     PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile, assets_a_node_config_references,
-    every_asset_uuid_the_project_holds, project_stream_documents,
+    every_asset_uuid_the_project_holds,
+    graph_document_with_each_stream_fragment_reference_resolved, project_stream_documents,
 };
 use uuid::Uuid;
 
@@ -160,6 +161,7 @@ impl ProjectAsALoadReadsIt {
             stream_location: self.location_of(stream_document),
             stream_name: stream_document.stream_name().to_string(),
             graph_or_why_none: the_graph_a_stream_document_holds(
+                &self.project_directory,
                 stream_document,
                 &self.asset_uuids_the_project_holds,
             ),
@@ -178,6 +180,7 @@ struct StreamAssetRead {
 /// The graph `stream_document` holds, or why it holds none: it does not read, it names no
 /// stream asset, or it does not load as a graph.
 fn the_graph_a_stream_document_holds(
+    project_directory: &Path,
     stream_document: &ProjectStreamDocument,
     asset_uuids_the_project_holds: &BTreeSet<Uuid>,
 ) -> std::result::Result<GraphSnapshot, String> {
@@ -192,7 +195,16 @@ fn the_graph_a_stream_document_holds(
         .map_err(|why| why_it_holds_no_graph(format!("names no stream asset: {why}")))?;
     let document_text = std::str::from_utf8(bytes)
         .map_err(|not_utf8| why_it_holds_no_graph(format!("is not UTF-8: {not_utf8}")))?;
-    let graph = GraphSnapshot::from_json_str(document_text)
+    let document: serde_json::Value = serde_json::from_str(document_text)
+        .map_err(|not_parsed| why_it_holds_no_graph(format!("does not parse: {not_parsed}")))?;
+    let document =
+        graph_document_with_each_stream_fragment_reference_resolved(project_directory, &document)
+            .map_err(|not_resolved| {
+            why_it_holds_no_graph(format!(
+                "holds a stream fragment that does not load: {not_resolved}"
+            ))
+        })?;
+    let graph = GraphSnapshot::from_graph_document(document)
         .map_err(|not_a_graph| why_it_holds_no_graph(format!("does not load: {not_a_graph}")))?;
     let nodes_at_every_level = graph.nodes_at_every_level();
     let nodes_holding_no_uuid: Vec<String> = nodes_at_every_level
@@ -255,7 +267,11 @@ fn the_graph_the_recorded_stream_holds(
     let asset_uuids_the_project_holds =
         every_asset_uuid_the_project_holds(project_directory, project_file.project)
             .map_err(|refusal| format!("its project's assets do not read: {refusal}"))?;
-    the_graph_a_stream_document_holds(stream_document, &asset_uuids_the_project_holds)
+    the_graph_a_stream_document_holds(
+        project_directory,
+        stream_document,
+        &asset_uuids_the_project_holds,
+    )
 }
 
 /// What a load of a project did: each stream it loaded and started, or
@@ -3346,6 +3362,7 @@ mod tests {
             let project_file = TatolabProjectFile {
                 project,
                 name: TEST_PROJECT_NAME.to_string(),
+                created_with_runtime: None,
                 dependencies: Vec::new(),
             };
             std::fs::write(
@@ -4014,7 +4031,6 @@ mod tests {
             content_sha256: "0".repeat(64),
             content_byte_len: 0,
             import_settings: serde_json::Map::new(),
-            forked_from: None,
         };
         let sidecar = project.path().join(image.path.sidecar_path());
         std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();

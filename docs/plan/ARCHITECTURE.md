@@ -1892,11 +1892,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   graph edit live, and the unit of undo and history. Each project's history is a Git repository
   the runtime writes with a Git engine it carries, never the person's own Git, kept on the machine as
   the project's database of history and branches; no remote carries it, and a project works
-  fully offline (owner, 2026-11-09). Another project's asset is used as a linked dependency pinned to a
-  revision, updated when the person chooses and copied only when they fork it. A dependency's
-  assets travel with it: each fetch copies the bytes of its media, scene and data assets into the
-  depending project's content store from the source's own, so the project reads them at the pin
-  offline and a fork of one needs no second copy. Python stays the
+  fully offline (owner, 2026-11-09). Another project is imported by copying it once, whole, from a folder
+  or a zip into `imports/<folder>/`, copied again only when the person chooses; everything it
+  holds is referenced in its folder and never copied out of it or moved inside it, and a stream
+  fragment holding one of its streams is a reference resolved at each load. Python stays the
   language of nodes: a `@graph_generator` function, replacing `@stream`, builds graph, and its
   output is stored as a frozen, read-only fragment, never one-to-one with a stream, and nothing writes a graph edit back into Python. Data on links and runtime
   state are never saved. Single player first; the cloud hub, branches, roles and releases build on

@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde_json::{Map, Value};
+use streamlib_project_repository::STREAM_DOCUMENT_ASSET_KEY;
 use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
@@ -72,8 +73,21 @@ impl LoadedStreamInThisRuntime {
     /// as a load is, before the live graph is touched.
     pub(super) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
-        graph_document: Value,
+        mut graph_document: Value,
     ) -> Result<()> {
+        if let (Some(stream_location), Value::Object(document)) =
+            (self.stream_location(), &mut graph_document)
+        {
+            document
+                .entry(STREAM_DOCUMENT_ASSET_KEY)
+                .or_insert_with(|| Value::String(stream_location.stream_asset.to_string()));
+        }
+        let graph_document =
+            streamlib_project_repository::graph_document_with_each_stream_fragment_reference_resolved(
+                self.project_directory(),
+                &graph_document,
+            )
+            .map_err(Error::GraphError)?;
         let graph_whose_every_node_holds_a_uuid =
             GraphSnapshot::from_graph_document(graph_document)?
                 .with_a_uuid_minted_for_each_node_holding_none();
