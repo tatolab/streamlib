@@ -1060,6 +1060,9 @@ def _the_evaluate_entry_a_rust_function_node_exports(
 ) -> FunctionNodeCompiledToItsEvaluateEntry:
     declaration = function_node.rust_function_node_declaration
     _refuse_a_rust_function_node_built_for_another_module_host_table(declaration, import_path)
+    function_signature: "dict[str, Any]" = getattr(
+        function_node, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
+    )
     return FunctionNodeCompiledToItsEvaluateEntry(
         evaluate_entry_address=declaration.evaluate_entry_address,
         input_ports=tuple(input_pin.port for input_pin in declaration.input_pins),
@@ -1079,6 +1082,8 @@ def _the_evaluate_entry_a_rust_function_node_exports(
         is_stateful=declaration.state_parameter is not None,
         body_loaded_from_numbas_cache=False,
         compiled_wrapper_kept_alive=function_node,
+        input_value_types=tuple(input_pin.value_type for input_pin in declaration.input_pins),
+        how_its_values_are_carried=_how_the_values_of_a_signature_are_carried(function_signature),
     )
 
 

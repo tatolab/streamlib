@@ -7,9 +7,10 @@
 #![cfg(feature = "function-node")]
 
 use tatolab_module_sdk::function_node::{
-    FunctionNodeInputPin, FunctionNodeNamedValue, FunctionNodeOutput, FunctionNodeRecord,
-    FunctionNodeRecordFieldWithItsDefault, FunctionNodeValueType, State, Stateful, Time,
-    function_node,
+    FunctionNodeInputPin, FunctionNodeNamedValue, FunctionNodeOutput, FunctionNodeOutputPort,
+    FunctionNodeRecord, FunctionNodeRecordFieldWithItsDefault, FunctionNodeValueType, State,
+    Stateful, Time, UnreadMessage, function_node,
+    refuse_an_unread_message_output_following_no_one_input,
 };
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
@@ -82,15 +83,9 @@ struct PanicsWritingItsSecondValue {
 }
 
 impl FunctionNodeOutput for PanicsWritingItsSecondValue {
-    const OUTPUT_PORTS: &'static [FunctionNodeNamedValue] = &[
-        FunctionNodeNamedValue {
-            name: "first",
-            value_type: FunctionNodeValueType::Float,
-        },
-        FunctionNodeNamedValue {
-            name: "second",
-            value_type: FunctionNodeValueType::Float,
-        },
+    const OUTPUT_PORTS: &'static [FunctionNodeOutputPort] = &[
+        FunctionNodeOutputPort::handing_out::<f64>("first"),
+        FunctionNodeOutputPort::handing_out::<f64>("second"),
     ];
 
     fn write_function_node_output_values(&self, output_values: &mut [f64]) {
@@ -110,6 +105,61 @@ fn panics_on_a_negative_input(x: f64) -> bool {
     true
 }
 
+/// `value` handed on while `open`, and nothing while closed.
+#[function_node]
+fn gate(value: UnreadMessage, #[pin_default(true)] open: bool) -> Option<UnreadMessage> {
+    open.then_some(value)
+}
+
+/// `message` handed on while `count` is positive, called even when `message` holds nothing.
+#[function_node]
+fn hand_on_while_counting(message: Option<UnreadMessage>, count: i64) -> Option<UnreadMessage> {
+    message.filter(|_| count > 0)
+}
+
+/// The reciprocal of `x`, or nothing at zero.
+#[function_node]
+fn reciprocal(x: f64) -> Option<f64> {
+    (x != 0.0).then(|| 1.0 / x)
+}
+
+#[derive(Clone, Copy, FunctionNodeRecord)]
+struct ThresholdCrossings {
+    level: f64,
+    rose_at_ns: Option<i64>,
+    fell: Option<bool>,
+}
+
+/// The level, and when it last rose past the threshold or fell below it.
+#[function_node]
+fn threshold_crossings(level: f64, threshold: f64, now: Time) -> ThresholdCrossings {
+    ThresholdCrossings {
+        level,
+        rose_at_ns: (level > threshold).then_some(now),
+        fell: (level < threshold).then_some(true),
+    }
+}
+
+/// Call `declaration`'s evaluate entry with `input_values`, answering its status and its output slots.
+fn evaluate_statelessly(
+    declaration: &tatolab_module_sdk::function_node::FunctionNodeDeclaration,
+    input_values: &[f64],
+    output_slot_count: usize,
+) -> (i32, Vec<f64>) {
+    let mut output_values = vec![7.0; output_slot_count];
+    // SAFETY: one value per input pin, one slot per output port and handed-out flag, none of config or state.
+    let status = unsafe {
+        (declaration.evaluate_entry)(
+            input_values.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            output_values.as_mut_ptr(),
+            0,
+        )
+    };
+    (status, output_values)
+}
+
 #[test]
 fn a_stateless_function_node_declares_its_pins_and_its_result() {
     let declaration = scale_and_offset_function_node_declaration();
@@ -125,24 +175,28 @@ fn a_stateless_function_node_declares_its_pins_and_its_result() {
                 port: "x",
                 value_type: FunctionNodeValueType::Float,
                 pin_default: None,
+                takes_none: false,
             },
             FunctionNodeInputPin {
                 port: "gain",
                 value_type: FunctionNodeValueType::Float,
                 pin_default: Some(2.0),
+                takes_none: false,
             },
             FunctionNodeInputPin {
                 port: "offset",
                 value_type: FunctionNodeValueType::Float,
                 pin_default: Some(0.5),
+                takes_none: false,
             },
         ]
     );
     assert_eq!(
         declaration.output_ports,
-        vec![FunctionNodeNamedValue {
+        vec![FunctionNodeOutputPort {
             name: "result",
             value_type: FunctionNodeValueType::Float,
+            may_hand_out_nothing: false,
         }]
     );
     assert!(declaration.config_fields.is_empty());
@@ -186,13 +240,15 @@ fn a_stateful_function_node_declares_its_config_state_time_and_record_outputs() 
     assert_eq!(
         declaration.output_ports,
         vec![
-            FunctionNodeNamedValue {
+            FunctionNodeOutputPort {
                 name: "total",
                 value_type: FunctionNodeValueType::Float,
+                may_hand_out_nothing: false,
             },
-            FunctionNodeNamedValue {
+            FunctionNodeOutputPort {
                 name: "changed_at_ns",
                 value_type: FunctionNodeValueType::Int,
+                may_hand_out_nothing: false,
             },
         ]
     );
@@ -378,6 +434,212 @@ fn a_declaration_reaches_python_as_the_dict_node_rust_function_reads() {
                     .unwrap()
             ),
             (MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR)
+        );
+    });
+}
+
+#[test]
+fn a_gate_declares_an_unread_message_pin_and_an_output_that_may_hand_out_nothing() {
+    let declaration = gate_function_node_declaration();
+    assert_eq!(declaration.short_name, "Gate");
+    assert_eq!(
+        declaration.input_pins,
+        vec![
+            FunctionNodeInputPin {
+                port: "value",
+                value_type: FunctionNodeValueType::UnreadMessage,
+                pin_default: None,
+                takes_none: false,
+            },
+            FunctionNodeInputPin {
+                port: "open",
+                value_type: FunctionNodeValueType::Bool,
+                pin_default: Some(1.0),
+                takes_none: false,
+            },
+        ]
+    );
+    assert_eq!(
+        declaration.output_ports,
+        vec![FunctionNodeOutputPort {
+            name: "result",
+            value_type: FunctionNodeValueType::UnreadMessage,
+            may_hand_out_nothing: true,
+        }]
+    );
+}
+
+#[test]
+fn an_open_gate_hands_on_the_token_of_its_message_and_a_closed_one_hands_out_nothing() {
+    let declaration = gate_function_node_declaration();
+    let token_of_the_first_input = 1.0;
+    assert_eq!(
+        evaluate_statelessly(&declaration, &[token_of_the_first_input, 1.0], 2),
+        (
+            MODULE_HOST_TABLE_STATUS_OK,
+            vec![token_of_the_first_input, 1.0]
+        ),
+        "the output slot carries the token, and the flag past it says it handed one out"
+    );
+    assert_eq!(
+        evaluate_statelessly(&declaration, &[token_of_the_first_input, 0.0], 2),
+        (MODULE_HOST_TABLE_STATUS_OK, vec![0.0, 0.0]),
+    );
+}
+
+#[test]
+fn an_optional_unread_message_pin_takes_none_when_it_holds_nothing() {
+    let declaration = hand_on_while_counting_function_node_declaration();
+    assert_eq!(
+        declaration
+            .input_pins
+            .iter()
+            .map(|input_pin| (input_pin.port, input_pin.value_type, input_pin.takes_none))
+            .collect::<Vec<_>>(),
+        vec![
+            ("message", FunctionNodeValueType::UnreadMessage, true),
+            ("count", FunctionNodeValueType::Int, false),
+        ]
+    );
+    assert_eq!(
+        evaluate_statelessly(&declaration, &[1.0, 3.0], 2),
+        (MODULE_HOST_TABLE_STATUS_OK, vec![1.0, 1.0])
+    );
+    assert_eq!(
+        evaluate_statelessly(&declaration, &[0.0, 3.0], 2),
+        (MODULE_HOST_TABLE_STATUS_OK, vec![0.0, 0.0]),
+        "a message pin holding nothing reaches the body as `None`"
+    );
+    assert_eq!(
+        evaluate_statelessly(&declaration, &[1.0, 0.0], 2),
+        (MODULE_HOST_TABLE_STATUS_OK, vec![0.0, 0.0])
+    );
+}
+
+#[test]
+fn a_number_that_may_be_none_writes_its_handed_out_flag_past_its_output() {
+    let declaration = reciprocal_function_node_declaration();
+    assert_eq!(
+        declaration.output_ports,
+        vec![FunctionNodeOutputPort {
+            name: "result",
+            value_type: FunctionNodeValueType::Float,
+            may_hand_out_nothing: true,
+        }]
+    );
+    assert_eq!(
+        evaluate_statelessly(&declaration, &[4.0], 2),
+        (MODULE_HOST_TABLE_STATUS_OK, vec![0.25, 1.0])
+    );
+    assert_eq!(
+        evaluate_statelessly(&declaration, &[0.0], 2),
+        (MODULE_HOST_TABLE_STATUS_OK, vec![0.0, 0.0])
+    );
+}
+
+#[test]
+fn a_record_of_outputs_gives_each_field_that_may_be_none_a_flag_in_output_order() {
+    let declaration = threshold_crossings_function_node_declaration();
+    assert_eq!(
+        declaration.output_ports,
+        vec![
+            FunctionNodeOutputPort {
+                name: "level",
+                value_type: FunctionNodeValueType::Float,
+                may_hand_out_nothing: false,
+            },
+            FunctionNodeOutputPort {
+                name: "rose_at_ns",
+                value_type: FunctionNodeValueType::Int,
+                may_hand_out_nothing: true,
+            },
+            FunctionNodeOutputPort {
+                name: "fell",
+                value_type: FunctionNodeValueType::Bool,
+                may_hand_out_nothing: true,
+            },
+        ]
+    );
+    let mut output_values = [7.0; 5];
+    // SAFETY: one value per input pin, one slot per output port and handed-out flag, none of config or state.
+    let status = unsafe {
+        (declaration.evaluate_entry)(
+            [3.0, 1.0].as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            output_values.as_mut_ptr(),
+            500,
+        )
+    };
+    assert_eq!(status, MODULE_HOST_TABLE_STATUS_OK);
+    assert_eq!(
+        output_values,
+        [3.0, 500.0, 0.0, 1.0, 0.0],
+        "`rose_at_ns` handed one out and `fell` did not, their flags after every output"
+    );
+}
+
+#[test]
+#[should_panic(expected = "take exactly one `UnreadMessage` input")]
+fn an_unread_message_output_with_two_unread_message_inputs_to_follow_is_refused() {
+    refuse_an_unread_message_output_following_no_one_input(
+        &[
+            FunctionNodeValueType::UnreadMessage,
+            FunctionNodeValueType::UnreadMessage,
+        ],
+        <UnreadMessage as FunctionNodeOutput>::OUTPUT_PORTS,
+    );
+}
+
+#[test]
+#[should_panic(expected = "take exactly one `UnreadMessage` input")]
+fn an_unread_message_output_with_no_unread_message_input_to_follow_is_refused() {
+    refuse_an_unread_message_output_following_no_one_input(
+        &[FunctionNodeValueType::Float],
+        <Option<UnreadMessage> as FunctionNodeOutput>::OUTPUT_PORTS,
+    );
+}
+
+#[cfg(feature = "pyo3")]
+#[test]
+fn a_gates_declaration_reaches_python_with_its_value_types_and_what_may_be_none() {
+    use pyo3::prelude::*;
+
+    Python::attach(|python| {
+        let python_declaration = gate_function_node_declaration()
+            .to_python_declaration(python)
+            .expect("the declaration converts");
+        let entry = |key: &str, index: usize, entry_key: &str| {
+            python_declaration
+                .get_item(key)
+                .expect("a dict lookup")
+                .unwrap_or_else(|| panic!("the declaration carries `{key}`"))
+                .get_item(index)
+                .unwrap()
+                .get_item(entry_key)
+                .unwrap()
+        };
+        assert_eq!(
+            entry("input_pins", 0, "value_type")
+                .extract::<String>()
+                .unwrap(),
+            "unread_message"
+        );
+        assert!(
+            !entry("input_pins", 0, "takes_none")
+                .extract::<bool>()
+                .unwrap()
+        );
+        assert_eq!(
+            entry("output_ports", 0, "value_type")
+                .extract::<String>()
+                .unwrap(),
+            "unread_message"
+        );
+        assert!(
+            entry("output_ports", 0, "may_hand_out_nothing")
+                .extract::<bool>()
+                .unwrap()
         );
     });
 }

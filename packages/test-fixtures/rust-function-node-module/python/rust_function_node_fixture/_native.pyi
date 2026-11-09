@@ -5,3 +5,4 @@ from typing import Any
 
 ScaleAndOffset: dict[str, Any]
 CountsItsOwnCalls: dict[str, Any]
+RustGate: dict[str, Any]
