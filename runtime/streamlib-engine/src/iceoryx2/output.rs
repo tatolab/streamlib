@@ -25,6 +25,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use iceoryx2::identifiers::UniqueSubscriberId;
 use iceoryx2::port::SendError;
 use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
@@ -35,8 +36,8 @@ use super::helper_process_loss_count_board::OutputPortBagCountBoardMirror;
 use super::loss_counters::{BagCountsByOutputPort, OutputPortBagCounters};
 use super::{
     ChannelDataServiceLoanedSample, ChannelDataServicePublisher, ChannelTrustTier,
-    DataChannelPayloadDescriptor, DataChannelSampleUserHeader, MessageGroupBoundary,
-    data_channel_payload_cache_lines_for,
+    DataChannelPayloadDescriptor, DataChannelSampleUserHeader, Iceoryx2Service,
+    MessageGroupBoundary, data_channel_payload_cache_lines_for,
 };
 use crate::core::context::StreamClock;
 use crate::core::descriptors::PortStreamFacts;
@@ -122,6 +123,12 @@ fn payload_area_bytes_mut(loaned_sample: &mut ChannelDataServiceLoanedSample) ->
 /// ONCE.
 struct ChannelEgress {
     publisher: ChannelDataServicePublisher,
+    /// The channel the publisher sends on, read for which subscribers are
+    /// connected to it.
+    channel: Iceoryx2Service,
+    /// Every subscriber connected to the channel just before the last send
+    /// that may have delivered; empty before the first.
+    subscribers_connected_at_the_last_send: Vec<UniqueSubscriberId>,
     /// The sequence number the next send that may deliver carries in its user
     /// header, counted from zero for this publisher's life.
     next_sequence_number: u64,
@@ -277,8 +284,14 @@ impl ChannelEgress {
                 .messages_lost_upstream_before_the_next_send,
             ..user_header
         };
+        self.channel.collect_connected_subscriber_ids_into(
+            &mut self.subscribers_connected_at_the_last_send,
+        );
         let send_outcome = loaned_sample.send();
         let may_have_delivered = a_send_may_have_delivered(&send_outcome);
+        if !may_have_delivered {
+            self.subscribers_connected_at_the_last_send.clear();
+        }
         self.next_sequence_number =
             sequence_number_following_a_send(self.next_sequence_number, may_have_delivered);
         if may_have_delivered {
@@ -453,6 +466,7 @@ impl OutputWriterInner {
     pub fn set_channel_publisher(
         &self,
         output_port: &str,
+        channel: &Iceoryx2Service,
         publisher: ChannelDataServicePublisher,
         egress_config: ChannelEgressConfig,
     ) {
@@ -466,6 +480,8 @@ impl OutputWriterInner {
             output_port.to_string(),
             ChannelEgress {
                 publisher,
+                channel: channel.clone(),
+                subscribers_connected_at_the_last_send: Vec::new(),
                 next_sequence_number: 0,
                 messages_lost_upstream_before_the_next_send: 0,
                 links: Vec::new(),
@@ -561,6 +577,21 @@ impl OutputWriterInner {
             .get(output_port)
             .map(|egress| egress.links.len())
             .unwrap_or(0)
+    }
+
+    /// Whether a reader now connected to `output_port` connected after its last
+    /// write, so that write never reached it.
+    ///
+    /// Every reader of a port subscribes to its one channel — a linked
+    /// destination, a viewer on the reserved slot, an island's reader — so this
+    /// sees each of them, and sees a link's destination only once its
+    /// subscriber is open. A port with no channel has no reader.
+    pub fn has_a_reader_the_last_write_missed(&self, output_port: &str) -> bool {
+        self.channels.lock().get(output_port).is_some_and(|egress| {
+            egress
+                .channel
+                .has_a_connected_subscriber_outside(&egress.subscribers_connected_at_the_last_send)
+        })
     }
 
     /// Reclaim the source-side egress for one disconnected `connect()` link.
@@ -1069,6 +1100,7 @@ mod tests {
         let inner = OutputWriterInner::new();
         inner.set_channel_publisher(
             "out",
+            pubsub,
             pubsub.create_publisher(64).unwrap(),
             ChannelEgressConfig {
                 service_name: "test/out".to_string(),
@@ -1086,6 +1118,53 @@ mod tests {
         Iceoryx2Node::for_this_test_process()
             .open_or_create_service(&unique_suffix(tag), max_subscribers, 4)
             .expect("open the channel data service")
+    }
+
+    /// A reader that subscribes after a write is one that write missed, until
+    /// the next write reaches it; a reader leaving is not.
+    #[test]
+    fn a_reader_subscribing_after_a_write_is_one_the_last_write_missed() {
+        let pubsub = open_channel_data_service("late-reader", 3);
+        let inner = output_writer_with_one_channel(
+            &pubsub,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        );
+        assert!(
+            !inner.has_a_reader_the_last_write_missed("out"),
+            "no reader yet"
+        );
+        assert!(
+            !inner.has_a_reader_the_last_write_missed("undeclared"),
+            "a port with no channel has no reader"
+        );
+
+        let first_reader = pubsub.create_subscriber(4).unwrap();
+        assert!(
+            inner.has_a_reader_the_last_write_missed("out"),
+            "nothing has been written to the first reader"
+        );
+        inner
+            .write_bytes_with_timestamp("out", b"picture", 0, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        assert!(!inner.has_a_reader_the_last_write_missed("out"));
+
+        let late_reader = pubsub.create_subscriber(4).unwrap();
+        assert!(inner.has_a_reader_the_last_write_missed("out"));
+        assert!(
+            late_reader.receive().unwrap().is_none(),
+            "the channel keeps no history for a late reader"
+        );
+        inner
+            .write_bytes_with_timestamp("out", b"picture", 1, MessageGroupBoundary::StartsGroup)
+            .unwrap();
+        assert!(!inner.has_a_reader_the_last_write_missed("out"));
+        assert!(late_reader.receive().unwrap().is_some());
+
+        drop(first_reader);
+        assert!(
+            !inner.has_a_reader_the_last_write_missed("out"),
+            "a reader leaving is no reader the write missed"
+        );
     }
 
     /// A loan is filled in place and published as one sample carrying its
@@ -1213,6 +1292,7 @@ mod tests {
         let second_subscriber = second.create_subscriber(4).unwrap();
         inner.set_channel_publisher(
             "out",
+            &second,
             second.create_publisher(64).unwrap(),
             ChannelEgressConfig {
                 service_name: "test/out".to_string(),
@@ -1275,6 +1355,7 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
             "out",
+            &pubsub,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/out".to_string(),
@@ -1433,6 +1514,7 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
             "out",
+            &pubsub,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/out".to_string(),
@@ -1512,13 +1594,13 @@ mod tests {
     #[test]
     fn remove_channel_link_reclaims_per_link_then_drops_channel() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let publisher = open_channel_data_service("reclaim/pubsub", 4)
-            .create_publisher(4096)
-            .unwrap();
+        let reclaim_channel = open_channel_data_service("reclaim/pubsub", 4);
+        let publisher = reclaim_channel.create_publisher(4096).unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
             "out",
+            &reclaim_channel,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/reclaim/out".to_string(),
@@ -1602,6 +1684,7 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
             "videoout",
+            &pubsub,
             pubsub.create_publisher(64).unwrap(),
             ChannelEgressConfig {
                 service_name: "test/videoout".to_string(),
@@ -1691,6 +1774,7 @@ mod tests {
         let ceiling = 128 * 1024usize;
         inner.set_channel_publisher(
             "out",
+            &pubsub,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/ceiling/out".to_string(),
@@ -1796,6 +1880,7 @@ mod tests {
         let install_the_channel = |wiring_generation: u64| {
             inner.set_channel_publisher(
                 "out",
+                &pubsub,
                 pubsub.create_publisher(64).unwrap(),
                 ChannelEgressConfig {
                     service_name: "test/mirrored-refusal/out".to_string(),
@@ -2098,6 +2183,7 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
             "out",
+            &pubsub,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/stale/out".to_string(),

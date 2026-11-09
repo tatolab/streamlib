@@ -663,6 +663,22 @@ impl PythonProcessorLinkDataAccess {
             .map(|inbound_link_name| inbound_link_name.as_str().to_string())
             .collect())
     }
+
+    /// Whether a reader now connected to `port_name` connected after its last
+    /// write; a declared port no link has reached has no reader.
+    pub(crate) fn output_port_has_a_reader_the_last_write_missed(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+    ) -> PyResult<bool> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        Ok(match self.output_writer_reaching(port_name)? {
+            Some(output_writer) => {
+                python.detach(|| output_writer.has_a_reader_the_last_write_missed(port_name))
+            }
+            None => false,
+        })
+    }
 }
 
 /// What a read hands back for a message's payload.
@@ -1290,6 +1306,7 @@ impl PythonProcessorLinkDataAccess {
                     let publisher = channel.create_publisher(expected_payload_bytes)?;
                     output_writer.set_channel_publisher(
                         port_name,
+                        &channel,
                         publisher,
                         ChannelEgressConfig {
                             service_name: channel_service_name.to_string(),

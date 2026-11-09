@@ -386,6 +386,24 @@ impl PythonLinkOutputDataWriter {
         )
     }
 
+    /// Whether a reader now connected to `port` connected after its last write,
+    /// so that write never reached it. `port` is a name or an `Output`
+    /// attribute.
+    fn has_a_reader_the_last_write_missed(
+        &self,
+        python: Python<'_>,
+        port: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
+        let port_name: String = if port.is_instance_of::<PyString>() {
+            port.extract()?
+        } else {
+            port_attribute_name(port, "Output")?
+        };
+        self.link_data_access
+            .get()
+            .output_port_has_a_reader_the_last_write_missed(python, &port_name)
+    }
+
     /// Replace the stream facts `port_name` carries with `stream_facts`, one of
     /// `tatolab.stream.stream_facts`'s types. The parent refuses facts of
     /// another family than the port's.

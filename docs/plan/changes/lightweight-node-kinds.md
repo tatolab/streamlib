@@ -462,7 +462,10 @@ Each was settled by the owner on the date it names.
 - **DECIDED 15 — `ImageFile` (owner, 2026-11-08).** A Python `@node.process` in `tatolab-ops`.
   Its config names a project image asset by UUID, opened through `asset_content_path`, never a
   raw path. It decodes PNG and JPEG with Pillow, uploads to one Image slot, and publishes once
-  at start and again on each config change.
+  at start and again on each config change. A reader that connects after a publish is sent the
+  same slot again, with no decode and no upload (owner, 2026-11-09): the output writer says
+  whether a subscriber now on the port's channel was not on it at the last write, read in
+  Python as `ctx.outputs.has_a_reader_the_last_write_missed(port)`.
 
 Assumed unless overruled:
 - A function's single output is named `result`; plain parameters are pins by default; a node's
