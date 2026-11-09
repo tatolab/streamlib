@@ -176,3 +176,28 @@ jobs:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
       dry_run: false
     secrets: inherit
+
+  # Tato Studio bundles this runtime, so its release starts once the Linux runtime is on
+  # get.tatolab.com. TATOLAB_APP_RELEASE_DISPATCH_TOKEN is a fine-grained token for
+  # tatolab/tatolab-app with Actions read and write, the one permission a workflow dispatch needs.
+  release-tato-studio:
+    name: Start Tato Studio's release
+    needs: [release-please, publish-the-release]
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Dispatch tatolab-app's release with this streamlib version
+        env:
+          GH_TOKEN: ${{ secrets.TATOLAB_APP_RELEASE_DISPATCH_TOKEN }}
+          RELEASE_TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::TATOLAB_APP_RELEASE_DISPATCH_TOKEN does not reach this repository — add a fine-grained token for tatolab/tatolab-app (Actions, read and write) to Infisical's prod environment, which syncs it to the organization's secrets"
+            exit 1
+          fi
+          gh workflow run release.yml --repo tatolab/tatolab-app --ref main \
+            -f streamlib_version="${RELEASE_TAG_NAME#v}"
+          echo "tatolab-app's release runs with streamlib ${RELEASE_TAG_NAME#v}"
