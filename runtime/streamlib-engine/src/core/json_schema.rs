@@ -54,6 +54,23 @@ pub struct GraphResponse {
     /// Every labelled group of the stream's own level: a spec key, read by nothing that runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LabelledNodeGroup>,
+    /// The stream of another project this one's graph document was forked from: a spec key,
+    /// read by nothing that runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<ForkedStreamOrigin>,
+}
+
+/// The stream a forked graph document was copied from: that stream asset, its project, and
+/// the commit of the project's history it was copied at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ForkedStreamOrigin {
+    /// The UUID of the stream asset it was copied from.
+    pub asset: String,
+    /// The UUID of the project that holds that stream.
+    pub from: String,
+    /// The commit of that project's history it was copied at.
+    pub revision: String,
 }
 
 /// A labelled group of one level's nodes, which a node joins by naming its `id` as its
@@ -1527,6 +1544,7 @@ mod graph_response_top_level_key_rendering_tests {
             [
                 "asset",
                 "clock",
+                "forked_from",
                 "groups",
                 "links",
                 "machine",

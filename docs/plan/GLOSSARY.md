@@ -251,8 +251,8 @@ image, USD, an FMU — referenced by UUID, never by path. _Avoid_: "resource", "
 is meant.
 
 **Graph document** _(crosses)_: a stream asset's canonical JSON — nodes by UUID, config, pin
-values, studio fields, links, fragments, groups — and the stream's source of truth. _Avoid_:
-"stream file", "scene", "`stream.py`".
+values, studio fields, links, fragments, groups, and for a fork the stream it was copied from —
+and the stream's source of truth. _Avoid_: "stream file", "scene", "`stream.py`".
 
 **Group** _(crosses)_: a labelled group of one level's nodes in a graph document — a UUID, a title,
 a description and a colour — that a node joins by naming its UUID as its `studio.group`; it changes

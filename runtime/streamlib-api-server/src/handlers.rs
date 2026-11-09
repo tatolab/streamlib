@@ -167,7 +167,7 @@ fn stream_operations_or_refusal(
 )]
 pub(crate) enum GraphOfOneStreamOrOfEveryStream {
     /// The graph of the stream `stream` named.
-    OneStream(GraphResponse),
+    OneStream(Box<GraphResponse>),
     /// Every loaded stream's graph, when no `stream` was named.
     EveryStream(MachineWideGraphResponse),
 }

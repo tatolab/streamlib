@@ -70,6 +70,43 @@ pub enum ProjectRepositoryRefusal {
     GraphDocumentUnreadable { path: String, why: String },
     #[error("`{name}` cannot be both a tracked file and a tracked folder in history")]
     TrackedFileAndFolderShareAName { name: String },
+    #[error(
+        "the history {history} holds no revision `{revision}`: name a commit, a tag or a branch"
+    )]
+    NoSuchRevision { revision: String, history: PathBuf },
+    #[error("the project {0} cannot depend on itself")]
+    ProjectDependsOnItself(Uuid),
+    #[error("the project already depends on {0}; move its pin with update_dependency")]
+    DependencyAlreadyHeld(Uuid),
+    #[error("the project depends on no project {0}")]
+    NoSuchDependency(Uuid),
+    #[error("the dependency {project} is pinned to {pinned}, not {expected}")]
+    DependencyPinnedElsewhere {
+        project: Uuid,
+        pinned: String,
+        expected: String,
+    },
+    #[error(
+        "{dependency_source} holds no project at that revision: it has no tatolab-project.json"
+    )]
+    DependencySourceHoldsNoProject { dependency_source: String },
+    #[error("{dependency_source} now holds the project {held}, not the dependency {expected}")]
+    DependencySourceHoldsAnotherProject {
+        dependency_source: String,
+        expected: Uuid,
+        held: Uuid,
+    },
+    #[error("the dependency {project} holds no stream asset {stream} at {commit}")]
+    DependencyHoldsNoStream {
+        project: Uuid,
+        stream: Uuid,
+        commit: String,
+    },
+    #[error("the dependency {project} has no fetched history at {history_directory}; add it again")]
+    DependencyNotFetched {
+        project: Uuid,
+        history_directory: PathBuf,
+    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "history")]
