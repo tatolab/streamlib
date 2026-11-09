@@ -327,3 +327,18 @@ def test_an_output_that_may_be_none_is_one_that_may_hand_out_nothing():
 def test_an_unread_message_output_without_exactly_one_unread_message_input_is_refused():
     with pytest.raises(TypeError, match="take exactly one `UnreadMessage` input"):
         node.function(pick_one_of_two)
+
+
+@dataclass(frozen=True)
+class TwoLevels:
+    low: float = 0.0
+    high: float = 1.0
+
+
+def two_levels_or_nothing(x: float) -> TwoLevels | None:
+    return None
+
+
+def test_a_record_of_outputs_that_may_be_none_is_refused_naming_the_fix():
+    with pytest.raises(TypeError, match=_literally("type each field that may hand out nothing")):
+        node.function(two_levels_or_nothing)

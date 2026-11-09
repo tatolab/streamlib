@@ -388,6 +388,19 @@ class _FunctionNodeSignatureReading:
                     f"To fix: `-> Stateful[<output>, {_name_of(self._state_record_class)}]`, "
                     f"returning `(output, new_state)`."
                 )
+        record_that_may_be_none, may_be_none = _value_annotation_and_whether_optional(output_annotation)
+        if (
+            may_be_none
+            and isinstance(record_that_may_be_none, type)
+            and dataclasses.is_dataclass(record_that_may_be_none)
+            and record_that_may_be_none not in _families_by_read_type()
+        ):
+            raise TypeError(
+                f"{self._function_name} returns `{_name_of(record_that_may_be_none)} | None`, and "
+                f"a record of outputs hands out each of its fields, so it is never `None` as a "
+                f"whole. To fix: return `{_name_of(record_that_may_be_none)}` and type each field "
+                f"that may hand out nothing `T | None`."
+            )
         if (
             isinstance(output_annotation, type)
             and dataclasses.is_dataclass(output_annotation)

@@ -800,12 +800,14 @@ def _the_island_node_inputs_no_value_reaches(
         prepared = prepared_by_node_id[node_id]
         linked_input_ports = {link["port"] for link in island_node["links_into"]}
         pinned_input_ports = set(island_node.get("pins") or {})
+        input_ports_that_take_none = _the_input_ports_that_take_none(prepared)
         inputs_no_value_reaches.extend(
             f"{island_node.get('name') or node_id}.{input_port}"
             for input_port in prepared.input_ports
             if input_port not in linked_input_ports
             and input_port not in pinned_input_ports
             and input_port not in prepared.pin_defaults_by_input_port
+            and input_port not in input_ports_that_take_none
         )
     return inputs_no_value_reaches
 
@@ -840,11 +842,24 @@ def _where_each_input_takes_its_value(
             where_each_input_takes_its_value.append(
                 (None, _a_pin_value_as_f64(node_id, input_port, pin_values_by_input_port[input_port]))
             )
-        else:
+        elif input_port in prepared.pin_defaults_by_input_port:
             where_each_input_takes_its_value.append(
                 (None, prepared.pin_defaults_by_input_port[input_port])
             )
+        else:
+            where_each_input_takes_its_value.append((None, _NOTHING_AS_AN_UNREAD_MESSAGE_TOKEN))
     return where_each_input_takes_its_value
+
+
+#: The token an `UnreadMessage` input holding no message carries: inputs are numbered from 1.
+_NOTHING_AS_AN_UNREAD_MESSAGE_TOKEN = 0.0
+
+
+def _the_input_ports_that_take_none(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":
+    return frozenset(
+        prepared.input_ports[input_index]
+        for input_index in prepared.how_its_values_are_carried.get("inputs_that_take_none", [])
+    )
 
 
 def _output_index(

@@ -12,6 +12,8 @@ use super::{
 use crate::core::descriptors::{
     PortFamilyDeclaration, PortFamilyLinkEndpoint, refusal_of_a_link_between_port_families,
 };
+use std::collections::HashSet;
+
 use crate::core::{Error, Result};
 
 fn output_port_family<'node>(
@@ -39,7 +41,8 @@ fn input_port_family<'node>(
 /// The output a link out of `port_name` of `node` carries on: the output
 /// itself, or, for one whose family follows an input of its node, the output
 /// linked into that input, followed upstream. `None` while an input it follows
-/// has no link yet, so its family is not settled.
+/// has no link yet, or the outputs it follows loop back on themselves, so its
+/// family is not settled.
 fn the_output_a_link_carries_on<'graph>(
     graph: &'graph Graph,
     node: &'graph ProcessorNode,
@@ -50,8 +53,12 @@ fn the_output_a_link_carries_on<'graph>(
     &'graph PortFamilyDeclaration,
 )> {
     let mut carried_on = (node, port_name);
-    for _ in 0..MOST_OUTPUTS_A_FAMILY_FOLLOWS_THROUGH {
+    let mut outputs_followed: HashSet<(&ProcessorUniqueId, &str)> = HashSet::new();
+    loop {
         let (node, port_name) = carried_on;
+        if !outputs_followed.insert((&node.id, port_name)) {
+            return None;
+        }
         let declaration = output_port_family(node, port_name)?;
         let Some(followed_input_port) = declaration.family_follows_input_port.as_deref() else {
             return Some((node, port_name, declaration));
@@ -70,12 +77,62 @@ fn the_output_a_link_carries_on<'graph>(
             link_into_the_followed_input.source().port_name(),
         );
     }
-    None
 }
 
-/// How many outputs whose family follows an input one link's check follows
-/// upstream before it stops, which bounds a loop of them.
-const MOST_OUTPUTS_A_FAMILY_FOLLOWS_THROUGH: usize = 64;
+/// Each input what arrives at `input_port_name` of `node` is carried on to by
+/// the outputs that follow it, downstream through every output that follows
+/// an input in turn, with the following output it leaves through.
+fn the_inputs_an_input_is_carried_on_to<'graph>(
+    graph: &'graph Graph,
+    node: &'graph ProcessorNode,
+    input_port_name: &'graph str,
+) -> Vec<(
+    &'graph ProcessorNode,
+    &'graph str,
+    &'graph ProcessorNode,
+    &'graph str,
+)> {
+    let mut inputs_carried_on_to = Vec::new();
+    let mut inputs_to_follow = vec![(node, input_port_name)];
+    let mut inputs_followed: HashSet<(&ProcessorUniqueId, &str)> = HashSet::new();
+    while let Some((following_node, following_input_port)) = inputs_to_follow.pop() {
+        if !inputs_followed.insert((&following_node.id, following_input_port)) {
+            continue;
+        }
+        let outputs_following_the_input = following_node.ports.outputs.iter().filter(|output| {
+            output.family.family_follows_input_port.as_deref() == Some(following_input_port)
+        });
+        for following_output in outputs_following_the_input {
+            let links_out_of_the_following_output = graph
+                .traversal()
+                .v(&following_node.id)
+                .out_e()
+                .iter()
+                .filter(|link| {
+                    link.source().port_name() == following_output.name
+                        && !link.has::<PendingDeletionComponent>()
+                });
+            for link_out in links_out_of_the_following_output {
+                let Some(downstream_node) = graph
+                    .traversal()
+                    .v(link_out.to_port().processor_id())
+                    .first()
+                else {
+                    continue;
+                };
+                let downstream_input_port = link_out.to_port().port_name();
+                inputs_carried_on_to.push((
+                    following_node,
+                    following_output.name.as_str(),
+                    downstream_node,
+                    downstream_input_port,
+                ));
+                inputs_to_follow.push((downstream_node, downstream_input_port));
+            }
+        }
+    }
+    inputs_carried_on_to
+}
 
 /// The refusal of a link from `output` to the input `to_port_name` of
 /// `to_node`, by their families, or `None` when they match.
@@ -132,47 +189,28 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     {
         return Err(Error::InvalidLink(refusal));
     }
-    let outputs_following_the_input = to_node.ports.outputs.iter().filter(|output| {
-        output.family.family_follows_input_port.as_deref() == Some(to.port_name())
-    });
-    for following_output in outputs_following_the_input {
-        let links_out_of_the_following_output = graph
-            .traversal()
-            .v(&to_node.id)
-            .out_e()
-            .iter()
-            .filter(|link| {
-                link.source().port_name() == following_output.name
-                    && !link.has::<PendingDeletionComponent>()
-            });
-        for link_out in links_out_of_the_following_output {
-            let Some(downstream_node) = graph
-                .traversal()
-                .v(link_out.to_port().processor_id())
-                .first()
-            else {
-                continue;
-            };
-            let Some(downstream_input_declaration) =
-                input_port_family(downstream_node, link_out.to_port().port_name())
-            else {
-                continue;
-            };
-            if let Some(refusal) = refusal_of_a_link_from_an_output(
-                carried_on,
-                downstream_node,
-                link_out.to_port().port_name(),
-                downstream_input_declaration,
-            ) {
-                return Err(Error::InvalidLink(format!(
-                    "cannot link {from} to {to}: {}.{} carries on what {to} takes, and it \
-                     already feeds {}.{}: {refusal}",
-                    to_node.display_name,
-                    following_output.name,
-                    downstream_node.display_name,
-                    link_out.to_port().port_name()
-                )));
-            }
+    for (following_node, following_output_name, downstream_node, downstream_input_port) in
+        the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name())
+    {
+        let Some(downstream_input_declaration) =
+            input_port_family(downstream_node, downstream_input_port)
+        else {
+            continue;
+        };
+        if let Some(refusal) = refusal_of_a_link_from_an_output(
+            carried_on,
+            downstream_node,
+            downstream_input_port,
+            downstream_input_declaration,
+        ) {
+            return Err(Error::InvalidLink(format!(
+                "cannot link {from} to {to}: {}.{} carries on what {to} takes, and it \
+                 feeds {}.{}: {refusal}",
+                following_node.display_name,
+                following_output_name,
+                downstream_node.display_name,
+                downstream_input_port
+            )));
         }
     }
     Ok(())
@@ -208,27 +246,47 @@ pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_ref
         if output_declaration.family_follows_input_port.is_some() {
             continue;
         }
-        let refusal = refusal_of_a_link_between_port_families(
-            PortFamilyLinkEndpoint {
-                node_name: &from_node.display_name,
-                port_name: link.source().port_name(),
-                declaration: output_declaration,
-            },
-            Some(config_to_apply),
-            PortFamilyLinkEndpoint {
-                node_name: &to_node.display_name,
-                port_name: link.to_port().port_name(),
-                declaration: input_declaration,
-            },
-        );
-        if let Some(refusal) = refusal {
-            return Err(Error::Config(format!(
-                "config update for {} refused: under it the wired link {} → {} is refused: \
-                 {refusal}",
-                from_node.display_name,
-                link.source(),
-                link.to_port()
-            )));
+        let inputs_the_link_reaches =
+            std::iter::once((to_node, link.to_port().port_name(), input_declaration)).chain(
+                the_inputs_an_input_is_carried_on_to(graph, to_node, link.to_port().port_name())
+                    .into_iter()
+                    .filter_map(|(_, _, downstream_node, downstream_input_port)| {
+                        input_port_family(downstream_node, downstream_input_port).map(
+                            |downstream_input_declaration| {
+                                (
+                                    downstream_node,
+                                    downstream_input_port,
+                                    downstream_input_declaration,
+                                )
+                            },
+                        )
+                    }),
+            );
+        for (reached_node, reached_input_port, reached_input_declaration) in inputs_the_link_reaches
+        {
+            let refusal = refusal_of_a_link_between_port_families(
+                PortFamilyLinkEndpoint {
+                    node_name: &from_node.display_name,
+                    port_name: link.source().port_name(),
+                    declaration: output_declaration,
+                },
+                Some(config_to_apply),
+                PortFamilyLinkEndpoint {
+                    node_name: &reached_node.display_name,
+                    port_name: reached_input_port,
+                    declaration: reached_input_declaration,
+                },
+            );
+            if let Some(refusal) = refusal {
+                return Err(Error::Config(format!(
+                    "config update for {} refused: under it the wired link {} → {}, which \
+                     reaches {}.{reached_input_port}, is refused: {refusal}",
+                    from_node.display_name,
+                    link.source(),
+                    link.to_port(),
+                    reached_node.display_name,
+                )));
+            }
         }
     }
     Ok(())

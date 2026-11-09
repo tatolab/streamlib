@@ -135,12 +135,15 @@ pub(crate) fn wire_a_link_into_a_function_node_island_through_its_reader(
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
+    if is_read_through_the_reader_of_its_island(graph, link_id) {
+        return Ok(());
+    }
     let function_node_id = link_in(graph, link_id)?.to_port().processor_id().clone();
-    let readers = the_readers_a_function_node_feeds(graph, &function_node_id);
-    let mut readers = readers.into_iter();
-    match (readers.next(), readers.next()) {
+    let reader_input_ports = the_reader_input_ports_a_function_node_feeds(graph, &function_node_id);
+    let mut reader_input_ports = reader_input_ports.into_iter();
+    match (reader_input_ports.next(), reader_input_ports.next()) {
         (None, _) => mark_a_link(graph, link_id, LinkState::Wired),
-        (Some(reader_id), None) => {
+        (Some((reader_id, _)), None) => {
             open_the_channel_of_a_link_into_a_function_node_island_at_its_reader(
                 graph,
                 link_id,
@@ -201,17 +204,91 @@ fn an_island_reading_a_channel_fed_to_two_readers(
     graph: &Graph,
     function_node_id: &ProcessorUniqueId,
 ) -> Error {
-    let mut reader_names: Vec<String> = the_readers_a_function_node_feeds(graph, function_node_id)
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    reader_names.sort();
+    let mut reader_input_port_names: Vec<String> =
+        the_reader_input_ports_a_function_node_feeds(graph, function_node_id)
+            .iter()
+            .map(|(reader_id, input_port)| format!("`{reader_id}.{input_port}`"))
+            .collect();
+    reader_input_port_names.sort();
     Error::InvalidLink(format!(
         "the island of function node `{function_node_id}` reads a link from a node outside \
-         any island, and feeds {}; each reader evaluates the island itself, so a link into it \
-         has one reader in this release. To fix: give each reader its own function nodes",
-        reader_names.join(" and ")
+         any island, and feeds {}; each input port a reader reads an island at evaluates it \
+         itself, so a link into it has one reader input port in this release. To fix: give \
+         each reader input port its own function nodes",
+        reader_input_port_names.join(" and ")
     ))
+}
+
+/// Each link from a function node into a node outside any island, which
+/// carries the island its reader evaluates.
+fn the_island_links(graph: &Graph) -> Vec<LinkUniqueId> {
+    graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| {
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().processor_id())
+        })
+        .map(|link| link.id.clone())
+        .collect()
+}
+
+fn is_read_through_the_reader_of_its_island(graph: &Graph, link_id: &LinkUniqueId) -> bool {
+    graph
+        .traversal()
+        .e(link_id)
+        .first()
+        .is_some_and(|link| link.has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>())
+}
+
+/// Open, at `reader_id`, the channel of each link from outside any island into
+/// `function_node_ids` that no reader reads yet.
+fn open_the_channels_of_the_links_into_an_island_at_its_reader(
+    graph: &mut Graph,
+    function_node_ids: &[ProcessorUniqueId],
+    reader_id: &ProcessorUniqueId,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<()> {
+    for link_into_the_island in
+        the_links_into_function_nodes_from_outside_any_island(graph, function_node_ids)
+    {
+        if !is_read_through_the_reader_of_its_island(graph, &link_into_the_island) {
+            open_the_channel_of_a_link_into_a_function_node_island_at_its_reader(
+                graph,
+                &link_into_the_island,
+                reader_id,
+                iceoryx2_node,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Open the channel of each link from outside any island that an island an
+/// edit changed now reads, at that island's reader, before the reader is
+/// handed the island.
+pub(crate) fn open_the_channels_each_island_newly_reads(
+    graph: &mut Graph,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<()> {
+    for island_link_id in the_island_links(graph) {
+        let reader_id = link_in(graph, &island_link_id)?
+            .to_port()
+            .processor_id()
+            .clone();
+        let function_node_ids = the_function_node_ids_an_island_calls(&the_island_feeding_a_link(
+            graph,
+            &island_link_id,
+        )?);
+        open_the_channels_of_the_links_into_an_island_at_its_reader(
+            graph,
+            &function_node_ids,
+            &reader_id,
+            iceoryx2_node,
+        )?;
+    }
+    Ok(())
 }
 
 /// The links into the function nodes `function_node_ids` from nodes outside
@@ -295,25 +372,12 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
         )));
     }
     let function_node_ids = the_function_node_ids_an_island_calls(&island);
-    for link_into_the_island in
-        the_links_into_function_nodes_from_outside_any_island(graph, &function_node_ids)
-    {
-        let already_read_through_a_reader = graph
-            .traversal()
-            .e(&link_into_the_island)
-            .first()
-            .is_some_and(|link| {
-                link.has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
-            });
-        if !already_read_through_a_reader {
-            open_the_channel_of_a_link_into_a_function_node_island_at_its_reader(
-                graph,
-                &link_into_the_island,
-                &reader_id,
-                iceoryx2_node,
-            )?;
-        }
-    }
+    open_the_channels_of_the_links_into_an_island_at_its_reader(
+        graph,
+        &function_node_ids,
+        &reader_id,
+        iceoryx2_node,
+    )?;
     let answer_awaited_from_the_reader = reader_link_wiring
         .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(island)?;
     reader_link_wiring.tell_each_function_node_how_its_far_side_ran_it(
@@ -340,16 +404,9 @@ pub(crate) fn hand_each_reader_the_island_a_compile_changed(
     graph: &mut Graph,
     links_wired_this_compile: &[LinkUniqueId],
 ) -> Result<()> {
-    let island_links: Vec<LinkUniqueId> = graph
-        .traversal()
-        .e(())
-        .iter()
-        .filter(|link| !links_wired_this_compile.contains(&link.id))
-        .filter(|link| {
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
-                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().processor_id())
-        })
-        .map(|link| link.id.clone())
+    let island_links: Vec<LinkUniqueId> = the_island_links(graph)
+        .into_iter()
+        .filter(|link_id| !links_wired_this_compile.contains(link_id))
         .collect();
     for link_id in island_links {
         let reader_id = link_in(graph, &link_id)?.to_port().processor_id().clone();
@@ -512,7 +569,26 @@ pub(crate) fn unwire_a_link_from_a_function_node_island_into_its_reader(
     link_id: &LinkUniqueId,
 ) -> Result<()> {
     let reader_id = link_in(graph, link_id)?.to_port().processor_id().clone();
-    let links_read_through_this_reader: Vec<LinkUniqueId> = graph
+    let function_nodes_of_the_unwired_island =
+        the_function_node_ids_an_island_calls(&the_island_feeding_a_link(graph, link_id)?);
+    let mut function_nodes_other_islands_of_this_reader_call = HashSet::new();
+    for other_island_link_id in the_island_links(graph) {
+        if other_island_link_id == *link_id
+            || link_in(graph, &other_island_link_id)?
+                .to_port()
+                .processor_id()
+                != &reader_id
+        {
+            continue;
+        }
+        function_nodes_other_islands_of_this_reader_call.extend(
+            the_function_node_ids_an_island_calls(&the_island_feeding_a_link(
+                graph,
+                &other_island_link_id,
+            )?),
+        );
+    }
+    let links_only_the_unwired_island_read_through_this_reader: Vec<LinkUniqueId> = graph
         .traversal()
         .e(())
         .iter()
@@ -521,10 +597,13 @@ pub(crate) fn unwire_a_link_from_a_function_node_island_into_its_reader(
                 .is_some_and(|read_through| {
                     read_through.reader_input_port.processor_id() == &reader_id
                 })
+                && function_nodes_of_the_unwired_island.contains(link.to_port().processor_id())
+                && !function_nodes_other_islands_of_this_reader_call
+                    .contains(link.to_port().processor_id())
         })
         .map(|link| link.id.clone())
         .collect();
-    for link_read_through_this_reader in links_read_through_this_reader {
+    for link_read_through_this_reader in links_only_the_unwired_island_read_through_this_reader {
         close_iceoryx2_service(graph, &link_read_through_this_reader)?;
     }
     if let Some(reader_link_wiring) = graph
@@ -739,15 +818,23 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
         if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()) {
             continue;
         }
-        let reader_id = link.to_port().processor_id();
-        if is_a_running_reader(reader_id)
-            && is_reactive_and_left_fed_only_by_islands(graph, reader_id, links_to_remove)
+        let destination_id = link.to_port().processor_id();
+        let readers_it_wakes = if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
         {
-            return Err(Error::InvalidLink(format!(
-                "removing `{link_id}` leaves `{reader_id}`, which runs reactively, fed only by \
-                 function node islands, which have no source to wake it, so it would never run \
-                 again. To fix: link it another source first, or remove it"
-            )));
+            the_readers_a_function_node_feeds(graph, destination_id)
+        } else {
+            HashSet::from([destination_id.clone()])
+        };
+        for reader_id in &readers_it_wakes {
+            if is_a_running_reader(reader_id)
+                && is_reactive_and_left_fed_only_by_islands(graph, reader_id, links_to_remove)
+            {
+                return Err(Error::InvalidLink(format!(
+                    "removing `{link_id}` leaves `{reader_id}`, which runs reactively, fed only \
+                     by function node islands, which have no source to wake it, so it would \
+                     never run again. To fix: link it another source first, or remove it"
+                )));
+            }
         }
     }
     for (updated_id, _) in config_updates {
@@ -830,7 +917,7 @@ fn refuse_an_island_reading_a_channel_fed_to_two_readers(graph: &Graph, link: &L
             !the_links_into_function_nodes_from_outside_any_island(graph, &island).is_empty();
         if reads_a_channel
             && island.iter().any(|island_node_id| {
-                the_readers_a_function_node_feeds(graph, island_node_id).len() > 1
+                the_reader_input_ports_a_function_node_feeds(graph, island_node_id).len() > 1
             })
         {
             return Err(an_island_reading_a_channel_fed_to_two_readers(
@@ -910,7 +997,19 @@ fn the_readers_a_function_node_feeds(
     graph: &Graph,
     function_node_id: &ProcessorUniqueId,
 ) -> HashSet<ProcessorUniqueId> {
-    let mut readers = HashSet::new();
+    the_reader_input_ports_a_function_node_feeds(graph, function_node_id)
+        .into_iter()
+        .map(|(reader_id, _)| reader_id)
+        .collect()
+}
+
+/// Each input port, of a node outside any island, that `function_node_id`
+/// reaches through the function nodes downstream of it.
+fn the_reader_input_ports_a_function_node_feeds(
+    graph: &Graph,
+    function_node_id: &ProcessorUniqueId,
+) -> HashSet<(ProcessorUniqueId, String)> {
+    let mut reader_input_ports = HashSet::new();
     let mut function_nodes_to_follow = vec![function_node_id.clone()];
     let mut function_nodes_followed = HashSet::new();
     while let Some(following_id) = function_nodes_to_follow.pop() {
@@ -925,11 +1024,14 @@ fn the_readers_a_function_node_feeds(
             if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
                 function_nodes_to_follow.push(destination_id.clone());
             } else {
-                readers.insert(destination_id.clone());
+                reader_input_ports.insert((
+                    destination_id.clone(),
+                    link.to_port().port_name().to_string(),
+                ));
             }
         }
     }
-    readers
+    reader_input_ports
 }
 
 fn is_reactive_and_left_fed_only_by_islands(
@@ -1996,5 +2098,145 @@ pub(crate) mod tests {
             )),
             "{refusal}"
         );
+    }
+
+    fn a_class_node_feeding(graph: &mut Graph) -> ProcessorUniqueId {
+        let source = add_a_node(
+            graph,
+            crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path()
+                .as_str(),
+            JsonValue::Null,
+        );
+        graph
+            .traversal_mut()
+            .v(&source)
+            .first_mut()
+            .unwrap()
+            .insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(Arc::new(
+                OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                    ProcessExecution::Reactive,
+                ),
+            )));
+        source
+    }
+
+    fn is_read_at_a_hidden_input_of(graph: &Graph, link_id: &LinkUniqueId) -> bool {
+        is_read_through_the_reader_of_its_island(graph, link_id)
+    }
+
+    #[test]
+    fn an_island_reading_a_class_node_that_feeds_two_input_ports_of_one_reader_is_refused_by_name()
+    {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let (remap, reader, _into_the_island, _into_the_reader) =
+            a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+        let into_a_second_input_port = link(&mut graph, (&remap, "result"), (&reader, "in2"));
+
+        let refusal = the_refusal_of_a_commit(
+            &graph,
+            &[],
+            &[],
+            std::slice::from_ref(&into_a_second_input_port),
+            &[],
+            &[],
+        )
+        .expect("an island reading a channel feeds one reader input port");
+        assert!(refusal.contains(&format!("`{reader}.in1`")), "{refusal}");
+        assert!(refusal.contains(&format!("`{reader}.in2`")), "{refusal}");
+    }
+
+    #[test]
+    fn removing_the_one_class_node_link_into_an_island_is_refused_when_it_leaves_its_reactive_reader_idle()
+     {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let source = a_class_node_feeding(&mut graph);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let reader =
+            a_helper_reader_before_its_setup_driven_in(&mut graph, ProcessExecution::Reactive);
+        let into_the_island = link(&mut graph, (&source, "out1"), (&remap, "x"));
+        link(&mut graph, (&remap, "result"), (&reader, "in1"));
+
+        let refusal = the_refusal_of_a_commit(
+            &graph,
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&into_the_island),
+            &[],
+        )
+        .expect("the reader's only wake source is the class node link");
+        assert!(refusal.contains(&format!("leaves `{reader}`")), "{refusal}");
+    }
+
+    #[test]
+    fn unwiring_one_island_of_a_reader_keeps_the_class_node_link_another_of_its_islands_reads() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let (_remap, reader, into_the_first_island, into_the_reader_at_in1) =
+            a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+        let second_source = a_class_node_feeding(&mut graph);
+        let second_remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let into_the_second_island =
+            link(&mut graph, (&second_source, "out1"), (&second_remap, "x"));
+        let into_the_reader_at_in2 = link(&mut graph, (&second_remap, "result"), (&reader, "in2"));
+        let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+        for island_link in [&into_the_reader_at_in1, &into_the_reader_at_in2] {
+            wire_a_link_from_a_function_node_island_into_its_reader(
+                &mut graph,
+                island_link,
+                &iceoryx2_node,
+            )
+            .unwrap();
+        }
+
+        unwire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader_at_in1,
+        )
+        .unwrap();
+
+        assert!(!is_read_at_a_hidden_input_of(
+            &graph,
+            &into_the_first_island
+        ));
+        assert!(is_read_at_a_hidden_input_of(
+            &graph,
+            &into_the_second_island
+        ));
+    }
+
+    #[test]
+    fn a_class_node_link_into_a_function_node_that_joins_a_read_island_is_opened_at_its_reader() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+        let reader = a_helper_reader_before_its_setup(&mut graph);
+        let into_the_reader = link(&mut graph, (&mix, "result"), (&reader, "in1"));
+        let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &iceoryx2_node,
+        )
+        .unwrap();
+        let source = a_class_node_feeding(&mut graph);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let into_the_reader_less_remap = link(&mut graph, (&source, "out1"), (&remap, "x"));
+        wire_a_link_into_a_function_node_island_through_its_reader(
+            &mut graph,
+            &into_the_reader_less_remap,
+            &iceoryx2_node,
+        )
+        .unwrap();
+        assert!(!is_read_at_a_hidden_input_of(
+            &graph,
+            &into_the_reader_less_remap
+        ));
+
+        link(&mut graph, (&remap, "result"), (&mix, "a"));
+        open_the_channels_each_island_newly_reads(&mut graph, &iceoryx2_node).unwrap();
+
+        assert!(is_read_at_a_hidden_input_of(
+            &graph,
+            &into_the_reader_less_remap
+        ));
     }
 }

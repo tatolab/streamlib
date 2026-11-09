@@ -1521,7 +1521,7 @@ requires-dist = [
     { name = "numba", specifier = ">=0.61" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=10.0" },
-    { name = "tatolab-stream", specifier = ">=0.68.32" },
+    { name = "tatolab-stream", specifier = ">=0.68.38" },
 ]
 
 [package.metadata.requires-dev]

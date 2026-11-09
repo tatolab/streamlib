@@ -31,9 +31,10 @@ class ImageFileConfig:
 
 
 def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
-    """The PNG or JPEG at `path`, decoded to an `(height, width, 4)` array of 8-bit RGBA."""
+    """The PNG or JPEG at `path`, upright by its EXIF orientation, decoded to an `(height, width, 4)` array of 8-bit RGBA."""
     import numpy
     from PIL import Image as PillowImage
+    from PIL import ImageOps
 
     with PillowImage.open(path) as image_file:
         if image_file.format not in ("PNG", "JPEG"):
@@ -41,12 +42,16 @@ def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
                 f"the image asset at {path} is {image_file.format or 'no format Pillow knows'}, "
                 f"and an ImageFile decodes PNG and JPEG"
             )
-        return numpy.asarray(image_file.convert("RGBA"))
+        return numpy.asarray(ImageOps.exif_transpose(image_file).convert("RGBA"))
 
 
 @node.process(execution="continuous", interval_ms=100)
 class ImageFile:
-    """Publishes the project image asset its config names, once at start and again on each config change."""
+    """Publishes the project image asset its config names, once at start and again on each config change.
+
+    A publish that fails is tried again at each process until one succeeds,
+    each failure raised once until it changes.
+    """
 
     image = Output(Image)
 
@@ -56,16 +61,29 @@ class ImageFile:
             IMAGE_FILE_TEXTURE_FORMAT, ["texture_binding"], depth=IMAGE_FILE_OUTPUT_RING_DEPTH
         )
         self._publish_on_the_next_process = True
+        self._failure_of_the_last_publish: str | None = None
 
     def configure(self, config: ImageFileConfig) -> None:
         """Publish the asset `config` names on the next process."""
         self._asset = config.asset
         self._publish_on_the_next_process = True
+        self._failure_of_the_last_publish = None
 
     def process(self, ctx) -> None:
         if not self._publish_on_the_next_process:
             return
+        try:
+            self._publish_the_asset(ctx)
+        except Exception as failure:
+            failure_named = f"{type(failure).__name__}: {failure}"
+            if failure_named == self._failure_of_the_last_publish:
+                return
+            self._failure_of_the_last_publish = failure_named
+            raise
         self._publish_on_the_next_process = False
+        self._failure_of_the_last_publish = None
+
+    def _publish_the_asset(self, ctx) -> None:
         if not self._asset:
             raise ValueError(
                 "ImageFile names no image asset. To fix: set its `asset` config to the UUID of "

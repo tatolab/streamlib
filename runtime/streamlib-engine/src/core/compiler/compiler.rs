@@ -14,8 +14,9 @@ use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
 use crate::core::compiler::compiler_ops::function_node_island::{
     HowALinkIsWired, hand_each_reader_the_island_a_compile_changed, how_a_link_is_wired,
-    note_where_each_function_node_runs, refuse_an_edit_an_island_cannot_take,
-    the_function_nodes_among, unwire_a_link_from_a_function_node_island_into_its_reader,
+    note_where_each_function_node_runs, open_the_channels_each_island_newly_reads,
+    refuse_an_edit_an_island_cannot_take, the_function_nodes_among,
+    unwire_a_link_from_a_function_node_island_into_its_reader,
     wire_a_call_inside_a_function_node_island,
     wire_a_link_from_a_function_node_island_into_its_reader,
     wire_a_link_into_a_function_node_island_through_its_reader,
@@ -396,6 +397,10 @@ impl Compiler {
             )?;
             tracing::debug!("[{}] Completed", CompilePhase::Wire);
         }
+        open_the_channels_each_island_newly_reads(
+            &mut graph_arc.write(),
+            runtime_ctx.iceoryx2_node(),
+        )?;
         hand_each_reader_the_island_a_compile_changed(&mut graph_arc.write(), &plan.links_to_add)?;
         note_where_each_function_node_runs(&mut graph_arc.write());
         hand_each_helper_the_pin_values_its_input_ports_read(&graph_arc.read())?;

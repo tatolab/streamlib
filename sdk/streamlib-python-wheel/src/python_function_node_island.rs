@@ -31,7 +31,7 @@ use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
 /// One value a function node takes or gives.
 #[derive(Debug)]
-enum FunctionNodeValue {
+pub(crate) enum FunctionNodeValue {
     /// A number or a bool, as the f64 a compiled entry carries.
     Number(f64),
     /// A `dict`, which only a node run as Python takes or gives.
@@ -210,8 +210,13 @@ fn the_newest_message_read_from(
     input_mailboxes: &InputMailboxesInner,
     reader_input_port: &str,
 ) -> Result<Option<MessageReadFromInputPort>> {
-    let mut newest = None;
-    while let Some(message) = input_mailboxes.read_raw(reader_input_port)? {
+    let mut newest: Option<MessageReadFromInputPort> = None;
+    while let Some(mut message) = input_mailboxes.read_raw(reader_input_port)? {
+        if let Some(replaced) = newest {
+            message.lost_since_last_read = message
+                .lost_since_last_read
+                .saturating_add(replaced.lost_since_last_read);
+        }
         newest = Some(message);
     }
     Ok(newest)
@@ -244,7 +249,13 @@ pub(crate) struct HowAFunctionNodeCarriesValuesBeyondNumbers {
 pub(crate) struct HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
     how_each_node_carries_its_values: Vec<HowAFunctionNodeCarriesValuesBeyondNumbers>,
     read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
+    values_last_read_off_links_from_outside_islands: ValuesLastReadOffLinksFromOutsideIslands,
 }
+
+/// The control value or record each reader input port last carried into an
+/// island this helper evaluates, which an island replacing it starts from.
+pub(crate) type ValuesLastReadOffLinksFromOutsideIslands =
+    Arc<Mutex<HashMap<String, FunctionNodeValue>>>;
 
 impl HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
     /// An island whose every value is a number, a dict or a pin.
@@ -253,6 +264,7 @@ impl HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
         Self {
             how_each_node_carries_its_values: Vec::new(),
             read_the_newest_message_at: Box::new(|_| Ok(None)),
+            values_last_read_off_links_from_outside_islands: Arc::default(),
         }
     }
 }
@@ -358,6 +370,7 @@ struct FunctionNodeIslandEvaluation {
     /// read since the last evaluation; it goes to one read only.
     message_handed_on_since_the_last_evaluation: bool,
     read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
+    values_last_read_off_links_from_outside_islands: ValuesLastReadOffLinksFromOutsideIslands,
     /// The board each call's breadcrumb is noted on, so the parent can name
     /// the node a call died or stalled in.
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
@@ -397,6 +410,9 @@ impl FunctionNodeIslandEvaluation {
                                 &function_node.node_id,
                                 reader_input_port,
                             )?);
+                        self.values_last_read_off_links_from_outside_islands
+                            .lock()
+                            .insert(reader_input_port.clone(), value_read_last.duplicated());
                     }
                     (Some(message), HowAnInputReadsALinkFromOutsideItsIsland::Record) => {
                         *value_read_last = Python::attach(|python| {
@@ -408,6 +424,9 @@ impl FunctionNodeIslandEvaluation {
                             .map(|record| FunctionNodeValue::Record(record.unbind()))
                             .map_err(|refusal| Error::Runtime(refusal.to_string()))
                         })?;
+                        self.values_last_read_off_links_from_outside_islands
+                            .lock()
+                            .insert(reader_input_port.clone(), value_read_last.duplicated());
                     }
                     (
                         Some(message),
@@ -698,9 +717,16 @@ impl HowAFunctionNodeIsCalled {
                     }
                 }
                 compiled.call_its_evaluate_entry_at(node_id, now_ns)?;
-                for (output_index, output_value) in output_values.iter_mut().enumerate() {
-                    *output_value =
-                        compiled.the_value_an_output_took(node_id, output_index, input_values)?;
+                let values_the_outputs_took = (0..output_values.len())
+                    .map(|output_index| {
+                        compiled.the_value_an_output_took(node_id, output_index, input_values)
+                    })
+                    .collect::<Result<Vec<FunctionNodeValue>>>()?;
+                compiled.keep_the_state_of_the_call_just_made();
+                for (output_value, value_the_output_took) in
+                    output_values.iter_mut().zip(values_the_outputs_took)
+                {
+                    *output_value = value_the_output_took;
                 }
                 Ok(())
             }
@@ -804,8 +830,8 @@ impl FunctionNodeCalledThroughItsEvaluateEntry {
         }
     }
 
-    /// Call the node's evaluate entry, keeping the state it wrote only when it
-    /// answers OK.
+    /// Call the node's evaluate entry, writing the state it answers aside
+    /// until [`Self::keep_the_state_of_the_call_just_made`].
     fn call_its_evaluate_entry_at(&mut self, node_id: &str, now_ns: i64) -> Result<()> {
         self.state_values_of_the_call_under_way
             .copy_from_slice(&self.state_values);
@@ -828,11 +854,16 @@ impl FunctionNodeCalledThroughItsEvaluateEntry {
                 "function node `{node_id}` refused its evaluation with status {status}"
             )));
         }
+        Ok(())
+    }
+
+    /// Keep the state the last call wrote, once every output it handed out is
+    /// one the island takes.
+    fn keep_the_state_of_the_call_just_made(&mut self) {
         std::mem::swap(
             &mut self.state_values,
             &mut self.state_values_of_the_call_under_way,
         );
-        Ok(())
     }
 }
 
@@ -970,6 +1001,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         let HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
             mut how_each_node_carries_its_values,
             read_the_newest_message_at,
+            values_last_read_off_links_from_outside_islands,
         } = how_it_carries_values_beyond_numbers;
         how_each_node_carries_its_values.resize_with(function_nodes.len(), Default::default);
         let mut function_nodes_each_after_what_it_reads: Vec<FunctionNodeInAnIsland> =
@@ -990,8 +1022,16 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
         {
             let how_it_carries_its_values = &how_each_node_carries_its_values[node_index];
             let mut where_each_input_takes_its_value_read = Vec::new();
-            for (source, pin_value) in where_each_input_takes_its_value {
+            for (input_index, (source, pin_value)) in
+                where_each_input_takes_its_value.into_iter().enumerate()
+            {
                 where_each_input_takes_its_value_read.push(match source {
+                    None if how_it_carries_its_values
+                        .inputs_carrying_an_unread_message
+                        .contains(&input_index) =>
+                    {
+                        WhereAFunctionNodeInputTakesItsValue::ItsPin(FunctionNodeValue::Nothing)
+                    }
                     None => WhereAFunctionNodeInputTakesItsValue::ItsPin(
                         FunctionNodeValue::Number(pin_value),
                     ),
@@ -1035,11 +1075,20 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                              outside its island, and it takes fewer inputs"
                         )
                     })?;
+                let value_read_last = match read_as {
+                    HowAnInputReadsALinkFromOutsideItsIsland::MessageHandedOnUnread => {
+                        FunctionNodeValue::Nothing
+                    }
+                    _ => values_last_read_off_links_from_outside_islands
+                        .lock()
+                        .get(reader_input_port)
+                        .map_or(FunctionNodeValue::Nothing, FunctionNodeValue::duplicated),
+                };
                 *where_it_takes_its_value =
                     WhereAFunctionNodeInputTakesItsValue::ALinkFromOutsideTheIsland {
                         reader_input_port: reader_input_port.clone(),
                         read_as,
-                        value_read_last: FunctionNodeValue::Nothing,
+                        value_read_last,
                     };
             }
             let writes_its_state_on_the_board = !initial_state_values.is_empty()
@@ -1117,6 +1166,7 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 last_evaluated_at_ns: None,
                 message_handed_on_since_the_last_evaluation: false,
                 read_the_newest_message_at,
+                values_last_read_off_links_from_outside_islands,
                 call_breadcrumb_board_writer,
             }),
             stream_clock_now_ns,
@@ -1315,6 +1365,8 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
                         },
                     )
                 },
+                values_last_read_off_links_from_outside_islands: link_data_access
+                    .values_last_read_off_links_into_its_function_node_islands(),
             },
         )
         .map_err(PyValueError::new_err)?;
@@ -2028,6 +2080,7 @@ mod tests {
                     },
                 ],
                 read_the_newest_message_at,
+                values_last_read_off_links_from_outside_islands: Arc::default(),
             },
         )
         .unwrap()
@@ -2129,6 +2182,7 @@ mod tests {
                         },
                     ],
                     read_the_newest_message_at,
+                    values_last_read_off_links_from_outside_islands: Arc::default(),
                 },
             )
             .unwrap();
@@ -2163,6 +2217,146 @@ mod tests {
                 .value,
             FunctionNodeIslandOutputValue::ControlValue(6.0),
             "a number keeps the newest value its link carried"
+        );
+    }
+
+    fn an_add_one_island_reading_a_link_from_outside_its_island(
+        stream_clock_now_ns: Box<dyn Fn() -> i64 + Send + Sync>,
+        read_the_newest_message_at: NewestMessageReaderOfTheReadersInputPorts,
+        values_last_read_off_links_from_outside_islands: ValuesLastReadOffLinksFromOutsideIslands,
+    ) -> FunctionNodeIslandEvaluatedInThisHelper {
+        FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+            vec![(
+                "add_one".to_string(),
+                0,
+                compiled_to(add_one_and_count_calls),
+                vec![(None, 0.0)],
+                vec![],
+                vec![0.0],
+                1,
+                vec![],
+            )],
+            (0, 0),
+            stream_clock_now_ns,
+            None,
+            &|_| None,
+            HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+                how_each_node_carries_its_values: vec![
+                    HowAFunctionNodeCarriesValuesBeyondNumbers {
+                        inputs_read_from_links_from_outside_the_island: vec![(
+                            0,
+                            READER_INPUT_PORT_OF_THE_LINK_FROM_OUTSIDE_THE_ISLAND.to_string(),
+                            "float".to_string(),
+                        )],
+                        ..Default::default()
+                    },
+                ],
+                read_the_newest_message_at,
+                values_last_read_off_links_from_outside_islands,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_island_replacing_another_starts_from_the_control_value_its_link_last_carried() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let (queued, read_the_newest_message_at) = messages_queued_at_the_reader_input_port();
+        let values_last_read: ValuesLastReadOffLinksFromOutsideIslands = Arc::default();
+        let island = an_add_one_island_reading_a_link_from_outside_its_island(
+            stream_clock_now_ns,
+            read_the_newest_message_at,
+            Arc::clone(&values_last_read),
+        );
+        queued
+            .lock()
+            .push(a_channels_block_of_one_f64_sample(5.0, 10));
+        stream_time_ns.store(100, Ordering::SeqCst);
+        assert_eq!(
+            island
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::ControlValue(6.0)
+        );
+
+        let (replacement_stream_time_ns, replacement_stream_clock_now_ns) =
+            a_stream_clock_the_test_sets();
+        let (_, replacement_reads_the_newest_message_at) =
+            messages_queued_at_the_reader_input_port();
+        let replacement = an_add_one_island_reading_a_link_from_outside_its_island(
+            replacement_stream_clock_now_ns,
+            replacement_reads_the_newest_message_at,
+            values_last_read,
+        );
+        replacement_stream_time_ns.store(200, Ordering::SeqCst);
+        assert_eq!(
+            replacement
+                .evaluate_the_island_output_for_this_read()
+                .unwrap()
+                .value,
+            FunctionNodeIslandOutputValue::ControlValue(6.0)
+        );
+    }
+
+    /// Counts its calls in its state and hands out a token naming an input it
+    /// does not have.
+    unsafe extern "C" fn count_calls_and_hand_out_a_token_naming_no_message_input(
+        _input_values: *const f64,
+        _config_values: *const f64,
+        state_values: *mut f64,
+        output_values: *mut f64,
+        _now_ns: i64,
+    ) -> i32 {
+        unsafe {
+            *state_values += 1.0;
+            *output_values = 7.0;
+        }
+        MODULE_HOST_TABLE_STATUS_OK
+    }
+
+    #[test]
+    fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started_from() {
+        let (stream_time_ns, stream_clock_now_ns) = a_stream_clock_the_test_sets();
+        let island =
+            FunctionNodeIslandEvaluatedInThisHelper::of_the_function_nodes_the_bootstrap_compiled(
+                vec![(
+                    "hand_on".to_string(),
+                    0,
+                    compiled_to(count_calls_and_hand_out_a_token_naming_no_message_input),
+                    vec![(None, 0.0)],
+                    vec![],
+                    vec![0.0],
+                    1,
+                    vec![],
+                )],
+                (0, 0),
+                stream_clock_now_ns,
+                None,
+                &|_| None,
+                HowAFunctionNodeIslandCarriesValuesBeyondNumbers {
+                    how_each_node_carries_its_values: vec![
+                        HowAFunctionNodeCarriesValuesBeyondNumbers {
+                            inputs_that_take_none: vec![0],
+                            inputs_carrying_an_unread_message: vec![0],
+                            outputs_carrying_an_unread_message: vec![0],
+                            ..Default::default()
+                        },
+                    ],
+                    read_the_newest_message_at: Box::new(|_| Ok(None)),
+                    values_last_read_off_links_from_outside_islands: Arc::default(),
+                },
+            )
+            .unwrap();
+        stream_time_ns.store(100, Ordering::SeqCst);
+
+        island
+            .evaluate_the_island_output_for_this_read()
+            .expect_err("a token naming no message input is refused");
+
+        assert_eq!(
+            island.the_state_each_stateful_function_node_last_returned(),
+            vec![(0, vec![0.0])]
         );
     }
 }

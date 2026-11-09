@@ -383,6 +383,21 @@ def the_first_gated_count_batch_read_after(
         occurrence += 1
 
 
+def a_gated_count_batch_read_wholly_after_a_live_edit(
+    tatolabd: TatolabdUnderTest, edit_returned_at_monotonic_ns: int, *, from_occurrence: int
+) -> "tuple[dict, int]":
+    """The batch after the first one the sink started once a live edit returned, which the sink reads with the edit applied.
+
+    A live pin edit returns before the sink's helper has installed the island
+    it changes, so the first batch started after it may span the change.
+    """
+    _, first_occurrence = the_first_gated_count_batch_read_after(
+        tatolabd, edit_returned_at_monotonic_ns, from_occurrence=from_occurrence
+    )
+    batch_after_it = tatolabd.await_marker("GATED_COUNT_BATCH_READ", occurrence=first_occurrence + 1)
+    return batch_after_it, first_occurrence + 1
+
+
 def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_while_closed(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
@@ -417,7 +432,7 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
         )
 
     set_open_live(False)
-    closed, occurrence = the_first_gated_count_batch_read_after(
+    closed, occurrence = a_gated_count_batch_read_wholly_after_a_live_edit(
         tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
     )
     assert closed["counts"] == [], (
@@ -426,7 +441,7 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
     assert closed["sink_pid"] == opened["sink_pid"], "a pin edit restarts nothing"
 
     set_open_live(True)
-    reopened, _ = the_first_gated_count_batch_read_after(
+    reopened, _ = a_gated_count_batch_read_wholly_after_a_live_edit(
         tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
     )
     assert reopened["counts"] and reopened["counts"][0] > counts[-1], (

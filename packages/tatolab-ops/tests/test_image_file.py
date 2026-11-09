@@ -47,3 +47,38 @@ def test_image_file_is_a_class_node_with_one_image_output_configured_by_asset():
     assert output_port["family"]["family"] == "image"
     assert getattr(ImageFile, "__tatolab_node_input_ports__") == []
     assert ImageFileConfig().asset == ""
+
+
+def test_a_jpeg_is_decoded_upright_by_its_exif_orientation(tmp_path: Path):
+    path = tmp_path / "rotated.jpeg"
+    exif = PillowImage.Exif()
+    exif[0x0112] = 6
+    PillowImage.new("RGB", (3, 2), (200, 100, 50)).save(path, format="JPEG", exif=exif)
+    pixels = decoded_rgba_pixels_of_the_image_file(str(path))
+    assert pixels.shape == (3, 2, 4), "orientation 6 turns a 3x2 image a quarter turn"
+
+
+class _AssetContentPathThatFails:
+    """A node context whose `asset_content_path` raises, standing in for an asset not yet readable."""
+
+    gpu_limited_access = None
+
+    def __init__(self) -> None:
+        self.asset_content_path_calls = 0
+
+    def asset_content_path(self, asset: str) -> str:
+        self.asset_content_path_calls += 1
+        raise RuntimeError(f"asset {asset} is not readable yet")
+
+
+def test_a_failed_publish_is_tried_again_and_raised_once_until_its_failure_changes():
+    image_file = ImageFile(ImageFileConfig(asset="0f0e"))
+    context = _AssetContentPathThatFails()
+    with pytest.raises(RuntimeError, match="not readable yet"):
+        image_file.process(context)
+    image_file.process(context)
+    assert context.asset_content_path_calls == 2, "the publish stays pending after a failure"
+
+    image_file.configure(ImageFileConfig(asset="0f0e"))
+    with pytest.raises(RuntimeError, match="not readable yet"):
+        image_file.process(context)
