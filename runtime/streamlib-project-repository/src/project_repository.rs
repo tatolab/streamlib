@@ -30,9 +30,11 @@ use crate::project_transaction::{
     ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{
-    StreamGraphDocument, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
-    StreamGraphOperation, asset_references_made_references_into_the_dependency,
-    assets_a_node_config_references, config_with_a_dependency_asset_reference_made_local,
+    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
+    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphOperation,
+    asset_references_made_references_into_the_dependency, assets_a_node_config_references,
+    config_with_a_dependency_asset_reference_made_local,
+    the_refresh_of_each_fragment_holding_a_stream,
 };
 
 /// Where each dependency's history is fetched to, relative to the project: one bare Git
@@ -577,11 +579,83 @@ impl ProjectRepository {
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         let pin_move =
             self.the_pin_move_a_dependency_update_makes(project, revision, bearer_token)?;
+        let ProjectDependencyOperation::MoveDependencyPin { to, .. } = &pin_move else {
+            return Err(ProjectRepositoryRefusal::NoSuchDependency(project));
+        };
+        let refreshes =
+            self.the_refresh_of_each_dependency_fragment_at(project, to, &BTreeSet::new())?;
         self.apply_project_operations(
             author,
-            vec![ProjectOperation::Dependency(pin_move)],
+            std::iter::once(ProjectOperation::Dependency(pin_move))
+                .chain(refreshes.into_iter().map(ProjectOperation::StreamGraph))
+                .collect(),
             ProjectTransactionLineage::NewEdit,
         )
+    }
+
+    /// The refresh of each top-level fragment holding a stream of the dependency `project`, in
+    /// every stream of this project but those of `skipping_streams`, from that stream as the
+    /// dependency's history holds it at `commit`, each node keeping its UUID by name.
+    pub fn the_refresh_of_each_dependency_fragment_at(
+        &self,
+        project: Uuid,
+        commit: &str,
+        skipping_streams: &BTreeSet<Uuid>,
+    ) -> Result<Vec<StreamGraphOperationOnAStream>, ProjectRepositoryRefusal> {
+        let project_text = project.to_string();
+        let assets = self.every_asset()?;
+        let mut dependency_stream_documents: BTreeMap<Uuid, Value> = BTreeMap::new();
+        let mut refreshes = Vec::new();
+        for holder in assets.values().filter(|asset| {
+            asset.kind == ProjectAssetKind::Stream && !skipping_streams.contains(&asset.asset)
+        }) {
+            let (holder_path, holder_document) =
+                self.read_stream_graph_document(&assets, holder.asset)?;
+            let mut held_streams: Vec<Value> = Vec::new();
+            for fragment_node in holder_document.fragment_nodes() {
+                let held_stream = &fragment_node.config[STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY];
+                if fragment_node.node_type == STREAM_FRAGMENT_NODE_TYPE
+                    && held_stream["from"].as_str() == Some(project_text.as_str())
+                    && !held_streams.contains(held_stream)
+                {
+                    held_streams.push(held_stream.clone());
+                }
+            }
+            for held_stream in held_streams {
+                let Some(dependency_stream) = held_stream["asset"]
+                    .as_str()
+                    .and_then(|asset| Uuid::parse_str(asset).ok())
+                else {
+                    continue;
+                };
+                let dependency_stream_document =
+                    match dependency_stream_documents.entry(dependency_stream) {
+                        Entry::Occupied(read) => read.into_mut(),
+                        Entry::Vacant(unread) => unread.insert(
+                            self.dependency_stream_at_commit(project, dependency_stream, commit)?
+                                .1,
+                        ),
+                    };
+                let graph_operations = the_refresh_of_each_fragment_holding_a_stream(
+                    &holder_document,
+                    &held_stream,
+                    dependency_stream_document,
+                )
+                .map_err(|why| {
+                    ProjectRepositoryRefusal::GraphOperationRefused {
+                        path: holder_path.to_string(),
+                        why,
+                    }
+                })?;
+                refreshes.extend(graph_operations.into_iter().map(|graph_operation| {
+                    StreamGraphOperationOnAStream {
+                        stream: holder.asset,
+                        graph_operation,
+                    }
+                }));
+            }
+        }
+        Ok(refreshes)
     }
 
     /// Fetch the dependency `project` from its source again, a Git remote with `bearer_token`,

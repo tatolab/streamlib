@@ -990,6 +990,64 @@ fn groups_with_each_uuid_kept_by_its_title(
     Ok(groups)
 }
 
+/// The `type` of a fragment node holding a stored copy of a stream: a dependency's, or one a
+/// fork made this project's.
+pub const STREAM_FRAGMENT_NODE_TYPE: &str = "tatolab.project:StreamFragment";
+
+/// The config key of a stream's fragment node naming the stream it holds.
+pub const STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: &str = "stream";
+
+/// The refresh of each top-level fragment node of `holder` that holds the stream `held_stream`
+/// — config `{"stream": held_stream}`, `{"asset"}` for a stream of this project or
+/// `{"asset", "from"}` for a dependency's — from `held_stream_document`, that stream's graph
+/// document now, each node keeping its UUID by name. A fragment already holding it is left out.
+pub fn the_refresh_of_each_fragment_holding_a_stream(
+    holder: &StreamGraphDocument,
+    held_stream: &Value,
+    held_stream_document: &Value,
+) -> Result<Vec<StreamGraphOperation>, String> {
+    let config = serde_json::json!({ STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: held_stream });
+    let mut fragment_run = a_graph_document_as_a_fragment_run(held_stream_document)?;
+    if let Some(project) = held_stream
+        .get("from")
+        .and_then(Value::as_str)
+        .and_then(|project| Uuid::parse_str(project).ok())
+    {
+        asset_references_made_references_into_the_dependency(&mut fragment_run, project);
+    }
+    let mut refreshes = Vec::new();
+    for fragment_node in holder.fragment_nodes() {
+        if fragment_node.node_type != STREAM_FRAGMENT_NODE_TYPE || fragment_node.config != config {
+            continue;
+        }
+        let Some(previous_fragment) = fragment_node.fragment else {
+            continue;
+        };
+        let refreshed_fragment = fragment_with_each_node_uuid_kept_by_its_name(
+            &fragment_run,
+            Some(&previous_fragment),
+            &mut Uuid::new_v4,
+        )?;
+        if refreshed_fragment == *previous_fragment {
+            continue;
+        }
+        refreshes.push(StreamGraphOperation::RefreshFragment {
+            node: fragment_node.id,
+            from: StreamGraphFragmentPlacement {
+                generator: fragment_node.node_type.clone(),
+                config: config.clone(),
+                fragment: *previous_fragment,
+            },
+            to: StreamGraphFragmentPlacement {
+                generator: fragment_node.node_type,
+                config: config.clone(),
+                fragment: refreshed_fragment,
+            },
+        });
+    }
+    Ok(refreshes)
+}
+
 /// Make each reference in `value` to an asset of the project it was written in,
 /// `{"asset": "<uuid>"}`, a reference into that project as a dependency, adding
 /// `"from": "<project>"`; a reference already naming a project is left as it is.

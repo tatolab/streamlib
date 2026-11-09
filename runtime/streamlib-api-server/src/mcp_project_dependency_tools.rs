@@ -4,7 +4,7 @@
 //! The dependency tools: another project pinned at a revision, its pin moved, its streams used
 //! as stored fragments, and one of them forked into this project.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use serde_json::Value;
 use streamlib_project_repository::{
     AppliedProjectTransaction, DependencyStreamFork, PinnedProjectDependency,
     ProjectDependencyOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
-    ProjectRepository,
+    ProjectRepository, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DependencyTransactionToolResult, ForkAssetToolResult, ForkedAssetOriginOnTheWire,
@@ -33,8 +33,8 @@ use crate::mcp_project_asset_tools::{
 use crate::mcp_stream_graph_tools::{
     DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,
     DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
-    GraphEditMode, GraphTransactionInFlight, GraphTransactionStep, STREAM_FRAGMENT_CONFIG_KEY,
-    STREAM_FRAGMENT_TYPE, StreamGraphOperationToolArgument,
+    GraphEditMode, GraphTransactionInFlight, GraphTransactionStep,
+    StreamGraphOperationToolArgument,
 };
 
 const DEPENDENCY_SOURCE_BEARER_TOKEN_ARGUMENT_DESCRIPTION: &str = "The token a Git remote that needs one, such as a private Artifacts repo, is sent as `Authorization: Bearer`, for this fetch alone: never written to `tatolab-project.json`, history, a transaction, a log or a refusal. Ignored for a project directory or a package.";
@@ -195,7 +195,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Move a dependency's pin to another revision, as one transaction by `author`: its history is fetched again from its source, a Git remote sent `bearer_token` when it needs one, and every fragment of this project's loaded streams that holds one of its streams is refreshed from the new pin, each node keeping its UUID by name so links into the fragment and edits around it hold. Answers the `dependency` and the `graph_operations` that refreshed each fragment; undo moves the pin back and restores each fragment as it was. Refused, nothing changed, for a project not depended on or a revision its source does not hold."
+        description = "Move a dependency's pin to another revision, as one transaction by `author`: its history is fetched again from its source, a Git remote sent `bearer_token` when it needs one, and every fragment of this project's streams that holds one of its streams is refreshed from the new pin — a loaded stream's live and in its graph document, one not loaded in its graph document alone, read on its next load — each node keeping its UUID by name so links into the fragment and edits around it hold. Answers the `dependency` and the `graph_operations` that refreshed each fragment; undo moves the pin back and restores each fragment as it was. Refused, nothing changed, for a project not depended on or a revision its source does not hold."
     )]
     async fn update_dependency(
         &self,
@@ -238,7 +238,28 @@ impl LocalApiMcpServerHandler {
                         stream_id_of_each_stream_asset,
                         project,
                     )?;
-                    Ok((refreshes, vec![ProjectOperation::Dependency(pin_move)]))
+                    let ProjectDependencyOperation::MoveDependencyPin { to, .. } = &pin_move else {
+                        return Err("the pin move moved no pin".to_owned());
+                    };
+                    let loaded_stream_assets: BTreeSet<Uuid> =
+                        stream_id_of_each_stream_asset.keys().copied().collect();
+                    let refreshes_of_streams_not_loaded = project_repository_held
+                        .the_refresh_of_each_dependency_fragment_at(
+                            project,
+                            to,
+                            &loaded_stream_assets,
+                        )
+                        .map_err(|refusal| refusal.to_string())?;
+                    Ok((
+                        refreshes,
+                        std::iter::once(ProjectOperation::Dependency(pin_move))
+                            .chain(
+                                refreshes_of_streams_not_loaded
+                                    .into_iter()
+                                    .map(ProjectOperation::StreamGraph),
+                            )
+                            .collect(),
+                    ))
                 },
             )?;
             let dependency = project_repository
@@ -383,7 +404,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Fork a stream of a project this one depends on into this project, as one transaction by `author`: its graph document at the pin is copied to `path` under a new stream asset UUID, recording the stream, project and commit it came from under `forked_from`, and every node of this project that referenced it as `{\"asset\", \"from\"}`, in its config or at any level of a stored fragment, is made to reference the copy, so a later `update_dependency` no longer reaches it. The copy is this project's own, edited like any of its streams. Answers the copy as an asset, `forked_from`, and the `graph_operations` applied to loaded streams; undo points each reference back, takes the copy out and unloads its stream, refused once the copy has been edited. Refused for an asset the dependency's history holds no graph document of, since only a stream is forked, and for a referencing node of a graph document that holds no UUID yet."
+        description = "Fork a stream of a project this one depends on into this project, as one transaction by `author`: its graph document at the pin is copied to `path` under a new stream asset UUID, recording the stream, project and commit it came from under `forked_from`, and every node of this project that referenced it as `{\"asset\", \"from\"}`, in its config or at any level of a stored fragment, is made to reference the copy, so a later `update_dependency` no longer reaches it. The copy is this project's own, edited like any of its streams; each committed edit to it refreshes every fragment holding it in this project's streams in the same transaction, loaded or not, each node keeping its UUID by name. Answers the copy as an asset, `forked_from`, and the `graph_operations` applied to loaded streams; undo points each reference back, takes the copy out and unloads its stream, refused once the copy has been edited. Refused for an asset the dependency's history holds no graph document of, since only a stream is forked, and for a referencing node of a graph document that holds no UUID yet."
     )]
     async fn fork_asset(
         &self,
@@ -545,10 +566,10 @@ fn the_refresh_of_each_fragment_holding_a_stream_of(
             .stream_graph_document(*stream_asset)
             .map_err(|refusal| refusal.to_string())?;
         for fragment_node in graph_document.fragment_nodes() {
-            if fragment_node.node_type != STREAM_FRAGMENT_TYPE {
+            if fragment_node.node_type != STREAM_FRAGMENT_NODE_TYPE {
                 continue;
             }
-            let held_stream = &fragment_node.config[STREAM_FRAGMENT_CONFIG_KEY];
+            let held_stream = &fragment_node.config[STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY];
             if held_stream["from"].as_str() != Some(project.to_string().as_str()) {
                 continue;
             }

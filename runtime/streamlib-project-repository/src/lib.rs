@@ -63,12 +63,13 @@ pub use project_transaction::{
     StreamGraphOperationOnAStream,
 };
 pub use stream_graph_document::{
-    StreamGraphDocument, StreamGraphDocumentGroup, StreamGraphDocumentLink,
-    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
-    StreamGraphGroupFields, StreamGraphOperation, a_graph_document_as_a_fragment_run,
+    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
+    StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
+    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
+    StreamGraphOperation, a_graph_document_as_a_fragment_run,
     asset_references_made_references_into_the_dependency, assets_a_node_config_references,
     config_with_a_dependency_asset_reference_made_local,
-    fragment_with_each_node_uuid_kept_by_its_name,
+    fragment_with_each_node_uuid_kept_by_its_name, the_refresh_of_each_fragment_holding_a_stream,
 };
 
 /// The directory inside a project that holds what the runtime keeps for it: history, content and dependencies.
