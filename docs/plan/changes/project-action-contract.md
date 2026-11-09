@@ -76,7 +76,9 @@ on-disk transaction format.
   UUID, recording the new hash and size on its sidecar. A file replaced outside the runtime is
   unsupported, and the runtime watches no folder (owner, 2026-11-09).
 - **Project files.** `list_project_files {project_directory, under?}` and
-  `read_project_file {project_directory, path}` are verbs, and
+  `read_project_file {project_directory, path}` are verbs, the read answering the file's raw bytes
+  so an image or any binary file reads as well as text, which is how Tato Studio serves a view's
+  built files; and
   `write_project_file {project_directory, path, content}` is a recorded action whose inverse
   restores the earlier content, so a node-code save undoes. A path outside the project, or inside
   `.tatolab/`, is refused (owner, 2026-11-09).
