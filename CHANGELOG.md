@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.40](https://github.com/tatolab/streamlib/compare/v0.68.39...v0.68.40) (2026-11-09)
+
+
+### Bug Fixes
+
+* **runtime:** a stream an action works on lists no failed_because, and the deleted-venv test follows its re-load ([1d6a91b](https://github.com/tatolab/streamlib/commit/1d6a91bcbf61b49f149b2495cb635cfd05e7133a))
+* **runtime:** a stream an action works on lists no failed_because, and the deleted-venv test follows its re-load ([72f0920](https://github.com/tatolab/streamlib/commit/72f0920f0cba42904cb1cc85e3033cbe3f26a661)), closes [#3360](https://github.com/tatolab/streamlib/issues/3360)
+
 ## [0.68.39](https://github.com/tatolab/streamlib/compare/v0.68.38...v0.68.39) (2026-11-09)
 
 
