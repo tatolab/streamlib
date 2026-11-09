@@ -281,6 +281,8 @@ impl GraphSnapshot {
                 clock: self.clock,
                 nodes: runtime_nodes,
                 links: runtime_links,
+                groups: self.groups.clone(),
+                forked_from: self.forked_from.clone(),
             },
             interface_as_drawn: GraphInterfaceAsDrawn {
                 interface_nodes,

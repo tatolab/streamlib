@@ -47,6 +47,7 @@ from helper_placement_streams import (
     python_source_through_a_gate_into_python_sink,
     python_source_through_a_gate_that_crashes_on_cue_into_python_sink,
     python_source_through_a_gate_into_two_python_sinks,
+    python_source_through_a_rust_gate_into_python_sink,
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
     pooled_counter_beside_a_pooled_node_that_hangs,
@@ -405,15 +406,21 @@ def a_gated_count_batch_read_wholly_after_a_live_edit(
     return batch_after_it, first_occurrence + 1
 
 
+@pytest.mark.parametrize(
+    "gated_stream",
+    [python_source_through_a_gate_into_python_sink, python_source_through_a_rust_gate_into_python_sink],
+    ids=["python-gate", "rust-gate"],
+)
 def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_while_closed(
-    start_tatolabd_running_stream: StartTatolabdRunningStream,
+    start_tatolabd_running_stream: StartTatolabdRunningStream, gated_stream: Callable[..., None]
 ):
-    """`<Python class> -> Gate -> <Python class>`: the sink's helper reads the
-    source's channel and evaluates `Gate` inside each read, with no process for
-    `Gate`. While open the sink reads each count once, in order; closed live,
-    it reads nothing, not the last count; opened again, it reads counts again.
+    """`<Python class> -> Gate -> <Python class>`, with `tatolab.ops`' Python
+    `Gate` and with a Rust one: the sink's helper reads the source's channel and
+    evaluates the gate inside each read, with no process for it. While open the
+    sink reads each count once, in order; closed live, it reads nothing, not the
+    last count; opened again, it reads counts again.
     """
-    tatolabd = start_tatolabd_running_stream(python_source_through_a_gate_into_python_sink)
+    tatolabd = start_tatolabd_running_stream(gated_stream)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     local_api = tatolabd.local_api_client()
     opened, occurrence = the_first_gated_count_batch_read_after(tatolabd, 0, from_occurrence=2)

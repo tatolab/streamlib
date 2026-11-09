@@ -2426,3 +2426,409 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
         ["source/video -> look/video"]
     );
 }
+
+/// A labelled group is made, edited and taken out, each as one transaction kept in the graph
+/// document and rendered by `graph`; a fresh runtime loading the document renders it too, and
+/// undo of its removal brings it back with every node that belonged to it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its_nodes() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+
+    let added = call(
+        "add_group",
+        json!({ "stream": stream_id, "title": "sources", "description": "every camera",
+                "colour": "#3b82f6", "nodes": [SOURCE_NODE_UUID],
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the group is made");
+    let group = added["added_groups"][0]["group"]
+        .as_str()
+        .expect("add_group answers the group's UUID")
+        .to_owned();
+    assert_eq!(added["added_groups"][0]["title"], "sources", "{added}");
+    call(
+        "set_group_fields",
+        json!({ "stream": stream_id, "group": group, "colour": "#22c55e",
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the group's fields are set");
+
+    let the_group_as = json!([{ "id": group, "title": "sources",
+                                "description": "every camera", "colour": "#22c55e" }]);
+    let source_of = |graph: &Value| {
+        graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == SOURCE_NODE_UUID)
+            .cloned()
+            .expect("the graph holds the source")
+    };
+    let kept = project.the_graph_document_of("main");
+    assert_eq!(kept["groups"], the_group_as, "{kept}");
+    assert_eq!(source_of(&kept)["studio"]["group"], json!(group), "{kept}");
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(live["groups"], the_group_as, "{live}");
+    assert_eq!(source_of(&live)["studio"]["group"], json!(group), "{live}");
+    let restarted = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let reloaded_stream_id = restarted.a_stream_loaded_from_its_graph_document(&project, "main");
+    let reloaded = restarted.the_live_graph_of(&reloaded_stream_id);
+    assert_eq!(reloaded["groups"], the_group_as, "{reloaded}");
+
+    let removed = call(
+        "remove_group",
+        json!({ "stream": stream_id, "group": group, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the group is taken out");
+    assert_eq!(
+        removed["operations"][0]["nodes"],
+        json!([SOURCE_NODE_UUID]),
+        "{removed}"
+    );
+    let ungrouped = project.the_graph_document_of("main");
+    assert!(ungrouped.get("groups").is_none(), "{ungrouped}");
+    assert!(source_of(&ungrouped).get("studio").is_none(), "{ungrouped}");
+    assert!(
+        engine.the_live_graph_of(&stream_id).get("groups").is_none(),
+        "the live graph still renders the group"
+    );
+
+    call(
+        "undo",
+        json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the undo applies");
+    let restored = project.the_graph_document_of("main");
+    assert_eq!(restored["groups"], the_group_as, "{restored}");
+    assert_eq!(
+        source_of(&restored)["studio"]["group"],
+        json!(group),
+        "{restored}"
+    );
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(live["groups"], the_group_as, "{live}");
+    assert_eq!(source_of(&live)["studio"]["group"], json!(group), "{live}");
+}
+
+impl ProjectWithGraphDocuments {
+    /// Add a [`StreamToolsTestSink`] named `name` to this project's stream `main` as one
+    /// committed transaction, answering the commit that records it.
+    fn commit_a_sink_named(&self, name: &str) -> String {
+        register_the_stream_tools_test_sink_once();
+        let mut project_repository =
+            streamlib_project_repository::ProjectRepository::open(self.path())
+                .expect("the project opens");
+        project_repository
+            .apply_project_operations(
+                &streamlib_project_repository::ProjectTransactionAuthor {
+                    kind: streamlib_project_repository::ProjectTransactionAuthorKind::Person,
+                    name: "arm maintainer".to_owned(),
+                },
+                vec![streamlib_project_repository::ProjectOperation::StreamGraph(
+                    streamlib_project_repository::StreamGraphOperationOnAStream {
+                        stream: self.stream_asset_of("main"),
+                        graph_operation:
+                            streamlib_project_repository::StreamGraphOperation::AddNode {
+                                node: streamlib_project_repository::StreamGraphDocumentNode {
+                                    id: Uuid::new_v4(),
+                                    name: name.to_owned(),
+                                    node_type: StreamToolsTestSink::processor_class_import_path()
+                                        .as_str()
+                                        .to_owned(),
+                                    config: json!({}),
+                                    pins: serde_json::Map::new(),
+                                    exposed_config_fields: Vec::new(),
+                                    studio: serde_json::Map::new(),
+                                    fragment: None,
+                                },
+                                links: Vec::new(),
+                            },
+                    },
+                )],
+                streamlib_project_repository::ProjectTransactionLineage::NewEdit,
+            )
+            .expect("the sink is committed")
+            .commit
+    }
+}
+
+/// The node named `name` of the graph document or render `graph`.
+fn the_node_named(graph: &Value, name: &str) -> Value {
+    graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|node| node["name"] == name)
+        .cloned()
+        .unwrap_or_else(|| panic!("the graph holds no node `{name}`: {graph}"))
+}
+
+/// Each node name the fragment of `fragment_node` stores, in order.
+fn the_node_names_a_fragment_stores(fragment_node: &Value) -> Vec<String> {
+    fragment_node["fragment"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Project `cell` uses project `arm`'s stream as a fragment at revision r1; `arm` commits r2,
+/// `cell` updates and receives it with its own group around the fragment intact and each stored
+/// node keeping its UUID; a fork then makes the stream `cell`'s own copy, which `arm`'s r3 no
+/// longer reaches.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_stops_its_updates() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let first_revision = arm.commit_a_sink_named("shoulder");
+    let cell = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let arm_stream = arm.stream_asset_of("main").to_string();
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+
+    let added = call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                "revision": &first_revision[..12], "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm is depended on");
+    assert_eq!(
+        added["dependency"]["revision"],
+        json!(first_revision),
+        "{added}"
+    );
+    let used = call(
+        "use_dependency_stream",
+        json!({ "stream": stream_id, "project": arm.project, "dependency_stream": arm_stream,
+                "name": "arm", "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm's stream is placed");
+    let fragment = used["added_nodes"][0]["node"]
+        .as_str()
+        .expect("use_dependency_stream answers the fragment node's UUID")
+        .to_owned();
+    call(
+        "add_group",
+        json!({ "stream": stream_id, "title": "cell", "nodes": [SOURCE_NODE_UUID, fragment],
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the cell's own group is made");
+    let placed = the_node_named(&cell.the_graph_document_of("main"), "arm");
+    assert_eq!(
+        the_node_names_a_fragment_stores(&placed),
+        ["source", "shoulder"]
+    );
+    let group = placed["studio"]["group"].clone();
+
+    let second_revision = arm.commit_a_sink_named("elbow");
+    let updated = call(
+        "update_dependency",
+        json!({ "project_directory": cell.path(), "project": arm.project,
+                "revision": second_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the pin moves");
+    assert_eq!(
+        updated["dependency"]["revision"],
+        json!(second_revision),
+        "{updated}"
+    );
+    assert_eq!(
+        updated["graph_operations"][0]["operation"], "refresh_fragment",
+        "{updated}"
+    );
+    let refreshed = the_node_named(&cell.the_graph_document_of("main"), "arm");
+    assert_eq!(refreshed["id"], json!(fragment), "{refreshed}");
+    assert_eq!(refreshed["studio"]["group"], group, "{refreshed}");
+    assert_eq!(
+        the_node_names_a_fragment_stores(&refreshed),
+        ["source", "shoulder", "elbow"]
+    );
+    assert_eq!(
+        refreshed["fragment"]["nodes"][1]["id"], placed["fragment"]["nodes"][1]["id"],
+        "the stored `shoulder` keeps its UUID across the update"
+    );
+    let live = the_node_named(&engine.the_live_graph_of(&stream_id), "arm");
+    assert_eq!(
+        the_node_names_a_fragment_stores(&live),
+        ["source", "shoulder", "elbow"]
+    );
+
+    let forked = call(
+        "fork_asset",
+        json!({ "project_directory": cell.path(), "project": arm.project, "asset": arm_stream,
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm's stream is forked");
+    let copy = forked["asset"]["asset"].clone();
+    assert_eq!(
+        forked["asset"]["path"], "streams/main-fork.graph.json",
+        "{forked}"
+    );
+    assert_eq!(
+        forked["forked_from"],
+        json!({ "asset": arm_stream, "from": arm.project, "revision": second_revision })
+    );
+    assert_eq!(
+        the_node_named(&cell.the_graph_document_of("main"), "arm")["config"],
+        json!({ "stream": { "asset": copy } })
+    );
+    assert_eq!(
+        cell.the_graph_document_of("main-fork")["forked_from"]["revision"],
+        json!(second_revision)
+    );
+    assert_eq!(
+        the_node_named(&engine.the_live_graph_of(&stream_id), "arm")["config"],
+        json!({ "stream": { "asset": copy } })
+    );
+
+    let third_revision = arm.commit_a_sink_named("wrist");
+    let updated_after_the_fork = call(
+        "update_dependency",
+        json!({ "project_directory": cell.path(), "project": arm.project,
+                "revision": third_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the pin moves");
+    assert!(
+        updated_after_the_fork.get("graph_operations").is_none(),
+        "{updated_after_the_fork}"
+    );
+    assert_eq!(
+        the_node_names_a_fragment_stores(&the_node_named(
+            &cell.the_graph_document_of("main"),
+            "arm"
+        )),
+        ["source", "shoulder", "elbow"]
+    );
+}
+
+/// A venv interpreter whose node type listing keeps the request it was sent in
+/// `listing-request.json` and prints `listing.json`, which a test writes first.
+const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._project_node_type_listing_entry*) cat > listing-request.json; cat listing.json ;;\nesac\nexit 0\n";
+
+/// Project `cell` depends on project `arm`, whose node code is committed at the pin: the
+/// listing is sent `arm`'s Python files at that commit and nothing else of it, and answers
+/// each source as the project's interpreter read it, under the project's UUID and name.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_projects_node_types_are_listed_with_each_dependencys_python_sources_at_its_pin() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    std::fs::create_dir_all(arm.path().join("nodes")).expect("the arm's nodes directory");
+    std::fs::write(
+        arm.path().join("nodes/gripper.py"),
+        "from tatolab.stream import node\n",
+    )
+    .expect("the arm's node code");
+    let pinned_revision = arm.commit_a_sink_named("shoulder");
+    std::fs::write(
+        arm.path().join("nodes/gripper.py"),
+        "written after the pin\n",
+    )
+    .expect("the arm's node code after the pin");
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    write_an_executable_script_from_a_child_process(
+        &cell.interpreter(),
+        STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING,
+    );
+    let project_source = json!({
+        "source": "project",
+        "node_types": [{
+            "type": "nodes.ik:InverseKinematics", "kind": "process", "description": "",
+            "category": "nodes.ik", "inputs": [], "outputs": [], "path": "nodes/ik.py", "line": 4,
+        }],
+        "graph_generators": [],
+        "unreadable_modules": [{
+            "module": "nodes.broken", "path": "nodes/broken.py", "line": 2, "column": 7,
+            "why": "SyntaxError: invalid syntax",
+        }],
+    });
+    let dependency_source = json!({
+        "source": "dependency", "project": arm.project, "revision": pinned_revision,
+        "node_types": [], "graph_generators": [], "unreadable_modules": [],
+    });
+    std::fs::write(
+        cell.path().join("listing.json"),
+        json!({ "sources": [project_source, dependency_source] }).to_string(),
+    )
+    .expect("the listing document");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                "revision": pinned_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm is depended on");
+
+    let listed = call(
+        "list_project_node_types",
+        json!({ "project_directory": cell.path() }),
+    )
+    .await
+    .expect("the cell's node types are listed");
+
+    assert_eq!(listed["project"], json!(cell.project), "{listed}");
+    assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
+    assert_eq!(
+        listed["sources"],
+        json!([project_source, dependency_source]),
+        "{listed}"
+    );
+    let request: Value = serde_json::from_slice(
+        &std::fs::read(cell.path().join("listing-request.json")).expect("the listing's request"),
+    )
+    .expect("the request is JSON");
+    assert_eq!(
+        request,
+        json!({ "dependencies": [{
+            "project": arm.project, "revision": pinned_revision,
+            "files": { "nodes/gripper.py": "from tatolab.stream import node\n" },
+        }] })
+    );
+}
+
+/// A listing whose interpreter prints no listing is refused naming the project, in the
+/// runtime's own words.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "list_project_node_types",
+            json!({ "project_directory": cell.path() }),
+        )
+        .await,
+    )
+    .expect_err("an interpreter that prints nothing lists nothing");
+
+    assert!(
+        refusal.contains("list_project_node_types failed")
+            && refusal.contains("printed no listing"),
+        "{refusal}"
+    );
+}

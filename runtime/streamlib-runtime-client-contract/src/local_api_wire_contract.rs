@@ -458,6 +458,17 @@ pub struct GraphTransactionAddedNode {
     pub label: Option<String>,
 }
 
+/// A labelled group a graph transaction made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphTransactionAddedGroup {
+    /// The stream it was made in, by stream id.
+    pub stream: String,
+    /// The UUID the runtime made for it.
+    pub group: String,
+    /// Its title.
+    pub title: String,
+}
+
 /// A link a graph transaction made, with the state the stream's graph reads it in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphTransactionConnectedLink {
@@ -494,6 +505,9 @@ pub struct GraphTransactionToolResult {
     pub added_nodes: Vec<GraphTransactionAddedNode>,
     /// Each link it made.
     pub connected_links: Vec<GraphTransactionConnectedLink>,
+    /// Each labelled group it made.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_groups: Vec<GraphTransactionAddedGroup>,
 }
 
 /// What a project's transactions resource holds: its newest transactions, newest first.
@@ -525,6 +539,213 @@ pub struct AssetTransactionToolResult {
     pub transaction: String,
     /// The commit on the project history's `main` that records it.
     pub commit: String,
+}
+
+/// A project this one depends on, as a dependency tool answers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectDependencyOnTheWire {
+    /// The depended-on project's UUID.
+    pub project: String,
+    /// Where its history is fetched from, as `add_dependency` was given it.
+    pub source: String,
+    /// The commit of its history it is pinned to.
+    pub revision: String,
+}
+
+/// The result of `add_dependency` and `update_dependency`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DependencyTransactionToolResult {
+    /// The dependency as the transaction left it.
+    pub dependency: ProjectDependencyOnTheWire,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+    /// Each graph operation the transaction applied to a loaded stream, as `transact` answers
+    /// them: each fragment refreshed from the dependency's new pin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graph_operations: Vec<serde_json::Value>,
+}
+
+/// The stream a fork copied, as `fork_asset` answers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForkedAssetOriginOnTheWire {
+    /// The UUID of the asset copied.
+    pub asset: String,
+    /// The UUID of the depended-on project that holds it.
+    pub from: String,
+    /// The commit of that project's history it was copied at.
+    pub revision: String,
+}
+
+/// The result of `fork_asset`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ForkAssetToolResult {
+    /// The copy, an asset of this project under a UUID of its own.
+    pub asset: ProjectAssetOnTheWire,
+    /// What it was copied from, which its graph document records under `forked_from`.
+    pub forked_from: ForkedAssetOriginOnTheWire,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+    /// Each graph operation the transaction applied to a loaded stream, as `transact` answers
+    /// them: each node config that referenced the dependency's asset, made to reference the
+    /// copy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graph_operations: Vec<serde_json::Value>,
+}
+
+/// The `list_project_node_types` tool's result: what a project and each source it draws node
+/// code from declares, read from source without running it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListProjectNodeTypesToolResult {
+    /// The project directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The project's UUID, from its `tatolab-project.json`.
+    pub project: String,
+    /// The project's name.
+    pub project_name: String,
+    /// The project first, then each linked dependency, then each installed distribution.
+    pub sources: Vec<NodeTypeSourceReadWithoutRunningIt>,
+}
+
+/// Where a listed node type's code comes from, under `source`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum NodeTypeSourceOrigin {
+    /// The project's own node code.
+    Project,
+    /// A linked dependency's node code at the revision it is pinned to.
+    Dependency {
+        /// The depended-on project's UUID.
+        project: String,
+        /// The commit or tag it is pinned to.
+        revision: String,
+    },
+    /// An installed distribution that declares `tatolab.nodes` entry points.
+    InstalledDistribution {
+        /// The distribution's name.
+        distribution: String,
+        /// The distribution's version.
+        distribution_version: String,
+    },
+}
+
+/// One source's node types, graph generators, and the modules of it that could not be read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeTypeSourceReadWithoutRunningIt {
+    /// Where the code comes from.
+    #[serde(flatten)]
+    pub origin: NodeTypeSourceOrigin,
+    /// Each node type declared, by type.
+    pub node_types: Vec<NodeTypeReadFromSource>,
+    /// Each `@graph_generator` declared, by import path.
+    pub graph_generators: Vec<GraphGeneratorReadFromSource>,
+    /// Each module that does not parse, with why and where; the rest of the source still lists.
+    pub unreadable_modules: Vec<NodeModuleNotReadable>,
+}
+
+/// One node type as its declaration states it in source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeTypeReadFromSource {
+    /// The type `add_node` takes: the import path `<module>:<qualname>`.
+    #[serde(rename = "type")]
+    pub node_type: String,
+    /// `process`, `function` or `shader`; `None` for an entry point whose declaration source does not show.
+    pub kind: Option<String>,
+    /// The declared description, or the docstring.
+    pub description: String,
+    /// The palette category, the declaring module when none is declared.
+    pub category: String,
+    /// The input ports, `None` where only the node's native half states them.
+    pub inputs: Option<Vec<NodeTypePortReadFromSource>>,
+    /// The output ports, `None` where only the node's native half states them.
+    pub outputs: Option<Vec<NodeTypePortReadFromSource>>,
+    /// The file declaring it, relative to its source's root.
+    pub path: Option<String>,
+    /// The line of its `class`, `def` or assignment.
+    pub line: Option<u32>,
+}
+
+/// One port as its declaration states it in source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeTypePortReadFromSource {
+    /// The port's name, cast as every exposed name is.
+    pub name: String,
+    /// The port family's wire name, `None` where source alone does not say.
+    pub family: Option<String>,
+    /// The port's declared description.
+    pub description: String,
+    /// A function or shader port's annotation as written; `None` for a process node's port.
+    pub annotation: Option<String>,
+    /// A function input's default pin value, where it is a literal.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "a_present_value_even_null"
+    )]
+    pub pin_default: Option<serde_json::Value>,
+    /// A function input's default as written, where it is not a literal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_default_as_written: Option<String>,
+}
+
+/// One `@graph_generator` as its declaration states it in source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphGeneratorReadFromSource {
+    /// The import path `import_graph_generator` takes: `<module>:<function>`.
+    pub generator: String,
+    /// Its docstring.
+    pub description: String,
+    /// Each parameter after the builder: a setting the fragment promotes.
+    pub promoted_config: Vec<GraphGeneratorPromotedSettingReadFromSource>,
+    /// The file declaring it, relative to its source's root.
+    pub path: String,
+    /// The line of its `def`.
+    pub line: u32,
+}
+
+/// One setting a graph generator promotes, as its parameter states it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphGeneratorPromotedSettingReadFromSource {
+    /// The parameter's name.
+    pub name: String,
+    /// Its annotation as written.
+    pub annotation: Option<String>,
+    /// Its default, where it is a literal.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "a_present_value_even_null"
+    )]
+    pub default: Option<serde_json::Value>,
+    /// Its default as written, where it is not a literal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_as_written: Option<String>,
+}
+
+/// A module of a source that could not be read, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeModuleNotReadable {
+    /// The module's import name.
+    pub module: String,
+    /// Its file, relative to its source's root.
+    pub path: String,
+    /// The line the parser stopped at.
+    pub line: Option<u32>,
+    /// The column the parser stopped at.
+    pub column: Option<u32>,
+    /// Why it was not read, in the parser's words.
+    pub why: String,
+}
+
+/// A key that is present deserializes to `Some`, `null` included, so a default of `None` is kept.
+fn a_present_value_even_null<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]
@@ -744,5 +965,39 @@ mod tests {
                 "commit": "c".repeat(40),
             })
         );
+    }
+
+    /// A source's origin rides flat beside its listing, under `source`.
+    #[test]
+    fn a_node_type_source_spells_its_origin_flat_and_keeps_a_null_default() {
+        let wire = serde_json::json!({
+            "source": "dependency",
+            "project": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
+            "revision": "v1",
+            "node_types": [{
+                "type": "nodes.gripper:Gripper",
+                "kind": "function",
+                "description": "",
+                "category": "nodes.gripper",
+                "inputs": [{"name": "grip", "family": "channels", "description": "", "annotation": "float | None", "pin_default": null}],
+                "outputs": null,
+                "path": "nodes/gripper.py",
+                "line": 4,
+            }],
+            "graph_generators": [],
+            "unreadable_modules": [],
+        });
+
+        let source: NodeTypeSourceReadWithoutRunningIt =
+            serde_json::from_value(wire.clone()).unwrap();
+
+        assert_eq!(
+            source.origin,
+            NodeTypeSourceOrigin::Dependency {
+                project: "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11".to_owned(),
+                revision: "v1".to_owned(),
+            }
+        );
+        assert_eq!(serde_json::to_value(&source).unwrap(), wire);
     }
 }

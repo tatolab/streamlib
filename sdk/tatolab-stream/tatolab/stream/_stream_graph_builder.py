@@ -16,7 +16,7 @@ import contextvars
 import copy
 import inspect
 import math
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import FunctionType
@@ -375,6 +375,7 @@ class StreamBuilder:
         self._placed_as_a_fragment = placed_as_a_fragment
         self._recorded_nodes_by_name: dict[str, _RecordedNode] = {}
         self._recorded_links: list[dict[str, dict[str, str]]] = []
+        self._recorded_groups_by_title: dict[str, dict[str, Any]] = {}
         self._stream_clock: StreamClock | None = None
 
     @property
@@ -537,6 +538,56 @@ class StreamBuilder:
             }
         )
 
+    def group(
+        self,
+        title: str,
+        nodes: Sequence[NodeReference],
+        *,
+        description: str = "",
+        colour: str = "",
+    ) -> None:
+        """Record a labelled group of `nodes`, nodes of this fragment, under `title`; it changes nothing that runs, and a refresh keeps its UUID while its title stands."""
+        if not self._placed_as_a_fragment:
+            raise ValueError(
+                f"stream `{self._name}` is no fragment: a generator groups nodes of the "
+                f"fragment it builds, and a stream's own groups are made with `add_group`"
+            )
+        for text, what_it_is in ((title, "title"), (description, "description"), (colour, "colour")):
+            if not isinstance(text, str):
+                raise TypeError(
+                    f"a group's {what_it_is} is a str; got {text!r}, of type "
+                    f"`{_type_name_as_written(text)}`"
+                )
+        if not title:
+            raise ValueError(f"a group of fragment `{self._name}` needs a title")
+        if title in self._recorded_groups_by_title:
+            raise ValueError(
+                f"fragment `{self._name}` already holds a group titled {title!r}; a group's "
+                f"title names it across every run of the generator, so give it another"
+            )
+        node_names: list[str] = []
+        for node in nodes:
+            if not isinstance(node, NodeReference):
+                raise TypeError(
+                    f"group {title!r} takes the references this fragment's `add` returned; "
+                    f"got {node!r}"
+                )
+            self._refuse_a_node_this_stream_does_not_hold(node.name)
+            for held_title, held in self._recorded_groups_by_title.items():
+                if node.name in held["nodes"]:
+                    raise ValueError(
+                        f"node `{node.name}` already belongs to group {held_title!r} of "
+                        f"fragment `{self._name}`; a node belongs to one group"
+                    )
+            if node.name not in node_names:
+                node_names.append(node.name)
+        recorded_group: dict[str, Any] = {"title": title, "nodes": node_names}
+        if description:
+            recorded_group["description"] = description
+        if colour:
+            recorded_group["colour"] = colour
+        self._recorded_groups_by_title[title] = recorded_group
+
     def run_on_clock(self, stream_clock: StreamClock) -> None:
         """Run this stream on `stream_clock` instead of real time; called at most once."""
         if not isinstance(
@@ -610,12 +661,18 @@ class StreamBuilder:
         )
 
     def _compiled_fragment(self) -> dict[str, Any]:
+        groups = (
+            {"groups": copy.deepcopy(list(self._recorded_groups_by_title.values()))}
+            if self._recorded_groups_by_title
+            else {}
+        )
         return {
             "nodes": [
                 recorded_node.as_graph_document_node()
                 for recorded_node in self._recorded_nodes_by_name.values()
             ],
             "links": copy.deepcopy(self._recorded_links),
+            **groups,
         }
 
     def _compiled_graph(self) -> dict[str, Any]:

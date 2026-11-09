@@ -113,9 +113,10 @@ returned — a track naming its gateway, a send node its track — recorded in t
 at load and rendered by `graph`; it carries no data and is never a link. _Avoid_: "link" for
 it, "handle".
 
-**Variable** _(user)_: a value a `SetVariable` node names and `GetVariable` nodes read anywhere in
-the graph with no drawn wire, as in Unreal Blueprints — a port's output, resolved to a link, or a
-node reference, resolved to a reference edge. _Avoid_: "global", "bus".
+**Variable** _(user)_: a value a `SetVariable` node names and `GetVariable` nodes read with no
+drawn wire, as in Unreal Blueprints — a port's output, resolved to a link, or a node reference,
+resolved to a reference edge. A get reads the setter on its own level, the stream's or a
+fragment's, or else the nearest enclosing one. _Avoid_: "global", "bus".
 
 **Broadcast** / **Track**: MoQ's words, used as they are — a gateway publishes one broadcast at a
 relay, each of its track nodes one track in it. A receive node names what it reads by them
@@ -250,8 +251,12 @@ image, USD, an FMU — referenced by UUID, never by path. _Avoid_: "resource", "
 is meant.
 
 **Graph document** _(crosses)_: a stream asset's canonical JSON — nodes by UUID, config, pin
-values, studio fields, links, fragments — and the stream's source of truth. _Avoid_: "stream file",
-"scene", "`stream.py`".
+values, studio fields, links, fragments, groups, and for a fork the stream it was copied from —
+and the stream's source of truth. _Avoid_: "stream file", "scene", "`stream.py`".
+
+**Group** _(crosses)_: a labelled group of one level's nodes in a graph document — a UUID, a title,
+a description and a colour — that a node joins by naming its UUID as its `studio.group`; it changes
+nothing that runs. _Avoid_: "fragment", "subgraph" for a group.
 
 **Fragment** _(crosses)_: a `@graph_generator` function's output stored in a graph document as one
 read-only container with its own node UUIDs, refreshed when the generator re-runs. _Avoid_:

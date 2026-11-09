@@ -23,6 +23,7 @@ mod processor_interpreter_launch_record;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
+pub(crate) use project_venv_made_with_the_runtime_unit_uv::the_projects_venv_interpreter;
 #[allow(clippy::module_inception)]
 mod runtime;
 mod runtime_crash_pinned_on_a_stream;
@@ -35,6 +36,10 @@ mod stream_graph_operation_applied_live;
 mod stream_location_and_id;
 mod stream_step_coordinator;
 
+pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_source::{
+    LinkedDependencyPythonSourcesAtItsPin, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
+    list_a_projects_node_types_and_graph_generators_from_source,
+};
 pub use crate::core::compiler::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
 };

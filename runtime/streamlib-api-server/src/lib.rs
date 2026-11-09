@@ -11,6 +11,8 @@ mod loopback_http_listener;
 mod mcp;
 mod mcp_project_asset_tools;
 mod mcp_project_change_feed;
+mod mcp_project_dependency_tools;
+mod mcp_project_node_type_tools;
 mod mcp_prompts;
 mod mcp_resources;
 mod mcp_stdio_upgrade;

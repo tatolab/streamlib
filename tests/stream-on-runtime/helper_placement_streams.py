@@ -3,7 +3,10 @@
 
 """The `@graph_generator` functions `test_helper_placement.py` runs from the suite project."""
 
+from typing import Any
+
 from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCalls
+from rust_function_node_fixture import RustGate
 from rust_function_node_fixture import ScaleAndOffset
 from tatolab.ops import Clamp, Gate, Lfo, Remap
 from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, graph_generator
@@ -332,8 +335,18 @@ def rust_function_nodes_in_islands_beside_tatolab_ops(stream_builder: StreamBuil
 @graph_generator
 def python_source_through_a_gate_into_python_sink(stream_builder: StreamBuilder) -> None:
     """A Python class's counts through `tatolab.ops`' `Gate` into another Python class."""
+    _python_source_through_this_gate_into_python_sink(stream_builder, Gate)
+
+
+@graph_generator
+def python_source_through_a_rust_gate_into_python_sink(stream_builder: StreamBuilder) -> None:
+    """A Python class's counts through the fixture module's Rust `RustGate` into another Python class."""
+    _python_source_through_this_gate_into_python_sink(stream_builder, RustGate)
+
+
+def _python_source_through_this_gate_into_python_sink(stream_builder: StreamBuilder, gate_node: Any) -> None:
     source = stream_builder.add(CountsEachTickRecordsSource, name="source")
-    gate = stream_builder.add(Gate, name="gate")
+    gate = stream_builder.add(gate_node, name="gate")
     sink = stream_builder.add(ReportsEachBatchOfGatedCountsItReadSink, name="sink")
     stream_builder.connect(source.output("counts_to_downstream"), gate.input("value"))
     stream_builder.connect(gate.output("result"), sink.input("gated_counts"))

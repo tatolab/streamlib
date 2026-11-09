@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -79,6 +81,35 @@ pub struct StreamGraphDocumentLink {
     pub target: StreamGraphDocumentLinkEnd,
 }
 
+/// What a labelled group says of its nodes; it changes nothing that runs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamGraphGroupFields {
+    /// The group's title.
+    pub title: String,
+    /// What the group's nodes do, for the next person who reads the graph.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The colour the studio draws the group with.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub colour: String,
+}
+
+/// One labelled group of a stream's graph document; a node belongs to it by naming its `id`
+/// as the node's `studio.group`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamGraphDocumentGroup {
+    /// The group's UUID, the runtime's from its placement on.
+    pub id: Uuid,
+    #[serde(flatten)]
+    pub fields: StreamGraphGroupFields,
+}
+
+/// The `studio` key a node names its labelled group's UUID under.
+const STUDIO_GROUP_KEY: &str = "group";
+
+/// The graph document's key holding its labelled groups.
+const GROUPS_KEY: &str = "groups";
+
 /// What a fragment node holds of its graph generator's run: the generator, the promoted
 /// settings it ran with and the graph it built.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -145,6 +176,24 @@ pub enum StreamGraphOperation {
         from: Vec<String>,
         to: Vec<String>,
     },
+    /// The labelled group was made, each of `nodes` joining it.
+    AddGroup {
+        group: StreamGraphDocumentGroup,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        nodes: Vec<Uuid>,
+    },
+    /// The labelled group's title, description and colour were replaced whole.
+    SetGroupFields {
+        group: Uuid,
+        from: StreamGraphGroupFields,
+        to: StreamGraphGroupFields,
+    },
+    /// The labelled group was taken out, each of `nodes`, every node it held, left ungrouped.
+    RemoveGroup {
+        group: StreamGraphDocumentGroup,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        nodes: Vec<Uuid>,
+    },
 }
 
 impl StreamGraphOperation {
@@ -191,6 +240,13 @@ impl StreamGraphOperation {
                 from: to,
                 to: from,
             },
+            Self::AddGroup { group, nodes } => Self::RemoveGroup { group, nodes },
+            Self::RemoveGroup { group, nodes } => Self::AddGroup { group, nodes },
+            Self::SetGroupFields { group, from, to } => Self::SetGroupFields {
+                group,
+                from: to,
+                to: from,
+            },
         }
     }
 
@@ -217,20 +273,28 @@ impl StreamGraphOperation {
             Self::SetExposedConfigFields { node, .. } => {
                 format!("set_exposed_config_fields {node}")
             }
+            Self::AddGroup { group, .. } => {
+                format!("add_group {} {}", group.id, group.fields.title)
+            }
+            Self::SetGroupFields { group, .. } => format!("set_group_fields {group}"),
+            Self::RemoveGroup { group, .. } => {
+                format!("remove_group {} {}", group.id, group.fields.title)
+            }
         }
     }
 
-    /// The node the operation acts on.
-    pub fn node(&self) -> Uuid {
+    /// The node the operation acts on; none for an operation on a labelled group.
+    pub fn node(&self) -> Option<Uuid> {
         match self {
-            Self::AddNode { node, .. } | Self::RemoveNode { node, .. } => node.id,
-            Self::Connect { link } | Self::Disconnect { link } => link.target.node,
+            Self::AddNode { node, .. } | Self::RemoveNode { node, .. } => Some(node.id),
+            Self::Connect { link } | Self::Disconnect { link } => Some(link.target.node),
             Self::SetNodeConfig { node, .. }
             | Self::SetPinValue { node, .. }
             | Self::RenameNode { node, .. }
             | Self::SetStudioFields { node, .. }
             | Self::RefreshFragment { node, .. }
-            | Self::SetExposedConfigFields { node, .. } => *node,
+            | Self::SetExposedConfigFields { node, .. } => Some(*node),
+            Self::AddGroup { .. } | Self::SetGroupFields { .. } | Self::RemoveGroup { .. } => None,
         }
     }
 
@@ -321,6 +385,93 @@ impl StreamGraphDocument {
         self.node_objects()
             .find(|node_object| node_name_of(node_object) == Some(name))
             .and_then(|node_object| serde_json::from_value(Value::Object(node_object.clone())).ok())
+    }
+
+    /// Every labelled group of the stream's own level, as the document holds it.
+    pub fn groups(&self) -> Result<Vec<StreamGraphDocumentGroup>, String> {
+        match self.every_other_key.get(GROUPS_KEY) {
+            None => Ok(Vec::new()),
+            Some(groups) => serde_json::from_value(groups.clone())
+                .map_err(|not_read| format!("the graph's `groups` do not read: {not_read}")),
+        }
+    }
+
+    /// The labelled group whose UUID is `group`, as the document holds it.
+    pub fn group(&self, group: Uuid) -> Result<StreamGraphDocumentGroup, String> {
+        let groups = self.groups()?;
+        groups
+            .iter()
+            .find(|held| held.id == group)
+            .cloned()
+            .ok_or_else(|| {
+                let held: Vec<String> = groups
+                    .iter()
+                    .map(|held| format!("{} `{}`", held.id, held.fields.title))
+                    .collect();
+                if held.is_empty() {
+                    format!("the graph holds no group {group}; it holds no group at all")
+                } else {
+                    format!(
+                        "the graph holds no group {group}. It holds: {}",
+                        held.join(", ")
+                    )
+                }
+            })
+    }
+
+    /// The UUID of every top-level node whose `studio.group` names the group `group`.
+    pub fn nodes_of_the_group(&self, group: Uuid) -> Vec<Uuid> {
+        self.node_objects()
+            .filter(|node_object| studio_group_of(node_object) == Some(group))
+            .filter_map(node_uuid_of)
+            .collect()
+    }
+
+    fn set_the_groups(&mut self, groups: &[StreamGraphDocumentGroup]) -> Result<(), String> {
+        if groups.is_empty() {
+            self.every_other_key.remove(GROUPS_KEY);
+        } else {
+            self.every_other_key.insert(
+                GROUPS_KEY.to_owned(),
+                serde_json::to_value(groups)
+                    .map_err(|not_written| format!("the groups do not write: {not_written}"))?,
+            );
+        }
+        Ok(())
+    }
+
+    fn set_the_studio_group_of(&mut self, node: Uuid, group: Option<Uuid>) -> Result<(), String> {
+        let node_object = self.node_object_mut(node)?;
+        let studio = node_object
+            .entry("studio")
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Value::Object(studio) = studio else {
+            return Err(format!("node {node}'s `studio` is not an object"));
+        };
+        match group {
+            Some(group) => {
+                studio.insert(
+                    STUDIO_GROUP_KEY.to_owned(),
+                    Value::String(group.to_string()),
+                );
+            }
+            None => {
+                studio.remove(STUDIO_GROUP_KEY);
+            }
+        }
+        if studio.is_empty() {
+            node_object.remove("studio");
+        }
+        Ok(())
+    }
+
+    /// Every top-level node, as the document holds it.
+    pub fn nodes(&self) -> Vec<StreamGraphDocumentNode> {
+        self.node_objects()
+            .filter_map(|node_object| {
+                serde_json::from_value(Value::Object(node_object.clone())).ok()
+            })
+            .collect()
     }
 
     /// Every top-level fragment node, as the document holds it.
@@ -497,6 +648,57 @@ impl StreamGraphDocument {
                 }
                 Ok(())
             }
+            StreamGraphOperation::AddGroup { group, nodes } => {
+                let mut groups = self.groups()?;
+                if groups.iter().any(|held| held.id == group.id) {
+                    return Err(format!(
+                        "the graph already holds group {}; a group's UUID is never reused",
+                        group.id
+                    ));
+                }
+                for node in nodes {
+                    let node_object = self
+                        .node_objects()
+                        .find(|node_object| node_uuid_of(node_object) == Some(*node))
+                        .ok_or_else(|| self.why_no_node_has(*node))?;
+                    if let Some(holder) = studio_group_of(node_object)
+                        .and_then(|held| groups.iter().find(|group| group.id == held))
+                    {
+                        return Err(format!(
+                            "node {node} `{}` already belongs to group {} `{}`; take it out of                              that group with set_studio_fields first",
+                            node_name_of(node_object).unwrap_or_default(),
+                            holder.id,
+                            holder.fields.title
+                        ));
+                    }
+                }
+                groups.push(group.clone());
+                self.set_the_groups(&groups)?;
+                for node in nodes {
+                    self.set_the_studio_group_of(*node, Some(group.id))?;
+                }
+                Ok(())
+            }
+            StreamGraphOperation::SetGroupFields { group, to, .. } => {
+                let mut groups = self.groups()?;
+                self.group(*group)?;
+                for held in &mut groups {
+                    if held.id == *group {
+                        held.fields = to.clone();
+                    }
+                }
+                self.set_the_groups(&groups)
+            }
+            StreamGraphOperation::RemoveGroup { group, .. } => {
+                let mut groups = self.groups()?;
+                self.group(group.id)?;
+                groups.retain(|held| held.id != group.id);
+                self.set_the_groups(&groups)?;
+                for node in self.nodes_of_the_group(group.id) {
+                    self.set_the_studio_group_of(node, None)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -593,6 +795,14 @@ fn node_uuid_of(node_object: &Map<String, Value>) -> Option<Uuid> {
         .and_then(|id| Uuid::parse_str(id).ok())
 }
 
+fn studio_group_of(node_object: &Map<String, Value>) -> Option<Uuid> {
+    node_object
+        .get("studio")?
+        .get(STUDIO_GROUP_KEY)?
+        .as_str()
+        .and_then(|group| Uuid::parse_str(group).ok())
+}
+
 fn node_name_of(node_object: &Map<String, Value>) -> Option<&str> {
     node_object.get("name").and_then(Value::as_str)
 }
@@ -678,9 +888,270 @@ pub fn fragment_with_each_node_uuid_kept_by_its_name(
         }
         links.push(kept_link);
     }
+    if let Some(fresh_groups) = fresh_level.get(GROUPS_KEY) {
+        let groups = groups_with_each_uuid_kept_by_its_title(
+            fresh_groups,
+            previous_fragment.and_then(|previous| previous.get(GROUPS_KEY)),
+            &uuid_of_the_name,
+            &mut nodes,
+            new_node_uuid,
+        )?;
+        kept_level.insert(GROUPS_KEY.to_owned(), Value::Array(groups));
+    }
     kept_level.insert("nodes".to_owned(), Value::Array(nodes));
     kept_level.insert("links".to_owned(), Value::Array(links));
     Ok(Value::Object(kept_level))
+}
+
+/// `fresh_groups`, the groups a graph generator made of one level's nodes, each naming its
+/// nodes by name, as the document holds them: each given the UUID the group of the same title
+/// holds in `previous_groups`, or a new one from `new_group_uuid`, and each node it names given
+/// that UUID as its `studio.group` in `nodes`.
+fn groups_with_each_uuid_kept_by_its_title(
+    fresh_groups: &Value,
+    previous_groups: Option<&Value>,
+    uuid_of_the_name: &Map<String, Value>,
+    nodes: &mut [Value],
+    new_group_uuid: &mut dyn FnMut() -> Uuid,
+) -> Result<Vec<Value>, String> {
+    let previous_groups: Vec<StreamGraphDocumentGroup> = previous_groups
+        .and_then(|previous| serde_json::from_value(previous.clone()).ok())
+        .unwrap_or_default();
+    let mut groups = Vec::new();
+    for fresh_group in fresh_groups
+        .as_array()
+        .ok_or("a fragment's `groups` is an array")?
+    {
+        let fields: StreamGraphGroupFields = serde_json::from_value(Value::Object(
+            fresh_group
+                .as_object()
+                .ok_or("a fragment's group is a JSON object")?
+                .iter()
+                .filter(|(key, _)| key.as_str() != "nodes")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        ))
+        .map_err(|not_read| format!("a fragment's group does not read: {not_read}"))?;
+        let group_uuid = previous_groups
+            .iter()
+            .find(|previous| previous.fields.title == fields.title)
+            .map_or_else(&mut *new_group_uuid, |previous| previous.id);
+        for named in fresh_group["nodes"].as_array().into_iter().flatten() {
+            let node_name = named.as_str().unwrap_or_default();
+            let node_uuid = uuid_of_the_name.get(node_name).ok_or_else(|| {
+                format!(
+                    "group `{}` names node `{node_name}`, which the fragment does not hold",
+                    fields.title
+                )
+            })?;
+            let node_object = nodes
+                .iter_mut()
+                .filter_map(Value::as_object_mut)
+                .find(|node_object| node_object.get("id") == Some(node_uuid))
+                .ok_or_else(|| format!("the fragment holds no node {node_uuid}"))?;
+            let studio = node_object
+                .entry("studio")
+                .or_insert_with(|| Value::Object(Map::new()));
+            if let Value::Object(studio) = studio {
+                studio.insert(
+                    STUDIO_GROUP_KEY.to_owned(),
+                    Value::String(group_uuid.to_string()),
+                );
+            }
+        }
+        groups.push(
+            serde_json::to_value(StreamGraphDocumentGroup {
+                id: group_uuid,
+                fields,
+            })
+            .map_err(|not_written| format!("a group does not write: {not_written}"))?,
+        );
+    }
+    Ok(groups)
+}
+
+/// Make each reference in `value` to an asset of the project it was written in,
+/// `{"asset": "<uuid>"}`, a reference into that project as a dependency, adding
+/// `"from": "<project>"`; a reference already naming a project is left as it is.
+pub fn asset_references_made_references_into_the_dependency(value: &mut Value, project: Uuid) {
+    match value {
+        Value::Object(object) => {
+            let names_an_asset = object
+                .get("asset")
+                .and_then(Value::as_str)
+                .is_some_and(|asset| Uuid::parse_str(asset).is_ok());
+            if names_an_asset {
+                object
+                    .entry("from")
+                    .or_insert_with(|| Value::String(project.to_string()));
+            }
+            for entry in object.values_mut() {
+                asset_references_made_references_into_the_dependency(entry, project);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                asset_references_made_references_into_the_dependency(item, project);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `config` with each reference to the asset `asset` of the dependency `project`,
+/// `{"asset": <asset>, "from": <project>}`, made a reference to this project's asset `copy`, or
+/// `None` when it holds no such reference.
+pub fn config_with_a_dependency_asset_reference_made_local(
+    config: &Value,
+    project: Uuid,
+    asset: Uuid,
+    copy: Uuid,
+) -> Option<Value> {
+    let mut rewritten = config.clone();
+    rewrite_the_dependency_asset_references(&mut rewritten, project, asset, copy)
+        .then_some(rewritten)
+}
+
+fn rewrite_the_dependency_asset_references(
+    value: &mut Value,
+    project: Uuid,
+    asset: Uuid,
+    copy: Uuid,
+) -> bool {
+    match value {
+        Value::Object(object) => {
+            let names_the_dependency_asset = |key: &str, expected: Uuid| {
+                object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .and_then(|held| Uuid::parse_str(held).ok())
+                    == Some(expected)
+            };
+            if names_the_dependency_asset("asset", asset)
+                && names_the_dependency_asset("from", project)
+            {
+                object.remove("from");
+                object.insert("asset".to_owned(), Value::String(copy.to_string()));
+                return true;
+            }
+            let mut rewritten_any = false;
+            for entry in object.values_mut() {
+                rewritten_any |=
+                    rewrite_the_dependency_asset_references(entry, project, asset, copy);
+            }
+            rewritten_any
+        }
+        Value::Array(items) => {
+            let mut rewritten_any = false;
+            for item in items {
+                rewritten_any |=
+                    rewrite_the_dependency_asset_references(item, project, asset, copy);
+            }
+            rewritten_any
+        }
+        _ => false,
+    }
+}
+
+/// `graph_document`, another project's stream as its graph document holds it, as a graph
+/// generator's run would build it: each node and link end named by name at every level, each
+/// group naming its nodes, and no UUID, so
+/// [`fragment_with_each_node_uuid_kept_by_its_name`] places it as a fragment.
+pub fn a_graph_document_as_a_fragment_run(graph_document: &Value) -> Result<Value, String> {
+    let Value::Object(level) = graph_document else {
+        return Err("a graph document is a JSON object".to_owned());
+    };
+    let mut name_of_the_uuid: Map<String, Value> = Map::new();
+    let mut names_in_each_group: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut nodes = Vec::new();
+    for node in a_graph_collection_of(level, "nodes")? {
+        let Value::Object(node) = node else {
+            return Err("a graph document's node is a JSON object".to_owned());
+        };
+        let mut run_node = node.clone();
+        let name = node_name_of(node)
+            .ok_or("a graph document's node holds its `name`")?
+            .to_owned();
+        if let Some(Value::String(node_uuid)) = run_node.remove("id") {
+            name_of_the_uuid.insert(node_uuid, Value::String(name.clone()));
+        }
+        if let Some(Value::Object(studio)) = run_node.get_mut("studio") {
+            if let Some(Value::String(group)) = studio.remove(STUDIO_GROUP_KEY) {
+                names_in_each_group
+                    .entry(group)
+                    .or_default()
+                    .push(Value::String(name.clone()));
+            }
+            if studio.is_empty() {
+                run_node.remove("studio");
+            }
+        }
+        if let Some(fragment) = node.get("fragment") {
+            run_node.insert(
+                "fragment".to_owned(),
+                a_graph_document_as_a_fragment_run(fragment)?,
+            );
+        }
+        nodes.push(Value::Object(run_node));
+    }
+    let mut links = Vec::new();
+    for link in a_graph_collection_of(level, "links")? {
+        let mut run_link = link.clone();
+        for end_key in ["source", "target"] {
+            if let Some(Value::Object(end)) = run_link.get_mut(end_key)
+                && let Some(name) = end
+                    .get("node")
+                    .and_then(Value::as_str)
+                    .and_then(|named| name_of_the_uuid.get(named))
+                    .cloned()
+            {
+                end.insert("node".to_owned(), name);
+            }
+        }
+        links.push(run_link);
+    }
+    let mut run = Map::new();
+    run.insert("nodes".to_owned(), Value::Array(nodes));
+    run.insert("links".to_owned(), Value::Array(links));
+    let groups: Vec<StreamGraphDocumentGroup> = match level.get(GROUPS_KEY) {
+        None => Vec::new(),
+        Some(groups) => serde_json::from_value(groups.clone())
+            .map_err(|not_read| format!("the graph's `groups` do not read: {not_read}"))?,
+    };
+    if !groups.is_empty() {
+        let mut run_groups = Vec::new();
+        for group in groups {
+            let Value::Object(mut run_group) = serde_json::to_value(&group.fields)
+                .map_err(|not_written| format!("a group does not write: {not_written}"))?
+            else {
+                continue;
+            };
+            run_group.insert(
+                "nodes".to_owned(),
+                Value::Array(
+                    names_in_each_group
+                        .remove(&group.id.to_string())
+                        .unwrap_or_default(),
+                ),
+            );
+            run_groups.push(Value::Object(run_group));
+        }
+        run.insert(GROUPS_KEY.to_owned(), Value::Array(run_groups));
+    }
+    Ok(Value::Object(run))
+}
+
+/// The `collection` list of a graph document's `level`, empty when absent; refused when present
+/// as anything but a list.
+fn a_graph_collection_of<'level>(
+    level: &'level Map<String, Value>,
+    collection: &str,
+) -> Result<&'level [Value], String> {
+    match level.get(collection) {
+        None => Ok(&[]),
+        Some(Value::Array(items)) => Ok(items),
+        Some(_) => Err(format!("a graph document's `{collection}` is a JSON list")),
+    }
 }
 
 fn push_the_config_of_each_node_at_every_level<'fragment>(
@@ -734,6 +1205,36 @@ fn collect_asset_references(value: &Value, referenced: &mut Vec<Uuid>) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_asset_reference_nested_in_another_is_made_a_dependency_reference_too() {
+        let project = Uuid::new_v4();
+        let outer = Uuid::new_v4().to_string();
+        let inner = Uuid::new_v4().to_string();
+        let mut config = serde_json::json!({ "asset": outer, "lut": { "asset": inner } });
+
+        asset_references_made_references_into_the_dependency(&mut config, project);
+
+        assert_eq!(
+            config,
+            serde_json::json!({
+                "asset": outer, "from": project.to_string(),
+                "lut": { "asset": inner, "from": project.to_string() },
+            })
+        );
+    }
+
+    #[test]
+    fn a_graph_document_whose_nodes_or_links_are_no_list_is_refused_as_a_fragment_run() {
+        for collection in ["nodes", "links"] {
+            let refusal =
+                a_graph_document_as_a_fragment_run(&serde_json::json!({ collection: "invalid" }))
+                    .unwrap_err();
+
+            assert!(refusal.contains(collection), "{refusal}");
+        }
+    }
+
     use serde_json::json;
 
     use super::*;
@@ -1080,7 +1581,7 @@ mod tests {
             serde_json::from_value::<StreamGraphOperation>(recorded)
                 .unwrap()
                 .node(),
-            node.id
+            Some(node.id)
         );
     }
 
@@ -1111,5 +1612,198 @@ mod tests {
             fragment_nodes[0].graph_generators_a_refresh_runs(),
             ["generators.looks:look", "generators.soft:soft"]
         );
+    }
+
+    fn a_group_titled(title: &str) -> StreamGraphDocumentGroup {
+        StreamGraphDocumentGroup {
+            id: Uuid::new_v4(),
+            fields: StreamGraphGroupFields {
+                title: title.to_owned(),
+                description: "what these nodes do".to_owned(),
+                colour: "#3b82f6".to_owned(),
+            },
+        }
+    }
+
+    fn a_document_holding(nodes: &[&StreamGraphDocumentNode]) -> StreamGraphDocument {
+        let mut document = an_empty_document();
+        for node in nodes {
+            document
+                .apply(&StreamGraphOperation::AddNode {
+                    node: (*node).clone(),
+                    links: Vec::new(),
+                })
+                .unwrap();
+        }
+        document
+    }
+
+    #[test]
+    fn a_group_operation_and_its_inverse_leave_the_document_as_it_was() {
+        let source = a_node("source");
+        let sink = a_node("sink");
+        let mut document = a_document_holding(&[&source, &sink]);
+        document
+            .apply(&StreamGraphOperation::SetStudioFields {
+                node: sink.id,
+                from: Map::new(),
+                to: json!({"position": [10, 20]}).as_object().unwrap().clone(),
+            })
+            .unwrap();
+        let sources = a_group_titled("sources");
+        let operations = [
+            StreamGraphOperation::AddGroup {
+                group: sources.clone(),
+                nodes: vec![source.id, sink.id],
+            },
+            StreamGraphOperation::SetGroupFields {
+                group: sources.id,
+                from: sources.fields.clone(),
+                to: StreamGraphGroupFields {
+                    title: "every source".to_owned(),
+                    description: String::new(),
+                    colour: "#22c55e".to_owned(),
+                },
+            },
+        ];
+        for operation in &operations {
+            let before = document.clone();
+            document.apply(operation).unwrap();
+            assert_ne!(document, before, "{operation:?} changed nothing");
+            let after = document.clone();
+            document.apply(&operation.inverse()).unwrap();
+            assert_eq!(
+                document.canonical_bytes().unwrap(),
+                before.canonical_bytes().unwrap(),
+                "{operation:?}"
+            );
+            document = after;
+        }
+
+        let removal = StreamGraphOperation::RemoveGroup {
+            group: document.group(sources.id).unwrap(),
+            nodes: document.nodes_of_the_group(sources.id),
+        };
+        let before = document.clone();
+        document.apply(&removal).unwrap();
+        assert!(document.groups().unwrap().is_empty());
+        assert!(document.nodes_of_the_group(sources.id).is_empty());
+        assert_eq!(
+            document.node(sink.id).unwrap().studio,
+            json!({"position": [10, 20]}).as_object().unwrap().clone()
+        );
+        assert_eq!(document.node(source.id).unwrap().studio, Map::new());
+        document.apply(&removal.inverse()).unwrap();
+        assert_eq!(
+            document.canonical_bytes().unwrap(),
+            before.canonical_bytes().unwrap()
+        );
+        assert_eq!(
+            document.nodes_of_the_group(sources.id),
+            vec![source.id, sink.id]
+        );
+    }
+
+    #[test]
+    fn a_node_of_one_group_is_refused_by_another_naming_the_group_it_belongs_to() {
+        let source = a_node("source");
+        let mut document = a_document_holding(&[&source]);
+        let sources = a_group_titled("sources");
+        document
+            .apply(&StreamGraphOperation::AddGroup {
+                group: sources.clone(),
+                nodes: vec![source.id],
+            })
+            .unwrap();
+        let before = document.clone();
+
+        let refusal = document
+            .apply(&StreamGraphOperation::AddGroup {
+                group: a_group_titled("inputs"),
+                nodes: vec![source.id],
+            })
+            .unwrap_err();
+
+        assert!(refusal.contains(&sources.id.to_string()), "{refusal}");
+        assert!(refusal.contains("`sources`"), "{refusal}");
+        assert_eq!(document, before);
+    }
+
+    #[test]
+    fn a_studio_group_naming_no_group_reads_as_no_member_of_any() {
+        let document = StreamGraphDocument::from_value(json!({
+            "nodes": [{ "id": Uuid::new_v4(), "name": "camera", "type": "nodes.camera:Camera",
+                        "studio": { "group": "sources" } }],
+        }))
+        .unwrap();
+        let group = a_group_titled("sources");
+
+        assert!(document.groups().unwrap().is_empty());
+        assert!(document.nodes_of_the_group(group.id).is_empty());
+        assert!(
+            document
+                .group(group.id)
+                .unwrap_err()
+                .contains("no group at all")
+        );
+    }
+
+    #[test]
+    fn a_generators_group_takes_a_uuid_kept_by_its_title_and_marks_each_node_it_names() {
+        let a_run_grouping = |title: &str| {
+            json!({
+                "nodes": [
+                    {"name": "blur", "type": "nodes.blur:Blur", "config": {}},
+                    {"name": "tint", "type": "nodes.tint:Tint", "config": {}},
+                ],
+                "links": [],
+                "groups": [{"title": title, "colour": "#f97316", "nodes": ["blur", "tint"]}],
+            })
+        };
+        let first_run = fragment_with_each_node_uuid_kept_by_its_name(
+            &a_run_grouping("soften"),
+            None,
+            &mut Uuid::new_v4,
+        )
+        .unwrap();
+        let group_uuid = first_run["groups"][0]["id"].clone();
+
+        assert_eq!(
+            first_run["groups"],
+            json!([{"id": group_uuid, "title": "soften", "colour": "#f97316"}])
+        );
+        for node in first_run["nodes"].as_array().unwrap() {
+            assert_eq!(node["studio"]["group"], group_uuid);
+        }
+        let rerun = fragment_with_each_node_uuid_kept_by_its_name(
+            &a_run_grouping("soften"),
+            Some(&first_run),
+            &mut Uuid::new_v4,
+        )
+        .unwrap();
+        assert_eq!(rerun, first_run);
+        let retitled = fragment_with_each_node_uuid_kept_by_its_name(
+            &a_run_grouping("blur then tint"),
+            Some(&first_run),
+            &mut Uuid::new_v4,
+        )
+        .unwrap();
+        assert_ne!(retitled["groups"][0]["id"], group_uuid);
+    }
+
+    #[test]
+    fn a_generators_group_naming_a_node_the_fragment_does_not_hold_is_refused_naming_both() {
+        let refusal = fragment_with_each_node_uuid_kept_by_its_name(
+            &json!({
+                "nodes": [{"name": "blur", "type": "nodes.blur:Blur"}],
+                "groups": [{"title": "soften", "nodes": ["glow"]}],
+            }),
+            None,
+            &mut Uuid::new_v4,
+        )
+        .unwrap_err();
+
+        assert!(refusal.contains("`soften`"), "{refusal}");
+        assert!(refusal.contains("`glow`"), "{refusal}");
     }
 }

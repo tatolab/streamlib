@@ -638,12 +638,18 @@ def _wiring_of_one_link_end(direction: str, port_name: str, link_id: str) -> "di
 
 @pytest.mark.parametrize(
     ("function_node", "is_compiled"),
-    [(gate_each_message, True), (hand_each_message_on_once_it_has_built_an_object, False)],
+    [
+        (gate_each_message, True),
+        (hand_each_message_on_once_it_has_built_an_object, False),
+        ("RustGate", True),
+    ],
 )
 def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
     function_node: Any, is_compiled: bool
 ):
-    import_path = f"{__name__}:{function_node.__name__}"
+    if function_node == "RustGate":
+        function_node = RustGate
+    import_path = f"{__name__}:{getattr(function_node, '__name__', 'RustGate')}"
     assert (
         isinstance(
             prepare_function_node_to_evaluate(function_node, import_path),
@@ -662,18 +668,18 @@ def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
     runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
     destination = _engine.open_node_link_data_access_for_helper_process()
     processor_interpreter_bootstrap.wire_link_data_access(
-        destination, {"inputs": [_wiring_of_one_link_end("input", "read", "L-out-of-the-gate")]}
+        destination, {"inputs": [_wiring_of_one_link_end("input", "read", f"L-out-of-{import_path}")]}
     )
     processor_interpreter_bootstrap.wire_link_data_access(
         data_plane,
         {
-            "inputs": [_wiring_of_one_link_end("input", "value", "L-into-the-gate")],
-            "outputs": [_wiring_of_one_link_end("output", "result", "L-out-of-the-gate")],
+            "inputs": [_wiring_of_one_link_end("input", "value", f"L-into-{import_path}")],
+            "outputs": [_wiring_of_one_link_end("output", "result", f"L-out-of-{import_path}")],
         },
     )
     source = _engine.open_node_link_data_access_for_helper_process()
     processor_interpreter_bootstrap.wire_link_data_access(
-        source, {"outputs": [_wiring_of_one_link_end("output", "frames", "L-into-the-gate")]}
+        source, {"outputs": [_wiring_of_one_link_end("output", "frames", f"L-into-{import_path}")]}
     )
     ctx = _ContextOfOneProcess()
 
@@ -996,6 +1002,111 @@ def test_an_island_mixing_a_compiled_python_and_a_rust_function_node_feeds_its_p
         "`tally` hands the Rust node 3, which it weights by its config's 4 and moves by its "
         "`bias` pin's 0.25"
     )
+
+
+@_EVALUATE_ENTRY_TYPE
+def _rust_gate_evaluate_entry(
+    input_values: Any, config_values: Any, state_values: Any, output_values: Any, now_ns: int
+) -> int:
+    is_open = input_values[1] != 0.0
+    output_values[0] = input_values[0] if is_open else 0.0
+    output_values[1] = 1.0 if is_open else 0.0
+    return 0
+
+
+RustGate = node.rust_function(
+    a_rust_function_node_declaration(
+        short_name="RustGate",
+        description="`value` handed on unread while `open`, and nothing while closed.",
+        input_pins=[
+            {"port": "value", "value_type": "unread_message", "pin_default": None, "takes_none": False},
+            {"port": "open", "value_type": "bool", "pin_default": 1.0, "takes_none": False},
+        ],
+        output_ports=[{"name": "result", "value_type": "unread_message", "may_hand_out_nothing": True}],
+        config_fields=[],
+        state_fields=[],
+        state_parameter=None,
+        config_parameter=None,
+        evaluate_entry_address=ctypes.cast(_rust_gate_evaluate_entry, ctypes.c_void_p).value,
+    )
+)
+
+
+@node.function
+def python_gate(value: UnreadMessage, open: bool = True) -> "UnreadMessage | None":
+    return value if open else None
+
+
+def test_a_rust_gate_carries_its_message_and_its_handed_out_flag_as_a_compiled_python_gate_does():
+    rust_compiled = compiled(RustGate)
+    python_compiled = compiled(python_gate)
+    assert rust_compiled.input_value_types == python_compiled.input_value_types == (
+        "unread_message",
+        "bool",
+    )
+    assert rust_compiled.how_its_values_are_carried == python_compiled.how_its_values_are_carried
+    assert rust_compiled.how_its_values_are_carried == {
+        "inputs_that_take_none": [],
+        "inputs_carrying_an_unread_message": [0],
+        "outputs_carrying_an_unread_message": [0],
+        "outputs_that_may_hand_out_nothing": [0],
+    }
+
+
+@_EVALUATE_ENTRY_TYPE
+def _rust_reciprocal_evaluate_entry(
+    input_values: Any, config_values: Any, state_values: Any, output_values: Any, now_ns: int
+) -> int:
+    hands_one_out = input_values[0] != 0.0
+    output_values[0] = 1.0 / input_values[0] if hands_one_out else 0.0
+    output_values[1] = 1.0 if hands_one_out else 0.0
+    return 0
+
+
+RustReciprocal = node.rust_function(
+    a_rust_function_node_declaration(
+        short_name="RustReciprocal",
+        description="The reciprocal of `x`, or nothing at zero.",
+        input_pins=[{"port": "x", "value_type": "float", "pin_default": 0.0, "takes_none": False}],
+        output_ports=[{"name": "result", "value_type": "float", "may_hand_out_nothing": True}],
+        config_fields=[],
+        state_fields=[],
+        state_parameter=None,
+        config_parameter=None,
+        evaluate_entry_address=ctypes.cast(_rust_reciprocal_evaluate_entry, ctypes.c_void_p).value,
+    )
+)
+
+
+@pytest.mark.parametrize(("x", "read"), [(4.0, 0.25), (0.0, None)])
+def test_an_island_output_a_rust_node_hands_out_nothing_on_reads_nothing(x: float, read: Any):
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["reciprocal"], [])
+    island = {
+        "input_port": "reciprocal",
+        "link_id": f"L-rust-reciprocal-of-{x}",
+        "output": {"node": "reciprocal-1", "port": "result"},
+        "nodes": [
+            {
+                "node": "reciprocal-1",
+                "breadcrumb_number": 0,
+                "import_path": f"{__name__}:RustReciprocal",
+                "config": None,
+                "links_into": [],
+                "pins": {"x": x},
+            },
+        ],
+    }
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], {f"{__name__}:RustReciprocal": RustReciprocal}.__getitem__
+    )
+
+    payload = data_plane.read_from_input_port("reciprocal")
+    if read is None:
+        assert payload is None, "an output that hands out nothing yields no message"
+    else:
+        assert payload is not None
+        assert struct.unpack("<d", bytes(payload)) == (pytest.approx(read),)
 
 
 @node.function

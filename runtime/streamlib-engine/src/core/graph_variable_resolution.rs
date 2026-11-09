@@ -16,6 +16,9 @@ use streamlib_processor_schema::{NODE_REFERENCE_NODE_KEY, node_name_a_config_val
 
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
+use crate::core::graph_fragment_flattening::{
+    GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
+};
 use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::json_schema::{
     GraphResponse, LinkOutput, LinkPortRefOutput, PortInfoOutput, PortKindOutput,
@@ -320,11 +323,16 @@ struct OneSetter<'graph> {
 
 impl GraphSnapshot {
     /// Resolve this graph's variables, refusing by name a get with no setter,
-    /// two setters of one name, a setter holding both a port's output and a
-    /// node reference or neither, and a get read as the kind of value its
-    /// variable does not hold. A graph with no variable node resolves to
-    /// itself.
-    pub fn with_graph_variables_resolved(&self) -> Result<GraphSnapshotWithVariablesResolved> {
+    /// two setters of one name on one level, a setter holding both a port's
+    /// output and a node reference or neither, and a get read as the kind of
+    /// value its variable does not hold. A variable is set on the level of its
+    /// setter, the stream or one of `fragments_flattened`, and a get reads the
+    /// setter on its own level or else the nearest enclosing one. A graph with
+    /// no variable node resolves to itself.
+    pub fn with_graph_variables_resolved(
+        &self,
+        fragments_flattened: &GraphFragmentsAsDrawn,
+    ) -> Result<GraphSnapshotWithVariablesResolved> {
         let variable_nodes: Vec<&GraphSnapshotNode> = self
             .nodes
             .iter()
@@ -359,8 +367,10 @@ impl GraphSnapshot {
             .iter()
             .map(|node| cast_of(&node.name))
             .collect::<Result<_>>()?;
+        let levels = GraphLevelsOfFlattenedFragments::of(fragments_flattened);
         let mut variable_of_each_get_by_cast: HashMap<String, String> = HashMap::new();
-        let mut setters_by_variable: HashMap<String, OneSetter<'_>> = HashMap::new();
+        let mut setters_by_level_and_variable: HashMap<(String, String), OneSetter<'_>> =
+            HashMap::new();
         for node in &variable_nodes {
             let variable = variable_a_node_names(node)?;
             if node.processor_type.as_str() == GET_VARIABLE_NODE_TYPE {
@@ -375,23 +385,47 @@ impl GraphSnapshot {
                 node,
                 holds: value_one_setter_holds(self, node, &variable, &is_a_get, &is_a_set)?,
             };
-            if let Some(first) = setters_by_variable.insert(variable.clone(), setter) {
+            if let Some(first) = setters_by_level_and_variable.insert(
+                (levels.level_of(&node.name).to_string(), variable.clone()),
+                setter,
+            ) {
                 return Err(Error::GraphError(format!(
                     "the variable `{variable}` is set by both `{}` and `{}`, and a variable \
-                     has one setter. Rename one of the variables, or remove one setter",
+                     has one setter on its level. Rename one of the variables, or remove one \
+                     setter",
                     first.node.name, node.name
                 )));
             }
         }
 
         let setter_of = |get_node: &str, variable: &str| -> Result<&OneSetter<'_>> {
-            setters_by_variable.get(variable).ok_or_else(|| {
-                Error::GraphError(format!(
-                    "`GetVariable` node `{get_node}` reads the variable `{variable}`, which no \
-                     `SetVariable` sets. The graph sets: {}",
-                    names_listed_for_a_refusal(sorted(setters_by_variable.keys()), "no variable")
-                ))
-            })
+            let mut level = levels.level_of(get_node);
+            let mut variables_the_get_can_read = Vec::new();
+            loop {
+                if let Some(setter) =
+                    setters_by_level_and_variable.get(&(level.to_string(), variable.to_string()))
+                {
+                    return Ok(setter);
+                }
+                variables_the_get_can_read.extend(
+                    setters_by_level_and_variable
+                        .keys()
+                        .filter(|(setter_level, _)| setter_level == level)
+                        .map(|(_, set_variable)| set_variable.clone()),
+                );
+                if level.is_empty() {
+                    break;
+                }
+                level = levels.level_of(level);
+            }
+            Err(Error::GraphError(format!(
+                "`GetVariable` node `{get_node}` reads the variable `{variable}`, which no \
+                 `SetVariable` on its level or an enclosing one sets. It can read: {}",
+                names_listed_for_a_refusal(
+                    sorted(variables_the_get_can_read.iter()),
+                    "no variable"
+                )
+            )))
         };
 
         for get_node in variable_nodes
@@ -517,7 +551,7 @@ impl GraphSnapshot {
         }
 
         let mut values_the_set_variables_hold: Vec<SetVariableAndTheValueItHolds> =
-            setters_by_variable
+            setters_by_level_and_variable
                 .values()
                 .map(|setter| SetVariableAndTheValueItHolds {
                     set_variable_node: setter.node.name.clone(),
@@ -535,6 +569,8 @@ impl GraphSnapshot {
                 clock: self.clock,
                 nodes: runtime_nodes,
                 links: runtime_links,
+                groups: self.groups.clone(),
+                forked_from: self.forked_from.clone(),
             },
             variables_as_drawn: GraphVariablesAsDrawn {
                 variable_node_positions: self
@@ -735,7 +771,46 @@ fn cast_of(name: &str) -> Result<String> {
 fn sorted<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut names: Vec<String> = names.cloned().collect();
     names.sort();
+    names.dedup();
     names
+}
+
+/// The levels a flattened graph's nodes run on: the stream's own, named `""`, and each
+/// fragment's, named by its path of names.
+struct GraphLevelsOfFlattenedFragments {
+    fragment_paths_of_names: HashSet<String>,
+}
+
+impl GraphLevelsOfFlattenedFragments {
+    fn of(fragments_flattened: &GraphFragmentsAsDrawn) -> Self {
+        let mut fragment_paths_of_names = HashSet::new();
+        let mut fragments_to_visit: Vec<_> = fragments_flattened.fragments.iter().collect();
+        while let Some(fragment) = fragments_to_visit.pop() {
+            fragment_paths_of_names.insert(fragment.path_of_names.clone());
+            fragments_to_visit.extend(&fragment.fragments_it_holds);
+        }
+        Self {
+            fragment_paths_of_names,
+        }
+    }
+
+    /// The level `node_name` runs on: the innermost fragment whose path of names prefixes
+    /// it, or the stream's own. Asked of a level, it answers the level enclosing it.
+    fn level_of<'name>(&self, node_name: &'name str) -> &'name str {
+        let mut prefix_end = node_name.len();
+        while let Some(separator) =
+            node_name[..prefix_end].rfind(GRAPH_FRAGMENT_NODE_PATH_SEPARATOR)
+        {
+            if self
+                .fragment_paths_of_names
+                .contains(&node_name[..separator])
+            {
+                return &node_name[..separator];
+            }
+            prefix_end = separator;
+        }
+        ""
+    }
 }
 
 #[cfg(test)]
@@ -745,7 +820,7 @@ mod tests {
     fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
         GraphSnapshot::from_graph_document(graph)
             .expect("the graph parses")
-            .with_graph_variables_resolved()
+            .with_graph_variables_resolved(&GraphFragmentsAsDrawn::default())
     }
 
     fn refusal_of(graph: serde_json::Value) -> String {
@@ -833,9 +908,223 @@ mod tests {
         assert!(
             refusal.contains(
                 "`GetVariable` node `get-camera-2` reads the variable `microphone`, which no \
-                 `SetVariable` sets. The graph sets: camera"
+                 `SetVariable` on its level or an enclosing one sets. It can read: camera"
             ),
             "{refusal}"
+        );
+    }
+
+    fn resolved_once_flattened(
+        graph: serde_json::Value,
+    ) -> Result<GraphSnapshotWithVariablesResolved> {
+        let flattening = GraphSnapshot::from_graph_document(graph)
+            .expect("the graph parses")
+            .with_graph_fragments_flattened(
+                &crate::core::processors::NodeTypesOneStreamResolves::new(),
+            )
+            .expect("the fragments flatten");
+        flattening
+            .graph_the_runtime_runs
+            .with_graph_variables_resolved(&flattening.fragments_as_drawn)
+    }
+
+    fn a_fragment_whose_tint_reads_the_variable_shade(
+        nodes_beside_the_tint: serde_json::Value,
+        links_beside_the_tints: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut nodes = vec![
+            serde_json::json!({"name": "source", "type": "tatolab.stream:GraphInput",
+                               "config": {"port": "video", "family": "image"}}),
+            serde_json::json!({"name": "get-shade", "type": "tatolab.stream:GetVariable",
+                               "config": {"variable": "shade"}}),
+            serde_json::json!({"name": "tint", "type": "rig:Tint"}),
+            serde_json::json!({"name": "out", "type": "tatolab.stream:GraphOutput",
+                               "config": {"port": "video", "family": "image"}}),
+        ];
+        nodes.extend(nodes_beside_the_tint.as_array().unwrap().iter().cloned());
+        let mut links = vec![
+            serde_json::json!({"source": {"node": "source", "port": "value"},
+                               "target": {"node": "tint", "port": "video_in"}}),
+            serde_json::json!({"source": {"node": "get-shade", "port": "value"},
+                               "target": {"node": "tint", "port": "shade_in"}}),
+            serde_json::json!({"source": {"node": "tint", "port": "video"},
+                               "target": {"node": "out", "port": "value"}}),
+        ];
+        links.extend(links_beside_the_tints.as_array().unwrap().iter().cloned());
+        serde_json::json!({"nodes": nodes, "links": links})
+    }
+
+    fn a_shade_set_inside() -> serde_json::Value {
+        a_fragment_whose_tint_reads_the_variable_shade(
+            serde_json::json!([
+                {"name": "palette", "type": "rig:Palette"},
+                {"name": "set-shade", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "shade"}},
+            ]),
+            serde_json::json!([
+                {"source": {"node": "palette", "port": "colour"},
+                 "target": {"node": "set-shade", "port": "value"}},
+            ]),
+        )
+    }
+
+    fn a_camera_through(
+        fragments: &[(&str, serde_json::Value)],
+        top_level_nodes: serde_json::Value,
+        top_level_links: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut nodes = vec![serde_json::json!({"name": "camera", "type": "rig:Camera"})];
+        let mut links = Vec::new();
+        let mut previous = ("camera", "video");
+        for (fragment_name, fragment) in fragments {
+            nodes.push(
+                serde_json::json!({"name": fragment_name, "type": "looks.generators:look",
+                                          "fragment": fragment}),
+            );
+            links.push(
+                serde_json::json!({"source": {"node": previous.0, "port": previous.1},
+                                          "target": {"node": fragment_name, "port": "video"}}),
+            );
+            previous = (fragment_name, "video");
+        }
+        nodes.push(serde_json::json!({"name": "display", "type": "rig:Display"}));
+        links.push(
+            serde_json::json!({"source": {"node": previous.0, "port": previous.1},
+                                      "target": {"node": "display", "port": "video_in"}}),
+        );
+        nodes.extend(top_level_nodes.as_array().unwrap().iter().cloned());
+        links.extend(top_level_links.as_array().unwrap().iter().cloned());
+        serde_json::json!({"nodes": nodes, "links": links})
+    }
+
+    #[test]
+    fn a_fragment_placed_twice_reads_each_placements_own_variable() {
+        let resolution = resolved_once_flattened(a_camera_through(
+            &[
+                ("warm", a_shade_set_inside()),
+                ("cool", a_shade_set_inside()),
+            ],
+            serde_json::json!([]),
+            serde_json::json!([]),
+        ))
+        .expect("each placement sets its own `shade`");
+        let links = &resolution.graph_the_runtime_runs.links;
+        assert!(links.contains(&link(("warm/palette", "colour"), ("warm/tint", "shade_in"))));
+        assert!(links.contains(&link(("cool/palette", "colour"), ("cool/tint", "shade_in"))));
+    }
+
+    #[test]
+    fn a_get_inside_a_fragment_with_no_setter_on_its_level_reads_the_enclosing_one() {
+        let resolution = resolved_once_flattened(a_camera_through(
+            &[(
+                "look",
+                a_fragment_whose_tint_reads_the_variable_shade(
+                    serde_json::json!([]),
+                    serde_json::json!([]),
+                ),
+            )],
+            serde_json::json!([
+                {"name": "palette", "type": "rig:Palette"},
+                {"name": "set-shade", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "shade"}},
+            ]),
+            serde_json::json!([
+                {"source": {"node": "palette", "port": "colour"},
+                 "target": {"node": "set-shade", "port": "value"}},
+            ]),
+        ))
+        .expect("the get reads the stream's `shade`");
+        assert!(
+            resolution
+                .graph_the_runtime_runs
+                .links
+                .contains(&link(("palette", "colour"), ("look/tint", "shade_in")))
+        );
+    }
+
+    #[test]
+    fn a_setter_inside_a_fragment_shadows_the_enclosing_one_for_its_own_level_only() {
+        let resolution = resolved_once_flattened(a_camera_through(
+            &[("look", a_shade_set_inside())],
+            serde_json::json!([
+                {"name": "grey", "type": "rig:Palette"},
+                {"name": "set-shade", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "shade"}},
+                {"name": "get-shade", "type": "tatolab.stream:GetVariable",
+                 "config": {"variable": "shade"}},
+                {"name": "swatch", "type": "rig:Display"},
+            ]),
+            serde_json::json!([
+                {"source": {"node": "grey", "port": "colour"},
+                 "target": {"node": "set-shade", "port": "value"}},
+                {"source": {"node": "get-shade", "port": "value"},
+                 "target": {"node": "swatch", "port": "video_in"}},
+            ]),
+        ))
+        .expect("one `shade` per level");
+        let links = &resolution.graph_the_runtime_runs.links;
+        assert!(links.contains(&link(("look/palette", "colour"), ("look/tint", "shade_in"))));
+        assert!(links.contains(&link(("grey", "colour"), ("swatch", "video_in"))));
+    }
+
+    #[test]
+    fn a_get_outside_a_fragment_never_reads_a_variable_set_inside_it() {
+        let refusal = resolved_once_flattened(a_camera_through(
+            &[("look", a_shade_set_inside())],
+            serde_json::json!([
+                {"name": "get-shade", "type": "tatolab.stream:GetVariable",
+                 "config": {"variable": "shade"}},
+                {"name": "swatch", "type": "rig:Display"},
+            ]),
+            serde_json::json!([
+                {"source": {"node": "get-shade", "port": "value"},
+                 "target": {"node": "swatch", "port": "video_in"}},
+            ]),
+        ))
+        .expect_err("the stream sets no `shade`")
+        .to_string();
+        assert!(
+            refusal.contains(
+                "`GetVariable` node `get-shade` reads the variable `shade`, which no \
+                 `SetVariable` on its level or an enclosing one sets. It can read: no variable"
+            ),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_variable_set_inside_a_fragment_leaves_it_through_a_graph_output() {
+        let fragment_handing_out_its_shade = a_fragment_whose_tint_reads_the_variable_shade(
+            serde_json::json!([
+                {"name": "palette", "type": "rig:Palette"},
+                {"name": "set-shade", "type": "tatolab.stream:SetVariable",
+                 "config": {"variable": "shade"}},
+                {"name": "get-shade-out", "type": "tatolab.stream:GetVariable",
+                 "config": {"variable": "shade"}},
+                {"name": "shade-out", "type": "tatolab.stream:GraphOutput",
+                 "config": {"port": "shade", "family": "image"}},
+            ]),
+            serde_json::json!([
+                {"source": {"node": "palette", "port": "colour"},
+                 "target": {"node": "set-shade", "port": "value"}},
+                {"source": {"node": "get-shade-out", "port": "value"},
+                 "target": {"node": "shade-out", "port": "value"}},
+            ]),
+        );
+        let resolution = resolved_once_flattened(a_camera_through(
+            &[("look", fragment_handing_out_its_shade)],
+            serde_json::json!([{"name": "swatch", "type": "rig:Display"}]),
+            serde_json::json!([
+                {"source": {"node": "look", "port": "shade"},
+                 "target": {"node": "swatch", "port": "video_in"}},
+            ]),
+        ))
+        .expect("the stream reads the fragment's `shade` through its Output");
+        assert!(
+            resolution
+                .graph_the_runtime_runs
+                .links
+                .contains(&link(("look/palette", "colour"), ("swatch", "video_in")))
         );
     }
 
@@ -969,7 +1258,8 @@ mod tests {
             {"name": "get-camra", "type": "tatolab.stream:GetVariable", "config": {"variable": "camra"}}
         ));
         assert!(
-            refusal_of(graph).contains("reads the variable `camra`, which no `SetVariable` sets")
+            refusal_of(graph)
+                .contains("reads the variable `camra`, which no `SetVariable` on its level")
         );
     }
 
@@ -1069,6 +1359,8 @@ mod tests {
             )],
             references: Vec::new(),
             machine: "vm".to_string(),
+            groups: Vec::new(),
+            forked_from: None,
         };
         resolution
             .variables_as_drawn
@@ -1100,6 +1392,8 @@ mod tests {
             )],
             references: Vec::new(),
             machine: "vm".to_string(),
+            groups: Vec::new(),
+            forked_from: None,
         };
         resolution
             .variables_as_drawn

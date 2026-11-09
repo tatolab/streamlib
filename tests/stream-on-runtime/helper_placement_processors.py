@@ -672,10 +672,18 @@ class LendsTheLabelToItsNativeHalf:
 SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS = 0.02
 
 
+def _sleep_past_the_pools_frame_interval() -> None:
+    time.sleep(SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS)
+
+
 @node.function
 def SleepsPastThePoolsFrameInterval(level: float = 0.5) -> float:  # noqa: N802
-    """Gives `level` after a sleep longer than the pool's frame interval: a body that sleeps, which runs as Python."""
-    time.sleep(SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS)
+    """Gives `level` after a sleep longer than the pool's frame interval: a body calling a plain Python function, which runs as Python.
+
+    The sleep sits in a helper because a function node's body may not reach the
+    clock itself; the side-effect check reads only the body.
+    """
+    _sleep_past_the_pools_frame_interval()
     return level
 
 
@@ -685,13 +693,21 @@ CALLS_RETURNED_BEFORE_A_CALL_HANGS = 100
 _calls_of_hangs_after_its_first_calls_in_this_process = 0
 
 
-@node.function
-def HangsAfterItsFirstCalls(level: float = 0.25) -> float:  # noqa: N802
-    """Gives `level` for its first calls in a process, then never returns: a body counting in a module global, which runs as Python."""
+def _count_this_call_and_hang_once_this_process_has_returned_enough() -> None:
     global _calls_of_hangs_after_its_first_calls_in_this_process
     _calls_of_hangs_after_its_first_calls_in_this_process += 1
     while _calls_of_hangs_after_its_first_calls_in_this_process > CALLS_RETURNED_BEFORE_A_CALL_HANGS:
         time.sleep(1.0)
+
+
+@node.function
+def HangsAfterItsFirstCalls(level: float = 0.25) -> float:  # noqa: N802
+    """Gives `level` for its first calls in a process, then never returns: a body calling a plain Python function, which runs as Python.
+
+    The per-process count sits in a helper because a function node's body may
+    not write module state itself; the side-effect check reads only the body.
+    """
+    _count_this_call_and_hang_once_this_process_has_returned_enough()
     return level
 
 

@@ -1945,6 +1945,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   edge; gateway-nodes]
   Rejected: a connection carried as a Records value — a live session is not data, and each reader
   would open its own (owner, 2026-11-06).
+  Inside a fragment a variable is scoped by level: a setter sets its variable on its own level,
+  the stream's or a fragment's, and a get reads the setter on its level or else the nearest
+  enclosing one, so a fragment placed twice never collides with itself and anything inside a
+  fragment reads the stream's variables. A variable set inside a fragment leaves it only through
+  the fragment's interface — a `GetVariable` linked to a `GraphOutput`. Owner, 2026-11-09.
+  [#3347]
+  Rejected: one namespace for the whole stream, which refuses a fragment that sets a variable
+  placed twice; a fragment's variables private with outer reads only through promoted config
+  (owner, 2026-11-09).
 - **OPEN** — Whether a fragment may hold another fragment, a generator placing a generator,
   without bound, and how a generator that places itself is refused. Any `@graph_generator` may
   be placed. [stream-interface-and-routing-policy; project-and-assets; IN-FLIGHT → graph-groups-and-nested-fragments]

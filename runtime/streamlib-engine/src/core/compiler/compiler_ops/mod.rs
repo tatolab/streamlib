@@ -13,6 +13,7 @@ mod prepare_processor_op;
 pub(crate) mod processor_interpreter_describe;
 pub(crate) mod processor_interpreter_shutdown_ladder;
 pub(crate) mod processor_interpreter_spawn_host;
+pub(crate) mod project_node_types_listed_from_source;
 pub(crate) mod python_processor_declaration;
 mod spawn_processor_op;
 pub(crate) mod subprocess_bridge;
