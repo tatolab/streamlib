@@ -16,16 +16,22 @@ use crate::project_asset::{
     read_every_asset_sidecar,
 };
 use crate::project_content_store::{ProjectContentStore, content_sha256_of};
-use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
+use crate::project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjectFile};
 use crate::project_history_repository::{
-    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
+    PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRemote,
+    ProjectHistoryRepository,
 };
+
+/// Where each dependency's history is fetched to, relative to the project: one bare Git
+/// repository per depended-on project, named by its UUID.
+pub const PROJECT_DEPENDENCIES_DIRECTORY: &str = ".tatolab/dependencies";
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::project_stream_documents;
 use crate::project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
+    ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
+    StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -288,8 +294,15 @@ impl ProjectRepository {
         }
         let mut staged_assets = self.every_asset()?;
         let mut staged_documents: BTreeMap<Uuid, StreamGraphDocument> = BTreeMap::new();
+        let mut staged_project_file = self.project_file.clone();
         for operation in &operations {
             match operation {
+                ProjectOperation::Dependency(dependency_operation) => {
+                    apply_operation_to_dependencies(
+                        &mut staged_project_file,
+                        dependency_operation,
+                    )?;
+                }
                 ProjectOperation::Asset(asset_operation) => {
                     if let ProjectAssetOperation::DeleteAsset { asset } = asset_operation {
                         self.refuse_deleting_an_asset_a_graph_references(
@@ -369,6 +382,18 @@ impl ProjectRepository {
                 return Err(refusal);
             }
         };
+        let project_file_as_it_was = self.project_file.clone();
+        if staged_project_file != project_file_as_it_was {
+            let written = staged_project_file.canonical_bytes().and_then(|bytes| {
+                write_file_whole(&self.project_directory.join(PROJECT_FILE_NAME), &bytes)
+            });
+            if let Err(refusal) = written {
+                self.restore_written_documents(written_documents);
+                self.undo_performed_effects(performed_effects);
+                return Err(refusal);
+            }
+            self.project_file = staged_project_file;
+        }
         let committed = self
             .tracked_files(&staged_assets)
             .and_then(|tracked_files| {
@@ -381,6 +406,23 @@ impl ProjectRepository {
         let commit = match committed {
             Ok(commit) => commit,
             Err(refusal) => {
+                if self.project_file != project_file_as_it_was {
+                    if let Err(not_restored) =
+                        project_file_as_it_was.canonical_bytes().and_then(|bytes| {
+                            write_file_whole(
+                                &self.project_directory.join(PROJECT_FILE_NAME),
+                                &bytes,
+                            )
+                        })
+                    {
+                        tracing::error!(
+                            project = %self.project_directory.display(),
+                            %not_restored,
+                            "could not restore the project file after a refused commit"
+                        );
+                    }
+                    self.project_file = project_file_as_it_was;
+                }
                 self.restore_written_documents(written_documents);
                 self.undo_performed_effects(performed_effects);
                 return Err(refusal);
@@ -398,6 +440,141 @@ impl ProjectRepository {
             transaction,
             commit,
         })
+    }
+
+    /// Depend on the project `source` holds — a project directory or a Git remote's URL — pinned
+    /// to the commit `revision` names there, as one transaction by `author`: its history is
+    /// fetched into [`PROJECT_DEPENDENCIES_DIRECTORY`] and the pin recorded in the project file.
+    pub fn add_dependency(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        source: &str,
+        revision: &str,
+    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+        refuse_an_author_without_a_name(author)?;
+        let dependencies_directory = self.project_directory.join(PROJECT_DEPENDENCIES_DIRECTORY);
+        let fetching_directory =
+            dependencies_directory.join(format!(".fetching-{}", Uuid::new_v4()));
+        let fetched = (|| {
+            let fetching = ProjectHistoryRepository::open_or_create_at(&fetching_directory)?;
+            fetching.fetch_every_branch_and_tag_from(&the_remote_a_source_names(source))?;
+            let commit = fetching.commit_a_revision_names(revision)?;
+            let project_file_at_the_pin =
+                project_file_in(&fetching.files_at_commit(&commit)?, source)?;
+            apply_operation_to_dependencies(
+                &mut self.project_file.clone(),
+                &ProjectDependencyOperation::AddDependency {
+                    dependency: PinnedProjectDependency {
+                        project: project_file_at_the_pin.project,
+                        source: source.to_owned(),
+                        revision: commit.clone(),
+                    },
+                },
+            )?;
+            Ok::<_, ProjectRepositoryRefusal>((commit, project_file_at_the_pin))
+        })();
+        let (commit, project_file_at_the_pin) = match fetched {
+            Ok(fetched) => fetched,
+            Err(refusal) => {
+                let _ = std::fs::remove_dir_all(&fetching_directory);
+                return Err(refusal);
+            }
+        };
+        let dependency_history_directory =
+            dependencies_directory.join(project_file_at_the_pin.project.to_string());
+        let _ = std::fs::remove_dir_all(&dependency_history_directory);
+        std::fs::rename(&fetching_directory, &dependency_history_directory)?;
+        self.apply_project_operations(
+            author,
+            vec![ProjectOperation::Dependency(
+                ProjectDependencyOperation::AddDependency {
+                    dependency: PinnedProjectDependency {
+                        project: project_file_at_the_pin.project,
+                        source: source.to_owned(),
+                        revision: commit,
+                    },
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+    }
+
+    /// Fetch the dependency `project` from its source again and move its pin to the commit
+    /// `revision` names there, as one transaction by `author`.
+    pub fn update_dependency(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        project: Uuid,
+        revision: &str,
+    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+        refuse_an_author_without_a_name(author)?;
+        let pinned = self.dependency(project)?;
+        let history = self.dependency_history(project)?;
+        history.fetch_every_branch_and_tag_from(&the_remote_a_source_names(&pinned.source))?;
+        let commit = history.commit_a_revision_names(revision)?;
+        let project_file_at_the_pin =
+            project_file_in(&history.files_at_commit(&commit)?, &pinned.source)?;
+        if project_file_at_the_pin.project != project {
+            return Err(
+                ProjectRepositoryRefusal::DependencySourceHoldsAnotherProject {
+                    dependency_source: pinned.source,
+                    expected: project,
+                    held: project_file_at_the_pin.project,
+                },
+            );
+        }
+        self.apply_project_operations(
+            author,
+            vec![ProjectOperation::Dependency(
+                ProjectDependencyOperation::MoveDependencyPin {
+                    project,
+                    from: pinned.revision,
+                    to: commit,
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+    }
+
+    /// The dependency `project` as the project file pins it.
+    pub fn dependency(
+        &self,
+        project: Uuid,
+    ) -> Result<PinnedProjectDependency, ProjectRepositoryRefusal> {
+        self.project_file
+            .dependencies
+            .iter()
+            .find(|held| held.project == project)
+            .cloned()
+            .ok_or(ProjectRepositoryRefusal::NoSuchDependency(project))
+    }
+
+    /// Every file of the dependency `project` at the commit it is pinned to, by path; read from
+    /// its fetched history, with no network.
+    pub fn dependency_files_at_its_pin(
+        &self,
+        project: Uuid,
+    ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
+        let pinned = self.dependency(project)?;
+        self.dependency_history(project)?
+            .files_at_commit(&pinned.revision)
+    }
+
+    fn dependency_history(
+        &self,
+        project: Uuid,
+    ) -> Result<ProjectHistoryRepository, ProjectRepositoryRefusal> {
+        let history_directory = self
+            .project_directory
+            .join(PROJECT_DEPENDENCIES_DIRECTORY)
+            .join(project.to_string());
+        if !history_directory.exists() {
+            return Err(ProjectRepositoryRefusal::DependencyNotFetched {
+                project,
+                history_directory,
+            });
+        }
+        ProjectHistoryRepository::open_or_create_at(&history_directory)
     }
 
     /// The undo `author`'s latest transaction not yet undone asks for: its inverse.
@@ -1064,6 +1241,94 @@ fn value_references_the_asset(value: &Value, asset_text: &str) -> bool {
             .any(|item| value_references_the_asset(item, asset_text)),
         _ => false,
     }
+}
+
+/// The remote `source` names: a project directory's own history, or a Git remote's URL as
+/// written.
+fn the_remote_a_source_names(source: &str) -> ProjectHistoryRemote {
+    let source_path = Path::new(source);
+    let url = if source_path.join(PROJECT_FILE_NAME).is_file() {
+        source_path
+            .join(PROJECT_HISTORY_DIRECTORY)
+            .display()
+            .to_string()
+    } else {
+        source.to_owned()
+    };
+    ProjectHistoryRemote {
+        url,
+        bearer_token: None,
+    }
+}
+
+fn project_file_in(
+    files: &BTreeMap<String, Vec<u8>>,
+    source: &str,
+) -> Result<TatolabProjectFile, ProjectRepositoryRefusal> {
+    let bytes = files.get(PROJECT_FILE_NAME).ok_or_else(|| {
+        ProjectRepositoryRefusal::DependencySourceHoldsNoProject {
+            dependency_source: source.to_owned(),
+        }
+    })?;
+    serde_json::from_slice(bytes).map_err(|why| ProjectRepositoryRefusal::ProjectFileUnreadable {
+        path: PathBuf::from(source).join(PROJECT_FILE_NAME),
+        why: why.to_string(),
+    })
+}
+
+fn apply_operation_to_dependencies(
+    project_file: &mut TatolabProjectFile,
+    operation: &ProjectDependencyOperation,
+) -> Result<(), ProjectRepositoryRefusal> {
+    match operation {
+        ProjectDependencyOperation::AddDependency { dependency } => {
+            if dependency.project == project_file.project {
+                return Err(ProjectRepositoryRefusal::ProjectDependsOnItself(
+                    dependency.project,
+                ));
+            }
+            if project_file
+                .dependencies
+                .iter()
+                .any(|held| held.project == dependency.project)
+            {
+                return Err(ProjectRepositoryRefusal::DependencyAlreadyHeld(
+                    dependency.project,
+                ));
+            }
+            project_file.dependencies.push(dependency.clone());
+            project_file
+                .dependencies
+                .sort_by(|left, right| left.project.cmp(&right.project));
+        }
+        ProjectDependencyOperation::RemoveDependency { dependency } => {
+            let before = project_file.dependencies.len();
+            project_file
+                .dependencies
+                .retain(|held| held.project != dependency.project);
+            if project_file.dependencies.len() == before {
+                return Err(ProjectRepositoryRefusal::NoSuchDependency(
+                    dependency.project,
+                ));
+            }
+        }
+        ProjectDependencyOperation::MoveDependencyPin { project, from, to } => {
+            let held = project_file
+                .dependencies
+                .iter_mut()
+                .find(|held| held.project == *project)
+                .ok_or(ProjectRepositoryRefusal::NoSuchDependency(*project))?;
+            if held.revision != *from {
+                return Err(ProjectRepositoryRefusal::DependencyPinnedElsewhere {
+                    project: *project,
+                    pinned: held.revision.clone(),
+                    expected: from.clone(),
+                });
+            }
+            held.revision = to.clone();
+        }
+    }
+    Ok(())
 }
 
 fn write_file_whole(path: &Path, bytes: &[u8]) -> Result<(), ProjectRepositoryRefusal> {

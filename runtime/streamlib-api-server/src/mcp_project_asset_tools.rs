@@ -471,7 +471,8 @@ impl LocalApiMcpServerHandler {
                         ProjectAssetOperation::RelocateAsset { asset, .. }
                         | ProjectAssetOperation::SetAssetSettings { asset, .. },
                     )) => project_repository.asset(*asset)?,
-                    Some(ProjectOperation::StreamGraph(_)) | None => {
+                    Some(ProjectOperation::StreamGraph(_) | ProjectOperation::Dependency(_))
+                    | None => {
                         return Err(ProjectRepositoryRefusal::EmptyTransaction);
                     }
                 };

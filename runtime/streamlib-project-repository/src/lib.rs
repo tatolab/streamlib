@@ -48,9 +48,9 @@ pub use project_stream_document::{
 };
 pub use project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphOperationOnAStream,
+    ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
+    ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
 pub use stream_graph_document::{
     StreamGraphDocument, StreamGraphDocumentGroup, StreamGraphDocumentLink,
