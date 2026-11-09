@@ -17,6 +17,7 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, InputLinkPortRef, Link, LinkUniqueId, ProcessorNode,
     ProcessorUniqueId, ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland,
+    cast_exposed_name_to_url_safe,
 };
 
 /// The island a shader node evaluates, on the node whose Image leaves it.
@@ -85,16 +86,18 @@ pub(crate) fn is_fused_into_the_shader_node_island_of_another(
 }
 
 /// The input port of its island's host that input `port` of fused shader node
-/// `node_id` is read at.
+/// `node_id` is read at, spelled in the cast form every mailbox read casts a
+/// port name to.
 pub(crate) fn the_host_input_port_a_fused_shader_node_input_is_read_at(
     host_id: &ProcessorUniqueId,
     node_id: &ProcessorUniqueId,
     port: &str,
 ) -> InputLinkPortRef {
-    InputLinkPortRef::new(
-        host_id.clone(),
-        format!("shader_node_island_input_{node_id}_{port}"),
-    )
+    let port_name = format!("shader_node_island_input_{node_id}_{port}");
+    let port_name = cast_exposed_name_to_url_safe(&port_name)
+        .map(|cast_port_name| cast_port_name.into_owned())
+        .unwrap_or(port_name);
+    InputLinkPortRef::new(host_id.clone(), port_name)
 }
 
 /// Where a link from outside an island into one of its members is read: the
@@ -662,6 +665,19 @@ mod tests {
 
         refuse_a_live_edit_of_a_shader_node_island(&stream.graph, &[], &every_node, &stream.links)
             .unwrap();
+    }
+
+    #[test]
+    fn the_host_input_port_of_a_fused_input_is_already_in_cast_form() {
+        let port = the_host_input_port_a_fused_shader_node_input_is_read_at(
+            &ProcessorUniqueId::from("HostNodeId"),
+            &ProcessorUniqueId::from("Plh868rqg4MCMX"),
+            "image",
+        );
+        assert_eq!(
+            cast_exposed_name_to_url_safe(port.port_name()).unwrap(),
+            port.port_name()
+        );
     }
 
     #[test]
