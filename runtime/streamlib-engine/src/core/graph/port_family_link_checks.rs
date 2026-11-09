@@ -43,7 +43,7 @@ fn input_port_family<'node>(
 /// output linked into that input, followed upstream. Empty while no input it
 /// follows has a link yet, or the outputs it follows only loop back on
 /// themselves, so its family is not settled.
-fn the_outputs_a_link_carries_on<'graph>(
+pub(crate) fn the_outputs_a_link_carries_on<'graph>(
     graph: &'graph Graph,
     node: &'graph ProcessorNode,
     port_name: &'graph str,

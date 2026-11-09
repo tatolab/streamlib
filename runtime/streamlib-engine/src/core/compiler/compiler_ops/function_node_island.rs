@@ -24,9 +24,10 @@ use crate::core::graph::{
     GraphWeight, HowItsHelpersRanAFunctionNode, InputLinkPortRef, Link,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
     LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
+    the_outputs_a_link_carries_on,
 };
 use crate::core::processors::OutOfProcessLinkWireReply;
-use crate::iceoryx2::Iceoryx2Node;
+use crate::iceoryx2::{Iceoryx2Node, InboundLinkName};
 
 use super::function_node_pool::is_the_function_node_pool_type;
 use super::open_iceoryx2_service_op::{
@@ -432,11 +433,61 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
                 .map(|how_it_ran| (function_node_id.to_string(), how_it_ran))
         }),
     );
+    record_the_stream_facts_an_island_link_carries_on(graph, link_id)?;
     mark_an_island_link_by_whether_its_reader_owes_an_answer(
         graph,
         link_id,
         answer_awaited_from_the_reader,
     )
+}
+
+/// Record, at the reader of island link `link_id`, the output whose messages
+/// the island hands on unread through an output that follows an input, so the
+/// reader reaches that output's stream facts at its input port. A link whose
+/// island hands out values of its own, or carries on more than one output or
+/// only another function node's, records none.
+fn record_the_stream_facts_an_island_link_carries_on(
+    graph: &Graph,
+    link_id: &LinkUniqueId,
+) -> Result<()> {
+    let link = link_in(graph, link_id)?;
+    let reader_input_port = link.to_port().port_name();
+    let reader = graph
+        .traversal()
+        .v(link.to_port().processor_id())
+        .first()
+        .ok_or_else(|| Error::ProcessorNotFound(link.to_port().processor_id().to_string()))?;
+    let upstream_stream_facts_by_inbound_link = reader.upstream_stream_facts_by_inbound_link();
+    upstream_stream_facts_by_inbound_link.forget_inbound_link(link_id);
+    let island_output_node = graph
+        .traversal()
+        .v(link.source().processor_id())
+        .first()
+        .ok_or_else(|| Error::ProcessorNotFound(link.source().processor_id().to_string()))?;
+    let outputs_carried_on =
+        the_outputs_a_link_carries_on(graph, island_output_node, link.source().port_name());
+    let [(carried_on_node, carried_on_port, _)] = outputs_carried_on.as_slice() else {
+        return Ok(());
+    };
+    if is_a_function_node(graph, &carried_on_node.id) {
+        return Ok(());
+    }
+    let inbound_link_name =
+        crate::iceoryx2::source_channel_name(carried_on_node.id.as_str(), carried_on_port)
+            .map_err(|why| {
+                Error::Configuration(format!(
+                    "cannot derive the channel name of `{}.{carried_on_port}`: {why}",
+                    carried_on_node.id
+                ))
+            })?;
+    upstream_stream_facts_by_inbound_link.record_inbound_link(
+        reader_input_port,
+        link_id,
+        InboundLinkName::from(inbound_link_name.into_string().as_str()),
+        carried_on_port,
+        std::sync::Arc::clone(carried_on_node.stream_facts_of_output_ports()),
+    );
+    Ok(())
 }
 
 /// Hand each reader whose island a compile changed that island again, in
@@ -465,6 +516,7 @@ pub(crate) fn hand_each_reader_the_island_a_compile_changed(
         else {
             continue;
         };
+        record_the_stream_facts_an_island_link_carries_on(graph, &link_id)?;
         let island_as_it_is_now = the_island_feeding_a_link(graph, &link_id)?;
         if reader_link_wiring
             .the_function_node_island_recorded_for_a_link(link_id.as_str())
@@ -652,15 +704,15 @@ pub(crate) fn unwire_a_link_from_a_function_node_island_into_its_reader(
     for link_read_through_this_reader in links_only_the_unwired_island_read_through_this_reader {
         close_iceoryx2_service(graph, &link_read_through_this_reader)?;
     }
-    if let Some(reader_link_wiring) = graph
-        .traversal()
-        .v(&reader_id)
-        .first()
-        .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
-    {
-        reader_link_wiring
-            .0
-            .forget_a_function_node_island(link_id.as_str());
+    if let Some(reader) = graph.traversal().v(&reader_id).first() {
+        reader
+            .upstream_stream_facts_by_inbound_link()
+            .forget_inbound_link(link_id);
+        if let Some(reader_link_wiring) = reader.get::<OutOfProcessLinkWiringComponent>() {
+            reader_link_wiring
+                .0
+                .forget_a_function_node_island(link_id.as_str());
+        }
     }
     mark_a_link(graph, link_id, LinkState::Disconnected)
 }
@@ -2064,6 +2116,115 @@ pub(crate) mod tests {
         let into_the_island = link(graph, (&source, "out1"), (&remap, "x"));
         let into_the_reader = link(graph, (&remap, "result"), (&reader, "in1"));
         (remap, reader, into_the_island, into_the_reader)
+    }
+
+    /// The inbound link a reader's input port is asked about by `inbound_link`
+    /// answers when one is recorded there by that name, and is refused when
+    /// none is.
+    fn the_reader_input_port_records_an_inbound_link_named(
+        graph: &Graph,
+        reader: &ProcessorUniqueId,
+        input_port: &str,
+        inbound_link: &str,
+    ) -> bool {
+        graph
+            .traversal()
+            .v(reader)
+            .first()
+            .unwrap()
+            .upstream_stream_facts_by_inbound_link()
+            .stream_facts_of_inbound_link(input_port, Some(inbound_link))
+            .is_ok()
+    }
+
+    #[test]
+    fn a_reader_reaches_the_stream_facts_of_the_class_node_an_island_hands_on_unread() {
+        let mut gate = a_function_node_type("test_ops:gate", &["value"], &["result"]);
+        gate.outputs[0].family.family_follows_input_port = Some("value".into());
+        let mut graph = a_graph_resolving_these_function_node_types([
+            gate,
+            a_function_node_type("test_ops:remap", &["x"], &["result"]),
+        ]);
+        let source = add_a_node(
+            &mut graph,
+            crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path()
+                .as_str(),
+            JsonValue::Null,
+        );
+        graph
+            .traversal_mut()
+            .v(&source)
+            .first_mut()
+            .unwrap()
+            .insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(Arc::new(
+                OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                    ProcessExecution::Reactive,
+                ),
+            )));
+        let gate = add_a_node(&mut graph, "test_ops:gate", JsonValue::Null);
+        let reader = a_helper_reader_before_its_setup(&mut graph);
+        link(&mut graph, (&source, "out1"), (&gate, "value"));
+        let into_the_reader = link(&mut graph, (&gate, "result"), (&reader, "in1"));
+        let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+        let channel_of_the_class_node =
+            crate::iceoryx2::source_channel_name(source.as_str(), "out1")
+                .unwrap()
+                .into_string();
+
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &iceoryx2_node,
+        )
+        .unwrap();
+        assert!(
+            the_reader_input_port_records_an_inbound_link_named(
+                &graph,
+                &reader,
+                "in1",
+                &channel_of_the_class_node
+            ),
+            "the reader's input port reads the class node's output through the gate"
+        );
+
+        unwire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
+        assert!(
+            !the_reader_input_port_records_an_inbound_link_named(
+                &graph,
+                &reader,
+                "in1",
+                &channel_of_the_class_node
+            ),
+            "an unwired island link leaves no inbound link behind"
+        );
+    }
+
+    #[test]
+    fn an_island_handing_out_values_of_its_own_records_no_upstream_output_at_its_reader() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let (_remap, reader, into_the_island, into_the_reader) =
+            a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
+        let source = link_in(&graph, &into_the_island)
+            .unwrap()
+            .source()
+            .processor_id()
+            .clone();
+
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_reader,
+            &Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
+        assert!(!the_reader_input_port_records_an_inbound_link_named(
+            &graph,
+            &reader,
+            "in1",
+            &crate::iceoryx2::source_channel_name(source.as_str(), "out1")
+                .unwrap()
+                .into_string()
+        ));
     }
 
     #[test]

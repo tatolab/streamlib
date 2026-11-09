@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::ProcessorUniqueId;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
@@ -866,9 +867,32 @@ fn subscriber_ring_depth_of_input_port(
 /// channel's subscriber count is — the service is created with the first
 /// inbound link and a later one must fit a notifier slot that already exists.
 ///
-/// A destination past the cap is refused here by name.
+/// A destination past the cap is refused here by name. It holds a notifier
+/// for each link into it through a channel and each link into a function node
+/// of its islands whose channel it reads; a link from an island it evaluates
+/// holds none.
 fn destination_max_notifiers(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId) -> Result<usize> {
-    let inbound_links = graph.traversal_mut().v(dest_proc_id).in_e().iter().count();
+    let links_into_it_through_a_channel = graph
+        .traversal()
+        .v(dest_proc_id)
+        .in_e()
+        .iter()
+        .filter(|link| {
+            !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+        })
+        .count();
+    let links_read_through_it_into_its_islands = graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| {
+            link.get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+                .is_some_and(|read_through| {
+                    read_through.reader_input_port.processor_id() == dest_proc_id
+                })
+        })
+        .count();
+    let inbound_links = links_into_it_through_a_channel + links_read_through_it_into_its_islands;
     if inbound_links > MAX_INBOUND_LINKS_PER_DESTINATION {
         return Err(Error::Configuration(format!(
             "processor '{dest_proc_id}' would hold {inbound_links} inbound links, and a \
@@ -4861,6 +4885,85 @@ mod tests {
         assert!(
             refused.to_string().contains("at most"),
             "the refusal names the cap; got {refused}"
+        );
+    }
+
+    /// A graph resolving function node types, with a destination fed
+    /// `channel_links` links through channels.
+    fn a_destination_fed_through_channels(channel_links: usize) -> (Graph, ProcessorUniqueId) {
+        let mut graph =
+            super::super::function_node_island::tests::a_graph_resolving_three_function_node_types(
+            );
+        let dest_id = add_mock_input_only(&mut graph);
+        for _ in 0..channel_links {
+            let src_id = add_mock_output_only(&mut graph);
+            graph.traversal_mut().add_e(
+                OutputLinkPortRef::new(&src_id, "out1"),
+                InputLinkPortRef::new(&dest_id, "in1"),
+            );
+        }
+        (graph, dest_id.as_str().into())
+    }
+
+    #[test]
+    fn a_link_from_an_island_the_destination_evaluates_holds_no_notifier_of_its_cap() {
+        let (mut graph, dest_uid) =
+            a_destination_fed_through_channels(MAX_INBOUND_LINKS_PER_DESTINATION);
+        let lfo = super::super::function_node_island::tests::add_a_node(
+            &mut graph,
+            "test_ops:lfo",
+            serde_json::Value::Null,
+        );
+        graph.traversal_mut().add_e(
+            OutputLinkPortRef::new(&lfo, "result"),
+            InputLinkPortRef::new(&dest_uid, "in1"),
+        );
+        assert_eq!(
+            destination_max_notifiers(&mut graph, &dest_uid)
+                .expect("the island link is evaluated in the read and needs no notifier"),
+            MAX_INBOUND_LINKS_PER_DESTINATION,
+        );
+    }
+
+    #[test]
+    fn a_link_into_an_island_read_through_the_destination_holds_a_notifier_of_its_cap() {
+        let (mut graph, dest_uid) =
+            a_destination_fed_through_channels(MAX_INBOUND_LINKS_PER_DESTINATION);
+        let remap = super::super::function_node_island::tests::add_a_node(
+            &mut graph,
+            "test_ops:remap",
+            serde_json::Value::Null,
+        );
+        let class_node = add_mock_output_only(&mut graph);
+        let into_the_island = graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(&class_node, "out1"),
+                InputLinkPortRef::new(&remap, "x"),
+            )
+            .first()
+            .unwrap()
+            .id
+            .clone();
+        graph
+            .traversal_mut()
+            .e(&into_the_island)
+            .first_mut()
+            .unwrap()
+            .insert(LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
+                reader_input_port: InputLinkPortRef::new(
+                    &dest_uid,
+                    "function_node_island_input_into_the_island",
+                ),
+            });
+        let refused = destination_max_notifiers(&mut graph, &dest_uid)
+            .expect_err("the link read through the destination is one inbound link past the cap");
+        assert!(
+            refused.to_string().contains(&format!(
+                "{} inbound links",
+                MAX_INBOUND_LINKS_PER_DESTINATION + 1
+            )),
+            "got {refused}"
         );
     }
 
