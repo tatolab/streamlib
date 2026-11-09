@@ -1891,20 +1891,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   whole in the runtime's own words over the local API and MCP, written unless the caller marks a
   graph edit live, and the unit of undo and history. Each project's history is a Git repository
   the runtime writes with a Git engine it carries, never the person's own Git, kept on the machine as
-  the project's transaction log; no remote carries it, nothing pushes, fetches or clones it, and a
-  project works fully offline (owner, 2026-11-09). A project is self-contained: every file a load
-  reads sits inside its directory, and history records every one of them, asset bytes and imports
-  included, so a copied or zipped folder opens to the same state on any machine. An asset is the
-  one file at its visible path, which a node reads. Another project is used as a module: added, it
-  is copied once, whole, into `imports/<module>/`, its own imports nested inside it; an update
-  replaces the folder whole; nothing is copied out of it or moved inside it, and every reference
-  to its streams, assets and node code resolves into that folder at load. A stream used inside
-  another is a reference read at load, never a stored copy. Editing a module means opening it as
-  its own project (owner, 2026-11-09). Python stays the
+  the project's database of history and branches; no remote carries it, and a project works
+  fully offline (owner, 2026-11-09). Another project's asset is used as a linked dependency pinned to a
+  revision, updated when the person chooses and copied only when they fork it. A dependency's
+  assets travel with it: each fetch copies the bytes of its media, scene and data assets into the
+  depending project's content store from the source's own, so the project reads them at the pin
+  offline and a fork of one needs no second copy. Python stays the
   language of nodes: a `@graph_generator` function, replacing `@stream`, builds graph, and its
   output is stored as a frozen, read-only fragment, never one-to-one with a stream, and nothing writes a graph edit back into Python. Data on links and runtime
   state are never saved. Single player first; the cloud hub, branches, roles and releases build on
-  the same transactions and history. Owner, 2026-11-07 and 2026-11-08. [project-and-assets; amended by self-contained-project-imports, IN-FLIGHT: self-contained projects, modules copied into imports/, stream fragments as references, no fork, no Git transport]
+  the same transactions and history. Owner, 2026-11-07 and 2026-11-08. [project-and-assets; amended by self-contained-project-imports: a self-contained project whose history records every file, asset bytes and imports included, with no remote; a module copied once, whole, into imports/ and referenced there; a stream fragment as a reference read at load; no fork and no Git transport]
   Rejected: graph edits written back into `stream.py` through a concrete-syntax-tree rewrite — text
   becomes the meeting point of four writers, a stream with loops or helpers refuses edits, and
   studio data, undo and multi-user editing have no home (owner, 2026-11-07).
@@ -1913,10 +1909,6 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2026-11-09).
   Rejected: a project's history in the person's own Git — many creatives have none installed, and
   each project needs its own history (owner, 2026-11-08).
-  Rejected: a dependency as another project's Git history fetched and pinned at a commit, its asset
-  bytes copied in per commit, its streams pasted as stored copies kept in step by refreshes, and a
-  fork copying an asset out of it — copies drift and make a project's state differ per machine
-  (owner, 2026-11-09).
 - **DECIDED** — The runtime refuses by name what a graph holds that it does not understand,
   at load and before a frame flows. Every built-in's config takes
   `#[serde(deny_unknown_fields)]`, and the refusal names the node, its `type` and the setting;

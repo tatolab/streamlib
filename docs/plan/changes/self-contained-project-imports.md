@@ -8,7 +8,10 @@
 > multiplayer work." And: git is "a trackable store for transactions like a transaction log", no
 > remote; editing a module means opening it as its own project; `tatolab-ops` "is just another
 > module"; `.venv` "is a cache / generated artifact" rebuilt from the lock; generator output stays
-> stored. The audit behind this change is the doc "Module and git design audit" (2026-11-09).
+> stored. On sources: a project on GitHub's "only job is to copy the entire project into the
+> imports akin to npm install", and adding a module is "the same add dependency (which I guess
+> really is a copy project as dependency step)". The audit behind this change is the doc "Module
+> and git design audit" (2026-11-09).
 
 A pivot of project-and-assets' dependency, content and history clauses. The project core — the
 graph document, UUIDs, transactions, undo and redo, one local history per project — stays.
@@ -60,8 +63,10 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
   which the file itself answers. `import_asset` copies a source on the machine into place once; an
   upload a client streams lands in `.tatolab/uploads/`, a cache the import empties.
 - **History** (project-and-assets §ADDED, Decided 4, 6 and 8): every commit records every file
-  of the project outside `.tatolab/` and the caches (`.venv`, `__pycache__`, `node_modules`), so
-  asset bytes and `imports/` are in history and an undo of a delete brings the bytes back. Git is
+  of the project as Decided 8 states — every file outside a hidden folder (`.tatolab/` and `.git`
+  among them), `node_modules`, `__pycache__` and a Python virtual environment, and no symbolic
+  link — so asset bytes and `imports/` are in history and an undo of a delete brings the bytes
+  back. Git is
   the store engine only: one branch, `main`, no remote, no push, no fetch, no clone path.
 - **Linked dependencies → imports** (project-and-assets §ADDED, Decided 3):
   - `add_dependency {source}` copies the module once into `imports/<folder>/`, where `source` is
@@ -76,7 +81,9 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
   - A module's Python is the project's: its folder is a uv path dependency of the project
     (`[tool.uv.sources] <name> = { path = "imports/<folder>", editable = true }`), written by the
     runtime, so `uv sync` rebuilds `.venv` from the lock and the module's node code imports from
-    its folder (#3382 keys node types by module on top of this).
+    its folder (#3382 keys node types by module on top of this). An import whose requirements the
+    project's lock cannot resolve beside the rest is refused in uv's own words, since a project
+    has one interpreter.
 - **Stream fragments are references** (project-and-assets §Fragments, graph-groups-and-nested-
   fragments): a `tatolab.project:StreamFragment` node holds only `{"stream": {"asset", "from"?}}`.
   The load reads the held stream's graph document from this project or the module's import and
@@ -87,8 +94,9 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
 - **Asset references** (project-and-assets §The asset verbs): `{"asset", "from"}` resolves to the
   file at that asset's path in the module's import; a node opens it through
   `asset_content_path(asset, from_project)` as today.
-- **Editing a module** is opening `imports/<folder>/` or its source as its own project; the
-  runtime needs nothing new, and Tato Studio's window for it is app work.
+- **Editing a module** is opening its source folder as its own project, and the edit reaches
+  this project through `update_dependency`; the runtime needs nothing new, and Tato Studio's
+  window for it is app work.
 - **Tato Studio's "Get more"** adds a module or a Python requirement through the runtime's
   dependency verbs; the runtime is the only writer of `pyproject.toml`.
 
@@ -132,7 +140,7 @@ compiled shader).
 **Decided 2 — no fork.** Editing a module means opening it as its own project.
 
 **Decided 3 — no `package:` source and no Git remote.** A module arrives as a project, from a
-folder or a downloaded archive.
+folder or a downloaded archive, through the one `add_dependency`.
 
 **Decided 4 — imports and asset bytes are in history.** A project contains everything, so its
 history does too.
@@ -145,6 +153,17 @@ the lock.
 and regenerates derived outputs, as Unreal's compile does, is open for later.
 
 ## Assumptions to correct if wrong
+
+- **Editing a module in place.** A project open at another project's `imports/<folder>/` is not
+  the way to edit it: edits there would land in history the enclosing project never committed, so
+  undo and its change feed could not account for them. The module is edited at its source and
+  arrives by `update_dependency`.
+- **Offline first open.** Self-contained covers the project's own files and its imports; a
+  third-party wheel (numpy, torch) comes from uv's cache or the index when `.venv` is rebuilt, and
+  a sync that reaches neither fails the run in uv's words, as `.venv` is a cache.
+- **No transition for existing projects.** Pre-1.0, nothing carries a project from the content
+  store forward: after ticket 2 a node reads the visible file, and `.tatolab/content/` is left
+  unread.
 
 - **Where `tatolab-ops` is copied from.** The runtime unit carries its first-party modules as
   project folders, as it carries samples, and a new project's scaffold adds `tatolab-ops` from
@@ -159,12 +178,23 @@ and regenerates derived outputs, as Unreal's compile does, is open for later.
 1. **Rip out the Git transport and the fetched-history dependencies.** Every REMOVED bullet but
    the content store's, `add_dependency` / `update_dependency` / `remove_dependency` /
    `list_dependencies` over `imports/`, stream fragments resolved at load, the uv path
-   dependency, and the plan, decisions doc and glossary corrected. Proof: a project with a module
+   dependency, `LOCAL_API_MCP_SERVER_INSTRUCTIONS` and each dependency tool's description
+   rewritten to the import verbs, and the plan, decisions doc and glossary corrected. Proof: a project with a module
    zipped, unzipped elsewhere and loaded reads the module's stream, asset and node code.
 2. **One copy of each asset.** The content store goes; nodes read the visible file; history records
-   asset bytes; uploads land in `.tatolab/uploads/`. Proof: replacing a file in Finder is what a
+   asset bytes; uploads land in `.tatolab/uploads/`; `LOCAL_API_MCP_SERVER_INSTRUCTIONS` and the
+   asset tools' descriptions stop naming the content store. Proof: replacing a file in Finder is what a
    node reads, and an undo of a delete brings the bytes back. May land before or after 1.
 3. **Tato Studio's "Get more" through the runtime** (tatolab-app). Waits on 1.
+
+## At ship
+
+The fold rewrites the project entry in §Processor model to this change's shape and adds, inside it:
+
+    Rejected: a dependency as another project's Git history fetched and pinned at a commit, its asset
+    bytes copied in per commit, its streams pasted as stored copies kept in step by refreshes, and a
+    fork copying an asset out of it — copies drift and make a project's state differ per machine
+    (owner, 2026-11-09).
 
 ## Notes (not in scope)
 
