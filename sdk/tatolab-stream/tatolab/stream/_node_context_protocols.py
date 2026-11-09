@@ -826,6 +826,16 @@ class LinkOutputDataWriter(Protocol):
         """
         ...
 
+    def has_a_reader_the_last_write_missed(self, port: str | Output[Any]) -> bool:
+        """Whether a reader now connected to `port` connected after its last write, so that write never reached it.
+
+        A channel keeps no history, so a node that writes only on change
+        writes again for such a reader. Every reader counts: a link's
+        destination once its subscriber is open, a viewer, an island. A port
+        no link has reached has no reader.
+        """
+        ...
+
     def set_stream_facts(self, port_name: str, stream_facts: PortStreamFacts) -> None:
         """Replace the stream facts `port_name` carries — what `graph` renders
         under the port and what a downstream reader reads off its inbound link.

@@ -22,8 +22,8 @@ helper's read, with no process of its own.
   input turns on; `Counter`; and `SampleAndHold`.
 - `Feedback`, the one node a loop of function nodes closes through.
 - `ImageFile`, a class node rather than a function node, publishes the PNG or JPEG
-  project asset its `asset` config names by UUID as an Image: once at start, and
-  again on each config change.
+  project asset its `asset` config names by UUID as an Image: once at start,
+  again on each config change, and again to any reader that connects later.
 
 ```python
 from tatolab.ops import Lfo, Remap

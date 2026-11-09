@@ -2581,6 +2581,7 @@ mod tests {
     ) {
         output_writer.set_channel_publisher(
             output_port,
+            channel,
             channel.create_publisher(64).unwrap(),
             crate::iceoryx2::ChannelEgressConfig {
                 service_name: format!("test/input/{output_port}"),
