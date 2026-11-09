@@ -13,16 +13,14 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{Peer, RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::Value;
-use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_project_repository::{
     AppliedProjectTransaction, DependencyStreamFork, PinnedProjectDependency,
     ProjectDependencyOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
-    ProjectRepository, ProjectTransactionAuthor, ProjectTransactionLineage, StreamGraphOperation,
-    StreamGraphOperationOnAStream,
+    ProjectRepository,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DependencyTransactionToolResult, ForkAssetToolResult, ForkedAssetOriginOnTheWire,
-    ProjectDependencyOnTheWire,
+    GraphTransactionToolResult, ProjectDependencyOnTheWire,
 };
 use uuid::Uuid;
 
@@ -34,8 +32,8 @@ use crate::mcp_project_asset_tools::{
 use crate::mcp_stream_graph_tools::{
     DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,
     DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
-    GraphEditMode, GraphTransactionInFlight, STREAM_FRAGMENT_CONFIG_KEY, STREAM_FRAGMENT_TYPE,
-    StreamGraphOperationToolArgument,
+    GraphEditMode, GraphTransactionInFlight, GraphTransactionStep, STREAM_FRAGMENT_CONFIG_KEY,
+    STREAM_FRAGMENT_TYPE, StreamGraphOperationToolArgument,
 };
 
 const DEPENDING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
@@ -114,7 +112,7 @@ struct ForkAssetToolArguments {
 #[tool_router(router = project_dependency_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Depend on another project, pinned at a revision, as one transaction by `author`: its history is fetched from `source` into `.tatolab/dependencies/<project uuid>/` and the pin, the commit `revision` names, is recorded in `tatolab-project.json`. A local project directory needs no network; a Git remote needs it only to fetch. Its assets are then referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read at the pin; its streams are placed with `use_dependency_stream`. Answers the `dependency` with its pinned `revision`. Refused, nothing pinned, for a revision the source does not hold, a source holding no project, the project itself, or a project already depended on."
+        description = "Depend on another project, pinned at a revision, as one transaction by `author`: its history is fetched from `source` into `.tatolab/dependencies/<project uuid>/` and the pin, the commit `revision` names, is recorded in `tatolab-project.json`. A local project directory needs no network; a Git remote needs it only to fetch. A clone of the project carries the pin without the fetched history, which is fetched again from the recorded `source` the first time it is read, the pin left where it is. Its assets are then referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read at the pin; its streams are placed with `use_dependency_stream`. Answers the `dependency` with its pinned `revision`. Refused, nothing pinned, for a revision the source does not hold, a source holding no project, the project itself, or a project already depended on."
     )]
     async fn add_dependency(
         &self,
@@ -184,48 +182,35 @@ impl LocalApiMcpServerHandler {
         let answered = tokio::task::spawn_blocking(move || {
             let project_repository =
                 the_project_repository_open_at(&project_repositories, &project_directory)?;
-            let (pin_move, refreshes) = {
-                let project_repository_held = project_repository.lock();
-                let pin_move = project_repository_held
-                    .the_pin_move_a_dependency_update_makes(project, &revision)
-                    .map_err(|refusal| refusal.to_string())?;
-                let refreshes = the_refresh_of_each_fragment_holding_a_stream_of(
-                    operations_on_the_loaded_streams.as_ref(),
-                    &project_repository_held,
-                    project,
-                )?;
-                (pin_move, refreshes)
+            let graph_transaction = GraphTransactionInFlight {
+                operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
+                project_repositories: &project_repositories,
+                async_runtime: &async_runtime,
             };
-            let pin_move = ProjectOperation::Dependency(pin_move);
-            let (applied, graph_operations) = if refreshes.is_empty() {
-                (
-                    the_project_operations_applied(
-                        &project_repositories,
-                        &project_repository,
-                        &author,
-                        vec![pin_move],
-                    )?,
-                    Vec::new(),
-                )
-            } else {
-                the_graph_transaction_applied(
-                    &GraphTransactionInFlight {
-                        operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
-                        project_repositories: &project_repositories,
-                        async_runtime: &async_runtime,
-                    },
-                    refreshes,
-                    vec![pin_move],
-                    &author,
-                )?
-            };
+            let applied = graph_transaction.apply_what_the_held_project_prepares(
+                &project_directory,
+                &author,
+                |project_repository_held, stream_id_of_each_stream_asset| {
+                    let pin_move = project_repository_held
+                        .the_pin_move_a_dependency_update_makes(project, &revision)
+                        .map_err(|refusal| refusal.to_string())?;
+                    let refreshes = the_refresh_of_each_fragment_holding_a_stream_of(
+                        project_repository_held,
+                        stream_id_of_each_stream_asset,
+                        project,
+                    )?;
+                    Ok((refreshes, vec![ProjectOperation::Dependency(pin_move)]))
+                },
+            )?;
             let dependency = project_repository
                 .lock()
                 .dependency(project)
                 .map_err(|refusal| refusal.to_string())?;
+            let (transaction, graph_operations) =
+                TransactionAsHistoryRecordsIt::of_the_answer(applied)?;
             Ok::<_, String>(the_answer_of_a_dependency_transaction(
                 &dependency,
-                applied,
+                transaction,
                 graph_operations,
             ))
         })
@@ -269,7 +254,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Fork a stream of a project this one depends on into this project, as one transaction by `author`: its graph document at the pin is copied to `path` under a new stream asset UUID, recording the stream, project and commit it came from under `forked_from`, and every node config of this project that referenced it as `{\"asset\", \"from\"}` is made to reference the copy, so a later `update_dependency` no longer reaches it. The copy is this project's own, edited like any of its streams. Answers the copy as an asset, `forked_from`, and the `graph_operations` applied to loaded streams; undo takes the copy out and points each reference back. Refused for an asset the dependency's history holds no graph document of: only a stream is forked."
+        description = "Fork a stream of a project this one depends on into this project, as one transaction by `author`: its graph document at the pin is copied to `path` under a new stream asset UUID, recording the stream, project and commit it came from under `forked_from`, and every node of this project that referenced it as `{\"asset\", \"from\"}`, in its config or at any level of a stored fragment, is made to reference the copy, so a later `update_dependency` no longer reaches it. The copy is this project's own, edited like any of its streams. Answers the copy as an asset, `forked_from`, and the `graph_operations` applied to loaded streams; undo points each reference back, takes the copy out and unloads its stream, refused once the copy has been edited. Refused for an asset the dependency's history holds no graph document of, since only a stream is forked, and for a referencing node of a graph document that holds no UUID yet."
     )]
     async fn fork_asset(
         &self,
@@ -293,49 +278,38 @@ impl LocalApiMcpServerHandler {
         let answered = tokio::task::spawn_blocking(move || {
             let project_repository =
                 the_project_repository_open_at(&project_repositories, &project_directory)?;
-            let (fork, forked_at, loaded_stream_ids) = {
-                let project_repository_held = project_repository.lock();
-                let fork = project_repository_held
-                    .the_fork_of_a_dependency_stream(project, asset, path.as_deref())
-                    .map_err(|refusal| refusal.to_string())?;
-                let forked_at = project_repository_held
-                    .dependency(project)
-                    .map_err(|refusal| refusal.to_string())?
-                    .revision;
-                let loaded_stream_ids = the_loaded_stream_ids_by_stream_asset(
-                    operations_on_the_loaded_streams.as_ref(),
-                    project_repository_held.project_file().project,
-                );
-                (fork, forked_at, loaded_stream_ids)
+            let graph_transaction = GraphTransactionInFlight {
+                operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
+                project_repositories: &project_repositories,
+                async_runtime: &async_runtime,
             };
-            let (reference_requests, project_operations_first) =
-                the_fork_split_by_loaded_stream(&fork, &loaded_stream_ids);
-            let (applied, graph_operations) = if reference_requests.is_empty() {
-                (
-                    the_project_operations_applied(
-                        &project_repositories,
-                        &project_repository,
-                        &author,
-                        fork.operations(),
-                    )?,
-                    Vec::new(),
-                )
-            } else {
-                the_graph_transaction_applied(
-                    &GraphTransactionInFlight {
-                        operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
-                        project_repositories: &project_repositories,
-                        async_runtime: &async_runtime,
-                    },
-                    reference_requests,
-                    project_operations_first,
-                    &author,
-                )?
-            };
+            let mut copy_and_the_pin_it_was_forked_at = None;
+            let applied = graph_transaction.apply_what_the_held_project_prepares(
+                &project_directory,
+                &author,
+                |project_repository_held, stream_id_of_each_stream_asset| {
+                    let fork = project_repository_held
+                        .the_fork_of_a_dependency_stream(project, asset, path.as_deref())
+                        .map_err(|refusal| refusal.to_string())?;
+                    let forked_at = project_repository_held
+                        .dependency(project)
+                        .map_err(|refusal| refusal.to_string())?
+                        .revision;
+                    copy_and_the_pin_it_was_forked_at = Some((fork.copy, forked_at));
+                    Ok(the_fork_split_by_loaded_stream(
+                        &fork,
+                        stream_id_of_each_stream_asset,
+                    ))
+                },
+            )?;
+            let (copy, forked_at) =
+                copy_and_the_pin_it_was_forked_at.ok_or("the fork was applied without its copy")?;
             let copy = project_repository
                 .lock()
-                .asset(fork.copy)
+                .asset(copy)
                 .map_err(|refusal| refusal.to_string())?;
+            let (transaction, graph_operations) =
+                TransactionAsHistoryRecordsIt::of_the_answer(applied)?;
             Ok::<_, String>(ForkAssetToolResult {
                 asset: project_asset_on_the_wire(&copy),
                 forked_from: ForkedAssetOriginOnTheWire {
@@ -343,8 +317,8 @@ impl LocalApiMcpServerHandler {
                     from: project.to_string(),
                     revision: forked_at,
                 },
-                transaction: applied.transaction,
-                commit: applied.commit,
+                transaction: transaction.transaction,
+                commit: transaction.commit,
                 graph_operations,
             })
         })
@@ -391,6 +365,21 @@ impl TransactionAsHistoryRecordsIt {
             commit: applied.commit.clone(),
         }
     }
+
+    /// The committed transaction a graph transaction answers, and each graph operation it
+    /// applied to a loaded stream as `transact` answers it.
+    fn of_the_answer(answered: GraphTransactionToolResult) -> Result<(Self, Vec<Value>), String> {
+        let (Some(transaction), Some(commit)) = (answered.transaction, answered.commit) else {
+            return Err("the committed transaction answered no commit".to_owned());
+        };
+        Ok((
+            Self {
+                transaction,
+                commit,
+            },
+            answered.operations,
+        ))
+    }
 }
 
 fn the_answer_of_a_dependency_transaction(
@@ -410,63 +399,17 @@ fn the_answer_of_a_dependency_transaction(
     }
 }
 
-/// `operations` applied to the project as one new transaction by `author`, announced on its
-/// change feed.
-fn the_project_operations_applied(
-    project_repositories: &ProjectRepositoriesOpenInThisRuntime,
-    project_repository: &streamlib_project_repository::ProjectRepositoryOneWriterAtATime,
-    author: &ProjectTransactionAuthor,
-    operations: Vec<ProjectOperation>,
-) -> Result<TransactionAsHistoryRecordsIt, String> {
-    let mut project_repository_held = project_repository.lock();
-    let applied = project_repository_held
-        .apply_project_operations(author, operations, ProjectTransactionLineage::NewEdit)
-        .map_err(|refusal| refusal.to_string())?;
-    project_repositories.announce_applied_transaction(&project_repository_held, applied.clone());
-    Ok(TransactionAsHistoryRecordsIt::of(&applied))
-}
-
-/// `requests` on the loaded streams applied as one committed transaction after
-/// `project_operations_first`, answering the transaction as history records it and each graph
-/// operation as `transact` answers it.
-fn the_graph_transaction_applied(
-    graph_transaction: &GraphTransactionInFlight<'_>,
-    requests: Vec<StreamGraphOperationToolArgument>,
-    project_operations_first: Vec<ProjectOperation>,
-    author: &ProjectTransactionAuthor,
-) -> Result<(TransactionAsHistoryRecordsIt, Vec<Value>), String> {
-    let answered = graph_transaction.apply(
-        requests,
-        project_operations_first,
-        GraphEditMode::Commit,
-        author,
-    )?;
-    let (Some(transaction), Some(commit)) = (answered.transaction, answered.commit) else {
-        return Err("the committed transaction answered no commit".to_owned());
-    };
-    Ok((
-        TransactionAsHistoryRecordsIt {
-            transaction,
-            commit,
-        },
-        answered.operations,
-    ))
-}
-
 /// The `use_dependency_stream` that refreshes each top-level fragment of this project's loaded
-/// streams holding a stream of the dependency `project`.
+/// streams, `stream_id_of_each_stream_asset`, holding a stream of the dependency `project`.
 fn the_refresh_of_each_fragment_holding_a_stream_of(
-    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
     project_repository: &ProjectRepository,
+    stream_id_of_each_stream_asset: &HashMap<Uuid, String>,
     project: Uuid,
-) -> Result<Vec<StreamGraphOperationToolArgument>, String> {
+) -> Result<Vec<GraphTransactionStep>, String> {
     let mut refreshes = Vec::new();
-    for (stream_asset, stream_id) in the_loaded_stream_ids_by_stream_asset(
-        operations_on_the_loaded_streams,
-        project_repository.project_file().project,
-    ) {
+    for (stream_asset, stream_id) in stream_id_of_each_stream_asset {
         let graph_document = project_repository
-            .stream_graph_document(stream_asset)
+            .stream_graph_document(*stream_asset)
             .map_err(|refusal| refusal.to_string())?;
         for fragment_node in graph_document.fragment_nodes() {
             if fragment_node.node_type != STREAM_FRAGMENT_TYPE {
@@ -479,65 +422,38 @@ fn the_refresh_of_each_fragment_holding_a_stream_of(
             let Some(dependency_stream) = held_stream["asset"].as_str() else {
                 continue;
             };
-            refreshes.push(StreamGraphOperationToolArgument::UseDependencyStream {
-                stream: stream_id.clone(),
-                project: project.to_string(),
-                dependency_stream: dependency_stream.to_owned(),
-                name: Some(fragment_node.name),
-                label: None,
-            });
+            refreshes.push(GraphTransactionStep::Requested(
+                StreamGraphOperationToolArgument::UseDependencyStream {
+                    stream: stream_id.clone(),
+                    project: project.to_string(),
+                    dependency_stream: dependency_stream.to_owned(),
+                    name: Some(fragment_node.name),
+                    label: None,
+                },
+            ));
         }
     }
     Ok(refreshes)
 }
 
-/// The stream id of each of the project `project`'s loaded streams, by its stream asset.
-fn the_loaded_stream_ids_by_stream_asset(
-    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
-    project: Uuid,
-) -> HashMap<Uuid, String> {
-    operations_on_the_loaded_streams
-        .list_streams()
-        .into_iter()
-        .filter(|listing| listing.node_count.is_some())
-        .filter_map(|listing| {
-            let stream_location = listing.stream_location?;
-            (stream_location.project == project)
-                .then_some((stream_location.stream_asset, listing.stream_id))
-        })
-        .collect()
-}
-
-/// `fork` as the `set_node_config` of each reference on a loaded stream, and the operations
-/// applied before them: the copy, then each reference on a stream not loaded.
+/// `fork` as the operation pointing each reference on a loaded stream at the copy, and the
+/// operations applied before them: the copy, then each reference on a stream not loaded.
 fn the_fork_split_by_loaded_stream(
     fork: &DependencyStreamFork,
-    loaded_stream_ids: &HashMap<Uuid, String>,
-) -> (Vec<StreamGraphOperationToolArgument>, Vec<ProjectOperation>) {
-    let mut reference_requests = Vec::new();
+    stream_id_of_each_stream_asset: &HashMap<Uuid, String>,
+) -> (Vec<GraphTransactionStep>, Vec<ProjectOperation>) {
+    let mut references_on_loaded_streams = Vec::new();
     let mut project_operations_first = vec![ProjectOperation::StreamDocument(
         fork.create_the_copy.clone(),
     )];
     for reference in &fork.references_made_local {
-        let StreamGraphOperationOnAStream {
-            stream,
-            graph_operation,
-        } = reference;
-        match (loaded_stream_ids.get(stream), graph_operation) {
-            (
-                Some(stream_id),
-                StreamGraphOperation::SetNodeConfig {
-                    node,
-                    to: Value::Object(config),
-                    ..
-                },
-            ) => reference_requests.push(StreamGraphOperationToolArgument::SetNodeConfig {
+        match stream_id_of_each_stream_asset.get(&reference.stream) {
+            Some(stream_id) => references_on_loaded_streams.push(GraphTransactionStep::Prepared {
                 stream: stream_id.clone(),
-                node: node.to_string(),
-                config: config.clone(),
+                graph_operation: reference.graph_operation.clone(),
             }),
-            _ => project_operations_first.push(ProjectOperation::StreamGraph(reference.clone())),
+            None => project_operations_first.push(ProjectOperation::StreamGraph(reference.clone())),
         }
     }
-    (reference_requests, project_operations_first)
+    (references_on_loaded_streams, project_operations_first)
 }

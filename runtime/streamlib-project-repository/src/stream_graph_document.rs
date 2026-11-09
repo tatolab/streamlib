@@ -474,6 +474,26 @@ impl StreamGraphDocument {
             .collect()
     }
 
+    /// Each node's config by its UUID, at every level of the fragments the document stores.
+    pub fn configs_of_every_node_at_every_level(&self) -> Vec<(Uuid, &Value)> {
+        let mut configs = Vec::new();
+        push_the_config_of_each_of_the_nodes_at_every_level(&self.node_values, &mut configs);
+        configs
+    }
+
+    /// The name of each top-level node holding no UUID, with the node as the document holds it.
+    pub fn nodes_holding_no_uuid(&self) -> Vec<(String, Value)> {
+        self.node_objects()
+            .filter(|node_object| node_uuid_of(node_object).is_none())
+            .map(|node_object| {
+                (
+                    node_name_of(node_object).unwrap_or_default().to_owned(),
+                    Value::Object(node_object.clone()),
+                )
+            })
+            .collect()
+    }
+
     /// Every top-level fragment node, as the document holds it.
     pub fn fragment_nodes(&self) -> Vec<StreamGraphDocumentNode> {
         self.node_objects()
@@ -1158,9 +1178,15 @@ fn push_the_config_of_each_node_at_every_level<'fragment>(
     fragment: &'fragment Value,
     configs: &mut Vec<(Uuid, &'fragment Value)>,
 ) {
-    let Some(nodes) = fragment.get("nodes").and_then(Value::as_array) else {
-        return;
-    };
+    if let Some(nodes) = fragment.get("nodes").and_then(Value::as_array) {
+        push_the_config_of_each_of_the_nodes_at_every_level(nodes, configs);
+    }
+}
+
+fn push_the_config_of_each_of_the_nodes_at_every_level<'fragment>(
+    nodes: &'fragment [Value],
+    configs: &mut Vec<(Uuid, &'fragment Value)>,
+) {
     for node in nodes.iter().filter_map(Value::as_object) {
         if let (Some(node_uuid), Some(config)) = (node_uuid_of(node), node.get("config")) {
             configs.push((node_uuid, config));
