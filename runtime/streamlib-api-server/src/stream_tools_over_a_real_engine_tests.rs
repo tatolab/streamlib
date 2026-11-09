@@ -2720,3 +2720,115 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
         ["source", "shoulder", "elbow"]
     );
 }
+
+/// A venv interpreter whose node type listing keeps the request it was sent in
+/// `listing-request.json` and prints `listing.json`, which a test writes first.
+const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._project_node_type_listing_entry*) cat > listing-request.json; cat listing.json ;;\nesac\nexit 0\n";
+
+/// Project `cell` depends on project `arm`, whose node code is committed at the pin: the
+/// listing is sent `arm`'s Python files at that commit and nothing else of it, and answers
+/// each source as the project's interpreter read it, under the project's UUID and name.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_projects_node_types_are_listed_with_each_dependencys_python_sources_at_its_pin() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    std::fs::create_dir_all(arm.path().join("nodes")).expect("the arm's nodes directory");
+    std::fs::write(
+        arm.path().join("nodes/gripper.py"),
+        "from tatolab.stream import node\n",
+    )
+    .expect("the arm's node code");
+    let pinned_revision = arm.commit_a_sink_named("shoulder");
+    std::fs::write(
+        arm.path().join("nodes/gripper.py"),
+        "written after the pin\n",
+    )
+    .expect("the arm's node code after the pin");
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    write_an_executable_script_from_a_child_process(
+        &cell.interpreter(),
+        STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING,
+    );
+    let project_source = json!({
+        "source": "project",
+        "node_types": [{
+            "type": "nodes.ik:InverseKinematics", "kind": "process", "description": "",
+            "category": "nodes.ik", "inputs": [], "outputs": [], "path": "nodes/ik.py", "line": 4,
+        }],
+        "graph_generators": [],
+        "unreadable_modules": [{
+            "module": "nodes.broken", "path": "nodes/broken.py", "line": 2, "column": 7,
+            "why": "SyntaxError: invalid syntax",
+        }],
+    });
+    let dependency_source = json!({
+        "source": "dependency", "project": arm.project, "revision": pinned_revision,
+        "node_types": [], "graph_generators": [], "unreadable_modules": [],
+    });
+    std::fs::write(
+        cell.path().join("listing.json"),
+        json!({ "sources": [project_source, dependency_source] }).to_string(),
+    )
+    .expect("the listing document");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                "revision": pinned_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm is depended on");
+
+    let listed = call(
+        "list_project_node_types",
+        json!({ "project_directory": cell.path() }),
+    )
+    .await
+    .expect("the cell's node types are listed");
+
+    assert_eq!(listed["project"], json!(cell.project), "{listed}");
+    assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
+    assert_eq!(
+        listed["sources"],
+        json!([project_source, dependency_source]),
+        "{listed}"
+    );
+    let request: Value = serde_json::from_slice(
+        &std::fs::read(cell.path().join("listing-request.json")).expect("the listing's request"),
+    )
+    .expect("the request is JSON");
+    assert_eq!(
+        request,
+        json!({ "dependencies": [{
+            "project": arm.project, "revision": pinned_revision,
+            "files": { "nodes/gripper.py": "from tatolab.stream import node\n" },
+        }] })
+    );
+}
+
+/// A listing whose interpreter prints no listing is refused naming the project, in the
+/// runtime's own words.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "list_project_node_types",
+            json!({ "project_directory": cell.path() }),
+        )
+        .await,
+    )
+    .expect_err("an interpreter that prints nothing lists nothing");
+
+    assert!(
+        refusal.contains("list_project_node_types failed")
+            && refusal.contains("printed no listing"),
+        "{refusal}"
+    );
+}
