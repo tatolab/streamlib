@@ -16,7 +16,8 @@ mod common;
 use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_stream_graph_crashing_while,
     a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    expect_the_runtime_to_crash_on_segv, the_stream_action_once_ended,
+    expect_the_runtime_to_crash_on_segv, the_reloads_queued_at_the_start,
+    the_stream_action_once_ended,
 };
 
 #[test]
@@ -149,6 +150,10 @@ fn a_recorded_stream_whose_venv_was_deleted_comes_back_failed_naming_the_venv() 
     let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command_with_no_vulkan_driver(&runtime_unit.tatolabd),
     );
+    let reloads_queued = the_reloads_queued_at_the_start(&runtime.standard_error());
+    assert_eq!(reloads_queued.len(), 1, "one re-load for the one project");
+    let reload_once_ended =
+        the_stream_action_once_ended(&machine_root.local_api_socket_path(), &reloads_queued[0]);
     let listed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "list_streams",
@@ -157,6 +162,14 @@ fn a_recorded_stream_whose_venv_was_deleted_comes_back_failed_naming_the_venv() 
     .json();
     runtime.interrupt_and_expect_a_clean_exit();
 
+    assert_eq!(
+        (
+            &reload_once_ended["state"],
+            &reload_once_ended["streams"][0]["state"]
+        ),
+        (&"done".into(), &"failed".into()),
+        "{reload_once_ended}"
+    );
     assert_eq!(listed["streams"][0]["state"], "failed", "{listed}");
     let failed_because = listed["streams"][0]["failed_because"]
         .as_str()

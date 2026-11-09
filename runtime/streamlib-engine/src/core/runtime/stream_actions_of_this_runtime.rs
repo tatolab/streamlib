@@ -2728,8 +2728,8 @@ impl Runner {
 
     /// Show each stream an action under way works on `preparing` — or
     /// `stopping`, for an action that unloads it — with the action and its
-    /// step, the earliest action on a stream winning: the streams the action
-    /// names, else the project's listed ones.
+    /// step and no `failed_because`, the earliest action on a stream winning:
+    /// the streams the action names, else the project's listed ones.
     fn show_the_streams_actions_under_way_prepare(&self, listings: &mut Vec<StreamListing>) {
         let mut streams_an_earlier_action_works_on: Vec<String> = Vec::new();
         for action in self
@@ -2796,6 +2796,7 @@ impl Runner {
                 {
                     Some(listing) => {
                         listing.state = state_it_shows;
+                        listing.failed_because = None;
                         listing.stream_action_under_way = Some(working_on_it.clone());
                     }
                     None => listings.push(StreamListing {
@@ -6906,6 +6907,43 @@ mod tests {
         the_stream_action_once_finished(&runner, &stop.action_id);
         assert!(the_pending_stream_actions_on(state_directory.path(), &camera).is_empty());
         assert!(the_record_of(state_directory.path(), &camera).stopped);
+    }
+
+    #[test]
+    #[serial]
+    fn a_failed_stream_a_start_retries_is_listed_preparing_with_no_failed_because_until_it_ends() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        let failed = StreamRecord {
+            failed_because: Some("it crashed the runtime".to_string()),
+            ..a_record_of(&project, "camera")
+        };
+        records_in(state_directory.path()).write(&failed).unwrap();
+        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+        stub_uv.handed_to(&runner);
+
+        let start = runner.start_stream(&failed.stream_id).unwrap();
+        the_stream_action_once(&runner, &start.action_id, |action| {
+            action.step == Some(StreamActionStep::MakingTheVenv)
+        });
+        let listed_while_it_retries = runner.list_streams();
+        std::fs::write(&gate, "").unwrap();
+        the_stream_action_once_finished(&runner, &start.action_id);
+
+        assert_eq!(
+            listed_while_it_retries.len(),
+            1,
+            "{listed_while_it_retries:?}"
+        );
+        assert_eq!(
+            (
+                listed_while_it_retries[0].state,
+                &listed_while_it_retries[0].failed_because
+            ),
+            (StreamListingState::Preparing, &None),
+            "{listed_while_it_retries:?}"
+        );
     }
 
     #[test]
