@@ -23,6 +23,9 @@ use crate::core::graph_interface_resolution::{
     is_a_graph_interface_node_type,
 };
 use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
+use crate::core::graph_variable_resolution::{
+    SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
+};
 use crate::core::json_schema::{
     GraphFragmentOutput, GraphResponse, LinkOutput, LinkPortRefOutput, NodeKindOutput,
     ProcessorNodeOutput, ProcessorNodePortsOutput,
@@ -156,10 +159,7 @@ fn flatten_one_level(
             if path_of_names.is_some() {
                 name_each_node_reference_its_schema_marks_on_this_level_by_its_path(
                     &mut config,
-                    &config_keys_of_a_node_type_holding_a_node_reference(
-                        node_types,
-                        &node.processor_type,
-                    ),
+                    &config_keys_holding_a_node_reference_of(node, node_types),
                     &names_of_the_levels_running_nodes_cast,
                     &name_on_this_level,
                 );
@@ -274,18 +274,33 @@ fn end_on_this_level(
     }
 }
 
+/// The config keys of `node` holding a node reference: those its type's schema marks, and a
+/// `SetVariable`'s `node_reference`, which the graph resolves before any schema is read.
+fn config_keys_holding_a_node_reference_of(
+    node: &GraphSnapshotNode,
+    node_types: &NodeTypesOneStreamResolves,
+) -> Vec<String> {
+    if node.processor_type.as_str() == SET_VARIABLE_NODE_TYPE {
+        return vec![SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY.to_string()];
+    }
+    config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.processor_type)
+        .into_iter()
+        .map(|ConfigKeyHoldingANodeReference { config_key, .. }| config_key)
+        .collect()
+}
+
 /// Rename, in `config`, the node reference under each of `keys_holding_a_node_reference` that
 /// names a running node of this level, to the name that node runs under.
 fn name_each_node_reference_its_schema_marks_on_this_level_by_its_path(
     config: &mut serde_json::Value,
-    keys_holding_a_node_reference: &[ConfigKeyHoldingANodeReference],
+    keys_holding_a_node_reference: &[String],
     names_of_the_levels_running_nodes_cast: &HashSet<String>,
     name_on_this_level: &impl Fn(&str) -> String,
 ) {
     let Some(config_object) = config.as_object_mut() else {
         return;
     };
-    for ConfigKeyHoldingANodeReference { config_key, .. } in keys_holding_a_node_reference {
+    for config_key in keys_holding_a_node_reference {
         let Some(config_value) = config_object.get_mut(config_key) else {
             continue;
         };
@@ -804,6 +819,47 @@ mod tests {
                 "reads_radius_of": {"node": "look/soft/blur"},
                 "label_shaped_like_a_reference": {"node": "blur"},
             })
+        );
+    }
+
+    #[test]
+    fn a_marked_node_reference_naming_a_node_outside_the_fragment_is_left_as_written() {
+        let mut graph = a_camera_through_look_holding_soft_into_a_display();
+        graph["nodes"][1]["fragment"]["nodes"][1]["fragment"]["nodes"][2]["config"]["reads_radius_of"] =
+            serde_json::json!({"node": "camera"});
+        let flattening = flattened(graph).expect("flattens");
+        let tint = flattening
+            .graph_the_runtime_runs
+            .nodes
+            .iter()
+            .find(|node| node.name == "look/soft/tint")
+            .expect("tint runs");
+        assert_eq!(
+            tint.config["reads_radius_of"],
+            serde_json::json!({"node": "camera"})
+        );
+    }
+
+    #[test]
+    fn a_set_variable_inside_a_fragment_names_its_referenced_node_by_its_path() {
+        let mut graph = a_camera_through_look_holding_soft_into_a_display();
+        graph["nodes"][1]["fragment"]["nodes"][1]["fragment"]["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": "set-blur", "type": SET_VARIABLE_NODE_TYPE,
+                "config": {"variable": "blur", "node_reference": {"node": "blur"}},
+            }));
+        let flattening = flattened(graph).expect("flattens");
+        let setter = flattening
+            .graph_the_runtime_runs
+            .nodes
+            .iter()
+            .find(|node| node.name == "look/soft/set-blur")
+            .expect("the setter is kept");
+        assert_eq!(
+            setter.config,
+            serde_json::json!({"variable": "blur", "node_reference": {"node": "look/soft/blur"}})
         );
     }
 
