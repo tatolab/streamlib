@@ -17,7 +17,7 @@ use crate::project_asset::{
     the_dependency_assets_recorded_at,
 };
 use crate::project_content_store::{
-    PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, content_sha256_of,
+    PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, content_sha256_of, is_a_sha256_digest,
 };
 use crate::project_dependency_source::{
     ProjectDependencySource, the_project_directory_an_installed_package_ships,
@@ -27,7 +27,10 @@ use crate::project_history_repository::{
     PROJECT_HISTORY_BRANCH, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
-use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
+use crate::project_stream_document::{
+    FORKED_FROM_KEY, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
+    the_fork_origin_a_graph_document_records,
+};
 use crate::project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation,
@@ -45,9 +48,6 @@ use crate::stream_graph_document::{
 /// Where each dependency's history is fetched to, relative to the project: one bare Git
 /// repository per depended-on project, named by its UUID.
 pub const PROJECT_DEPENDENCIES_DIRECTORY: &str = ".tatolab/dependencies";
-
-/// The top-level key of a forked graph document that records the stream it was copied from.
-pub const FORKED_FROM_KEY: &str = "forked_from";
 
 /// A pinned dependency as `dependency_listing` answers it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -234,7 +234,7 @@ impl ProjectRepository {
                 content_sha256: content_sha256_of(bytes),
                 content_byte_len: bytes.len() as u64,
                 import_settings: serde_json::Map::new(),
-                forked_from: None,
+                forked_from: stream_document.fork_origin_written_in_it(),
                 path: stream_document.path,
             };
             if let Some(earlier) = every_asset.get(&stream_asset.asset) {
@@ -1005,11 +1005,12 @@ impl ProjectRepository {
         Ok((fork, applied))
     }
 
-    /// Record every asset with a sidecar the dependency `project` holds at `commit` of
-    /// `history`, for a reader with no history, and copy into this project's content store the
-    /// bytes of each that it lacks and that the content store of `source`, when it is a
-    /// project on this machine, holds. Bytes neither store holds are left for a read of them
-    /// to refuse by name.
+    /// Copy into this project's content store the bytes of each asset with a sidecar the
+    /// dependency `project` holds at `commit` of `history` that it lacks and that the content
+    /// store of `source`, when it is a project on this machine, holds, then record every one of
+    /// them, for a reader with no history. A sidecar that does not parse, names a stream, holds
+    /// no SHA-256 digest, or shares its UUID with another names no asset; bytes neither store
+    /// holds or that cannot be read are left for a read of them to refuse by name.
     fn record_and_copy_the_dependency_assets_at(
         &self,
         history: &ProjectHistoryRepository,
@@ -1017,6 +1018,10 @@ impl ProjectRepository {
         source: &str,
         commit: &str,
     ) -> Result<Vec<ProjectAsset>, ProjectRepositoryRefusal> {
+        let record_path =
+            the_dependency_asset_record_path(&self.project_directory, project, commit)?;
+        let mut sidecar_path_of_each_asset: BTreeMap<Uuid, String> = BTreeMap::new();
+        let mut asset_uuids_named_twice = BTreeSet::new();
         let mut recorded_assets = Vec::new();
         for (file_path, bytes) in history.files_at_commit(commit)? {
             let Some(asset_path) = file_path.strip_suffix(ASSET_SIDECAR_FILE_SUFFIX) else {
@@ -1026,32 +1031,47 @@ impl ProjectRepository {
                 let sidecar: ProjectAssetSidecar = serde_json::from_slice(&bytes)?;
                 Ok(ProjectAsset::from_sidecar(asset_path, sidecar))
             });
-            match read {
-                Ok(recorded_asset) => recorded_assets.push(recorded_asset),
-                Err(refusal) => tracing::warn!(
+            let recorded_asset = match read {
+                Ok(recorded_asset) => recorded_asset,
+                Err(refusal) => {
+                    tracing::warn!(
+                        dependency = %project,
+                        %commit,
+                        sidecar = %file_path,
+                        %refusal,
+                        "a dependency's sidecar that does not parse names no asset of it"
+                    );
+                    continue;
+                }
+            };
+            if recorded_asset.kind == ProjectAssetKind::Stream
+                || !is_a_sha256_digest(&recorded_asset.content_sha256)
+            {
+                tracing::warn!(
                     dependency = %project,
                     %commit,
                     sidecar = %file_path,
-                    %refusal,
-                    "a dependency's sidecar that does not parse names no asset of it"
-                ),
+                    "a dependency's sidecar naming a stream or holding no SHA-256 digest names no asset of it"
+                );
+                continue;
             }
+            if let Some(first_sidecar_path) =
+                sidecar_path_of_each_asset.insert(recorded_asset.asset, file_path.clone())
+            {
+                tracing::warn!(
+                    dependency = %project,
+                    %commit,
+                    asset = %recorded_asset.asset,
+                    first = %first_sidecar_path,
+                    second = %file_path,
+                    "a dependency's asset UUID named by two sidecars names no asset of it"
+                );
+                asset_uuids_named_twice.insert(recorded_asset.asset);
+            }
+            recorded_assets.push(recorded_asset);
         }
-        let record_path =
-            the_dependency_asset_record_path(&self.project_directory, project, commit);
-        if let Some(record_directory) = record_path.parent() {
-            std::fs::create_dir_all(record_directory)?;
-        }
-        let partial_record_path =
-            record_path.with_extension(format!("incoming-{}", Uuid::new_v4()));
-        std::fs::write(
-            &partial_record_path,
-            canonical_project_json_bytes(&recorded_assets)?,
-        )?;
-        if let Err(not_placed) = std::fs::rename(&partial_record_path, &record_path) {
-            let _ = std::fs::remove_file(&partial_record_path);
-            return Err(not_placed.into());
-        }
+        recorded_assets
+            .retain(|recorded_asset| !asset_uuids_named_twice.contains(&recorded_asset.asset));
 
         let source_content_store_directory = match ProjectDependencySource::named_by(source) {
             ProjectDependencySource::ProjectDirectory(source_project_directory) => {
@@ -1088,7 +1108,20 @@ impl ProjectRepository {
                 );
                 continue;
             };
-            let stored = self.content_store.store_the_file_at(&source_content)?;
+            let stored = match self.content_store.store_the_file_at(&source_content) {
+                Ok(stored) => stored,
+                Err(refusal @ ProjectRepositoryRefusal::ImportSourceUnreadable { .. }) => {
+                    tracing::warn!(
+                        dependency = %project,
+                        asset = %recorded_asset.asset,
+                        %source,
+                        %refusal,
+                        "a dependency's asset bytes do not read, so reading them is refused"
+                    );
+                    continue;
+                }
+                Err(refusal) => return Err(refusal),
+            };
             if stored.content_sha256 != recorded_asset.content_sha256 {
                 tracing::warn!(
                     dependency = %project,
@@ -1098,6 +1131,20 @@ impl ProjectRepository {
                     "a dependency's content store holds other bytes under an asset's hash"
                 );
             }
+        }
+
+        if let Some(record_directory) = record_path.parent() {
+            std::fs::create_dir_all(record_directory)?;
+        }
+        let partial_record_path =
+            record_path.with_extension(format!("incoming-{}", Uuid::new_v4()));
+        std::fs::write(
+            &partial_record_path,
+            canonical_project_json_bytes(&recorded_assets)?,
+        )?;
+        if let Err(not_placed) = std::fs::rename(&partial_record_path, &record_path) {
+            let _ = std::fs::remove_file(&partial_record_path);
+            return Err(not_placed.into());
         }
         Ok(recorded_assets)
     }
@@ -1506,7 +1553,7 @@ impl ProjectRepository {
                         content_sha256: content_sha256_of(&bytes),
                         content_byte_len: bytes.len() as u64,
                         import_settings: serde_json::Map::new(),
-                        forked_from: None,
+                        forked_from: the_fork_origin_a_graph_document_records(document),
                         path: path.clone(),
                     },
                 );

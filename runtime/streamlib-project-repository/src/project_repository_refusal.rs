@@ -119,6 +119,11 @@ pub enum ProjectRepositoryRefusal {
     )]
     DependencyAssetsNotRecordedAtThePin { project: Uuid, revision: String },
     #[error(
+        "the pin of the dependency {project} names `{revision}`, which is no commit's hexadecimal \
+         hash, so it names no record of the dependency's assets"
+    )]
+    DependencyPinNamesNoCommitHash { project: Uuid, revision: String },
+    #[error(
         "the bytes of the asset {asset} of the dependency {project} are not in this project's \
          content store: its source {dependency_source} held none of them, and a Git remote carries \
          no content store"

@@ -7,12 +7,24 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::project_asset::{
-    GRAPH_DOCUMENT_FILE_SUFFIX, ProjectRelativeAssetPath, project_files_ending_with,
+    GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAssetForkOrigin, ProjectRelativeAssetPath,
+    project_files_ending_with,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
 /// The top-level key of a graph document that holds its stream asset's UUID.
 pub const STREAM_DOCUMENT_ASSET_KEY: &str = "asset";
+
+/// The top-level key of a forked graph document that records the stream it was copied from.
+pub const FORKED_FROM_KEY: &str = "forked_from";
+
+/// The dependency's stream a graph document `document` was forked from, as it records it under
+/// `forked_from`; none when it records none it can be read by.
+pub fn the_fork_origin_a_graph_document_records(
+    document: &Value,
+) -> Option<ProjectAssetForkOrigin> {
+    serde_json::from_value(document.get(FORKED_FROM_KEY)?.clone()).ok()
+}
 
 /// One stream asset's graph document as it sits in its project: its path and its bytes, or why
 /// they do not read.
@@ -53,6 +65,12 @@ impl ProjectStreamDocument {
         Uuid::parse_str(written).map_err(|not_a_uuid| {
             format!("the graph document's `{STREAM_DOCUMENT_ASSET_KEY}` `{written}` is not a UUID: {not_a_uuid}")
         })
+    }
+
+    /// The dependency's stream the document was forked from, as it records it.
+    pub fn fork_origin_written_in_it(&self) -> Option<ProjectAssetForkOrigin> {
+        let document: Value = serde_json::from_slice(self.bytes.as_ref().ok()?).ok()?;
+        the_fork_origin_a_graph_document_records(&document)
     }
 
     /// The stream asset's UUID: the one the document holds, or, while it holds none it can be
