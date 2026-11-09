@@ -59,20 +59,16 @@ This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folde
   contract, and a new version adds keys while the runtime reads every older one (owner,
   2026-11-09).
 
-  `[NEEDS DECISION]` How the runtime reads a view's manifest. The contract is the view SDK's Zod
-  schema in TypeScript, and the runtime is Rust. Options:
-  (a) **the runtime parses the manifest file with a serde type** mirroring the schema, and a CI
-  gate checks that type against the view SDK's generated JSON Schema, so a drift fails the build
-  in both repos; (b) Studio tells the runtime a view's ports when it places the node, which makes
-  the graph depend on Studio being open and breaks an agent-built graph. **Recommendation: (a).**
-  The JSON Schema serves only as the drift check, and the Zod schema stays the guarantee.
-  (session, 2026-11-09)
-
-  `[NEEDS DECISION]` Whether Studio's Frame is the existing group. Studio's toolbar has a Frame
-  tool, and the graph already has labelled groups with a title, a description and a colour that
-  nodes join. Options: (a) **a Frame is a group**, drawn as a frame, and only Notes are new; (b) a
-  Frame is its own canvas item beside groups. **Recommendation: (a)**: one system per concern.
-  (session, 2026-11-09)
+- **Reading a view's manifest.** The runtime reads a view's manifest file itself, with a serde
+  type mirroring the view SDK's Zod schema. A CI gate checks that type against the schema the view
+  SDK generates, so a drift fails the build. The Zod schema stays the guarantee, and the generated
+  JSON Schema serves only the drift check. Owner, 2026-11-09: "runtime owns it".
+  Rejected: Studio telling the runtime a view's ports when it places the node — the graph would
+  depend on Studio being open, and an agent-built graph would have no ports (owner, 2026-11-09).
+- **Studio's Frame is a group.** The runtime's labelled group, a title, a description and a colour
+  that nodes join, is what Tato Studio draws as a Frame. It groups nodes and does nothing else, and
+  no second canvas item exists for it. Owner, 2026-11-09: "it's the same, just a grouping of
+  things".
 
 ## MODIFIED
 
@@ -90,5 +86,6 @@ This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folde
 ## Consumers
 
 Tato Studio's view host finds view nodes by UUID, drives panels from the runtime's reported ports,
-and sends writes through `write_studio_view_output` in place of its refused `send_output`. That is
+and sends writes through `write_studio_view_output` in place of its refused `send_output`, and draws a
+runtime group for its Frame tool, which it calls a group. That is
 tatolab-app #195 and #209, backlog that never blocks this change.

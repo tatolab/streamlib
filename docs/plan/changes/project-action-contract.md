@@ -92,18 +92,19 @@ on-disk transaction format.
   graph, after which no refresh reaches them. Both are graph actions with inverses
   (owner, 2026-11-09).
 
-  `[NEEDS DECISION]` What a collapsed subgraph is stored as. The plan defines a subgraph as a
-  fragment, a `@graph_generator`'s stored output, which is frozen and read-only. A collapsed
-  selection has no generator. Options:
-  (a) **an authored fragment**: a fragment node with no generator, whose inside is edited like
-  any graph and which no refresh touches; (b) a generator written out as Python, which writes
-  graph back into code, as the plan rejects. **Recommendation: (a).** (session, 2026-11-09)
+  A collapsed subgraph is an **authored fragment**: a fragment node with no generator, whose inside
+  is edited like any graph and which no refresh touches. A subgraph therefore comes three ways: a
+  generator's frozen output, another stream placed by reference through its Graph Input and Output
+  nodes, and an authored fragment. Owner, 2026-11-09: "subgraphs aren't limited to generators, they
+  also extend to using a stream as a node".
+  Rejected: a collapsed selection written out as a Python generator — it writes graph back into
+  code, which the plan rejects (owner, 2026-11-09).
 
 ## MODIFIED
 
 - §Processor model, the project-and-assets entry: "every change … is a transaction" gains the
-  format version and the idempotency key, and the subgraph entry admits an authored fragment, if
-  the owner picks (a).
+  format version and the idempotency key, and the subgraph entry admits an authored fragment
+  beside a generator's output and a referenced stream.
 - §Product, the stream actions: `rename_stream` becomes `set_stream_display_name`, a recorded
   action. `create_stream` and `delete_stream` join the tools.
 - §Product, the stream's location, id and display name: the display name lives in the graph
