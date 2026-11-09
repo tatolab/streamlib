@@ -152,19 +152,24 @@ the lock.
 **Decided 6 — generator output stays stored.** Whether a project needs a build step that walks it
 and regenerates derived outputs, as Unreal's compile does, is open for later.
 
+**Decided 7 — third-party Python is uv's.** Self-contained covers the project's own files and its
+imports; a third-party wheel (numpy, torch) comes from uv's cache or the index when `.venv` is
+rebuilt, and a sync that reaches neither fails the run in uv's words, as ComfyUI's does. Each step
+of that sync is reported on the run's action so Tato Studio can show it downloading and installing.
+
+**Decided 8 — guide, never block, an update over edits.** `update_dependency` on an import edited
+since its copy answers which files were edited and asks the caller to confirm the overwrite with
+`overwrite_edited_files`; with it, the folder is replaced whole.
+
+**Decided 9 — no transition.** The content store was a rewrite pre-1.0: after ticket 2 a node
+reads the visible file, and nothing carries an older project forward.
+
 ## Assumptions to correct if wrong
 
 - **Editing a module in place.** A transaction on a project open at `imports/<folder>/` is
   recorded in that module's own history and also as one commit on the enclosing project, the
   runtime being the one writer of both, so the enclosing project's history and change feed account
-  for it; undo stays per window. `update_dependency` on an import edited since its copy is refused,
-  naming the edited files, so it never silently replaces them.
-- **Offline first open.** Self-contained covers the project's own files and its imports; a
-  third-party wheel (numpy, torch) comes from uv's cache or the index when `.venv` is rebuilt, and
-  a sync that reaches neither fails the run in uv's words, as `.venv` is a cache.
-- **No transition for existing projects.** Pre-1.0, nothing carries a project from the content
-  store forward: after ticket 2 a node reads the visible file, and `.tatolab/content/` is left
-  unread.
+  for it; undo stays per window.
 
 - **Where `tatolab-ops` is copied from.** The runtime unit carries its first-party modules as
   project folders, as it carries samples, and a new project's scaffold adds `tatolab-ops` from
@@ -186,7 +191,9 @@ and regenerates derived outputs, as Unreal's compile does, is open for later.
    asset bytes; uploads land in `.tatolab/uploads/`; `LOCAL_API_MCP_SERVER_INSTRUCTIONS` and the
    asset tools' descriptions stop naming the content store. Proof: replacing a file in Finder is what a
    node reads, and an undo of a delete brings the bytes back. May land before or after 1.
-3. **Tato Studio's "Get more" through the runtime** (tatolab-app). Waits on 1.
+3. **Tato Studio's "Get more" through the runtime** (tatolab-app): adding and updating modules,
+   the overwrite prompt for an edited import, and a status indicator showing a run's download and
+   install steps. Waits on 1.
 
 ## At ship
 
