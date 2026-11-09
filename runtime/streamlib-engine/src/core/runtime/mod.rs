@@ -7,6 +7,7 @@ mod engine_teardown_watchdog;
 mod function_node_states_carried_across_loads;
 mod graph_change_listener;
 mod helper_process_group_registry;
+mod live_graph_reconciled_to_a_graph_document;
 mod loaded_stream;
 mod local_processor_type_registration;
 mod machine_name;

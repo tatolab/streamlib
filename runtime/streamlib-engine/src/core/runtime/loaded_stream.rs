@@ -110,9 +110,9 @@ pub struct LoadedStreamInThisRuntime {
     pub(crate) processor_interpreter_launch_record:
         Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
-    /// The variable and interface nodes, and what they resolved to, of the
-    /// graph this stream loaded, so `graph` renders them as drawn.
-    graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
+    /// The fragment, variable and interface nodes, and what they resolved to, of the
+    /// graph this stream runs, so `graph` renders them as drawn.
+    pub(super) graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
     /// How long this stream's teardown has before its watchdog abandons it.
     teardown_watchdog_budget: Duration,
     /// Held for the whole of a start or a stop, so a stop that lands while
@@ -503,7 +503,7 @@ impl LoadedStreamInThisRuntime {
         self.compiler.scope_reading(StepLedgerReading::read_off)
     }
 
-    fn publish_on_this_streams_topic(&self, event: RuntimeEvent) {
+    pub(super) fn publish_on_this_streams_topic(&self, event: RuntimeEvent) {
         self.loaded_stream_identity()
             .publish_on_this_streams_topic(event);
     }

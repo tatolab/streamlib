@@ -278,6 +278,21 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 )?;
                 Ok(Vec::new())
             }
+            fn run_a_graph_generator_in_the_interpreter_of_the_stream_a_call_names(
+                &self,
+                stream_id: &str,
+                generator: &str,
+                _fragment_name: Option<&str>,
+                _promoted_settings: &::serde_json::Map<String, ::serde_json::Value>,
+            ) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_id,
+                )?;
+                Err(::streamlib::sdk::error::Error::Configuration(format!(
+                    "graph generator `{generator}` did not run: the stub runtime's stream \
+                     belongs to no project"
+                )))
+            }
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }

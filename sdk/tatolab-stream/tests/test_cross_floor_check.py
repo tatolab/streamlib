@@ -4,9 +4,8 @@
 """The cross-floor check: each finding kind over a fixture source, the warning
 block it renders, and the gate over `tatolab.stream`'s own Python.
 
-The compile that prints the block is tested in
-`test_project_stream_compile_entry.py`, the gate over the scaffold in
-`test_scaffold_template.py`.
+The runtime's run of the check over a project is tested beside it in the engine, the gate
+over the scaffold in `test_scaffold_template.py`.
 """
 
 import os
