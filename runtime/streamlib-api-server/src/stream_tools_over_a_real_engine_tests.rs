@@ -3367,3 +3367,66 @@ async fn a_pin_move_refreshes_each_holder_of_a_stream_it_refreshed() {
         "{arm_in_spare_in_outer}"
     );
 }
+
+/// Project `cell` depends on project `arm`, which holds a LUT; `fork_asset` on the LUT gives
+/// `cell` its own file of the same bytes beside a sidecar recording `forked_from`, and points
+/// the node of `cell` that referenced the LUT at the copy.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forked_data_asset_is_a_file_of_the_project_its_references_now_name() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let cell = a_project_whose_main_stream_holds_one_source();
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    let lut_source = tempfile::NamedTempFile::new().expect("a LUT file");
+    std::fs::write(lut_source.path(), b"LUT_3D_SIZE 2\n").expect("the LUT's bytes");
+    let imported = call(
+        "import_asset",
+        json!({ "project_directory": arm.path(), "source": lut_source.path(),
+                "asset_path": "looks/grade.cube", "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the LUT is imported");
+    let lut = imported["asset"]["asset"].clone();
+    let revision = imported["commit"].clone();
+    call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                "revision": revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm is depended on");
+    let mut main = the_graph_of_a_stream_named("main");
+    main["nodes"].as_array_mut().unwrap().push(json!({
+        "id": Uuid::new_v4(),
+        "name": "grader",
+        "type": StreamToolsTestSink::processor_class_import_path().as_str(),
+        "config": { "lut": { "asset": lut, "from": arm.project } },
+    }));
+    cell.write_the_graph_document(main);
+
+    let forked = call(
+        "fork_asset",
+        json!({ "project_directory": cell.path(), "project": arm.project, "asset": lut,
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the LUT is forked");
+
+    let copy = forked["asset"]["asset"].clone();
+    assert_eq!(forked["asset"]["path"], "looks/grade-fork.cube", "{forked}");
+    assert_eq!(
+        forked["forked_from"],
+        json!({ "asset": lut, "from": arm.project, "revision": revision })
+    );
+    assert_eq!(
+        std::fs::read(cell.path().join("looks/grade-fork.cube")).expect("the copy's file"),
+        b"LUT_3D_SIZE 2\n"
+    );
+    assert_eq!(
+        the_node_named(&cell.the_graph_document_of("main"), "grader")["config"],
+        json!({ "lut": { "asset": copy } })
+    );
+}

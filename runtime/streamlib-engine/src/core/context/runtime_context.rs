@@ -198,13 +198,28 @@ impl RuntimeContext {
         &self.loaded_stream.project_directory
     }
 
-    /// Where the bytes of the project asset `asset` sit: a content-addressed file to open and
-    /// read, never to write. Refused when the stream's project holds no such asset or lacks its bytes.
-    pub fn asset_content_path(&self, asset: uuid::Uuid) -> crate::core::Result<std::path::PathBuf> {
-        streamlib_project_repository::the_content_path_of_an_asset(
-            self.stream_project_directory(),
-            asset,
-        )
+    /// Where the bytes of the asset `asset` sit — the stream's project's own, or with
+    /// `from_project` the asset of that dependency at its pin, as a config's
+    /// `{"asset", "from"}` names it: a content-addressed file to open and read, never to write.
+    /// Refused when no such asset is held there or its bytes are not in the project's store.
+    pub fn asset_content_path(
+        &self,
+        asset: uuid::Uuid,
+        from_project: Option<uuid::Uuid>,
+    ) -> crate::core::Result<std::path::PathBuf> {
+        match from_project {
+            None => streamlib_project_repository::the_content_path_of_an_asset(
+                self.stream_project_directory(),
+                asset,
+            ),
+            Some(from_project) => {
+                streamlib_project_repository::the_content_path_of_a_dependency_asset(
+                    self.stream_project_directory(),
+                    from_project,
+                    asset,
+                )
+            }
+        }
         .map_err(|refusal| crate::core::Error::Configuration(refusal.to_string()))
     }
 
@@ -604,8 +619,12 @@ impl<'a> RuntimeContextFullAccess<'a> {
     }
 
     /// See [`RuntimeContext::asset_content_path`].
-    pub fn asset_content_path(&self, asset: uuid::Uuid) -> crate::core::Result<std::path::PathBuf> {
-        self.host_base().asset_content_path(asset)
+    pub fn asset_content_path(
+        &self,
+        asset: uuid::Uuid,
+        from_project: Option<uuid::Uuid>,
+    ) -> crate::core::Result<std::path::PathBuf> {
+        self.host_base().asset_content_path(asset, from_project)
     }
 }
 
@@ -681,8 +700,12 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     }
 
     /// See [`RuntimeContext::asset_content_path`].
-    pub fn asset_content_path(&self, asset: uuid::Uuid) -> crate::core::Result<std::path::PathBuf> {
-        self.host_base().asset_content_path(asset)
+    pub fn asset_content_path(
+        &self,
+        asset: uuid::Uuid,
+        from_project: Option<uuid::Uuid>,
+    ) -> crate::core::Result<std::path::PathBuf> {
+        self.host_base().asset_content_path(asset, from_project)
     }
 
     /// See [`RuntimeContextFullAccess::host_base`].

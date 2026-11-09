@@ -24,9 +24,12 @@ mod stream_graph_document;
 
 pub use canonical_project_json::canonical_project_json_bytes;
 pub use project_asset::{
-    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind,
-    ProjectAssetSidecar, ProjectRelativeAssetPath, every_asset_uuid_the_project_holds,
-    the_content_path_of_an_asset,
+    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX,
+    PROJECT_DEPENDENCY_ASSET_RECORDS_DIRECTORY, ProjectAsset, ProjectAssetForkOrigin,
+    ProjectAssetKind, ProjectAssetSidecar, ProjectRelativeAssetPath,
+    every_asset_uuid_the_project_holds, the_content_path_of_a_dependency_asset,
+    the_content_path_of_an_asset, the_dependency_asset_record_path,
+    the_dependency_assets_recorded_at,
 };
 pub use project_content_store::{
     PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,
@@ -49,7 +52,7 @@ pub use project_repositories_open_in_this_runtime::{
 };
 #[cfg(feature = "history")]
 pub use project_repository::{
-    DependencyStreamFork, FORKED_FROM_KEY, ProjectDependencyListed, ProjectRepository,
+    DependencyAssetFork, FORKED_FROM_KEY, ProjectDependencyListed, ProjectRepository,
 };
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{

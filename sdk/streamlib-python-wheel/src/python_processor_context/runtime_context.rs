@@ -43,16 +43,28 @@ impl StreamAndNodeTheHelperHosts {
         }
     }
 
-    fn asset_content_path(&self, asset: &str) -> PyResult<String> {
-        let asset = uuid::Uuid::parse_str(asset).map_err(|error| {
-            pyo3::exceptions::PyValueError::new_err(format!(
-                "`{asset}` is not an asset UUID: {error}"
-            ))
-        })?;
-        let content_path = streamlib_project_repository::the_content_path_of_an_asset(
-            std::path::Path::new(&self.stream_project_directory),
-            asset,
-        )
+    fn asset_content_path(&self, asset: &str, from_project: Option<&str>) -> PyResult<String> {
+        let uuid_named_by = |text: &str, what: &str| {
+            uuid::Uuid::parse_str(text).map_err(|error| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "`{text}` is not {what} UUID: {error}"
+                ))
+            })
+        };
+        let asset = uuid_named_by(asset, "an asset")?;
+        let project_directory = std::path::Path::new(&self.stream_project_directory);
+        let content_path = match from_project {
+            None => {
+                streamlib_project_repository::the_content_path_of_an_asset(project_directory, asset)
+            }
+            Some(from_project) => {
+                streamlib_project_repository::the_content_path_of_a_dependency_asset(
+                    project_directory,
+                    uuid_named_by(from_project, "a project")?,
+                    asset,
+                )
+            }
+        }
         .map_err(|refusal| pyo3::exceptions::PyLookupError::new_err(refusal.to_string()))?;
         Ok(content_path.to_string_lossy().into_owned())
     }
@@ -308,9 +320,11 @@ impl PythonRuntimeContextFullAccess {
         self.stream_and_node.stream_project_directory.clone()
     }
 
-    /// Where the bytes of the project asset `asset` sit, to open and read but never write.
-    fn asset_content_path(&self, asset: &str) -> PyResult<String> {
-        self.stream_and_node.asset_content_path(asset)
+    /// Where the bytes of the asset `asset` sit, the project's own or with `from_project` the
+    /// dependency's at its pin, to open and read but never write.
+    #[pyo3(signature = (asset, from_project = None))]
+    fn asset_content_path(&self, asset: &str, from_project: Option<&str>) -> PyResult<String> {
+        self.stream_and_node.asset_content_path(asset, from_project)
     }
 
     /// Whether this processor is currently paused.
@@ -438,9 +452,11 @@ impl PythonRuntimeContextLimitedAccess {
         self.stream_and_node.stream_project_directory.clone()
     }
 
-    /// Where the bytes of the project asset `asset` sit, to open and read but never write.
-    fn asset_content_path(&self, asset: &str) -> PyResult<String> {
-        self.stream_and_node.asset_content_path(asset)
+    /// Where the bytes of the asset `asset` sit, the project's own or with `from_project` the
+    /// dependency's at its pin, to open and read but never write.
+    #[pyo3(signature = (asset, from_project = None))]
+    fn asset_content_path(&self, asset: &str, from_project: Option<&str>) -> PyResult<String> {
+        self.stream_and_node.asset_content_path(asset, from_project)
     }
 
     /// Whether this processor is currently paused.

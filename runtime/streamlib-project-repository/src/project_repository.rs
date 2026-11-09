@@ -11,12 +11,17 @@ use uuid::Uuid;
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_asset::{
-    GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetKind, ProjectAssetSidecar,
-    ProjectRelativeAssetPath, project_files_ending_with, project_files_the_history_records,
-    read_every_asset_sidecar,
+    ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAsset, ProjectAssetForkOrigin,
+    ProjectAssetKind, ProjectAssetSidecar, ProjectRelativeAssetPath, project_files_ending_with,
+    project_files_the_history_records, read_every_asset_sidecar, the_dependency_asset_record_path,
+    the_dependency_assets_recorded_at,
 };
-use crate::project_content_store::{ProjectContentStore, content_sha256_of};
-use crate::project_dependency_source::ProjectDependencySource;
+use crate::project_content_store::{
+    PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, content_sha256_of,
+};
+use crate::project_dependency_source::{
+    ProjectDependencySource, the_project_directory_an_installed_package_ships,
+};
 use crate::project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjectFile};
 use crate::project_history_repository::{
     PROJECT_HISTORY_BRANCH, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
@@ -54,31 +59,30 @@ pub struct ProjectDependencyListed {
     pub newest_on_the_source: Option<Result<String, String>>,
 }
 
-/// What a fork of a dependency's stream makes, before it is applied.
+/// What a fork of a dependency's asset makes, before it is applied.
 #[derive(Clone, Debug, PartialEq)]
-pub struct DependencyStreamFork {
-    /// The copy's new stream asset UUID.
+pub struct DependencyAssetFork {
+    /// The copy's new asset UUID.
     pub copy: Uuid,
-    /// The copy's graph document, written into this project.
-    pub create_the_copy: ProjectStreamDocumentOperation,
-    /// Each node of this project that referenced the dependency's stream, in its config or a
+    /// The copy written into this project: a stream's graph document, or another asset's
+    /// sidecar beside its file, both recording what it was forked from.
+    pub create_the_copy: ProjectOperation,
+    /// Each node of this project that referenced the dependency's asset, in its config or a
     /// stored fragment, made to reference the copy.
     pub references_made_local: Vec<StreamGraphOperationOnAStream>,
 }
 
-impl DependencyStreamFork {
+impl DependencyAssetFork {
     /// The fork as the operations of one transaction: the copy first, then each reference.
     pub fn operations(&self) -> Vec<ProjectOperation> {
-        std::iter::once(ProjectOperation::StreamDocument(
-            self.create_the_copy.clone(),
-        ))
-        .chain(
-            self.references_made_local
-                .iter()
-                .cloned()
-                .map(ProjectOperation::StreamGraph),
-        )
-        .collect()
+        std::iter::once(self.create_the_copy.clone())
+            .chain(
+                self.references_made_local
+                    .iter()
+                    .cloned()
+                    .map(ProjectOperation::StreamGraph),
+            )
+            .collect()
     }
 }
 
@@ -230,6 +234,7 @@ impl ProjectRepository {
                 content_sha256: content_sha256_of(bytes),
                 content_byte_len: bytes.len() as u64,
                 import_settings: serde_json::Map::new(),
+                forked_from: None,
                 path: stream_document.path,
             };
             if let Some(earlier) = every_asset.get(&stream_asset.asset) {
@@ -553,6 +558,12 @@ impl ProjectRepository {
                     (commit, project_file_at_the_pin),
                 ))
             })?;
+        self.record_and_copy_the_dependency_assets_at(
+            &self.dependency_history(project_file_at_the_pin.project)?,
+            project_file_at_the_pin.project,
+            source,
+            &commit,
+        )?;
         self.apply_project_operations(
             author,
             vec![ProjectOperation::Dependency(
@@ -684,6 +695,7 @@ impl ProjectRepository {
                 },
             );
         }
+        self.record_and_copy_the_dependency_assets_at(&history, project, &pinned.source, &commit)?;
         Ok(ProjectDependencyOperation::MoveDependencyPin {
             project,
             from: pinned.revision,
@@ -754,20 +766,53 @@ impl ProjectRepository {
         })
     }
 
-    /// What a fork of the dependency `project`'s stream `stream`, at its pin, into this project
-    /// makes: its graph document copied to `path` under a new stream asset UUID, recording the
-    /// stream, project and commit it came from under `forked_from`, and every node of this
+    /// What a fork of the dependency `project`'s asset `asset`, at its pin, into this project
+    /// makes: a stream's graph document copied to `path` under a new stream asset UUID, or
+    /// another asset's sidecar written beside its file at `path` under a new UUID, its bytes
+    /// those the fetch already copied into this project's content store, each recording the
+    /// asset, project and commit it came from under `forked_from`; and every node of this
     /// project's streams that referenced it, at any level of a stored fragment, made to
     /// reference the copy. Refused when a node referencing it holds no UUID to name it by.
-    pub fn the_fork_of_a_dependency_stream(
+    pub fn the_fork_of_a_dependency_asset(
         &self,
         project: Uuid,
-        stream: Uuid,
+        asset: Uuid,
         path: Option<&str>,
-    ) -> Result<DependencyStreamFork, ProjectRepositoryRefusal> {
+    ) -> Result<DependencyAssetFork, ProjectRepositoryRefusal> {
         let pinned = self.dependency(project)?;
-        let (path_in_the_dependency, mut document) =
-            self.dependency_stream_at_commit(project, stream, &pinned.revision)?;
+        let copy = Uuid::new_v4();
+        let create_the_copy =
+            match self.dependency_stream_at_commit(project, asset, &pinned.revision) {
+                Ok((path_in_the_dependency, document)) => self.the_copy_of_a_dependency_stream(
+                    &pinned,
+                    asset,
+                    copy,
+                    path_in_the_dependency,
+                    document,
+                    path,
+                )?,
+                Err(ProjectRepositoryRefusal::DependencyHoldsNoStream { .. }) => {
+                    self.the_copy_of_a_dependency_asset(&pinned, asset, copy, path)?
+                }
+                Err(refusal) => return Err(refusal),
+            };
+        Ok(DependencyAssetFork {
+            copy,
+            create_the_copy,
+            references_made_local: self
+                .each_reference_to_a_dependency_asset_made_local(project, asset, copy)?,
+        })
+    }
+
+    fn the_copy_of_a_dependency_stream(
+        &self,
+        pinned: &PinnedProjectDependency,
+        stream: Uuid,
+        copy: Uuid,
+        path_in_the_dependency: ProjectRelativeAssetPath,
+        mut document: Value,
+        path: Option<&str>,
+    ) -> Result<ProjectOperation, ProjectRepositoryRefusal> {
         let path = match path {
             Some(path) => ProjectRelativeAssetPath::parse(path)?,
             None => {
@@ -780,7 +825,6 @@ impl ProjectRepository {
                 ))?
             }
         };
-        let copy = Uuid::new_v4();
         let document_object = document.as_object_mut().ok_or_else(|| {
             ProjectRepositoryRefusal::GraphDocumentUnreadable {
                 path: path_in_the_dependency.to_string(),
@@ -788,7 +832,7 @@ impl ProjectRepository {
             }
         })?;
         if let Some(nodes) = document_object.get_mut("nodes") {
-            asset_references_made_references_into_the_dependency(nodes, project);
+            asset_references_made_references_into_the_dependency(nodes, pinned.project);
         }
         document_object.insert(
             STREAM_DOCUMENT_ASSET_KEY.to_owned(),
@@ -798,15 +842,115 @@ impl ProjectRepository {
             FORKED_FROM_KEY.to_owned(),
             serde_json::json!({
                 "asset": stream.to_string(),
-                "from": project.to_string(),
+                "from": pinned.project.to_string(),
                 "revision": pinned.revision,
             }),
         );
+        Ok(ProjectOperation::StreamDocument(
+            ProjectStreamDocumentOperation::CreateStreamDocument {
+                stream: copy,
+                path,
+                document,
+            },
+        ))
+    }
+
+    fn the_copy_of_a_dependency_asset(
+        &self,
+        pinned: &PinnedProjectDependency,
+        asset: Uuid,
+        copy: Uuid,
+        path: Option<&str>,
+    ) -> Result<ProjectOperation, ProjectRepositoryRefusal> {
+        let recorded_assets = match the_dependency_assets_recorded_at(
+            &self.project_directory,
+            pinned.project,
+            &pinned.revision,
+        ) {
+            Err(ProjectRepositoryRefusal::DependencyAssetsNotRecordedAtThePin { .. }) => self
+                .record_and_copy_the_dependency_assets_at(
+                    &self.dependency_history(pinned.project)?,
+                    pinned.project,
+                    &pinned.source,
+                    &pinned.revision,
+                )?,
+            recorded => recorded?,
+        };
+        let held = recorded_assets
+            .into_iter()
+            .find(|held| held.asset == asset)
+            .ok_or_else(|| ProjectRepositoryRefusal::DependencyHoldsNoAsset {
+                project: pinned.project,
+                asset,
+                commit: pinned.revision.clone(),
+            })?;
+        self.content_store
+            .stored_content(&held.content_sha256)
+            .map_err(
+                |_| ProjectRepositoryRefusal::DependencyAssetContentNotFetched {
+                    project: pinned.project,
+                    asset,
+                    dependency_source: pinned.source.clone(),
+                },
+            )?;
+        let path = match path {
+            Some(path) => ProjectRelativeAssetPath::parse(path)?,
+            None => {
+                let file_name = held.path.file_name();
+                let fork_file_name = match file_name.rsplit_once('.') {
+                    Some((stem, extension)) if !stem.is_empty() => {
+                        format!("{stem}-fork.{extension}")
+                    }
+                    _ => format!("{file_name}-fork"),
+                };
+                let directory = held.path.directory();
+                ProjectRelativeAssetPath::parse(&if directory.is_empty() {
+                    fork_file_name
+                } else {
+                    format!("{directory}/{fork_file_name}")
+                })?
+            }
+        };
+        refuse_a_graph_document_path(&path)?;
+        self.refuse_a_path_through_a_symbolic_link(&path)?;
+        refuse_a_path_another_asset_holds(&self.every_asset()?, &path, None)?;
+        if path.on_disk_under(&self.project_directory).exists() {
+            return Err(ProjectRepositoryRefusal::AssetPathHoldsAnotherFile {
+                path: path.to_string(),
+            });
+        }
+        Ok(ProjectOperation::Asset(
+            ProjectAssetOperation::ImportAsset {
+                asset: ProjectAsset {
+                    asset: copy,
+                    kind: held.kind,
+                    path,
+                    content_sha256: held.content_sha256,
+                    content_byte_len: held.content_byte_len,
+                    import_settings: held.import_settings,
+                    forked_from: Some(ProjectAssetForkOrigin {
+                        asset,
+                        from: pinned.project,
+                        revision: pinned.revision.clone(),
+                    }),
+                },
+            },
+        ))
+    }
+
+    /// The operation pointing each node of this project's streams that references the
+    /// dependency `project`'s asset `asset`, at any level of a stored fragment, at `copy`.
+    fn each_reference_to_a_dependency_asset_made_local(
+        &self,
+        project: Uuid,
+        asset: Uuid,
+        copy: Uuid,
+    ) -> Result<Vec<StreamGraphOperationOnAStream>, ProjectRepositoryRefusal> {
         let assets = self.every_asset()?;
         let mut references_made_local = Vec::new();
         for this_projects_stream in assets
             .values()
-            .filter(|asset| asset.kind == ProjectAssetKind::Stream)
+            .filter(|held| held.kind == ProjectAssetKind::Stream)
         {
             let (stream_path, stream_document) =
                 self.read_stream_graph_document(&assets, this_projects_stream.asset)?;
@@ -818,7 +962,7 @@ impl ProjectRepository {
                         config_with_a_dependency_asset_reference_made_local(
                             node_object,
                             project,
-                            stream,
+                            asset,
                             copy,
                         )
                         .is_some()
@@ -831,7 +975,7 @@ impl ProjectRepository {
             }
             for node in stream_document.nodes() {
                 if let Some(graph_operation) =
-                    the_operation_pointing_a_node_at_a_forked_copy(&node, project, stream, copy)
+                    the_operation_pointing_a_node_at_a_forked_copy(&node, project, asset, copy)
                 {
                     references_made_local.push(StreamGraphOperationOnAStream {
                         stream: this_projects_stream.asset,
@@ -840,33 +984,122 @@ impl ProjectRepository {
                 }
             }
         }
-        Ok(DependencyStreamFork {
-            copy,
-            create_the_copy: ProjectStreamDocumentOperation::CreateStreamDocument {
-                stream: copy,
-                path,
-                document,
-            },
-            references_made_local,
-        })
+        Ok(references_made_local)
     }
 
-    /// Fork the dependency `project`'s stream `stream` at its pin into this project, as one
-    /// transaction by `author`: [`Self::the_fork_of_a_dependency_stream`], applied.
-    pub fn fork_dependency_stream(
+    /// Fork the dependency `project`'s asset `asset` at its pin into this project, as one
+    /// transaction by `author`: [`Self::the_fork_of_a_dependency_asset`], applied.
+    pub fn fork_dependency_asset(
         &mut self,
         author: &ProjectTransactionAuthor,
         project: Uuid,
-        stream: Uuid,
+        asset: Uuid,
         path: Option<&str>,
-    ) -> Result<(DependencyStreamFork, AppliedProjectTransaction), ProjectRepositoryRefusal> {
-        let fork = self.the_fork_of_a_dependency_stream(project, stream, path)?;
+    ) -> Result<(DependencyAssetFork, AppliedProjectTransaction), ProjectRepositoryRefusal> {
+        let fork = self.the_fork_of_a_dependency_asset(project, asset, path)?;
         let applied = self.apply_project_operations(
             author,
             fork.operations(),
             ProjectTransactionLineage::NewEdit,
         )?;
         Ok((fork, applied))
+    }
+
+    /// Record every asset with a sidecar the dependency `project` holds at `commit` of
+    /// `history`, for a reader with no history, and copy into this project's content store the
+    /// bytes of each that it lacks and that the content store of `source`, when it is a
+    /// project on this machine, holds. Bytes neither store holds are left for a read of them
+    /// to refuse by name.
+    fn record_and_copy_the_dependency_assets_at(
+        &self,
+        history: &ProjectHistoryRepository,
+        project: Uuid,
+        source: &str,
+        commit: &str,
+    ) -> Result<Vec<ProjectAsset>, ProjectRepositoryRefusal> {
+        let mut recorded_assets = Vec::new();
+        for (file_path, bytes) in history.files_at_commit(commit)? {
+            let Some(asset_path) = file_path.strip_suffix(ASSET_SIDECAR_FILE_SUFFIX) else {
+                continue;
+            };
+            let read = ProjectRelativeAssetPath::parse(asset_path).and_then(|asset_path| {
+                let sidecar: ProjectAssetSidecar = serde_json::from_slice(&bytes)?;
+                Ok(ProjectAsset::from_sidecar(asset_path, sidecar))
+            });
+            match read {
+                Ok(recorded_asset) => recorded_assets.push(recorded_asset),
+                Err(refusal) => tracing::warn!(
+                    dependency = %project,
+                    %commit,
+                    sidecar = %file_path,
+                    %refusal,
+                    "a dependency's sidecar that does not parse names no asset of it"
+                ),
+            }
+        }
+        let record_path =
+            the_dependency_asset_record_path(&self.project_directory, project, commit);
+        if let Some(record_directory) = record_path.parent() {
+            std::fs::create_dir_all(record_directory)?;
+        }
+        let partial_record_path =
+            record_path.with_extension(format!("incoming-{}", Uuid::new_v4()));
+        std::fs::write(
+            &partial_record_path,
+            canonical_project_json_bytes(&recorded_assets)?,
+        )?;
+        if let Err(not_placed) = std::fs::rename(&partial_record_path, &record_path) {
+            let _ = std::fs::remove_file(&partial_record_path);
+            return Err(not_placed.into());
+        }
+
+        let source_content_store_directory = match ProjectDependencySource::named_by(source) {
+            ProjectDependencySource::ProjectDirectory(source_project_directory) => {
+                Some(source_project_directory.join(PROJECT_CONTENT_STORE_DIRECTORY))
+            }
+            ProjectDependencySource::PythonPackageShippingAProject { distribution } => {
+                the_project_directory_an_installed_package_ships(
+                    &self.project_directory,
+                    &distribution,
+                )
+                .ok()
+                .map(|shipped| shipped.join(PROJECT_CONTENT_STORE_DIRECTORY))
+            }
+            ProjectDependencySource::GitRemote(_) => None,
+        };
+        for recorded_asset in &recorded_assets {
+            if self
+                .content_store
+                .stored_content(&recorded_asset.content_sha256)
+                .is_ok()
+            {
+                continue;
+            }
+            let Some(source_content) = source_content_store_directory
+                .as_ref()
+                .map(|directory| directory.join(&recorded_asset.content_sha256))
+                .filter(|source_content| source_content.is_file())
+            else {
+                tracing::warn!(
+                    dependency = %project,
+                    asset = %recorded_asset.asset,
+                    %source,
+                    "a dependency's asset bytes are not on this machine, so reading them is refused"
+                );
+                continue;
+            };
+            let stored = self.content_store.store_the_file_at(&source_content)?;
+            if stored.content_sha256 != recorded_asset.content_sha256 {
+                tracing::warn!(
+                    dependency = %project,
+                    asset = %recorded_asset.asset,
+                    expected = %recorded_asset.content_sha256,
+                    held = %stored.content_sha256,
+                    "a dependency's content store holds other bytes under an asset's hash"
+                );
+            }
+        }
+        Ok(recorded_assets)
     }
 
     /// Every dependency the project file pins, each with, when `check_for_newer`, the newest
@@ -1022,6 +1255,15 @@ impl ProjectRepository {
                 dependency = %project,
                 "fetched a pinned dependency's missing history again from its source"
             );
+            let history = ProjectHistoryRepository::open_or_create_at(&history_directory)?;
+            let pinned = self.dependency(project)?;
+            self.record_and_copy_the_dependency_assets_at(
+                &history,
+                project,
+                &pinned.source,
+                &pinned.revision,
+            )?;
+            return Ok(history);
         }
         ProjectHistoryRepository::open_or_create_at(&history_directory)
     }
@@ -1264,6 +1506,7 @@ impl ProjectRepository {
                         content_sha256: content_sha256_of(&bytes),
                         content_byte_len: bytes.len() as u64,
                         import_settings: serde_json::Map::new(),
+                        forked_from: None,
                         path: path.clone(),
                     },
                 );
@@ -1433,6 +1676,7 @@ impl ProjectRepository {
                         content_sha256: stored.content_sha256,
                         content_byte_len: stored.content_byte_len,
                         import_settings,
+                        forked_from: None,
                     },
                 }))
             }

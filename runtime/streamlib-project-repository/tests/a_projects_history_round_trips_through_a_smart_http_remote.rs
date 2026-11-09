@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 use streamlib_project_repository::{
     ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectHistoryRemote,
     ProjectHistoryRepository, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, the_content_path_of_a_dependency_asset,
 };
 
 const REMOTE_BEARER_TOKEN: &str = "art_v1_0123456789abcdef0123456789abcdef01234567";
@@ -289,6 +289,17 @@ fn a_dependency_on_a_remote_that_needs_a_token_fetches_with_it_and_keeps_it_nowh
         cell.dependency(arm_project).unwrap().revision,
         first_revision
     );
+    let intro = arm
+        .assets()
+        .unwrap()
+        .into_iter()
+        .find(|asset| asset.path.to_string() == "media/intro.mp4")
+        .unwrap()
+        .asset;
+    assert!(matches!(
+        the_content_path_of_a_dependency_asset(cell.project_directory(), arm_project, intro),
+        Err(ProjectRepositoryRefusal::DependencyAssetContentNotFetched { .. })
+    ));
 
     std::fs::write(parent.path().join("outro.mp4"), b"more video").unwrap();
     let mut arm = ProjectRepository::open(arm.project_directory()).unwrap();

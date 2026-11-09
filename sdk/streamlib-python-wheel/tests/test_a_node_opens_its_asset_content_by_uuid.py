@@ -82,3 +82,53 @@ def test_a_string_that_is_not_a_uuid_is_refused(
 
     with pytest.raises(ValueError, match="not an asset UUID"):
         full_access_context.asset_content_path("looks/grade.cube")
+
+
+def a_project_depending_on_one_holding_a_data_asset(project_directory: Path) -> tuple[str, str]:
+    dependency_project = str(uuid.uuid4())
+    revision = "0" * 40
+    asset = str(uuid.uuid4())
+    content_sha256 = hashlib.sha256(LUT_BYTES).hexdigest()
+    content_store = project_directory / ".tatolab" / "content"
+    content_store.mkdir(parents=True)
+    (content_store / content_sha256).write_bytes(LUT_BYTES)
+    (project_directory / "tatolab-project.json").write_text(
+        json.dumps(
+            {
+                "project": str(uuid.uuid4()),
+                "name": "cell",
+                "dependencies": [
+                    {"project": dependency_project, "source": "/arm", "revision": revision}
+                ],
+            }
+        )
+    )
+    record = project_directory / ".tatolab" / "dependency-assets" / dependency_project
+    record.mkdir(parents=True)
+    (record / f"{revision}.json").write_text(
+        json.dumps(
+            [
+                {
+                    "asset": asset,
+                    "kind": "data",
+                    "path": "looks/grade.cube",
+                    "content_sha256": content_sha256,
+                    "content_byte_len": len(LUT_BYTES),
+                    "import_settings": {},
+                }
+            ]
+        )
+    )
+    return asset, dependency_project
+
+
+def test_both_contexts_open_a_dependencys_asset_at_its_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    asset, dependency_project = a_project_depending_on_one_holding_a_data_asset(tmp_path)
+
+    for context in both_contexts_of_a_node_in(tmp_path, monkeypatch):
+        content_path = context.asset_content_path(asset, from_project=dependency_project)
+        assert Path(content_path).read_bytes() == LUT_BYTES
+        with pytest.raises(LookupError, match=asset):
+            context.asset_content_path(asset)
