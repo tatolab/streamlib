@@ -164,16 +164,19 @@ since its copy answers which files were edited and asks the caller to confirm th
 **Decided 9 — no transition.** The content store was a rewrite pre-1.0: after ticket 2 a node
 reads the visible file, and nothing carries an older project forward.
 
+**Decided 10 — first-party modules ride the runtime.** The runtime unit carries its first-party
+modules, `tatolab-ops` among them, as project folders, as it carries samples; a new project's
+scaffold copies `tatolab-ops` in through `add_dependency`, so each runtime release gives new
+projects its version, and an existing project keeps its copy until `update_dependency`, which
+`list_dependencies` `check_for_newer` shows when the runtime carries a newer one. It replaces the
+PyPI requirement PR #3392 added, as ComfyUI ships its core nodes and Unreal its engine plugins.
+
 ## Assumptions to correct if wrong
 
 - **Editing a module in place.** A transaction on a project open at `imports/<folder>/` is
   recorded in that module's own history and also as one commit on the enclosing project, the
   runtime being the one writer of both, so the enclosing project's history and change feed account
   for it; undo stays per window.
-
-- **Where `tatolab-ops` is copied from.** The runtime unit carries its first-party modules as
-  project folders, as it carries samples, and a new project's scaffold adds `tatolab-ops` from
-  there through `add_dependency`. It replaces the PyPI requirement PR #3392 added.
 - **A private GitHub repository** is out of the first slice; a download of a public one needs no
   credential, and a private one returns with whatever sign-in Tato Studio gets.
 - **A plain Python requirement** (numpy, torch) stays a `pyproject.toml` requirement the runtime
