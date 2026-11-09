@@ -33,6 +33,7 @@ use streamlib::sdk::runtime::{
     StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordsInTheStateDirectory,
     StreamRenameOutcome,
 };
+use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
 use uuid::Uuid;
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
@@ -3205,5 +3206,164 @@ async fn fragments_follow_a_pin_moved_while_their_stream_is_unloaded_and_each_ed
             "arm"
         )),
         ["source", "shoulder", "elbow"]
+    );
+}
+
+/// The graph of the stream `stream_name` holding one fragment named after each stream of
+/// `held_stream_names`, each of `project`'s own stream, stored empty.
+fn the_graph_of_a_stream_holding_fragments_of(
+    project: &ProjectWithGraphDocuments,
+    stream_name: &str,
+    held_stream_names: &[&str],
+) -> Value {
+    let fragment_nodes: Vec<Value> = held_stream_names
+        .iter()
+        .map(|held_stream_name| {
+            json!({
+                "id": Uuid::new_v4(),
+                "name": held_stream_name,
+                "type": STREAM_FRAGMENT_NODE_TYPE,
+                "config": { "stream": { "asset": project.stream_asset_of(held_stream_name) } },
+                "fragment": { "nodes": [], "links": [] },
+            })
+        })
+        .collect();
+    json!({ "stream": stream_name, "nodes": fragment_nodes, "links": [] })
+}
+
+/// The names of the nodes the fragment node `fragment_name` of `fragment_node`'s stored
+/// fragment stores in turn.
+fn the_node_names_a_nested_fragment_stores(
+    fragment_node: &Value,
+    fragment_name: &str,
+) -> Vec<String> {
+    let nested = fragment_node["fragment"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|node| node["name"] == fragment_name)
+        .cloned()
+        .unwrap_or(Value::Null);
+    the_node_names_a_fragment_stores(&nested)
+}
+
+/// `left` holds `main`, `right` holds `main` and `left`, and `top` holds `right`, none loaded,
+/// beside a stream whose graph document does not parse. An edit to `main` refreshes `left`
+/// before `right` and `right` before `top`, so `top`'s copy of `right` holds `left`'s new copy
+/// of `main`.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edit_refreshes_each_holder_after_every_stream_it_holds() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let cell = a_project_whose_main_stream_holds_one_source();
+    cell.write_the_graph_document(the_graph_of_a_stream_holding_fragments_of(
+        &cell,
+        "left",
+        &["main"],
+    ));
+    cell.write_the_graph_document(the_graph_of_a_stream_holding_fragments_of(
+        &cell,
+        "right",
+        &["main", "left"],
+    ));
+    cell.write_the_graph_document(the_graph_of_a_stream_holding_fragments_of(
+        &cell,
+        "top",
+        &["right"],
+    ));
+    cell.write_an_unloadable_graph_document("broken");
+    let main_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "add_node",
+            json!({ "stream": main_id, "type": sink_type.as_str(), "name": "wrist",
+                    "author": an_agent_named("alice") }),
+        )
+        .await,
+    )
+    .expect("main is edited");
+
+    let right_in_top = the_node_named(&cell.the_graph_document_of("top"), "right");
+    assert_eq!(
+        the_node_names_a_nested_fragment_stores(&right_in_top, "left"),
+        ["main"],
+        "{right_in_top}"
+    );
+    let left_in_right_in_top = right_in_top["fragment"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|node| node["name"] == "left")
+        .cloned()
+        .expect("top's copy of right holds left");
+    assert_eq!(
+        the_node_names_a_nested_fragment_stores(&left_in_right_in_top, "main"),
+        ["source", "wrist"],
+        "{left_in_right_in_top}"
+    );
+}
+
+/// `spare` holds project `arm`'s stream and `outer` holds `spare`, neither loaded. Moving the
+/// pin refreshes `spare` and then `outer`'s copy of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pin_move_refreshes_each_holder_of_a_stream_it_refreshed() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let first_revision = arm.commit_a_sink_named("shoulder");
+    let cell = a_project_whose_main_stream_holds_one_source();
+    cell.write_the_graph_document(the_graph_of_a_stream_named("spare"));
+    let spare_id = engine.a_stream_loaded_from_its_graph_document(&cell, "spare");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                "revision": first_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm is depended on");
+    call(
+        "use_dependency_stream",
+        json!({ "stream": spare_id, "project": arm.project,
+                "dependency_stream": arm.stream_asset_of("main").to_string(), "name": "arm",
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm's stream is placed");
+    engine
+        .engine
+        .unload_stream(&spare_id)
+        .expect("the spare stream unloads");
+    cell.write_the_graph_document(the_graph_of_a_stream_holding_fragments_of(
+        &cell,
+        "outer",
+        &["spare"],
+    ));
+
+    let second_revision = arm.commit_a_sink_named("elbow");
+    call(
+        "update_dependency",
+        json!({ "project_directory": cell.path(), "project": arm.project,
+                "revision": second_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the pin moves");
+
+    let spare_in_outer = the_node_named(&cell.the_graph_document_of("outer"), "spare");
+    let arm_in_spare_in_outer = spare_in_outer["fragment"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|node| node["name"] == "arm")
+        .cloned()
+        .unwrap_or_else(|| panic!("outer's copy of spare holds the arm: {spare_in_outer}"));
+    assert_eq!(
+        the_node_names_a_fragment_stores(&arm_in_spare_in_outer),
+        ["source", "shoulder", "elbow"],
+        "{arm_in_spare_in_outer}"
     );
 }

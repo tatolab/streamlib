@@ -195,7 +195,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Move a dependency's pin to another revision, as one transaction by `author`: its history is fetched again from its source, a Git remote sent `bearer_token` when it needs one, and every fragment of this project's streams that holds one of its streams is refreshed from the new pin — a loaded stream's live and in its graph document, one not loaded in its graph document alone, read on its next load — each node keeping its UUID by name so links into the fragment and edits around it hold. Answers the `dependency` and the `graph_operations` that refreshed each fragment; undo moves the pin back and restores each fragment as it was. Refused, nothing changed, for a project not depended on or a revision its source does not hold."
+        description = "Move a dependency's pin to another revision, as one transaction by `author`: its history is fetched again from its source, a Git remote sent `bearer_token` when it needs one, and every fragment of this project's streams that holds one of its streams is refreshed from the new pin — a loaded stream's live and in its graph document, one not loaded in its graph document alone, read on its next load — and in turn each fragment holding a stream of this project such a refresh changed, each node keeping its UUID by name so links into the fragment and edits around it hold. Answers the `dependency` and the `graph_operations` that refreshed each fragment of a loaded stream; undo moves the pin back and restores each fragment as it was. Refused, nothing changed, for a project not depended on or a revision its source does not hold."
     )]
     async fn update_dependency(
         &self,
