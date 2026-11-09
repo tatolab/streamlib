@@ -4,8 +4,8 @@
 //! A recorded stream that keeps crashing `tatolabd` is recorded failed, GPU-free:
 //! the crash-on-demand test node crashes the runtime while its stream loads,
 //! twice, and the next start lists the stream failed with its reason and
-//! skips it; `start_stream` retries it past its crash, to the GPU the runtime
-//! is left without, which changes nothing the stream owns. Built with
+//! skips it; a `run_project` of its project retries it past its crash, to the
+//! GPU the runtime is left without, which fails it for that reason instead. Built with
 //! `--features machine-directories-under-a-test-root`, which registers the
 //! node.
 
@@ -21,7 +21,7 @@ use common::{
 };
 
 #[test]
-fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start_retries_it() {
+fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_a_run_retries_it() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let crash_trigger = machine_root.project_directory().join("crash-armed");
@@ -91,17 +91,24 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start
     );
 
     std::fs::remove_file(&crash_trigger).unwrap();
+    let venv_bin = machine_root.project_directory().join(".venv/bin");
+    std::fs::create_dir_all(&venv_bin).unwrap();
+    std::os::unix::fs::symlink(
+        an_executable_standing_in_for_the_interpreter(),
+        venv_bin.join("python"),
+    )
+    .unwrap();
     let retried = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
-        "start_stream",
-        serde_json::json!({"stream": crasher_stream_id}),
+        "run_project",
+        serde_json::json!({"project_directory": machine_root.project_directory()}),
     )
     .json();
     let retry_once_ended = the_stream_action_once_ended(
         &machine_root.local_api_socket_path(),
         retried["action"]
             .as_str()
-            .expect("`start_stream` answers its action"),
+            .expect("`run_project` answers its action"),
     );
     runtime.interrupt_and_expect_a_clean_exit();
 
@@ -115,7 +122,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start
     );
     let standard_error = runtime.standard_error();
     assert!(
-        standard_error.contains(&format!("the stream `{crasher_stream_id}` did not start: "))
+        standard_error.contains(&format!("the stream `{crasher_stream_id}` failed: "))
             && standard_error.contains("the engine could not give the stream its GPU context"),
         "the retry did not load the stream past its crash to the GPU this runtime was left \
          without:\n{standard_error}"
@@ -124,10 +131,21 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_start
         !run_in_progress_record.exists(),
         "a clean stop left the run-in-progress record behind"
     );
+    let after_the_retry = the_crashers_record();
     assert_eq!(
-        the_crashers_record(),
-        after_two_crashes_and_the_start_that_failed_it,
-        "a retry the engine refused changes nothing the stream owns"
+        after_the_retry.runtime_crashes_in_a_row_implicating_it, 0,
+        "a run replaces the record, so the crashes it was failed for count no longer"
+    );
+    assert!(
+        after_the_retry
+            .failed_because
+            .as_deref()
+            .is_some_and(|failed_because| failed_because.contains("GPU context")),
+        "the retry is failed for its own reason, not the crashes: {after_the_retry:?}"
+    );
+    assert_ne!(
+        after_the_retry,
+        after_two_crashes_and_the_start_that_failed_it
     );
 }
 

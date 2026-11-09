@@ -19,7 +19,7 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    StubToolCallTransport, run_project_tool_result_text, stop_stream_tool_result_text,
+    StubToolCallTransport, rename_stream_tool_result_text, run_project_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -207,18 +207,46 @@ fn run_of_a_dir_that_is_not_a_directory_is_refused_before_any_call() {
 }
 
 #[test]
-fn stop_queues_the_streams_stop_and_says_so() {
-    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam")),
+fn stop_queues_the_stop_of_the_working_directorys_project_or_the_one_dir_names() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    let stop_answer =
+        json!({"action": "R-1", "project_directory": canonical_project_directory}).to_string();
+    let (isolated_machine_directories, stub_local_api_server) =
+        a_runtime_answering("stop_project", StubToolAnswer::tool_result(&stop_answer));
+
+    let in_the_project = run_tatolab_in(
+        &isolated_machine_directories,
+        project_directory.path(),
+        &["stop"],
     );
+    let naming_it = isolated_machine_directories.run_tatolab(&[
+        "stop",
+        "--dir",
+        project_directory.path().to_str().unwrap(),
+    ]);
 
-    let printed = printed_by_a_successful(&isolated_machine_directories, &["stop", "cam"]);
-
-    assert_eq!(printed, "R-1 queued: stop of cam\n");
+    for finished in [&in_the_project, &naming_it] {
+        assert_eq!(
+            finished.status.code(),
+            Some(0),
+            "{}",
+            standard_error_text(finished)
+        );
+        assert_eq!(
+            standard_output_text(finished),
+            format!(
+                "R-1 queued: stop of {}\n",
+                canonical_project_directory.display()
+            )
+        );
+    }
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("stop_stream"),
-        [json!({"stream": "cam"})]
+        stub_local_api_server.recorded_arguments_of("stop_project"),
+        [
+            json!({"project_directory": canonical_project_directory}),
+            json!({"project_directory": canonical_project_directory}),
+        ]
     );
 }
 
@@ -263,22 +291,6 @@ fn a_refused_cancel_prints_the_runtimes_refusal_and_exits_one() {
         standard_error_text(&refused),
         "error: cancel_stream_action failed: the stream action `R-1` is a running stop, which \
          has begun unloading its streams and cannot be cut short; it ends done\n"
-    );
-}
-
-#[test]
-fn start_queues_the_streams_start_and_says_so() {
-    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "start_stream",
-        StubToolAnswer::tool_result(r#"{"action":"R-2","stream":"cam"}"#),
-    );
-
-    let printed = printed_by_a_successful(&isolated_machine_directories, &["start", "cam"]);
-
-    assert_eq!(printed, "R-2 queued: start of cam\n");
-    assert_eq!(
-        stub_local_api_server.recorded_arguments_of("start_stream"),
-        [json!({"stream": "cam"})]
     );
 }
 
@@ -465,11 +477,11 @@ fn a_scale_the_runtime_refused_exits_one_in_its_own_words() {
 #[test]
 fn a_stream_the_runtime_does_not_hold_is_refused_listing_the_streams_before_any_action() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("cam")),
+        "rename_stream",
+        StubToolAnswer::tool_result(&rename_stream_tool_result_text("cam", "Desk")),
     );
 
-    let refused = isolated_machine_directories.run_tatolab(&["stop", "nope"]);
+    let refused = isolated_machine_directories.run_tatolab(&["rename", "nope", "Desk"]);
 
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
@@ -478,7 +490,7 @@ fn a_stream_the_runtime_does_not_hold_is_refused_listing_the_streams_before_any_
          \"Camera\"\n"
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("stop_stream"),
+        stub_local_api_server.recorded_arguments_of("rename_stream"),
         Vec::<serde_json::Value>::new()
     );
 }
@@ -493,14 +505,14 @@ fn an_empty_stream_argument_is_refused_and_never_falls_back_to_the_working_direc
             "main",
             &canonical_project_directory,
         )],
-        "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("hello-main-3f2a9c")),
+        "rename_stream",
+        StubToolAnswer::tool_result(&rename_stream_tool_result_text("hello-main-3f2a9c", "Desk")),
     );
 
     let refused = run_tatolab_in(
         &isolated_machine_directories,
         project_directory.path(),
-        &["stop", ""],
+        &["rename", "", "Desk"],
     );
 
     assert_eq!(refused.status.code(), Some(1));
@@ -510,7 +522,7 @@ fn an_empty_stream_argument_is_refused_and_never_falls_back_to_the_working_direc
         standard_error_text(&refused)
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("stop_stream"),
+        stub_local_api_server.recorded_arguments_of("rename_stream"),
         Vec::<serde_json::Value>::new()
     );
 }
@@ -522,15 +534,21 @@ fn a_display_name_one_stream_holds_reaches_the_tool_as_that_streams_id() {
             listed_stream("hello-main-3f2a9c", "Hello camera", Path::new("/srv/hello")),
             listed_stream("desk-main-0a1b2c", "Desk", Path::new("/srv/desk")),
         ],
-        "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("hello-main-3f2a9c")),
+        "rename_stream",
+        StubToolAnswer::tool_result(&rename_stream_tool_result_text(
+            "hello-main-3f2a9c",
+            "Front",
+        )),
     );
 
-    printed_by_a_successful(&isolated_machine_directories, &["stop", "Hello camera"]);
+    printed_by_a_successful(
+        &isolated_machine_directories,
+        &["rename", "Hello camera", "Front"],
+    );
 
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("stop_stream"),
-        [json!({"stream": "hello-main-3f2a9c"})]
+        stub_local_api_server.recorded_arguments_of("rename_stream"),
+        [json!({"stream": "hello-main-3f2a9c", "display_name": "Front"})]
     );
 }
 
@@ -542,22 +560,16 @@ fn every_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_n
     let canonical_project_directory = project_directory.path().canonicalize().unwrap();
     for (tatolab_arguments, tool_name, tool_answer, sent) in [
         (
-            &["stop"][..],
-            "stop_stream",
-            stop_stream_tool_result_text("hello-main-3f2a9c"),
-            json!({"stream": "hello-main-3f2a9c"}),
-        ),
-        (
-            &["start"][..],
-            "start_stream",
-            json!({"action": "R-2", "stream": "hello-main-3f2a9c"}).to_string(),
-            json!({"stream": "hello-main-3f2a9c"}),
-        ),
-        (
             &["rename", "Hello camera"][..],
             "rename_stream",
             json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}).to_string(),
             json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}),
+        ),
+        (
+            &["clock", "--scale", "0.5"][..],
+            "set_stream_clock_scale",
+            json!({"stream": "hello-main-3f2a9c", "scale": 0.5}).to_string(),
+            json!({"stream": "hello-main-3f2a9c", "scale": 0.5}),
         ),
     ] {
         let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
@@ -598,14 +610,14 @@ fn a_directory_several_streams_were_loaded_from_is_refused_listing_them_and_noth
             listed_stream("rig-front-0a1b2c", "front", &canonical_project_directory),
             listed_stream("rig-back-9f8e7d", "back", &canonical_project_directory),
         ],
-        "stop_stream",
-        StubToolAnswer::tool_result(&stop_stream_tool_result_text("rig-front-0a1b2c")),
+        "rename_stream",
+        StubToolAnswer::tool_result(&rename_stream_tool_result_text("rig-front-0a1b2c", "Desk")),
     );
 
     let refused = run_tatolab_in(
         &isolated_machine_directories,
         project_directory.path(),
-        &["stop"],
+        &["rename", "Desk"],
     );
 
     assert_eq!(refused.status.code(), Some(1));
@@ -618,7 +630,7 @@ fn a_directory_several_streams_were_loaded_from_is_refused_listing_them_and_noth
         )
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("stop_stream"),
+        stub_local_api_server.recorded_arguments_of("rename_stream"),
         Vec::<serde_json::Value>::new()
     );
 }

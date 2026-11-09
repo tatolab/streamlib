@@ -634,7 +634,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     # Long enough for the source to have driven many frames through the effect.
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
     frames_written = frames_the_scaffolded_effect_wrote(tatolabd, stream_id)
-    queued_stop = local_api.call_tool("stop_stream", {"stream": stream_id})
+    queued_stop = local_api.call_tool("stop_project", {"project_directory": str(app_directory)})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
 
     stream_output = the_first_streams_output(tatolabd, stream_id)

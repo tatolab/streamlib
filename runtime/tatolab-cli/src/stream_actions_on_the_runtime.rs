@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The streams the machine's runtime holds, managed one call at a time: `new`, `run`, `stop`,
-//! `start`, `rm`, `cancel`, `rename`, `streams` and `clock`, each the local API tool of the same purpose, and the
+//! `rm`, `cancel`, `rename`, `streams` and `clock`, each the local API tool of the same purpose, and the
 //! lines or table each prints. A verb naming one stream resolves its stream argument to an id
 //! through `list_streams` first. `run` and `dev` share the project load request.
 
@@ -14,7 +14,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     CancelStreamActionToolResult, CreateProjectToolResult, ListStreamsToolResult,
     ListStreamsToolResultStream, ListedStreamState, RemoveProjectToolResult,
     RenameStreamToolResult, RunProjectToolResult, SetStreamClockScaleToolResult,
-    StartStreamToolResult, StopStreamToolResult, StreamActionStateOnTheWire,
+    StopProjectToolResult, StreamActionStateOnTheWire,
 };
 
 use crate::TatolabCommandFailure;
@@ -31,10 +31,8 @@ pub(crate) enum StreamActionTool {
     RunProject,
     /// Creates a project and queues its load.
     CreateProject,
-    /// Unloads a stream, recording it stopped.
-    StopStream,
-    /// Loads a stopped stream again, or retries a failed one.
-    StartStream,
+    /// Unloads every stream of a project, recording each stopped.
+    StopProject,
     /// Unloads every stream of a project and forgets every record of it.
     RemoveProject,
     /// Drops a queued stream action, or stops a running one at its step.
@@ -53,8 +51,7 @@ impl StreamActionTool {
         match self {
             StreamActionTool::RunProject => "run_project",
             StreamActionTool::CreateProject => "create_project",
-            StreamActionTool::StopStream => "stop_stream",
-            StreamActionTool::StartStream => "start_stream",
+            StreamActionTool::StopProject => "stop_project",
             StreamActionTool::RemoveProject => "remove_project",
             StreamActionTool::CancelStreamAction => "cancel_stream_action",
             StreamActionTool::RenameStream => "rename_stream",
@@ -269,38 +266,25 @@ fn stream_tool_arguments(stream: &str) -> serde_json::Map<String, serde_json::Va
     stream_arguments
 }
 
-/// `stop_stream`'s arguments for `stream`.
-pub(crate) fn stop_stream_tool_arguments(
-    stream: &str,
-) -> serde_json::Map<String, serde_json::Value> {
-    stream_tool_arguments(stream)
-}
-
-/// `tatolab stop [STREAM]`.
-pub(crate) fn stop_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
-    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
-    let stop_stream_result: StopStreamToolResult = call_one_stream_action_tool(
-        StreamActionTool::StopStream,
-        stop_stream_tool_arguments(&stream),
-    )?;
+/// `tatolab stop [--dir DIR]`: the stop of the whole project — `--dir` resolved against
+/// `caller_working_directory`, else the working directory itself.
+pub(crate) fn stop_project(
+    caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
+) -> Result<u8, TatolabCommandFailure> {
+    let project_directory =
+        the_project_directory_a_verb_names(caller_working_directory, requested_project_directory)?;
+    let mut stop_project_arguments = serde_json::Map::new();
+    stop_project_arguments.insert(
+        "project_directory".to_owned(),
+        project_directory.display().to_string().into(),
+    );
+    let stop_project_result: StopProjectToolResult =
+        call_one_stream_action_tool(StreamActionTool::StopProject, stop_project_arguments)?;
     write_verb_standard_output(&rendered_queued_stream_action_line(
-        &stop_stream_result.action,
+        &stop_project_result.action,
         "stop",
-        &stop_stream_result.stream,
-    ))
-}
-
-/// `tatolab start [STREAM]`.
-pub(crate) fn start_stream(stream_argument: Option<&str>) -> Result<u8, TatolabCommandFailure> {
-    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
-    let start_stream_result: StartStreamToolResult = call_one_stream_action_tool(
-        StreamActionTool::StartStream,
-        stream_tool_arguments(&stream),
-    )?;
-    write_verb_standard_output(&rendered_queued_stream_action_line(
-        &start_stream_result.action,
-        "start",
-        &start_stream_result.stream,
+        &stop_project_result.project_directory.display().to_string(),
     ))
 }
 
@@ -495,9 +479,9 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         let stream_id = &listed_stream.stream;
         let failed_line = match &listed_stream.location {
             Some(location) => format!(
-                "{stream_id} failed: {failed_because}. `tatolab start {stream_id}` retries it, \
-                 `tatolab rm --dir {}` forgets its project.\n",
-                location.project_directory.display()
+                "{stream_id} failed: {failed_because}. `tatolab run --dir {project_directory}` \
+                 retries it, `tatolab rm --dir {project_directory}` forgets its project.\n",
+                project_directory = location.project_directory.display()
             ),
             None => format!("{stream_id} failed: {failed_because}.\n"),
         };
@@ -517,10 +501,19 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
             .collect::<Vec<_>>()
             .join(" and ");
         let stream_id = &listed_stream.stream;
-        rendered_table.push_str(&format!(
-            "{stream_id} is waiting for {capture_devices} access, which nobody has asked for \
-             yet: `tatolab stop {stream_id}` then `tatolab start {stream_id}` asks for it.\n"
-        ));
+        let waiting_line = match &listed_stream.location {
+            Some(location) => format!(
+                "{stream_id} is waiting for {capture_devices} access, which nobody has asked for \
+                 yet: `tatolab stop --dir {project_directory}` then `tatolab run --dir \
+                 {project_directory}` asks for it.\n",
+                project_directory = location.project_directory.display()
+            ),
+            None => format!(
+                "{stream_id} is waiting for {capture_devices} access, which nobody has asked for \
+                 yet.\n"
+            ),
+        };
+        rendered_table.push_str(&waiting_line);
     }
     rendered_table
 }
@@ -684,7 +677,7 @@ mod tests {
              desk-0a1b2c  desk  running  3      /srv/desk  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
              \n\
              desk-0a1b2c is waiting for camera and microphone access, which nobody has asked \
-             for yet: `tatolab stop desk-0a1b2c` then `tatolab start desk-0a1b2c` asks for it.\n"
+             for yet: `tatolab stop --dir /srv/desk` then `tatolab run --dir /srv/desk` asks for it.\n"
         );
     }
 
@@ -715,14 +708,14 @@ mod tests {
 
     #[test]
     fn an_answer_that_is_not_the_tools_result_is_refused_naming_the_tool() {
-        let refusal = tool_result_from::<StartStreamToolResult>(
-            StreamActionTool::StartStream.tool_name(),
+        let refusal = tool_result_from::<StopProjectToolResult>(
+            StreamActionTool::StopProject.tool_name(),
             "{}",
         )
         .unwrap_err();
 
         assert!(
-            refusal.starts_with("start_stream answered something other than its result ("),
+            refusal.starts_with("stop_project answered something other than its result ("),
             "{refusal}"
         );
     }

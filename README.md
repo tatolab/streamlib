@@ -185,8 +185,9 @@ streams with the edit. An edit that fails unloads its stream and records it fail
 lands in the log `dev` prints, and the next save loads it again. An edit that leaves
 `tatolab-project.json` unreadable fails the load itself and leaves the running streams as they
 were. Ctrl-C ends `dev`
-and leaves the streams running. Every stream the runtime loads is recorded: it runs until
-`tatolab stop` or `tatolab rm`, and the runtime loads it again each time it starts. `tatolab run`
+and leaves the streams running. A project runs and stops as a whole: every stream the runtime
+loads is recorded, the project runs until `tatolab stop` or `tatolab rm`, and the runtime loads it
+again each time it starts. `tatolab run`
 queues the load once, without watching for edits, prints the action's id and returns at once;
 `tatolab logs -f` follows the load and the streams' records. `tatolab cancel <action>` takes an
 action back: a queued one is dropped, and a running load stops at the step it is on, its uv sync
@@ -412,8 +413,7 @@ tatolab run [--dir DIR]
 tatolab dev [--dir DIR]
 
 tatolab streams
-tatolab stop [STREAM]
-tatolab start [STREAM]
+tatolab stop [--dir DIR]
 tatolab rm [--dir DIR]
 tatolab cancel ACTION
 tatolab rename [STREAM] DISPLAY_NAME
@@ -459,19 +459,20 @@ tatolab enable-virtual-camera [--print]
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
-- **`STREAM`**, in `stop`, `start`, `rename`, `clock` and `logs --stream`, is a stream id,
+- **`STREAM`**, in `rename`, `clock` and `logs --stream`, is a stream id,
   or a display name exactly one stream holds. Omitted, it is the one stream loaded from the
   working directory, stopped and failed ones included. An argument several streams match, or none,
   is refused listing each candidate's id and display name. `graph --stream` is the exception: it
   takes a stream id, and omitted it means every loaded stream.
-- **`stop`** unloads a stream, which stays stopped across the runtime's restarts until
-  **`start`** loads it again. `start` also retries a failed stream. **`rm`** unloads every stream
-  of the project in `--dir`, or the working directory, and forgets them. Each queues its action on
-  the project's queue and prints its id at once: `tatolab streams` shows the stream `stopping` or
-  `preparing` until it has run, and a runtime that crashes first finishes it at its next start.
-- **`cancel`** takes back the action whose id `run`, `dev`, `stop`, `start` or `rm` printed. A
+- **`stop`** unloads every stream of the project in `--dir`, or the working directory, and the
+  project stays stopped across the runtime's restarts until **`run`** runs it again; `run` also
+  retries a failed stream. **`rm`** unloads every stream of the project and forgets them. Each
+  queues its action on the project's queue and prints its id at once: `tatolab streams` shows the
+  streams `stopping` until it has run, and a runtime that crashes first finishes it at its next
+  start.
+- **`cancel`** takes back the action whose id `run`, `dev`, `stop` or `rm` printed. A
   queued action is dropped, its streams' records left as they were, and `cancel` prints
-  `<action> cancelled`. A running load or start stops at the step it is on: its uv sync is
+  `<action> cancelled`. A running load stops at the step it is on: its uv sync is
   killed and a half-made `.venv` removed, a stream it was loading is recorded failed,
   and the streams it had not reached stay as they were; `cancel` prints `<action> cancelling`.
   A running stop or `rm` has begun unloading and cannot be cut short, so `cancel` is refused and
@@ -555,9 +556,9 @@ and the folder of its own log — to observe; `add_node`, `connect`, `disconnect
 answers at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
 same way, and `list_assets`, `describe_asset`, `import_asset`, `move_asset`, `rename_asset` and
-`delete_asset` over the project's assets; `stop_stream`, `start_stream`, `remove_project`,
-`rename_stream`, `set_stream_clock_scale` and `list_streams` to manage the streams the runtime
-holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
+`delete_asset` over the project's assets; `stop_project`, which stops a whole project until
+`run_project` runs it again, `remove_project`, `rename_stream`, `set_stream_clock_scale` and
+`list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
 machine, naming the node by the `id` `graph` lists. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every
@@ -791,7 +792,7 @@ Not built yet: the macOS app and Windows.
 - **``the stream `<id>` failed: <traceback>``** in the project's log, shown by `dev` and
   `tatolab logs` — the stream's graph document does not load, a node raised, or its load was
   refused; the runtime lists it `failed` with that reason. Fix it and run or save again;
-  `tatolab start <id>` retries it. A folder with no `tatolab-project.json` is no project: its
+  `tatolab run` retries it. A folder with no `tatolab-project.json` is no project: its
   load fails saying so.
 - **`tatolab dev: <refusal>; save again to queue another load`** — the runtime refused to queue
   the load at all; its refusal names why.

@@ -80,8 +80,7 @@ mod against_an_isolated_machine {
         for verb_arguments in [
             &["run", "--dir", project_directory][..],
             &["dev", "--dir", project_directory][..],
-            &["stop", "camera"][..],
-            &["start", "camera"][..],
+            &["stop", "--dir", project_directory][..],
             &["rm", "--dir", project_directory][..],
             &["streams"][..],
             &["graph"][..],

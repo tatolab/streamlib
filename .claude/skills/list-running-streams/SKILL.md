@@ -22,9 +22,9 @@ lab-rig-0a1b2c       rig     running  6      /home/me/lab     stream:rig
 old-main-9f8e7d      main    stopped  -      /home/me/old     stream:main
 ```
 
-- `ID` — the stream id, which `stop`, `start`, `rm`, `graph --stream` and `logs --stream` take. The runtime computes it from the stream's location — `<folder>-<function>-<hash>` over the resolved project directory and the stream function — so running the same project again keeps it, and another checkout of the project gets another.
+- `ID` — the stream id, which `rename`, `clock`, `graph --stream` and `logs --stream` take; `stop` and `rm` take the project's directory. The runtime computes it from the stream's location — `<folder>-<function>-<hash>` over the resolved project directory and the stream function — so running the same project again keeps it, and another checkout of the project gets another.
 - `NAME` — the display name: the function's name, or what `tatolab rename` set. It is a label, never an address.
-- `STATE` — `running` (loaded; or recorded and loaded again at the runtime's next start, with `-` nodes), `stopped` (unloaded by `tatolab stop`), or `failed` (its code failed at its last load, or it was implicated in the runtime's last two crashes in a row or unable to re-load at its start). Every stream the runtime loads is recorded, whichever `tatolab run`, `tatolab dev` or MCP connection loaded it, and comes back on every start of the runtime until `stop` or `rm`.
+- `STATE` — `running` (loaded; or recorded and loaded again at the runtime's next start, with `-` nodes), `stopped` (unloaded with its project by `tatolab stop`), or `failed` (its code failed at its last load, or it was implicated in the runtime's last two crashes in a row or unable to re-load at its start). Every stream the runtime loads is recorded, whichever `tatolab run`, `tatolab dev` or MCP connection loaded it, and comes back on every start of the runtime until `stop` or `rm`.
 - `NODES` — the loaded graph's node count; `-` when the stream is not loaded.
 - `PROJECT` and `FUNCTION` — the stream's location: the project directory the runtime compiled it in, and its stream function as `module:function`; `-` for a record an earlier runtime wrote, which is listed `failed` until `rm` forgets it.
 
@@ -32,8 +32,8 @@ old-main-9f8e7d      main    stopped  -      /home/me/old     stream:main
 - **A `running` row with a node count** — that stream is loaded; hand its id to `drive-running-stream`.
 - **`No streams in this runtime.`** — the runtime answers and holds nothing. Load one with `tatolab run --dir <project>`; it prints the stream id and returns.
 - **`no runtime is running on this machine: nothing answers at <socket>`** — no runtime is up for this user. The machine's runtime runs while Tato Studio is open, or as `tatolabd` in a terminal — the owner's to start; a session that needs a runtime of its own starts the test-only build instead (`drive-running-stream`). When another user holds the machine, the refusal names them.
-- **`preparing` / `stopping`** — a queued action is working on the stream: a load or start, or a stop or `rm`. Read the row again once it has run.
-- **`stopped` / `failed`** — not loaded. `tatolab start <name>` loads it again (retrying a failed one); `tatolab rm --dir <project>` forgets every stream of its project.
+- **`preparing` / `stopping`** — a queued action is working on the stream: a load, or a stop or `rm`. Read the row again once it has run.
+- **`stopped` / `failed`** — not loaded. `tatolab run --dir <project>` runs its project again (retrying a failed one); `tatolab rm --dir <project>` forgets every stream of its project.
 
 ## Notes
 - No flags. `tatolab streams` takes none.

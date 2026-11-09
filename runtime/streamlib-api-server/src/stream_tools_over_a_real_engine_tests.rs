@@ -4,8 +4,8 @@
 //! The stream tools over a real engine: a stream run over a `/mcp/stdio`
 //! connection outlives the connection and the local API, `logs` pages a
 //! stream's records by sequence number, and `list_streams`,
-//! `stop_stream`, `start_stream`, `remove_project` and `rename_stream` act by
-//! stream id on an engine recording its streams in a temporary state
+//! `stop_project`, `remove_project` and `rename_stream` act on
+//! an engine recording its streams in a temporary state
 //! directory, `open_viewer` opens only over `/mcp/stdio`, and graph edits are
 //! transactions kept in a stream's graph document that each author's `undo` reverses.
 //!
@@ -477,11 +477,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         self.engine
             .forget_the_stream_of_a_deleted_stream_asset(project, stream_asset)
     }
-    fn stop_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
-        OperationsOnTheStreamsLoadedInThisRuntime::stop_stream(self.engine.as_ref(), stream_id)
-    }
-    fn start_stream(&self, stream_id: &str) -> Result<StreamActionQueued> {
-        OperationsOnTheStreamsLoadedInThisRuntime::start_stream(self.engine.as_ref(), stream_id)
+    fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::stop_project(
+            self.engine.as_ref(),
+            project_directory,
+        )
     }
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
         OperationsOnTheStreamsLoadedInThisRuntime::remove_project(
@@ -698,7 +698,7 @@ async fn logs_reads_a_projects_records_by_stream_paged_by_its_cursor() {
 }
 
 // ============================================================================
-// list, stop, start and remove against an engine recording its streams
+// list, stop and remove against an engine recording its streams
 // ============================================================================
 
 /// `list_streams` lists each stream by its id with its display name and
@@ -851,11 +851,11 @@ async fn set_stream_clock_scale_refuses_a_stream_with_no_clock_running() {
     );
 }
 
-/// Stop, start and remove through the tools: each queues its action and
+/// Stop and remove a project through the tools: each queues its action and
 /// answers it at once, refuses what it cannot do naming why with nothing
 /// queued, and its action leaves the state directory as it says.
 #[tokio::test(flavor = "multi_thread")]
-async fn stop_start_and_remove_project_queue_actions_on_the_streams_the_runtime_holds() {
+async fn stop_project_and_remove_project_queue_actions_on_the_streams_the_runtime_holds() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
@@ -869,29 +869,28 @@ async fn stop_start_and_remove_project_queue_actions_on_the_streams_the_runtime_
         }
     };
 
-    let refusal = call("start_stream", json!({ "stream": live }))
-        .await
-        .expect_err("a loaded stream does not start");
-    assert!(
-        refusal.contains("already loaded") && refusal.contains("living with its host process"),
-        "{refusal}"
-    );
-    let refusal = call("start_stream", json!({ "stream": "nothing" }))
-        .await
-        .expect_err("an id no record holds does not start");
-    assert!(
-        refusal.contains("nothing") && refusal.contains(&parked),
-        "{refusal}"
-    );
-    let refusal = call("stop_stream", json!({ "stream": parked }))
-        .await
-        .expect_err("a stopped stream does not stop again");
-    assert!(refusal.contains("already stopped"), "{refusal}");
+    let refusal = call(
+        "stop_project",
+        json!({ "project_directory": "relative/project" }),
+    )
+    .await
+    .expect_err("a relative project directory does not stop");
+    assert!(refusal.contains("absolute"), "{refusal}");
 
-    let stop = call("stop_stream", json!({ "stream": live }))
-        .await
-        .unwrap();
-    assert_eq!(stop["stream"], live.as_str(), "{stop}");
+    let stop = call(
+        "stop_project",
+        json!({ "project_directory": project.path() }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        stop["project_directory"],
+        std::fs::canonicalize(project.path())
+            .unwrap()
+            .display()
+            .to_string(),
+        "{stop}"
+    );
     let stopped = the_stream_action_once_finished(
         &engine.operations_on_the_loaded_streams(),
         stop["action"].as_str().unwrap(),
@@ -899,8 +898,21 @@ async fn stop_start_and_remove_project_queue_actions_on_the_streams_the_runtime_
     .await;
     assert_eq!(stopped["kind"], "stop", "{stopped}");
     assert_eq!(stopped["state"], "done", "{stopped}");
+    assert_eq!(
+        stopped["streams"].as_array().unwrap().len(),
+        1,
+        "the stopped `parked` is left out of the stop: {stopped}"
+    );
+    assert_eq!(stopped["streams"][0]["stream"], live.as_str(), "{stopped}");
     assert_eq!(stopped["streams"][0]["state"], "stopped", "{stopped}");
     assert!(engine.engine.ids_of_the_loaded_streams().is_empty());
+    let refusal = call(
+        "stop_project",
+        json!({ "project_directory": project.path() }),
+    )
+    .await
+    .expect_err("a project none of whose streams runs does not stop again");
+    assert!(refusal.contains("none to stop"), "{refusal}");
 
     let removal = call(
         "remove_project",
@@ -1045,14 +1057,6 @@ async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed(
             && failed_because.contains("/home/someone/hello"),
         "{failed_because}"
     );
-    let refusal = call("start_stream", json!({ "stream": "main" }))
-        .await
-        .expect_err("a record an earlier runtime wrote does not start");
-    assert!(
-        refusal.contains("an earlier runtime recorded it"),
-        "{refusal}"
-    );
-
     let removal = call(
         "remove_project",
         json!({ "project_directory": "/home/someone/hello" }),
@@ -1071,48 +1075,11 @@ async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed(
     );
 }
 
-/// On a runtime handed no uv, a recorded stream whose interpreter is gone does
-/// not start and is recorded failed saying the runtime unit carries no uv; a run
-/// of a project with no venv records the project failed, and its action is done.
+/// On a runtime handed no uv, a run of a project with no venv records the project failed
+/// saying the runtime unit carries no uv, and its action is done.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_start_or_run_needing_a_venv_on_a_runtime_given_no_uv_records_it_failed_saying_so() {
+async fn a_run_needing_a_venv_on_a_runtime_given_no_uv_records_it_failed_saying_so() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
-    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("gone"));
-    let gone = engine.a_stream_recorded_and_not_loaded(&project, "gone", true);
-    std::fs::remove_file(project.interpreter()).expect("the interpreter goes");
-
-    let start = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "start_stream",
-            json!({ "stream": gone }),
-        )
-        .await,
-    )
-    .expect("the start is queued");
-    let started = the_stream_action_once_finished(
-        &engine.operations_on_the_loaded_streams(),
-        start["action"].as_str().unwrap(),
-    )
-    .await;
-    assert_eq!(started["state"], "done", "{started}");
-    assert_eq!(
-        started["streams"][0]["state"], "failed",
-        "a recorded stream whose venv cannot be made does not start: {started}"
-    );
-    let Some(StreamRecordAsRead::Current(gone_record)) = engine
-        .stream_records()
-        .read(&gone)
-        .expect("the record reads")
-    else {
-        panic!("the record of `{gone}` stays, as this runtime wrote it");
-    };
-    let gone_failed_because = gone_record.failed_because.expect("the stream is failed");
-    assert!(
-        gone_failed_because.contains("the runtime unit carries no uv"),
-        "{gone_failed_because}"
-    );
-
     let project_with_no_venv = ProjectWithGraphDocuments::with_no_venv();
     project_with_no_venv.write_the_graph_document(the_graph_of_a_stream_named("main"));
     let run = the_run_of_the_project_once_finished(
@@ -1639,14 +1606,14 @@ async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_h
 // ============================================================================
 
 /// A project run over a `/mcp/stdio` connection is recorded and runs on once
-/// the connection drops, and stop, start and remove act on it through the
+/// the connection drops, and stop_project, run_project and remove_project act on it through the
 /// tools.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn a_run_project_end_to_end_outlives_its_connection_through_stop_start_and_remove() {
+async fn a_run_project_end_to_end_outlives_its_connection_through_stop_run_and_remove() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
     let camera_stream_id = project.stream_id_of("camera");
@@ -1691,13 +1658,13 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_start_and
     let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
     for (tool_name, arguments, state_the_action_leaves) in [
         (
-            "stop_stream",
-            json!({ "stream": camera_stream_id }),
+            "stop_project",
+            json!({ "project_directory": project.path() }),
             json!("stopped"),
         ),
         (
-            "start_stream",
-            json!({ "stream": camera_stream_id }),
+            "run_project",
+            json!({ "project_directory": project.path() }),
             json!("running"),
         ),
         (

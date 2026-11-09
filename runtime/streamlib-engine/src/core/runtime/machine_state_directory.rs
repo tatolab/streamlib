@@ -46,12 +46,12 @@ pub struct StreamRecord {
     /// Whether the owner stopped the stream, so a restart leaves it unloaded.
     pub stopped: bool,
     /// Why the stream is failed, so the runtime's start skips it until
-    /// `start_stream` retries it; `None` when it is not failed.
+    /// a `run_project` retries it; `None` when it is not failed.
     pub failed_because: Option<String>,
     /// How many of the runtime's crashes in a row, the last included, the
     /// stream was implicated in.
     pub runtime_crashes_in_a_row_implicating_it: u32,
-    /// The stop, remove and start actions queued on the stream and not yet
+    /// The stop and remove actions queued on the stream and not yet
     /// finished, in queue order; each is finalised only by its own action.
     #[serde(default)]
     pub pending_stream_actions: Vec<PendingStreamActionOnTheRecord>,
@@ -118,8 +118,6 @@ pub enum PendingStreamActionKind {
     Stop,
     /// Forgets the record.
     Remove,
-    /// Records the stream neither stopped nor failed.
-    Start,
 }
 
 impl StreamRecord {
@@ -181,29 +179,13 @@ impl StreamRecord {
         }
     }
 
-    /// Whether the stream is stopped once its pending stops and starts have
-    /// run: the last of them decides, and the record's own state otherwise.
+    /// Whether the stream is stopped once its pending stops have run.
     pub fn is_stopped_once_its_pending_stream_actions_run(&self) -> bool {
-        self.pending_stream_actions
-            .iter()
-            .rev()
-            .find_map(|pending| match pending.kind {
-                PendingStreamActionKind::Stop => Some(true),
-                PendingStreamActionKind::Start => Some(false),
-                PendingStreamActionKind::Remove => None,
-            })
-            .unwrap_or(self.stopped)
-    }
-
-    /// Whether the stream is failed once its pending stops and starts have
-    /// run: a pending start retries it, and the record's own state decides
-    /// otherwise.
-    pub fn is_failed_once_its_pending_stream_actions_run(&self) -> bool {
-        self.is_failed()
-            && !self
+        self.stopped
+            || self
                 .pending_stream_actions
                 .iter()
-                .any(|pending| pending.kind == PendingStreamActionKind::Start)
+                .any(|pending| pending.kind == PendingStreamActionKind::Stop)
     }
 
     /// Queue the pending action `action_id` of `kind` on the record.
@@ -978,20 +960,15 @@ mod tests {
     }
 
     #[test]
-    fn the_last_pending_stop_or_start_decides_whether_a_record_is_stopped_or_failed() {
+    fn a_pending_stop_records_a_record_stopped_until_its_action_finishes_it() {
         let mut record = a_record_of("camera-app", "preview");
         assert!(!record.is_stopped_once_its_pending_stream_actions_run());
 
         record.queue_the_pending_stream_action("R-1", PendingStreamActionKind::Stop);
         assert!(record.is_stopped_once_its_pending_stream_actions_run());
-        record.queue_the_pending_stream_action("R-2", PendingStreamActionKind::Start);
+        record.finish_the_pending_stream_action("R-1");
         assert!(!record.is_stopped_once_its_pending_stream_actions_run());
-
-        record.failed_because = Some("it crashed".to_string());
-        assert!(!record.is_failed_once_its_pending_stream_actions_run());
-        record.finish_the_pending_stream_action("R-2");
-        assert!(record.is_failed_once_its_pending_stream_actions_run());
-        assert_eq!(record.pending_stream_actions.len(), 1);
+        assert!(record.pending_stream_actions.is_empty());
     }
 
     #[test]

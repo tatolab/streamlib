@@ -119,7 +119,7 @@ def test_every_verb_with_no_runtime_refuses_naming_the_socket_and_how_to_start_o
 ):
     local_api_socket_path = private_machine_directories.machine_directories.local_api_socket_path
 
-    for verb_arguments in (("graph",), ("streams",), ("stop", "main"), ("mcp",)):
+    for verb_arguments in (("graph",), ("streams",), ("stop",), ("mcp",)):
         refused = run_tatolab_observation_verb(*verb_arguments)
 
         assert refused.returncode == 1, (verb_arguments, refused.stdout, refused.stderr)

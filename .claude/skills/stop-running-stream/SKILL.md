@@ -1,6 +1,6 @@
 ---
 name: stop-running-stream
-description: Stop a stream on the machine's StreamLib runtime with `tatolab stop`, or forget its whole project with `tatolab rm`, then confirm with `tatolab streams` that it is no longer loaded so its camera / GPU claim is released — and end a runtime the session started for itself. Use when done driving a stream — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear a recorded stream before loading a fresh one. Wraps `tatolab stop`, `tatolab rm` and `tatolab streams`.
+description: Stop a project's streams on the machine's StreamLib runtime with `tatolab stop`, or forget its whole project with `tatolab rm`, then confirm with `tatolab streams` that it is no longer loaded so its camera / GPU claim is released — and end a runtime the session started for itself. Use when done driving a stream — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear a recorded stream before loading a fresh one. Wraps `tatolab stop`, `tatolab rm` and `tatolab streams`.
 ---
 
 # stop-running-stream
@@ -11,9 +11,9 @@ Ends a stream's work without touching the runtime. The machine's runtime stays o
 
 ### 1. Stop or remove it
 ```bash
-tatolab stop <stream id>
+tatolab stop --dir <project directory>
 ```
-Queues the stop and prints its action id at once (`<action> queued: stop of <stream id>`); the stream shows `stopping` until the stop has run, then `stopped`, and stays stopped across the runtime's restarts until `tatolab start <stream id>`. A warning that the stop was not recorded means a restart of the runtime loads the stream again.
+Queues the stop of the whole project (`--dir` defaults to the working directory) and prints its action id at once (`<action> queued: stop of <project>`); every stream of the project shows `stopping` until the stop has run, then `stopped`, and the project stays stopped across the runtime's restarts until `tatolab run` runs it again. A project runs and stops as a whole: no verb stops one stream of it. A failed action naming a stream that was not recorded stopped means a restart of the runtime loads that stream again.
 
 ```bash
 tatolab rm --dir <project directory>
@@ -42,4 +42,4 @@ Wait up to ~15 s for `$TATOLAB_TEST_MACHINE_ROOT/tatolabd.exit` to appear and re
 
 ## Notes
 - One camera consumer per `/dev/videoN` — unloading the stream that opened it is what frees the device.
-- A runtime refuses to stop nothing: `stop` / `rm` of a name it does not hold is refused, naming the streams it does hold.
+- A runtime refuses to stop nothing: `stop` of a project none of whose streams runs, or `rm` of a project it holds no stream of, is refused, naming the streams it does hold.
