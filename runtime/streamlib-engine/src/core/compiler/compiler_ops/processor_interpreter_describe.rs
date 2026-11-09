@@ -250,28 +250,54 @@ fn register_the_described_node_type(
     let stream_environment = stream_environment.clone();
     let lend_directory = Arc::new(lend_directory.to_path_buf());
     let the_stream_its_helpers_belong_to = the_stream_its_helpers_belong_to.clone();
-    let child_execution_config =
-        match how_a_python_node_of_the_type_runs {
-            HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
-                node_types_of_the_stream.record_the_execution_a_described_class_declares(
-                    descriptor.processor_class_import_path.clone(),
-                    execution_config.execution,
-                );
-                execution_config
-            }
-            HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
-                register_the_function_node_pool_once(
-                    node_types_of_the_stream,
-                    &stream_environment,
-                    &lend_directory,
-                    &the_stream_its_helpers_belong_to,
-                )?;
-                return node_types_of_the_stream
+    let child_execution_config = match how_a_python_node_of_the_type_runs {
+        HowAPythonNodeOfTheTypeRuns::InItsOwnProcessorInterpreter(execution_config) => {
+            node_types_of_the_stream.record_the_execution_a_described_class_declares(
+                descriptor.processor_class_import_path.clone(),
+                execution_config.execution,
+            );
+            execution_config
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(program) => {
+            return node_types_of_the_stream
                     .register_a_type_described_in_this_streams_processor_interpreter(
                         descriptor,
-                        HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
-                            processor_once_promoted_to_its_own_process: Box::new(move |node| {
+                        HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(
+                            move |node| {
                                 Ok(Box::new(
+                                    super::shader_node_native_evaluator::ShaderNodeNativeEvaluatorProcessor::for_the_node(
+                                        node,
+                                        descriptor_for_constructor.clone(),
+                                        program.clone(),
+                                    ),
+                                )
+                                    as Box<dyn DynGeneratedProcessor + Send>)
+                            },
+                        )),
+                    );
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(_) => {
+            return Err(Error::NotSupported(format!(
+                "shader node `{processor_class_import_path}` runs on the GPU through Vulkan, \
+                     which this platform's runtime does not drive"
+            )));
+        }
+        HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds => {
+            register_the_function_node_pool_once(
+                node_types_of_the_stream,
+                &stream_environment,
+                &lend_directory,
+                &the_stream_its_helpers_belong_to,
+            )?;
+            return node_types_of_the_stream
+                .register_a_type_described_in_this_streams_processor_interpreter(
+                    descriptor,
+                    HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                        processor_once_promoted_to_its_own_process: Box::new(move |node| {
+                            Ok(
+                                Box::new(
                                     spawn_host_for_a_function_node_promoted_to_its_own_process(
                                         &processor_class_import_path,
                                         &descriptor_for_constructor,
@@ -281,12 +307,13 @@ fn register_the_described_node_type(
                                         the_stream_its_helpers_belong_to.clone(),
                                     )?,
                                 )
-                                    as Box<dyn DynGeneratedProcessor + Send>)
-                            }),
-                        },
-                    );
-            }
-        };
+                                    as Box<dyn DynGeneratedProcessor + Send>,
+                            )
+                        }),
+                    },
+                );
+        }
+    };
     node_types_of_the_stream.register_a_type_described_in_this_streams_processor_interpreter(
         descriptor,
         HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(move |node| {

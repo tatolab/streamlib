@@ -891,6 +891,24 @@ DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
 )
 
 
+#: Each key of a described shader node type its `@node.shader` stamp fills, in wire order.
+#: The shader stamps are spelled here, not imported, because the `tatolab-stream` in a
+#: project's venv may predate `@node.shader`, and their attribute names are the wire
+#: contract both sides hold.
+DESCRIBED_SHADER_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
+    ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
+    ("kind", NODE_DECLARATION_KIND_STAMP),
+    ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
+    ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
+    ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+    ("shader_source", "__tatolab_node_shader_source__"),
+    ("shader_signature", "__tatolab_node_shader_signature__"),
+)
+
+#: The kind stamp a `@node.shader` carries.
+SHADER_NODE_KIND = "shader"
+
+
 #: Each key of a described node type, process or function, filled from a stamp an older
 #: `tatolab-stream` does not write, and left out when the node carries none: the engine reads an
 #: absent key as undeclared. Spelled here, not imported, because the `tatolab-stream` in a
@@ -940,7 +958,14 @@ def _describe_the_processor_class_its_imported_module_defines(
         resolved: Any = load_processor_class(import_path)
     except HelperProcessProtocolError as unresolvable:
         raise ProcessorClassNotDescribable(str(unresolvable)) from None
-    if isinstance(resolved, FunctionNode):
+    if (
+        isinstance(resolved, FunctionNode)
+        and getattr(resolved, NODE_DECLARATION_KIND_STAMP, None) == SHADER_NODE_KIND
+    ):
+        described_keys_and_their_stamps = DESCRIBED_SHADER_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
+        the_decorator_that_stamps_them = "@node.shader"
+        what_it_names = "function"
+    elif isinstance(resolved, FunctionNode):
         described_keys_and_their_stamps = DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS
         the_decorator_that_stamps_them = "@node.function"
         what_it_names = "function"
