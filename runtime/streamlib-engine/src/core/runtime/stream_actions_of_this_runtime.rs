@@ -27,8 +27,8 @@ use super::project_stream_action_queue::{
     StreamActionWorkingOnAStream, StreamOfAStreamAction, a_stream_action_not_held,
 };
 use super::project_venv_made_with_the_runtime_unit_uv::{
-    ProjectVenvNotMade, make_the_projects_venv_unless_its_interpreter_runs,
-    the_projects_venv_interpreter,
+    ProjectVenvNotMade, every_first_party_module_folder_in,
+    make_the_projects_venv_current_with_the_runtime_unit_uv, the_projects_venv_interpreter,
 };
 use super::runtime::{
     a_stream_id_already_loaded_refusal, request_a_streams_shutdown_and_wait_until_it_has_ended,
@@ -48,6 +48,7 @@ use crate::core::graph::names_listed_for_a_refusal;
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::logging::{ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread};
 use crate::core::{Error, Result};
+use streamlib_consumer_rhi::runtime_unit_layout::first_party_modules_directory_beside_the_lend;
 
 /// How a loaded stream is held: recorded by the runtime, or living as long as
 /// the process that hosts its library [`Runner`].
@@ -2231,18 +2232,26 @@ impl Runner {
         })
     }
 
-    /// Make the `.venv` of the project in `project_directory` with the uv this
-    /// runtime was handed, unless its interpreter runs.
+    /// Make the `.venv` of the project in `project_directory` current with the
+    /// uv this runtime was handed and the first-party modules beside its lend.
     fn make_the_projects_venv(
         &self,
         project_directory: &Path,
         is_interrupted: &dyn Fn() -> bool,
     ) -> std::result::Result<(), ProjectVenvNotMade> {
-        make_the_projects_venv_unless_its_interpreter_runs(
+        let first_party_module_folders = self
+            .engine_resources_shared_by_every_stream
+            .processor_interpreter_lend_directory
+            .get()
+            .and_then(first_party_modules_directory_beside_the_lend)
+            .map(|directory| every_first_party_module_folder_in(&directory))
+            .unwrap_or_default();
+        make_the_projects_venv_current_with_the_runtime_unit_uv(
             project_directory,
             self.engine_resources_shared_by_every_stream
                 .runtime_unit_uv_executable
                 .get(),
+            &first_party_module_folders,
             is_interrupted,
         )
     }

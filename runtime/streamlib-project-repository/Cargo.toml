@@ -18,7 +18,7 @@ path = "src/lib.rs"
 default = ["history"]
 # The project's own history and the one writer that commits to it. Without it the crate reads
 # and writes a project's files alone, so a consumer such as the Python wheel links no libgit2.
-history = ["dep:git2", "dep:libz-sys", "dep:parking_lot", "dep:tokio", "dep:zip"]
+history = ["dep:git2", "dep:libz-sys", "dep:parking_lot", "dep:tokio", "dep:zip", "dep:toml_edit"]
 
 [dependencies]
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"], optional = true }
@@ -31,12 +31,14 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }
+toml_edit = { workspace = true, optional = true }
 tracing.workspace = true
 uuid = { version = "1.11", features = ["v4", "v5", "serde"] }
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+toml.workspace = true
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [lints]

@@ -32,6 +32,7 @@ pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod source_call_site_scan;
 pub mod stage_browser_host;
+pub mod stage_first_party_modules;
 pub mod stage_runtime_unit_uv;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the

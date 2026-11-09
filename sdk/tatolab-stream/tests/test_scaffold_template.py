@@ -235,13 +235,14 @@ def test_the_scaffold_pins_the_python_version_the_plan_names():
     assert template_text("python-version").strip() == "3.12"
 
 
-def test_the_scaffold_depends_on_tatolab_stream_the_testpattern_and_ops_modules_and_numpy_only():
-    """`new` raises the `tatolab-stream`, `tatolab-testpattern` and `tatolab-ops`
-    floors to the version of the runtime that writes it; the template's own floors keep PyPI's 0.0.0 placeholder out of
-    a resolve of the tree."""
+def test_the_scaffold_depends_on_tatolab_stream_the_testpattern_module_and_numpy_only():
+    """`new` raises the `tatolab-stream` and `tatolab-testpattern` floors to the
+    version of the runtime that writes it; the template's own floors keep PyPI's
+    0.0.0 placeholder out of a resolve of the tree. `tatolab-ops` rides the
+    runtime, which installs it into the project's `.venv`."""
     assert (
         'dependencies = ["tatolab-stream>=0.54.2", '
-        '"tatolab-testpattern>=0.68.18", "tatolab-ops>=0.68.41", "numpy>=2.1"]\n'
+        '"tatolab-testpattern>=0.68.18", "numpy>=2.1"]\n'
         in template_text("pyproject.toml")
     ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
 

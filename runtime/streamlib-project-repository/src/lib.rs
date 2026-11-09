@@ -13,6 +13,8 @@ mod project_history_repository;
 mod project_import_copy;
 mod project_import_folders;
 #[cfg(feature = "history")]
+mod project_pyproject_import_sources;
+#[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
 #[cfg(feature = "history")]
 mod project_repository;

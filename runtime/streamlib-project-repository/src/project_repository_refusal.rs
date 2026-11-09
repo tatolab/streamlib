@@ -56,6 +56,8 @@ pub enum ProjectRepositoryRefusal {
     NothingToUndo { author: String },
     #[error("{author} has undone nothing that is left to redo")]
     NothingToRedo { author: String },
+    #[error("the Python project file {path} could not be read: {why}")]
+    PyprojectUnreadable { path: PathBuf, why: String },
     #[error("the import source {path} could not be read: {why}")]
     ImportSourceUnreadable { path: PathBuf, why: String },
     #[error("the project's content store holds no content {0}")]

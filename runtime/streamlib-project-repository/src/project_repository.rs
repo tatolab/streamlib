@@ -27,6 +27,9 @@ use crate::project_import_copy::{
     refuse_an_import_folder_name, sha256_of_each_file_under, stage_a_copy_of_the_project_source,
     the_import_folder_in, the_import_folder_named_after, version_of_the_copied_files,
 };
+use crate::project_pyproject_import_sources::{
+    PYPROJECT_FILE_NAME, pyproject_with_each_import_as_a_uv_path_source,
+};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
 use crate::project_transaction::{
@@ -478,6 +481,18 @@ impl ProjectRepository {
             }
             self.project_file = staged_project_file;
         }
+        let pyproject_as_it_was = match self.write_each_import_into_the_pyproject_if_they_changed(
+            &project_file_as_it_was.dependencies,
+        ) {
+            Ok(pyproject_as_it_was) => pyproject_as_it_was,
+            Err(refusal) => {
+                self.restore_the_project_file(&project_file_as_it_was);
+                self.restore_written_documents(written_documents);
+                self.undo_performed_import_effects(performed_import_effects);
+                self.undo_performed_effects(performed_effects);
+                return Err(refusal);
+            }
+        };
         let committed = self
             .tracked_files(&staged_assets)
             .and_then(|tracked_files| {
@@ -490,23 +505,10 @@ impl ProjectRepository {
         let commit = match committed {
             Ok(commit) => commit,
             Err(refusal) => {
-                if self.project_file != project_file_as_it_was {
-                    if let Err(not_restored) =
-                        project_file_as_it_was.canonical_bytes().and_then(|bytes| {
-                            write_file_whole(
-                                &self.project_directory.join(PROJECT_FILE_NAME),
-                                &bytes,
-                            )
-                        })
-                    {
-                        tracing::error!(
-                            project = %self.project_directory.display(),
-                            %not_restored,
-                            "could not restore the project file after a refused commit"
-                        );
-                    }
-                    self.project_file = project_file_as_it_was;
+                if let Some(pyproject_as_it_was) = pyproject_as_it_was {
+                    self.restore_the_pyproject(&pyproject_as_it_was);
                 }
+                self.restore_the_project_file(&project_file_as_it_was);
                 self.restore_written_documents(written_documents);
                 self.undo_performed_import_effects(performed_import_effects);
                 self.undo_performed_effects(performed_effects);
@@ -764,6 +766,63 @@ impl ProjectRepository {
                 referencing_nodes,
             })
         }
+    }
+
+    /// Write each import the project file holds into `pyproject.toml` as a uv path source when
+    /// they differ from `imports_as_they_were` and the project has a `pyproject.toml`, answering the file's text as it was so a refused
+    /// commit can put it back; `None` when nothing was written.
+    fn write_each_import_into_the_pyproject_if_they_changed(
+        &self,
+        imports_as_they_were: &[ProjectImport],
+    ) -> Result<Option<String>, ProjectRepositoryRefusal> {
+        if self.project_file.dependencies == imports_as_they_were {
+            return Ok(None);
+        }
+        let pyproject_path = self.project_directory.join(PYPROJECT_FILE_NAME);
+        let pyproject_as_it_was = match std::fs::read_to_string(&pyproject_path) {
+            Ok(text) => text,
+            Err(not_read) if not_read.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(not_read) => return Err(not_read.into()),
+        };
+        let pyproject = pyproject_with_each_import_as_a_uv_path_source(
+            &pyproject_as_it_was,
+            &self.project_directory,
+            &self.project_file.dependencies,
+        )?;
+        if pyproject == pyproject_as_it_was {
+            return Ok(None);
+        }
+        write_file_whole(&pyproject_path, pyproject.as_bytes())?;
+        Ok(Some(pyproject_as_it_was))
+    }
+
+    fn restore_the_pyproject(&self, pyproject_as_it_was: &str) {
+        if let Err(not_restored) = write_file_whole(
+            &self.project_directory.join(PYPROJECT_FILE_NAME),
+            pyproject_as_it_was.as_bytes(),
+        ) {
+            tracing::error!(
+                project = %self.project_directory.display(),
+                %not_restored,
+                "could not restore pyproject.toml after a refused commit"
+            );
+        }
+    }
+
+    fn restore_the_project_file(&mut self, project_file_as_it_was: &TatolabProjectFile) {
+        if self.project_file == *project_file_as_it_was {
+            return;
+        }
+        if let Err(not_restored) = project_file_as_it_was.canonical_bytes().and_then(|bytes| {
+            write_file_whole(&self.project_directory.join(PROJECT_FILE_NAME), &bytes)
+        }) {
+            tracing::error!(
+                project = %self.project_directory.display(),
+                %not_restored,
+                "could not restore the project file after a refused commit"
+            );
+        }
+        self.project_file = project_file_as_it_was.clone();
     }
 
     /// Put the import an operation places or takes out in place on disk, answering how to undo

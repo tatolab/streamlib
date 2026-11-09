@@ -876,3 +876,48 @@ fn an_import_folder_linked_back_to_its_enclosing_project_ends_the_search() {
         "{refusal}"
     );
 }
+
+#[test]
+fn an_import_is_a_uv_path_source_of_the_project_through_undo_and_redo() {
+    let mut imports = CellImportingArm::new();
+    std::fs::write(
+        imports.arm.directory().join("pyproject.toml"),
+        "[project]\nname = \"robot-arm\"\nversion = \"0.1.0\"\ndependencies = [\"numpy>=2.1\"]\n",
+    )
+    .unwrap();
+    let cell_pyproject = imports.cell.directory().join("pyproject.toml");
+    std::fs::write(
+        &cell_pyproject,
+        "[project]\nname = \"cell\"\nversion = \"0.1.0\"\ndependencies = [\"tatolab-stream>=0.68\"]\n",
+    )
+    .unwrap();
+    let the_cell_pyproject = || -> toml::Value {
+        toml::from_str(&std::fs::read_to_string(&cell_pyproject).unwrap()).unwrap()
+    };
+
+    imports.import_the_arm();
+    let imported = the_cell_pyproject();
+    assert_eq!(
+        imported["project"]["dependencies"],
+        toml::Value::try_from(["tatolab-stream>=0.68", "robot-arm"]).unwrap()
+    );
+    assert_eq!(
+        imported["tool"]["uv"]["sources"]["robot-arm"]["path"].as_str(),
+        Some("imports/robot-arm")
+    );
+    assert_eq!(
+        imported["tool"]["uv"]["sources"]["robot-arm"]["package"].as_bool(),
+        Some(false)
+    );
+
+    imports.cell.undo();
+    let undone = the_cell_pyproject();
+    assert_eq!(
+        undone["project"]["dependencies"],
+        toml::Value::try_from(["tatolab-stream>=0.68"]).unwrap()
+    );
+    assert!(undone.get("tool").is_none(), "{undone}");
+
+    imports.cell.redo();
+    assert_eq!(the_cell_pyproject(), imported);
+}

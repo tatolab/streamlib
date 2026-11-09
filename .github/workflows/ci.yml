@@ -649,8 +649,9 @@ jobs:
         run: .venv/bin/pytest -v -m "not rig_only_capability"
 
       # A scaffolded stream compiles and type-checks with no runtime installed,
-      # in what a user's `uv sync` gives it: `tatolab-stream`, the test-pattern
-      # and ops modules, and numpy.
+      # in what a user's `.venv` holds: `tatolab-stream`, the test-pattern
+      # module and numpy from its `uv sync`, and the ops module the runtime
+      # installs.
       - name: Scaffolded stream compiles and type-checks (Python 3.12)
         run: |
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
