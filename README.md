@@ -741,6 +741,7 @@ package on PyPI:
 | Module | |
 |---|---|
 | `tatolab-testpattern` | `TestPatternSource`: the sample animation, for a machine with no camera. |
+| `tatolab-ops` | The small function nodes (`Lfo`, `Remap`, `Clamp`, `Gate`, …), compiled to native code and run inside the node that reads them; every new project depends on it. |
 | `tatolab-virtualcamera` | `VirtualCameraSink`, Linux only: a v4l2loopback camera any other application can select. |
 
 The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then

@@ -16,7 +16,7 @@ name: Distributions
 # the runtime unit, for the Linux runtime tarball and for the credentials that
 # publish it, so nothing uploads unless everything built. The Linux runtime
 # publishes after both, because a stream it scaffolds locks the `tatolab-stream`
-# PyPI holds and the `tatolab-testpattern` the index holds. A failed publish is
+# PyPI holds and the `tatolab-testpattern` and `tatolab-ops` the index holds. A failed publish is
 # recovered by re-running the original run's failed job: PyPI and the index both
 # skip a file they hold byte for byte, and the Linux runtime overwrites a partial
 # upload.
@@ -231,8 +231,8 @@ jobs:
       tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
       extension_build_needs_the_slang_compiler: true
 
-  # A user's `uv sync` resolves `tatolab-stream` from PyPI and
-  # `tatolab-testpattern` from the index the scaffold names, where every earlier
+  # A user's `uv sync` resolves `tatolab-stream` from PyPI, and
+  # `tatolab-testpattern` and `tatolab-ops` from the index the scaffold names, where every earlier
   # release is a candidate. This run's distributions are in neither yet, so the
   # `tatolab` index is pointed at an index tree built from this run's wheels the
   # way the release builds the real one, `tatolab-stream` joins PyPI as
@@ -243,6 +243,7 @@ jobs:
     needs:
       - build-tatolab-stream-distribution
       - build-tatolab-testpattern-distribution
+      - build-tatolab-ops-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -265,14 +266,14 @@ jobs:
       - name: The index tree is one uv resolves from
         run: python3 scripts/test_tatolab_package_index.py -v
 
-      - name: Collect the tatolab-stream and tatolab-testpattern this run built
+      - name: Collect the tatolab-stream, tatolab-testpattern and tatolab-ops this run built
         uses: actions/download-artifact@v7
         with:
-          pattern: release-distribution-tatolab-{stream,testpattern}
+          pattern: release-distribution-tatolab-{stream,testpattern,ops}
           path: /tmp/this-runs-distributions
           merge-multiple: true
 
-      - name: The scaffold locks this run's tatolab-stream and tatolab-testpattern
+      - name: The scaffold locks this run's tatolab-stream, tatolab-testpattern and tatolab-ops
         run: |
           set -euo pipefail
           mkdir /tmp/this-runs-tatolab-stream
@@ -288,7 +289,7 @@ jobs:
           import tomllib
           print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
           ")"
-          for distribution_name in tatolab-stream tatolab-testpattern; do
+          for distribution_name in tatolab-stream tatolab-testpattern tatolab-ops; do
             locked_version="$(python3 - "$distribution_name" <<'EOF'
           import sys
           import tomllib
@@ -389,6 +390,70 @@ jobs:
         with:
           name: release-distribution-tatolab-compositor
           path: packages/tatolab-compositor/dist/*.whl
+          if-no-files-found: error
+
+  # Pure Python, so one wheel serves every platform. Each node's body compiles
+  # with Numba in the helper that reads it, so the wheel carries no native code.
+  build-tatolab-ops-distribution:
+    name: tatolab-ops wheel
+    needs: build-tatolab-stream-distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Build the tatolab-ops wheel
+        run: uv build --wheel --out-dir packages/tatolab-ops/dist packages/tatolab-ops
+
+      - name: Collect the tatolab-stream this release publishes
+        uses: actions/download-artifact@v7
+        with:
+          name: release-distribution-tatolab-stream
+          path: /tmp/tatolab-stream-distribution
+
+      # `--no-index` beside this run's `tatolab-stream`, which PyPI does not
+      # hold until the upload, so the declared floor has to admit it.
+      - name: The wheel installs beside this release's tatolab-stream, loads every node, and carries its licence
+        run: |
+          set -euo pipefail
+          if unzip -Z1 packages/tatolab-ops/dist/*.whl | grep -qx 'tatolab/__init__.py'; then
+            echo "::error::the tatolab-ops wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+          python3 -m venv /tmp/ops-wheel-check
+          /tmp/ops-wheel-check/bin/pip install 'numba>=0.61' 'numpy>=1.26' 'pillow>=10.0'
+          /tmp/ops-wheel-check/bin/pip install \
+            --no-index --find-links /tmp/tatolab-stream-distribution \
+            packages/tatolab-ops/dist/*.whl
+          /tmp/ops-wheel-check/bin/python -c "
+          from importlib.metadata import distribution, entry_points
+          license_text = distribution('tatolab-ops').read_text('licenses/LICENSE') or ''
+          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
+          node_entry_points = [
+              node_entry_point for node_entry_point in entry_points(group='tatolab.nodes')
+              if node_entry_point.dist.name == 'tatolab-ops'
+          ]
+          assert node_entry_points, 'tatolab-ops registers no node'
+          for node_entry_point in node_entry_points:
+              print('tatolab-ops exports', node_entry_point.name, node_entry_point.load())
+          "
+
+      - name: Keep the wheel for the upload
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-distribution-tatolab-ops
+          path: packages/tatolab-ops/dist/*.whl
           if-no-files-found: error
 
   # Pure Python, so one wheel serves every platform, and it ships as a namespace
@@ -605,6 +670,7 @@ jobs:
       - build-tatolab-camera-distribution
       - build-tatolab-rive-distribution
       - build-tatolab-compositor-distribution
+      - build-tatolab-ops-distribution
       - lock-the-scaffold-against-this-runs-distributions
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball
@@ -690,6 +756,7 @@ jobs:
       - build-tatolab-camera-distribution
       - build-tatolab-rive-distribution
       - build-tatolab-compositor-distribution
+      - build-tatolab-ops-distribution
       - lock-the-scaffold-against-this-runs-distributions
       - prove-the-runtime-unit-on-macos
       - build-linux-runtime-tarball
