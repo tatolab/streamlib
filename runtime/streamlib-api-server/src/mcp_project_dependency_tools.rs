@@ -20,7 +20,8 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DependencyTransactionToolResult, ForkAssetToolResult, ForkedAssetOriginOnTheWire,
-    GraphTransactionToolResult, ProjectDependencyOnTheWire,
+    GraphTransactionToolResult, ListDependenciesToolResult, ListedProjectDependencyOnTheWire,
+    ProjectDependencyOnTheWire,
 };
 use uuid::Uuid;
 
@@ -75,6 +76,32 @@ struct UpdateDependencyToolArguments {
     revision: String,
     #[schemars(description = DEPENDENCY_SOURCE_BEARER_TOKEN_ARGUMENT_DESCRIPTION)]
     bearer_token: Option<String>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ListDependenciesToolArguments {
+    #[schemars(description = DEPENDING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(
+        description = "Fetch each dependency's source and answer the newest commit of its `main` beside the pin. Without it the listing needs no network."
+    )]
+    check_for_newer: Option<bool>,
+    #[schemars(description = DEPENDENCY_SOURCE_BEARER_TOKEN_ARGUMENT_DESCRIPTION)]
+    bearer_token: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RemoveDependencyToolArguments {
+    #[schemars(description = DEPENDING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
+    project: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
 }
@@ -232,6 +259,96 @@ impl LocalApiMcpServerHandler {
         })?
         .map_err(|refusal| format!("update_dependency failed: {refusal}"))?;
         serialized_tool_result("update_dependency", &answered)
+    }
+
+    #[tool(
+        description = "List the projects this one depends on, each with its `source` and the `revision` it is pinned to, as `tatolab-project.json` holds them; changes nothing. With `check_for_newer`, each source is fetched — a Git remote sent `bearer_token` when it needs one — and each dependency also answers `newest_revision`, the newest commit of its `main`, and `newer_revision_exists`, or, for a source that could not be fetched, `check_refused_because`; the pins stay where they are until `update_dependency` moves one."
+    )]
+    async fn list_dependencies(
+        &self,
+        Parameters(ListDependenciesToolArguments {
+            project_directory,
+            check_for_newer,
+            bearer_token,
+        }): Parameters<ListDependenciesToolArguments>,
+    ) -> ToolCallAnswer {
+        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let answered = tokio::task::spawn_blocking(move || {
+            let project_repository =
+                the_project_repository_open_at(&project_repositories, &project_directory)?;
+            let listing = project_repository
+                .lock()
+                .dependency_listing(check_for_newer.unwrap_or(false), bearer_token.as_deref());
+            Ok::<_, String>(ListDependenciesToolResult {
+                dependencies: listing
+                    .into_iter()
+                    .map(|listed| {
+                        let (newest_revision, check_refused_because) =
+                            match listed.newest_on_the_source {
+                                None => (None, None),
+                                Some(Ok(newest_revision)) => (Some(newest_revision), None),
+                                Some(Err(why)) => (None, Some(why)),
+                            };
+                        ListedProjectDependencyOnTheWire {
+                            newer_revision_exists: newest_revision
+                                .as_ref()
+                                .map(|newest| *newest != listed.dependency.revision),
+                            newest_revision,
+                            check_refused_because,
+                            dependency: the_dependency_on_the_wire(&listed.dependency),
+                        }
+                    })
+                    .collect(),
+            })
+        })
+        .await
+        .map_err(|join_failure| {
+            format!("list_dependencies failed: the call did not finish: {join_failure}")
+        })?
+        .map_err(|refusal| format!("list_dependencies failed: {refusal}"))?;
+        serialized_tool_result("list_dependencies", &answered)
+    }
+
+    #[tool(
+        description = "Stop depending on another project, as one transaction by `author`: its pin leaves `tatolab-project.json`; its fetched history stays under `.tatolab/dependencies/<project uuid>/`, so undo puts the pin back as it was. Answers the `dependency` as it was pinned. Refused, nothing changed, while a node of any of this project's streams — a fragment holding one of its streams, or a config holding `{\"asset\", \"from\"}` naming it, at any depth — still references its assets, naming each such node; remove or `fork_asset` them first. Refused for a project not depended on."
+    )]
+    async fn remove_dependency(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(RemoveDependencyToolArguments {
+            project_directory,
+            project,
+            author,
+        }): Parameters<RemoveDependencyToolArguments>,
+    ) -> ToolCallAnswer {
+        let author = the_author_of_a_change(author, &peer);
+        let project = the_dependency_named(&project)
+            .map_err(|refusal| format!("remove_dependency failed: {refusal}"))?;
+        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let answered = tokio::task::spawn_blocking(move || {
+            let project_repository =
+                the_project_repository_open_at(&project_repositories, &project_directory)?;
+            let mut project_repository_held = project_repository.lock();
+            let removed = project_repository_held
+                .dependency(project)
+                .map_err(|refusal| refusal.to_string())?;
+            let applied = project_repository_held
+                .remove_dependency(&author, project)
+                .map_err(|refusal| refusal.to_string())?;
+            project_repositories
+                .announce_applied_transaction(&project_repository_held, applied.clone());
+            Ok::<_, String>(the_answer_of_a_dependency_transaction(
+                &removed,
+                TransactionAsHistoryRecordsIt::of(&applied),
+                Vec::new(),
+            ))
+        })
+        .await
+        .map_err(|join_failure| {
+            format!("remove_dependency failed: the call did not finish: {join_failure}")
+        })?
+        .map_err(|refusal| format!("remove_dependency failed: {refusal}"))?;
+        serialized_tool_result("remove_dependency", &answered)
     }
 
     #[tool(
@@ -400,14 +517,18 @@ fn the_answer_of_a_dependency_transaction(
     graph_operations: Vec<Value>,
 ) -> DependencyTransactionToolResult {
     DependencyTransactionToolResult {
-        dependency: ProjectDependencyOnTheWire {
-            project: dependency.project.to_string(),
-            source: dependency.source.clone(),
-            revision: dependency.revision.clone(),
-        },
+        dependency: the_dependency_on_the_wire(dependency),
         transaction: applied.transaction,
         commit: applied.commit,
         graph_operations,
+    }
+}
+
+fn the_dependency_on_the_wire(dependency: &PinnedProjectDependency) -> ProjectDependencyOnTheWire {
+    ProjectDependencyOnTheWire {
+        project: dependency.project.to_string(),
+        source: dependency.source.clone(),
+        revision: dependency.revision.clone(),
     }
 }
 

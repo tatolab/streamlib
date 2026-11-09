@@ -19,7 +19,7 @@ use crate::project_content_store::{ProjectContentStore, content_sha256_of};
 use crate::project_dependency_source::ProjectDependencySource;
 use crate::project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjectFile};
 use crate::project_history_repository::{
-    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
+    PROJECT_HISTORY_BRANCH, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
@@ -41,6 +41,16 @@ pub const PROJECT_DEPENDENCIES_DIRECTORY: &str = ".tatolab/dependencies";
 
 /// The top-level key of a forked graph document that records the stream it was copied from.
 pub const FORKED_FROM_KEY: &str = "forked_from";
+
+/// A pinned dependency as `dependency_listing` answers it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectDependencyListed {
+    /// The pin as the project file holds it.
+    pub dependency: PinnedProjectDependency,
+    /// When a check for newer was asked, the newest commit of the source's `main`, or why the
+    /// source could not be fetched.
+    pub newest_on_the_source: Option<Result<String, String>>,
+}
 
 /// What a fork of a dependency's stream makes, before it is applied.
 #[derive(Clone, Debug, PartialEq)]
@@ -382,6 +392,18 @@ impl ProjectRepository {
                         }
                     })?;
                 }
+            }
+        }
+        for operation in &operations {
+            if let ProjectOperation::Dependency(ProjectDependencyOperation::RemoveDependency {
+                dependency,
+            }) = operation
+            {
+                self.refuse_removing_a_dependency_a_graph_references(
+                    dependency.project,
+                    &staged_assets,
+                    &staged_documents,
+                )?;
             }
         }
         let (undoes, redoes) = match lineage {
@@ -771,6 +793,116 @@ impl ProjectRepository {
             ProjectTransactionLineage::NewEdit,
         )?;
         Ok((fork, applied))
+    }
+
+    /// Every dependency the project file pins, each with, when `check_for_newer`, the newest
+    /// commit of its source's `main`, fetched with `bearer_token` for a Git remote; a source
+    /// that cannot be fetched answers why beside its pin instead.
+    pub fn dependency_listing(
+        &self,
+        check_for_newer: bool,
+        bearer_token: Option<&str>,
+    ) -> Vec<ProjectDependencyListed> {
+        self.project_file
+            .dependencies
+            .iter()
+            .map(|pinned| {
+                let newest_on_the_source = check_for_newer.then(|| {
+                    self.newest_revision_of_a_dependencys_source(pinned, bearer_token)
+                        .map_err(|refusal| refusal.to_string())
+                });
+                ProjectDependencyListed {
+                    dependency: pinned.clone(),
+                    newest_on_the_source,
+                }
+            })
+            .collect()
+    }
+
+    fn newest_revision_of_a_dependencys_source(
+        &self,
+        pinned: &PinnedProjectDependency,
+        bearer_token: Option<&str>,
+    ) -> Result<String, ProjectRepositoryRefusal> {
+        let history = self.dependency_history_fetched_with(pinned.project, bearer_token)?;
+        history.fetch_every_branch_and_tag_from(
+            &ProjectDependencySource::named_by(&pinned.source)
+                .the_remote_to_fetch_from(&self.project_directory, bearer_token)?,
+        )?;
+        history.commit_a_revision_names(&format!("refs/heads/{PROJECT_HISTORY_BRANCH}"))
+    }
+
+    /// Stop depending on `project`, as one transaction by `author`: its pin leaves the project
+    /// file and its fetched history stays, so undo can put the pin back. Refused while a node
+    /// of this project's streams still references one of its assets.
+    pub fn remove_dependency(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        project: Uuid,
+    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+        let dependency = self.dependency(project)?;
+        self.apply_project_operations(
+            author,
+            vec![ProjectOperation::Dependency(
+                ProjectDependencyOperation::RemoveDependency { dependency },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+    }
+
+    /// Refuse removing the dependency `project` while a node of a stream, as the transaction has
+    /// staged its document or as it is on disk, references one of its assets, at any depth of
+    /// its config or the fragment it holds.
+    fn refuse_removing_a_dependency_a_graph_references(
+        &self,
+        project: Uuid,
+        staged_assets: &BTreeMap<Uuid, ProjectAsset>,
+        staged_documents: &BTreeMap<Uuid, StreamGraphDocument>,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let project_text = project.to_string();
+        let mut referencing_nodes = Vec::new();
+        for stream_asset in staged_assets
+            .values()
+            .filter(|asset| asset.kind == ProjectAssetKind::Stream)
+        {
+            let document: Value = match staged_documents.get(&stream_asset.asset) {
+                Some(staged_document) => {
+                    serde_json::from_slice(&staged_document.canonical_bytes()?)?
+                }
+                None => serde_json::from_slice(&std::fs::read(
+                    stream_asset.path.on_disk_under(&self.project_directory),
+                )?)
+                .map_err(|why| {
+                    ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                        path: stream_asset.path.to_string(),
+                        why: why.to_string(),
+                    }
+                })?,
+            };
+            for node in document
+                .get("nodes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if value_references_an_asset_of_the_dependency(node, &project_text) {
+                    referencing_nodes.push(format!(
+                        "{} node `{}` ({})",
+                        stream_asset.path,
+                        node.get("name").and_then(Value::as_str).unwrap_or_default(),
+                        node.get("id").and_then(Value::as_str).unwrap_or_default(),
+                    ));
+                }
+            }
+        }
+        if referencing_nodes.is_empty() {
+            Ok(())
+        } else {
+            Err(ProjectRepositoryRefusal::DependencyStillReferenced {
+                project,
+                referencing_nodes,
+            })
+        }
     }
 
     /// The fetched history of the dependency `project`, fetched again from the source its pin
@@ -1691,6 +1823,22 @@ fn refuse_a_path_another_asset_holds(
             holder: holder.asset,
         }),
         None => Ok(()),
+    }
+}
+
+fn value_references_an_asset_of_the_dependency(value: &Value, project_text: &str) -> bool {
+    match value {
+        Value::Object(object) => {
+            (object.contains_key("asset")
+                && object.get("from").and_then(Value::as_str) == Some(project_text))
+                || object
+                    .values()
+                    .any(|entry| value_references_an_asset_of_the_dependency(entry, project_text))
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(|item| value_references_an_asset_of_the_dependency(item, project_text)),
+        _ => false,
     }
 }
 
