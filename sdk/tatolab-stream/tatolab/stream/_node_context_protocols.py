@@ -504,11 +504,12 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
     def asset_content_path(self, asset: str, from_project: str | None = None) -> str:
         """Where the bytes of the asset with UUID `asset` sit: a file to open and read, never to write.
 
-        The asset is the stream's project's own, or with `from_project` the asset of that
-        dependency at its pin, as a config's `{"asset": ..., "from": ...}` names it.
+        The asset is the stream's project's own, or with `from_project` the asset of that import,
+        its file inside the import's folder, as a config's `{"asset": ..., "from": ...}` names it.
 
         Raises `ValueError` for a string that is not a UUID, and `LookupError` when no such asset
-        is held there or the project's content store lacks its bytes.
+        is held there, the project's content store lacks its bytes, or an import's file is
+        missing.
         """
         ...
 

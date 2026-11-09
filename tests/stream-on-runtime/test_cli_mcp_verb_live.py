@@ -82,7 +82,6 @@ CONTROL_TOOL_NAMES = {
     "list_dependencies",
     "remove_dependency",
     "use_dependency_stream",
-    "fork_asset",
     "list_project_node_types",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"

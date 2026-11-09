@@ -5308,8 +5308,6 @@ dependencies = [
  "git2",
  "libz-sys",
  "parking_lot",
- "rustls",
- "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha2",
@@ -5318,6 +5316,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zip",
 ]
 
 [[package]]

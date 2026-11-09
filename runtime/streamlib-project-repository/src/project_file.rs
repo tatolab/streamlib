@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,7 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 /// The project file's name at the root of every project.
 pub const PROJECT_FILE_NAME: &str = "tatolab-project.json";
 
-/// What `tatolab-project.json` holds: the project's identity and the projects it depends on.
+/// What `tatolab-project.json` holds: the project's identity and the modules it imports.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TatolabProjectFile {
@@ -20,31 +21,49 @@ pub struct TatolabProjectFile {
     pub project: Uuid,
     /// The project's name as people see it; a label, never an identity.
     pub name: String,
-    /// Each project this one uses assets from, pinned to a revision.
+    /// The version of the runtime that created the project: a record, never a lock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_with_runtime: Option<String>,
+    /// Each project copied into this one's `imports/` folder.
     #[serde(default)]
-    pub dependencies: Vec<PinnedProjectDependency>,
+    pub dependencies: Vec<ProjectImport>,
 }
 
-/// Another project this one uses, at the revision it is pinned to.
+/// Another project copied whole into `imports/<folder>/` and referenced there.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PinnedProjectDependency {
-    /// The depended-on project's UUID.
+pub struct ProjectImport {
+    /// The imported project's UUID.
     pub project: Uuid,
-    /// Where its history is fetched from: a local path, an Artifacts remote or a package.
+    /// The folder under `imports/` that holds it.
+    pub folder: String,
+    /// Where it was copied from, as `add_dependency` was given it.
     pub source: String,
-    /// The commit or tag it is pinned to.
-    pub revision: String,
+    /// The SHA-256 of the files the copy carried, which names the version it carried.
+    pub version: String,
+    /// The SHA-256 of each file the copy carried, by its path inside the folder.
+    pub copied_files: BTreeMap<String, String>,
 }
 
+/// The version of this runtime, as a new project records it.
+pub const THIS_RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 impl TatolabProjectFile {
-    /// A new project's file, with a fresh UUID and no dependencies.
+    /// A new project's file, with a fresh UUID, this runtime's version and no imports.
     pub fn of_a_new_project(name: &str) -> Self {
         Self {
             project: Uuid::new_v4(),
             name: name.to_owned(),
+            created_with_runtime: Some(THIS_RUNTIME_VERSION.to_owned()),
             dependencies: Vec::new(),
         }
+    }
+
+    /// The import of `project`, when this project holds one.
+    pub fn import_of(&self, project: Uuid) -> Option<&ProjectImport> {
+        self.dependencies
+            .iter()
+            .find(|import| import.project == project)
     }
 
     /// Read the project file at the root of `project_directory`.

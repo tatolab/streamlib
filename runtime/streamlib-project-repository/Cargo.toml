@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-project-repository"
-description = "A StreamLib project as a versioned repository of assets: its project file, asset sidecars with UUIDs, its content store, transactions and its own Git history"
+description = "A StreamLib project as a versioned repository of assets: its project file, asset sidecars with UUIDs, its imports, its content store, transactions and its own local Git history"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -18,7 +18,7 @@ path = "src/lib.rs"
 default = ["history"]
 # The project's own history and the one writer that commits to it. Without it the crate reads
 # and writes a project's files alone, so a consumer such as the Python wheel links no libgit2.
-history = ["dep:git2", "dep:libz-sys", "dep:parking_lot", "dep:rustls", "dep:rustls-platform-verifier", "dep:tokio"]
+history = ["dep:git2", "dep:libz-sys", "dep:parking_lot", "dep:tokio", "dep:zip"]
 
 [dependencies]
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"], optional = true }
@@ -26,9 +26,6 @@ git2 = { version = "0.21", default-features = false, features = ["vendored-libgi
 # promises a host, and `libz.so.1` is not among it.
 libz-sys = { version = "1.1", default-features = false, features = ["static"], optional = true }
 parking_lot = { version = "0.12", optional = true }
-# Git's smart HTTP over the runtime's own TLS stack, so libgit2 carries no OpenSSL.
-rustls = { version = "0.23", optional = true }
-rustls-platform-verifier = { version = "0.7", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -36,9 +33,11 @@ thiserror.workspace = true
 tokio = { workspace = true, optional = true }
 tracing.workspace = true
 uuid = { version = "1.11", features = ["v4", "v5", "serde"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"], optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [lints]
 workspace = true

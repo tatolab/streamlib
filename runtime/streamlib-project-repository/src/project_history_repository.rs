@@ -6,33 +6,8 @@ use std::path::{Path, PathBuf};
 
 use git2::{FileMode, ObjectType, Oid, Repository, Signature, Sort};
 
-use crate::project_history_smart_http_transport::with_the_bearer_token_on_this_thread;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::ProjectTransactionAuthor;
-
-const MAIN_BRANCH_REFSPEC: &str = "refs/heads/main:refs/heads/main";
-const EVERY_BRANCH_REFSPEC: &str = "+refs/heads/*:refs/heads/*";
-const EVERY_TAG_REFSPEC: &str = "+refs/tags/*:refs/tags/*";
-
-/// A Git smart-HTTP remote a project's history is pushed to and fetched from, such as a
-/// Cloudflare Artifacts repo: `https://<account>.artifacts.cloudflare.net/git/<namespace>/<repo>.git`.
-#[derive(Clone)]
-pub struct ProjectHistoryRemote {
-    /// The remote's URL, carrying no credentials.
-    pub url: String,
-    /// The token sent as `Authorization: Bearer`; an Artifacts repo takes one scoped to it.
-    pub bearer_token: Option<String>,
-}
-
-impl std::fmt::Debug for ProjectHistoryRemote {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProjectHistoryRemote")
-            .field("url", &self.url)
-            .field("bearer_token", &self.bearer_token.as_ref().map(|_| "set"))
-            .finish()
-    }
-}
 
 /// Where a project's history sits, relative to the project: a bare Git repository the runtime alone writes.
 pub const PROJECT_HISTORY_DIRECTORY: &str = ".tatolab/history.git";
@@ -54,7 +29,8 @@ pub struct ProjectHistoryCommit {
     pub author_name: String,
 }
 
-/// A project's history, a Git repository written through libgit2; the one place the crate touches Git.
+/// A project's history, a local Git repository written through libgit2 with one branch and no
+/// remote; the one place the crate touches Git.
 pub struct ProjectHistoryRepository {
     history_directory: PathBuf,
     repository: Repository,
@@ -87,62 +63,6 @@ impl ProjectHistoryRepository {
             history_directory,
             repository,
         })
-    }
-
-    /// Open the bare history at `history_directory`, making an empty one when none is there:
-    /// the copy of another project's history a dependency is fetched into.
-    pub fn open_or_create_at(history_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
-        let repository = if history_directory.exists() {
-            Repository::open_bare(history_directory)?
-        } else {
-            let mut options = git2::RepositoryInitOptions::new();
-            options
-                .bare(true)
-                .initial_head(PROJECT_HISTORY_BRANCH)
-                .mkpath(true);
-            Repository::init_opts(history_directory, &options)?
-        };
-        Ok(Self {
-            history_directory: history_directory.to_path_buf(),
-            repository,
-        })
-    }
-
-    /// Fetch every branch and tag of `remote` into this history, each replacing the one of its
-    /// name, and remove each branch and tag `remote` no longer holds; fetched commits are kept.
-    pub fn fetch_every_branch_and_tag_from(
-        &self,
-        remote: &ProjectHistoryRemote,
-    ) -> Result<(), ProjectRepositoryRefusal> {
-        with_the_bearer_token_on_this_thread(remote.bearer_token.as_deref(), || {
-            let mut anonymous_remote = self.repository.remote_anonymous(&remote.url)?;
-            let mut fetch_options = git2::FetchOptions::new();
-            fetch_options.prune(git2::FetchPrune::On);
-            anonymous_remote.fetch(
-                &[EVERY_BRANCH_REFSPEC, EVERY_TAG_REFSPEC],
-                Some(&mut fetch_options),
-                None,
-            )
-        })?;
-        tracing::info!(remote = %remote.url, "fetched a dependency's history");
-        Ok(())
-    }
-
-    /// The commit `revision` names in this history: a commit id, whole or abbreviated, a tag or
-    /// a branch.
-    pub fn commit_a_revision_names(
-        &self,
-        revision: &str,
-    ) -> Result<String, ProjectRepositoryRefusal> {
-        let named = self
-            .repository
-            .revparse_single(revision)
-            .and_then(|object| object.peel_to_commit())
-            .map_err(|_| ProjectRepositoryRefusal::NoSuchRevision {
-                revision: revision.to_owned(),
-                history: self.history_directory.clone(),
-            })?;
-        Ok(named.id().to_string())
     }
 
     /// The history's directory on disk.
@@ -179,50 +99,6 @@ impl ProjectHistoryRepository {
             &parents,
         )?;
         Ok(commit_oid.to_string())
-    }
-
-    /// Push `main` to `remote`, which must take it as a fast-forward.
-    pub fn push_main_to(
-        &self,
-        remote: &ProjectHistoryRemote,
-    ) -> Result<(), ProjectRepositoryRefusal> {
-        let mut refused_reference_updates = Vec::new();
-        let pushed = with_the_bearer_token_on_this_thread(remote.bearer_token.as_deref(), || {
-            let mut anonymous_remote = self.repository.remote_anonymous(&remote.url)?;
-            let mut callbacks = git2::RemoteCallbacks::new();
-            callbacks.push_update_reference(|reference, refused_because| {
-                if let Some(refused_because) = refused_because {
-                    refused_reference_updates.push(format!("{reference}: {refused_because}"));
-                }
-                Ok(())
-            });
-            let mut push_options = git2::PushOptions::new();
-            push_options.remote_callbacks(callbacks);
-            anonymous_remote.push(&[MAIN_BRANCH_REFSPEC], Some(&mut push_options))
-        });
-        pushed?;
-        if !refused_reference_updates.is_empty() {
-            return Err(ProjectRepositoryRefusal::HistoryRemoteRefused {
-                url: remote.url.clone(),
-                why: refused_reference_updates.join("; "),
-            });
-        }
-        tracing::info!(remote = %remote.url, "pushed the project's history");
-        Ok(())
-    }
-
-    /// Fetch `remote`'s `main` into this history's `main` as a fast-forward, answering the
-    /// commit `main` then holds.
-    pub fn fetch_main_from(
-        &self,
-        remote: &ProjectHistoryRemote,
-    ) -> Result<Option<String>, ProjectRepositoryRefusal> {
-        with_the_bearer_token_on_this_thread(remote.bearer_token.as_deref(), || {
-            let mut anonymous_remote = self.repository.remote_anonymous(&remote.url)?;
-            anonymous_remote.fetch(&[MAIN_BRANCH_REFSPEC], None, None)
-        })?;
-        tracing::info!(remote = %remote.url, "fetched the project's history");
-        self.head_commit()
     }
 
     /// Every commit on `main`, newest first.
@@ -411,47 +287,6 @@ mod tests {
         );
         assert_eq!(commits[0].author_name, "builder");
         assert_eq!(history.files_at_head().unwrap(), tracked_files);
-    }
-
-    #[test]
-    fn a_fetch_removes_each_branch_the_source_deleted_and_keeps_its_commits() {
-        let source_project = tempfile::tempdir().unwrap();
-        let source = ProjectHistoryRepository::create_for_project(source_project.path()).unwrap();
-        let mut tracked_files = BTreeMap::new();
-        tracked_files.insert("tatolab-project.json".to_owned(), b"{}\n".to_vec());
-        let commit = source
-            .commit_tracked_files(&tracked_files, &agent(), "first")
-            .unwrap();
-        let source_repository = Repository::open(source.history_directory()).unwrap();
-        source_repository
-            .branch(
-                "feature",
-                &source_repository
-                    .find_commit(Oid::from_str(&commit).unwrap())
-                    .unwrap(),
-                false,
-            )
-            .unwrap();
-        let fetched_into = tempfile::tempdir().unwrap();
-        let fetched =
-            ProjectHistoryRepository::open_or_create_at(&fetched_into.path().join("history.git"))
-                .unwrap();
-        let remote = ProjectHistoryRemote {
-            url: source.history_directory().display().to_string(),
-            bearer_token: None,
-        };
-        fetched.fetch_every_branch_and_tag_from(&remote).unwrap();
-        assert_eq!(fetched.commit_a_revision_names("feature").unwrap(), commit);
-
-        source_repository
-            .find_branch("feature", git2::BranchType::Local)
-            .unwrap()
-            .delete()
-            .unwrap();
-        fetched.fetch_every_branch_and_tag_from(&remote).unwrap();
-
-        assert!(fetched.commit_a_revision_names("feature").is_err());
-        assert_eq!(fetched.commit_a_revision_names(&commit).unwrap(), commit);
     }
 
     #[test]

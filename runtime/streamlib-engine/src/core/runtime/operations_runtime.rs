@@ -633,6 +633,14 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn reconcile_each_stream_fragment_to_the_stream_it_references_live(
+        &self,
+    ) -> BoxFuture<'_, Result<()>> {
+        self.in_this_streams_log_route(
+            self.reconcile_each_stream_fragment_to_the_stream_it_references(),
+        )
+    }
+
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
         Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
     }

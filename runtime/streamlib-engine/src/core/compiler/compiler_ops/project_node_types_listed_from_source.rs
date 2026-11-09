@@ -42,21 +42,24 @@ const PROJECT_NODE_TYPE_LISTING_STANDARD_OUTPUT_KEPT_BYTES: usize = 64 * 1024 * 
 /// The label each line of a listing's standard error is logged under.
 const PROJECT_NODE_TYPE_LISTING_STANDARD_ERROR_LOG_LABEL: &str = "project-node-type-listing";
 
-/// A linked dependency's Python files at the revision it is pinned to, as the listing reads them.
+/// An imported project's Python files as its folder under `imports/` holds them now, as the
+/// listing reads them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct LinkedDependencyPythonSourcesAtItsPin {
-    /// The depended-on project's UUID.
+pub struct ImportedProjectPythonSources {
+    /// The imported project's UUID.
     pub project: String,
-    /// The commit or tag it is pinned to.
-    pub revision: String,
-    /// Each `.py` file of the dependency at its pin, by its path there.
+    /// Its folder under `imports/`.
+    pub folder: String,
+    /// The version its copy carried.
+    pub version: String,
+    /// Each `.py` file of its folder, by its path inside the folder.
     pub files: BTreeMap<String, String>,
 }
 
-/// What the listing entry reads on standard input: every dependency's Python sources.
+/// What the listing entry reads on standard input: every import's Python sources.
 #[derive(Serialize)]
 struct ProjectNodeTypeListingRequest<'request> {
-    dependencies: &'request [LinkedDependencyPythonSourcesAtItsPin],
+    dependencies: &'request [ImportedProjectPythonSources],
 }
 
 /// What the listing entry prints: every source's listing, or why there is none.
@@ -86,13 +89,12 @@ fn project_node_type_listing_command(project_directory: &Path) -> Command {
 }
 
 /// Every source's node types and graph generators for the project at `project_directory`:
-/// the project's own node code, each linked dependency's at its pin from
-/// `dependency_sources`, and each installed distribution's that declares `tatolab.nodes`.
+/// the project's own node code outside `imports/`, each import's from `import_sources`, and each installed distribution's that declares `tatolab.nodes`.
 /// Each source is `{source, node_types, graph_generators, unreadable_modules}`. Refused when
 /// the project's interpreter could not start, ran past its bound or printed no listing.
 pub fn list_a_projects_node_types_and_graph_generators_from_source(
     project_directory: &Path,
-    dependency_sources: &[LinkedDependencyPythonSourcesAtItsPin],
+    import_sources: &[ImportedProjectPythonSources],
 ) -> Result<Vec<Value>> {
     let interpreter_path = the_projects_venv_interpreter(project_directory);
     let interpreter = interpreter_path.display();
@@ -103,7 +105,7 @@ pub fn list_a_projects_node_types_and_graph_generators_from_source(
         ))
     };
     let request_json = serde_json::to_vec(&ProjectNodeTypeListingRequest {
-        dependencies: dependency_sources,
+        dependencies: import_sources,
     })
     .map_err(|not_written| refused(format!("its request does not write as JSON: {not_written}")))?;
     let mut command = project_node_type_listing_command(project_directory);

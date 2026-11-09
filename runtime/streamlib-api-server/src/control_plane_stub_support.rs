@@ -86,6 +86,11 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
+        fn reconcile_each_stream_fragment_to_the_stream_it_references_live(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             _graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -447,6 +452,11 @@ macro_rules! graph_mutation_ops_record_the_call {
             _link_id: ::streamlib::sdk::graph::LinkUniqueId,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!("the MCP front end edits a graph through `apply_a_stream_graph_operation_live` alone")
+        }
+        fn reconcile_each_stream_fragment_to_the_stream_it_references_live(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            Box::pin(async { Ok(()) })
         }
         fn apply_a_stream_graph_operation_live(
             &self,

@@ -475,7 +475,7 @@ impl LocalApiMcpServerHandler {
                     )) => project_repository.asset(*asset)?,
                     Some(
                         ProjectOperation::StreamGraph(_)
-                        | ProjectOperation::Dependency(_)
+                        | ProjectOperation::Import(_)
                         | ProjectOperation::StreamDocument(_),
                     )
                     | None => {

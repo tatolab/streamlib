@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use streamlib_project_repository::{
-    StreamGraphDocument, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
+    StreamGraphDocumentLinkEnd, StreamGraphOperation,
 };
 use uuid::Uuid;
 
@@ -126,6 +127,7 @@ impl LoadedStreamInThisRuntime {
         match graph_operation {
             StreamGraphOperation::AddNode { node, links } => {
                 node.fragment.is_some()
+                    || node.node_type == STREAM_FRAGMENT_NODE_TYPE
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
@@ -140,6 +142,16 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveGroup { .. } => true,
             other => other.node().is_some_and(no_processor_runs_as),
         }
+    }
+
+    /// Reconcile the live graph to itself as drawn, so each stream fragment places the stream it
+    /// references as that stream's document, or its import's, is on disk now.
+    pub(crate) async fn reconcile_each_stream_fragment_to_the_stream_it_references(
+        &self,
+    ) -> Result<()> {
+        let graph_as_drawn = self.to_json()?;
+        self.reconcile_the_live_graph_to_the_graph_document(graph_as_drawn)
+            .await
     }
 
     /// Apply `graph_operation` to this stream's graph as drawn and reconcile the live graph to

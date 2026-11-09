@@ -64,110 +64,65 @@ pub enum ProjectRepositoryRefusal {
     EmptyTransaction,
     #[error("the transaction's author needs a name")]
     AuthorWithoutAName,
-    #[error("the history remote {url} refused the push: {why}")]
-    HistoryRemoteRefused { url: String, why: String },
     #[error("the graph document {path} could not be read, so what it references is unknown: {why}")]
     GraphDocumentUnreadable { path: String, why: String },
     #[error("`{name}` cannot be both a tracked file and a tracked folder in history")]
     TrackedFileAndFolderShareAName { name: String },
+    #[error("the project {0} cannot import itself")]
+    ProjectImportsItself(Uuid),
+    #[error("the project already imports {0}; copy it again with update_dependency")]
+    ImportAlreadyHeld(Uuid),
+    #[error("the project imports no project {0}")]
+    NoSuchImport(Uuid),
+    #[error("`imports/{folder}` already holds another import; name another `folder`")]
+    ImportFolderAlreadyHeld { folder: String },
+    #[error("`{folder}` is not an import's folder: {why}")]
+    ImportFolderRefused { folder: String, why: &'static str },
     #[error(
-        "the history {history} holds no revision `{revision}`: name a commit, a tag or a branch"
+        "the import source {import_source} is a relative path; a folder or a zip on this machine \
+         is named by its absolute path"
     )]
-    NoSuchRevision { revision: String, history: PathBuf },
-    #[error("the project {0} cannot depend on itself")]
-    ProjectDependsOnItself(Uuid),
-    #[error("the project already depends on {0}; move its pin with update_dependency")]
-    DependencyAlreadyHeld(Uuid),
-    #[error("the project depends on no project {0}")]
-    NoSuchDependency(Uuid),
-    #[error("the dependency {project} is pinned to {pinned}, not {expected}")]
-    DependencyPinnedElsewhere {
-        project: Uuid,
-        pinned: String,
-        expected: String,
+    ImportSourceNotAnAbsolutePath { import_source: String },
+    #[error("{import_source} holds no project to import: {what_is_missing}")]
+    ImportSourceHoldsNoProject {
+        import_source: String,
+        what_is_missing: String,
     },
-    #[error(
-        "the dependency source {dependency_source} is a relative path; a project directory is \
-         named by its absolute path"
-    )]
-    DependencySourceNotAnAbsolutePath { dependency_source: String },
-    #[error(
-        "{dependency_source} holds no project at that revision: it has no tatolab-project.json"
-    )]
-    DependencySourceHoldsNoProject { dependency_source: String },
-    #[error("{dependency_source} now holds the project {held}, not the dependency {expected}")]
-    DependencySourceHoldsAnotherProject {
-        dependency_source: String,
+    #[error("{import_source} holds the project {held}, not the import {expected}")]
+    ImportSourceHoldsAnotherProject {
+        import_source: String,
         expected: Uuid,
         held: Uuid,
     },
-    #[error("the dependency {project} holds no stream asset {stream} at {commit}")]
-    DependencyHoldsNoStream {
-        project: Uuid,
-        stream: Uuid,
-        commit: String,
-    },
-    #[error("the dependency {project} holds no asset {asset} at {commit}")]
-    DependencyHoldsNoAsset {
+    #[error("the import {project} in {import_folder} holds no asset {asset}")]
+    ImportHoldsNoAsset {
         project: Uuid,
         asset: Uuid,
-        commit: String,
+        import_folder: PathBuf,
+    },
+    #[error("the asset {asset} is missing: it needs the file {file}")]
+    AssetFileMissing { asset: Uuid, file: PathBuf },
+    #[error(
+        "`imports/{folder}` was edited since it was copied: {edited_files:?}; copying it again \
+         overwrites them, so confirm with `overwrite_edited_files`"
+    )]
+    ImportEditedSinceItsCopy {
+        folder: String,
+        edited_files: Vec<String>,
     },
     #[error(
-        "the assets of the dependency {project} at {revision} are not recorded in this project; \
-         `update_dependency` to that revision fetches them"
+        "the project still uses the import {project}: {referencing_nodes:?} reference it; remove \
+         them first"
     )]
-    DependencyAssetsNotRecordedAtThePin { project: Uuid, revision: String },
-    #[error(
-        "the pin of the dependency {project} names `{revision}`, which is no commit's hexadecimal \
-         hash, so it names no record of the dependency's assets"
-    )]
-    DependencyPinNamesNoCommitHash { project: Uuid, revision: String },
-    #[error(
-        "the bytes of the asset {asset} of the dependency {project} are not in this project's \
-         content store: its source {dependency_source} held none of them, and a Git remote carries \
-         no content store"
-    )]
-    DependencyAssetContentNotFetched {
+    ImportStillReferenced {
         project: Uuid,
-        asset: Uuid,
-        dependency_source: String,
+        referencing_nodes: Vec<String>,
     },
     #[error(
         "the graph document {path} was edited after the transaction being reversed wrote it; \
          taking it out would lose those edits"
     )]
     StreamDocumentEditedSinceItWasWritten { path: String },
-    #[error(
-        "node `{node_name}` of the graph document {path} references the stream being forked and \
-         holds no UUID, so no operation can point it at the copy; load the stream, then fork"
-    )]
-    ForkReachesANodeHoldingNoUuid { path: String, node_name: String },
-    #[error(
-        "no package `{distribution}` is installed in the project's venv under {venv_lib_directory}; add it to pyproject.toml and sync"
-    )]
-    DependencyPackageNotInstalled {
-        distribution: String,
-        venv_lib_directory: PathBuf,
-    },
-    #[error(
-        "the package `{distribution}` ships no project: none of its files is a tatolab-project.json beside its .tatolab/history.git"
-    )]
-    DependencyPackageShipsNoProject { distribution: String },
-    #[error(
-        "the package `{distribution}` ships several projects, {project_directories:?}; a package dependency needs exactly one"
-    )]
-    DependencyPackageShipsSeveralProjects {
-        distribution: String,
-        project_directories: Vec<PathBuf>,
-    },
-    #[error(
-        "the project still uses the dependency {project}: {referencing_nodes:?} reference its assets; remove or fork them first"
-    )]
-    DependencyStillReferenced {
-        project: Uuid,
-        referencing_nodes: Vec<String>,
-    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "history")]

@@ -256,8 +256,7 @@ image, USD, an FMU — referenced by UUID, never by path. _Avoid_: "resource", "
 is meant.
 
 **Graph document** _(crosses)_: a stream asset's canonical JSON — nodes by UUID, config, pin
-values, studio fields, links, fragments, groups, and for a fork the stream it was copied from —
-and the stream's source of truth. _Avoid_: "stream file", "scene", "`stream.py`".
+values, studio fields, links, fragments, groups — and the stream's source of truth. _Avoid_: "stream file", "scene", "`stream.py`".
 
 **Group** _(crosses)_: a labelled group of one level's nodes in a graph document — a UUID, a title,
 a description and a colour — that a node joins by naming its UUID as its `studio.group`; it changes
@@ -267,8 +266,9 @@ nothing that runs. _Avoid_: "fragment", "subgraph" for a group.
 read-only container with its own node UUIDs, refreshed when the generator re-runs. _Avoid_:
 "nested stream", "group".
 
-**Linked dependency** _(crosses)_: another project used at a pinned revision, its assets read-only
-until forked. _Avoid_: "copy", "import" for a link.
+**Stream fragment** _(crosses)_: a `tatolab.project:StreamFragment` node holding only a reference,
+`{"stream": {"asset", "from"?}}`, to a stream of this project or of an import, whose graph each
+load places in it as that stream's document is on disk. _Avoid_: "copy", "paste" for one.
 
 **Processor** _(engine)_: the engine's word for a node — its trait, its id, its interpreter;
 kept in Rust identifiers until the rename. _Avoid_: on any user surface.

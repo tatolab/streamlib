@@ -362,7 +362,7 @@ fn a_transaction_records_its_author_parent_and_inverse() {
     assert_eq!(set.transaction.author, agent());
     assert_eq!(
         set.transaction.inverse_operations,
-        vec![set.transaction.operations[0].inverse()]
+        vec![set.transaction.operations[0].inverse_at(&applied.commit)]
     );
     assert_eq!(
         repository.asset(video_asset).unwrap().import_settings,

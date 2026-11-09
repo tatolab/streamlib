@@ -7,10 +7,10 @@
 
 The runtime starts it as `<venv python> -I -m tatolab.stream._project_node_type_listing_entry`
 with the project directory as the working directory and, on stdin, one JSON object
-`{"dependencies": [{"project", "revision", "files": {path: source text}}]}`: the Python files
-of each linked dependency at its pin. Nothing is imported or run; every module is read from
+`{"dependencies": [{"project", "folder", "version", "files": {path: source text}}]}`: the
+Python files of each import as its folder under `imports/` holds them. Nothing is imported or run; every module is read from
 source. stdout carries exactly one JSON object, `{"sources": [...]}`, and the exit code is 0.
-Each source is the project itself, a dependency or an installed distribution that declares
+Each source is the project itself outside `imports/`, an import or an installed distribution that declares
 `tatolab.nodes` entry points, with the `node_types`, `graph_generators` and
 `unreadable_modules` read from it.
 """
@@ -44,6 +44,9 @@ LISTING_FAILED_BECAUSE_DOCUMENT_KEY = "failed_because"
 # its content store and every other dot-directory, and bytecode caches.
 _PROJECT_DIRECTORY_NAMES_NEVER_READ = ("__pycache__", "node_modules")
 
+# The project's own directory whose folders each hold an import, listed as its own source.
+_PROJECT_IMPORTS_DIRECTORY_NAME = "imports"
+
 
 def list_the_node_types_and_graph_generators_of_a_project(
     project_directory: Path,
@@ -64,7 +67,8 @@ def list_the_node_types_and_graph_generators_of_a_project(
             {
                 "source": DEPENDENCY_SOURCE,
                 "project": dependency["project"],
-                "revision": dependency["revision"],
+                "folder": dependency["folder"],
+                "version": dependency["version"],
                 **read_node_types_and_graph_generators_from_module_sources(
                     _dependency_module_sources(dependency["files"])
                 ),
@@ -76,10 +80,13 @@ def list_the_node_types_and_graph_generators_of_a_project(
 
 def _project_module_sources(project_directory: Path) -> Iterator[tuple[str, str, str | OSError]]:
     for directory, subdirectory_names, file_names in os.walk(project_directory):
+        is_the_project_root = Path(directory) == project_directory
         subdirectory_names[:] = sorted(
             name
             for name in subdirectory_names
-            if not name.startswith(".") and name not in _PROJECT_DIRECTORY_NAMES_NEVER_READ
+            if not name.startswith(".")
+            and name not in _PROJECT_DIRECTORY_NAMES_NEVER_READ
+            and not (is_the_project_root and name == _PROJECT_IMPORTS_DIRECTORY_NAME)
         )
         for file_name in sorted(file_names):
             file_path = Path(directory) / file_name

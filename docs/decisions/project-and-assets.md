@@ -1,7 +1,8 @@
 # Projects and assets: a project is a versioned repository the runtime writes
 
 Rationale for the `[project-and-assets]` entries in `docs/plan/ARCHITECTURE.md` §Processor model &
-scheduling, §Product and §Control plane & observability, decided 2026-11-07 and 2026-11-08. It
+scheduling, §Product and §Control plane & observability, decided 2026-11-07 and 2026-11-08 and amended 2026-11-09 by
+`docs/plan/changes/self-contained-project-imports.md`. It
 supersedes "the graph is emitted, never authored" in `one-runtime-per-machine.md`. Node kinds, the
 five families, variables, Graph Input and Output nodes, islands and viewers are unchanged; a
 stream's graph document stores them.
@@ -20,11 +21,13 @@ one kind of asset beside media, images, USD, FMUs and the rest. The runtime gene
 every asset and node instance when it is created, and every reference names a UUID. The runtime is
 the project's one writer: every change is a transaction with an author and an inverse, the unit of
 undo and history. Each project has its own Git history, written by a Git engine the runtime
-carries, in a form Cloudflare Artifacts takes as a remote. Large binary content lives in a
-content-addressed store beside history, with only a pointer in it. Another project's asset is a
-linked dependency pinned to a revision, updated by choice and copied only by a fork. Python defines
-node types; a `@graph_generator` function builds graph, stored as a frozen fragment. A project
-works fully offline; a remote is optional.
+carries, the local transaction log behind undo and redo; nothing pushes, fetches or clones it. Large binary content lives in a
+content-addressed store beside history, with only a pointer in it. Another project is imported by
+copying it once, whole, into `imports/<folder>/`, copied again only by choice; what it holds is
+referenced in its folder, a stream fragment of one of its streams is a reference resolved at each
+load, and editing it means opening its folder as its own project. Python defines node types; a
+`@graph_generator` function builds graph, stored as a frozen fragment. A project is
+self-contained and works fully offline.
 
 ## Rejected alternatives
 
@@ -41,6 +44,11 @@ works fully offline; a remote is optional.
   LFS; history holds a pointer, as LFS does.
 - **Copying a dependency's stream by default.** It severs the link to the team that maintains it,
   so updates stop arriving.
+- **A dependency read from its fetched history at a pinned revision, and a fork to edit it.** A
+  project opened elsewhere needs the fetch to reach the same state, and a fork copies out of a
+  module, so two copies of one thing drift (owner, 2026-11-09).
+- **A Git remote for a project's history.** History is a local database, not a sync channel
+  (owner, 2026-11-09).
 - **A CRDT now.** Two valid edits can merge into an invalid graph, and a hub must validate edits
   anyway.
 
@@ -48,7 +56,7 @@ works fully offline; a remote is optional.
 
 - **It is how creative tools work.** Unreal, Houdini, TouchDesigner, DaVinci and Blender keep a
   tool-owned model of a project and its assets, edited by operations, and code defines node types,
-  not the scene. Houdini's digital assets and Unreal's plugins are the linked-dependency shape.
+  not the scene. Houdini's digital assets and Unreal's plugins are the import shape.
 - **UUIDs end edit fights.** A rename and a config change from two places never touch the same
   thing, and links, positions, state and history follow the UUID.
 - **Transactions and Git-shaped history are the seam for multiplayer.** A hub that orders
@@ -61,4 +69,4 @@ works fully offline; a remote is optional.
   tools change from names to UUIDs, which every client follows.
 - Tato Studio reads saved positions, shows assets and dependencies, and its code pane edits node
   code and generators.
-- Syncing content to the cloud needs storage beside the Artifacts remote, which is later work.
+- Syncing a project to the cloud is later work, beside history rather than through it.

@@ -251,10 +251,11 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     assert project["unreadable_modules"] == []
 
 
-def test_a_dependencys_node_code_is_read_from_the_files_at_its_pin(tmp_path: Path) -> None:
+def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: Path) -> None:
     dependency = {
         "project": "6f1c2a8e-0000-4000-8000-000000000001",
-        "revision": "v1.0",
+        "folder": "gripper",
+        "version": "ab" * 32,
         "files": {
             "nodes/gripper.py": DEPENDENCY_NODE_SOURCE,
             "streams/cell.graph.json": "{}",
@@ -267,7 +268,8 @@ def test_a_dependencys_node_code_is_read_from_the_files_at_its_pin(tmp_path: Pat
 
     dependency_source = the_source(listing, "dependency")
     assert dependency_source["project"] == dependency["project"]
-    assert dependency_source["revision"] == "v1.0"
+    assert dependency_source["folder"] == "gripper"
+    assert dependency_source["version"] == "ab" * 32
     assert [
         (node_type["type"], node_type["inputs"]) for node_type in dependency_source["node_types"]
     ] == [
@@ -307,6 +309,23 @@ def test_an_installed_distribution_lists_each_node_type_its_entry_points_name(
     assert node_types["tatolab_fixture_ops:Missing"]["kind"] is None
 
 
+def test_the_project_source_leaves_out_the_node_code_of_its_imports_folder(
+    tmp_path: Path,
+) -> None:
+    project_directory = a_plain_project(tmp_path)
+    write_files(project_directory, {"imports/gripper/nodes/gripper.py": DEPENDENCY_NODE_SOURCE})
+
+    project = the_source(
+        list_the_node_types_and_graph_generators_of_a_project(
+            project_directory, [], installed_distribution_search_path=[]
+        ),
+        "project",
+    )
+
+    assert "imports.gripper.nodes.gripper:Gripper" not in node_types_by_type(project)
+    assert len(project["node_types"]) == 4
+
+
 def test_a_syntax_error_is_reported_for_its_module_only(tmp_path: Path) -> None:
     project_directory = a_plain_project(tmp_path)
     write_files(
@@ -338,7 +357,8 @@ def test_the_entry_prints_one_document_for_the_project_in_its_working_directory(
         "dependencies": [
             {
                 "project": "6f1c2a8e-0000-4000-8000-000000000001",
-                "revision": "main",
+                "folder": "gripper",
+                "version": "ab" * 32,
                 "files": {"nodes/gripper.py": DEPENDENCY_NODE_SOURCE},
             }
         ]

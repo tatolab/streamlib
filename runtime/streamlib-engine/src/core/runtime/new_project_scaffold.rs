@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use streamlib_project_repository::{PROJECT_FILE_NAME, TatolabProjectFile};
+use streamlib_project_repository::{PROJECT_FILE_NAME, THIS_RUNTIME_VERSION, TatolabProjectFile};
 use uuid::Uuid;
 
 use super::StreamLocation;
@@ -120,6 +120,7 @@ impl NewProjectScaffold {
         let project_file = TatolabProjectFile {
             project: self.project,
             name: self.project_name.clone(),
+            created_with_runtime: Some(THIS_RUNTIME_VERSION.to_owned()),
             dependencies: Vec::new(),
         };
         let bytes = project_file.canonical_bytes().map_err(|refusal| {
