@@ -39,10 +39,16 @@ pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
             .join(&import.folder);
         if let Some(distribution_name) = the_distribution_name_the_folder_declares(&import_folder)?
         {
-            source_path_of_each_requirement.insert(
-                distribution_name,
-                format!("{PROJECT_IMPORTS_DIRECTORY}/{}", import.folder),
-            );
+            let source_path = format!("{PROJECT_IMPORTS_DIRECTORY}/{}", import.folder);
+            if let Some(first_source_path) =
+                source_path_of_each_requirement.insert(distribution_name.clone(), source_path)
+            {
+                return Err(ProjectRepositoryRefusal::ImportsDeclareOneDistribution {
+                    distribution_name,
+                    first_folder: first_source_path,
+                    second_folder: format!("{PROJECT_IMPORTS_DIRECTORY}/{}", import.folder),
+                });
+            }
         }
     }
 
@@ -60,7 +66,17 @@ pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
         })
         .map(|(name, _)| name.to_owned())
         .collect();
-    for name in &requirements_no_import_holds {
+    let sources_an_import_replaces: Vec<String> = uv_sources
+        .iter()
+        .map(|(name, _)| name.to_owned())
+        .filter(|name| {
+            source_path_of_each_requirement.contains_key(&normalized_distribution_name(name))
+        })
+        .collect();
+    for name in requirements_no_import_holds
+        .iter()
+        .chain(&sources_an_import_replaces)
+    {
         uv_sources.remove(name);
     }
     for (name, path) in &source_path_of_each_requirement {
@@ -126,7 +142,7 @@ fn is_a_source_into_the_imports_folder(source: &Item) -> bool {
 }
 
 /// The table at `keys`, made where it is missing, each one written as its own `[header]`
-/// section rather than inline. Refused when a key on the way holds something other than a table.
+/// section, an inline one included. Refused when a key on the way holds something other than a table.
 fn the_table_at<'document>(
     pyproject: &'document mut DocumentMut,
     keys: &[&str],
@@ -140,6 +156,9 @@ fn the_table_at<'document>(
             new_table.set_implicit(!is_the_last_key);
             Item::Table(new_table)
         });
+        if let Some(inline_table) = entry.as_inline_table().cloned() {
+            *entry = Item::Table(inline_table.into_table());
+        }
         table =
             entry
                 .as_table_mut()
@@ -318,5 +337,51 @@ mod tests {
         .unwrap();
 
         assert_eq!(written, SCAFFOLDED_PYPROJECT);
+    }
+
+    #[test]
+    fn two_imports_declaring_one_distribution_are_refused() {
+        let project = tempfile::tempdir().unwrap();
+        let arm = an_import_named(project.path(), "robot-arm", "robot-arm");
+        let other_arm = an_import_named(project.path(), "other-arm", "Robot_Arm");
+
+        let refusal = pyproject_with_each_import_as_a_uv_path_source(
+            SCAFFOLDED_PYPROJECT,
+            project.path(),
+            &[arm, other_arm],
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                refusal,
+                ProjectRepositoryRefusal::ImportsDeclareOneDistribution { .. }
+            ),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn an_inline_sources_table_and_a_source_spelled_another_way_are_rewritten_once() {
+        let project = tempfile::tempdir().unwrap();
+        let arm = an_import_named(project.path(), "robot-arm", "robot-arm");
+        let pyproject = "[project]\nname = \"cell\"\ndependencies = [\"Robot_Arm\"]\n\n\
+            [tool.uv]\nsources = { Robot_Arm = { path = \"elsewhere\" }, torch = { index = \"pytorch\" } }\n";
+
+        let written =
+            pyproject_with_each_import_as_a_uv_path_source(pyproject, project.path(), &[arm])
+                .unwrap();
+
+        let pyproject: toml::Value = toml::from_str(&written).unwrap();
+        let sources = pyproject["tool"]["uv"]["sources"].as_table().unwrap();
+        assert_eq!(
+            sources.keys().collect::<Vec<_>>(),
+            ["robot-arm", "torch"],
+            "{written}"
+        );
+        assert_eq!(
+            pyproject["project"]["dependencies"],
+            toml::Value::try_from(["robot-arm"]).unwrap()
+        );
     }
 }

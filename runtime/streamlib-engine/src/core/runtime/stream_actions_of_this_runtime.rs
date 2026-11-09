@@ -3442,6 +3442,11 @@ mod tests {
                 &self.interpreter(),
                 STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE,
             );
+            crate::core::runtime::project_venv_made_with_the_runtime_unit_uv::record_the_venv_synced_with_what_the_project_holds_now(
+                self.path(),
+                &[],
+            )
+            .expect("the venv's sync stamp");
             self
         }
 
