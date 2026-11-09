@@ -1609,15 +1609,17 @@ impl LoadedStreamInThisRuntime {
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
         let graph_whose_every_node_holds_a_uuid =
             graph.with_a_uuid_minted_for_each_node_holding_none();
-        let resolution = graph_whose_every_node_holds_a_uuid.with_graph_only_nodes_resolved()?;
-        let graph = &resolution.graph_the_runtime_runs;
         self.processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
-                graph.nodes.iter().map(|node| &node.processor_type),
+                &graph_whose_every_node_holds_a_uuid
+                    .node_types_its_running_nodes_name_at_every_level(),
                 lend_directory,
             )?;
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
+        let resolution = graph_whose_every_node_holds_a_uuid
+            .with_graph_only_nodes_resolved(&self.node_types_this_stream_resolves)?;
+        let graph = &resolution.graph_the_runtime_runs;
         resolution.validate(&self.node_types_this_stream_resolves)?;
         let node_names_the_graph_only_nodes_hold =
             resolution.graph_only_nodes_as_drawn.node_names_cast();
