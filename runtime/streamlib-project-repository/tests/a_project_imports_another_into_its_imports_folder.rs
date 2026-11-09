@@ -805,3 +805,38 @@ fn a_zipped_module_holding_pyvenv_cfg_at_its_root_is_still_copied() {
             .is_file()
     );
 }
+
+#[test]
+fn an_asset_only_a_nested_copy_of_an_import_holds_resolves_to_that_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let mut gripper = ProjectWithOneStream::created_in(root.path(), "gripper");
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "robot-arm");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let add = |importing: &mut ProjectWithOneStream, imported: &ProjectWithOneStream| {
+        importing
+            .repository
+            .add_dependency(
+                &a_person(),
+                &imported.directory().display().to_string(),
+                None,
+            )
+            .unwrap();
+    };
+    add(&mut cell, &gripper);
+    let lut_only_the_newer_gripper_holds = gripper.import_a_lut(b"LUT 2");
+    add(&mut arm, &gripper);
+    add(&mut cell, &arm);
+
+    let file = the_file_of_an_imported_asset(
+        &cell.directory(),
+        gripper.project(),
+        lut_only_the_newer_gripper_holds,
+    )
+    .unwrap();
+
+    assert_eq!(
+        file,
+        cell.directory()
+            .join("imports/robot-arm/imports/gripper/grade.cube")
+    );
+}

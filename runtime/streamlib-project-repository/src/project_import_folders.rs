@@ -17,6 +17,16 @@ pub fn the_folder_of_an_import(
     project_directory: &Path,
     project: Uuid,
 ) -> Result<PathBuf, ProjectRepositoryRefusal> {
+    each_folder_of_an_import_nearest_first(project_directory, project)
+        .into_iter()
+        .next()
+        .ok_or(ProjectRepositoryRefusal::NoSuchImport(project))
+}
+
+/// Every folder holding a copy of `project` as the project at `project_directory` sees it,
+/// nearest first.
+fn each_folder_of_an_import_nearest_first(project_directory: &Path, project: Uuid) -> Vec<PathBuf> {
+    let mut folders_of_the_import = Vec::new();
     let mut projects_to_read = VecDeque::from([project_directory.to_path_buf()]);
     let mut directories_read = BTreeSet::new();
     while let Some(importing_directory) = projects_to_read.pop_front() {
@@ -37,12 +47,12 @@ pub fn the_folder_of_an_import(
                 .join(PROJECT_IMPORTS_DIRECTORY)
                 .join(&import.folder);
             if import.project == project {
-                return Ok(import_folder);
+                folders_of_the_import.push(import_folder.clone());
             }
             projects_to_read.push_back(import_folder);
         }
     }
-    Err(ProjectRepositoryRefusal::NoSuchImport(project))
+    folders_of_the_import
 }
 
 /// Whether `folder` names one folder inside `imports/`: one normal path component, never an
@@ -56,24 +66,31 @@ fn is_one_folder_name(folder: &str) -> bool {
 }
 
 /// The file of the asset `asset` of the import `from`, as the project at `project_directory`
-/// resolves it: the file at the asset's path inside the import's folder. Refused when no
-/// import holds the asset, or when its file is missing, naming the file it needs.
+/// resolves it: the file at the asset's path inside the nearest copy of the import holding the
+/// asset. Refused when no copy holds the asset, or when its file is missing, naming the file it
+/// needs.
 pub fn the_file_of_an_imported_asset(
     project_directory: &Path,
     from: Uuid,
     asset: Uuid,
 ) -> Result<PathBuf, ProjectRepositoryRefusal> {
-    let import_folder = the_folder_of_an_import(project_directory, from)?;
-    let held_asset = read_every_asset_sidecar(&import_folder)?
-        .remove(&asset)
-        .ok_or_else(|| ProjectRepositoryRefusal::ImportHoldsNoAsset {
-            project: from,
-            asset,
-            import_folder: import_folder.clone(),
-        })?;
-    let file = held_asset.path.on_disk_under(&import_folder);
-    if !file.is_file() {
-        return Err(ProjectRepositoryRefusal::AssetFileMissing { asset, file });
+    let folders_of_the_import = each_folder_of_an_import_nearest_first(project_directory, from);
+    let Some(nearest_folder) = folders_of_the_import.first() else {
+        return Err(ProjectRepositoryRefusal::NoSuchImport(from));
+    };
+    for import_folder in &folders_of_the_import {
+        let Some(held_asset) = read_every_asset_sidecar(import_folder)?.remove(&asset) else {
+            continue;
+        };
+        let file = held_asset.path.on_disk_under(import_folder);
+        if !file.is_file() {
+            return Err(ProjectRepositoryRefusal::AssetFileMissing { asset, file });
+        }
+        return Ok(file);
     }
-    Ok(file)
+    Err(ProjectRepositoryRefusal::ImportHoldsNoAsset {
+        project: from,
+        asset,
+        import_folder: nearest_folder.clone(),
+    })
 }
