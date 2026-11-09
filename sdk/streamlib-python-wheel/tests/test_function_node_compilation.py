@@ -572,6 +572,7 @@ def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
     source.write_to_output_port("frames", b"first", timestamp_ns=11)
     runner.process(ctx)
     payload, timestamp_ns = destination.read_from_input_port_with_timestamp("read")
+    assert payload is not None
     assert (bytes(payload), timestamp_ns) == (b"first", 11)
     runner.process(ctx)
     assert destination.read_from_input_port("read") is None, "each message is handed on once"
@@ -625,6 +626,7 @@ def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_famil
     pool.process(_ContextOfOneProcess())
 
     payload, timestamp_ns = destination.read_from_input_port_with_timestamp("read")
+    assert payload is not None
     assert (bytes(payload), timestamp_ns) == (b"a frame's descriptor", 21)
 
 

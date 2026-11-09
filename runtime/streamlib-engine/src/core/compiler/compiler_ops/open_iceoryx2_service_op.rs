@@ -26,11 +26,10 @@ use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, Link,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
-    ReadOfALinkByTheReaderOfAFunctionNodeIsland,
     LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
-    ProcessorLossCounts, ProcessorMetrics, SourceSideHeldOpenForAReaderOutsideItsStream,
-    SourceSideOfALinkWiredOn,
+    ProcessorLossCounts, ProcessorMetrics, ReadOfALinkByTheReaderOfAFunctionNodeIsland,
+    SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
 };
 use crate::core::output_port_stream_facts::StreamFactsOfOutputPorts;
 use crate::core::processors::{

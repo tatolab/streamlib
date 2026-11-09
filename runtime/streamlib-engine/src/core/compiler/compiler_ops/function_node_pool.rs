@@ -660,7 +660,14 @@ mod tests {
         let into_the_pool = the_links_a_link_is_wired_as(&graph, &gate_into_the_reader)
             .into_iter()
             .find(|carried| {
-                graph.traversal().e(carried).first().unwrap().to_port().processor_id() == &pool
+                graph
+                    .traversal()
+                    .e(carried)
+                    .first()
+                    .unwrap()
+                    .to_port()
+                    .processor_id()
+                    == &pool
             })
             .unwrap();
         graph
@@ -668,13 +675,13 @@ mod tests {
             .v(&pool)
             .first_mut()
             .unwrap()
-            .insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(
-                std::sync::Arc::new(
-                    crate::core::processors::OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
-                        ProcessExecution::Continuous { interval_ms: 10 },
-                    ),
+            .insert_component_without_rendering_it(
+            OutOfProcessLinkWiringComponent(std::sync::Arc::new(
+                crate::core::processors::OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                    ProcessExecution::Continuous { interval_ms: 10 },
                 ),
-            ));
+            )),
+        );
 
         wire_a_link_from_a_function_node_island_into_its_reader(
             &mut graph,

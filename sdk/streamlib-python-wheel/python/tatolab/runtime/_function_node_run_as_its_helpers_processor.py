@@ -213,6 +213,10 @@ class _FunctionNodeRunAsItsHelpersProcessor:
             if output_value is None:
                 continue
             if output_port in ports_carrying_an_unread_message:
+                if isinstance(output_value, (int, float, dict)):
+                    raise TypeError(
+                        f"output {output_port!r} hands on an `UnreadMessage`, and the node gave {output_value!r}"
+                    )
                 hand_an_unread_message_on(
                     link_data_access=self._link_data_access,
                     output_port=output_port,

@@ -304,9 +304,10 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
         if *feeds_the_reader {
             reader_link_wiring.forget_a_function_node_island(link_id.as_str());
         }
-        let read_through_its_islands_reader = graph.traversal().e(link_id).first().is_some_and(
-            |link| link.has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>(),
-        );
+        let read_through_its_islands_reader =
+            graph.traversal().e(link_id).first().is_some_and(|link| {
+                link.has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+            });
         if read_through_its_islands_reader {
             close_iceoryx2_service(graph, link_id)?;
         }

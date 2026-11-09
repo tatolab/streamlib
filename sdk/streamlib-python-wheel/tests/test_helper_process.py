@@ -313,6 +313,7 @@ def test_a_message_read_unread_is_handed_on_exactly_as_it_arrived():
     )
 
     payload, timestamp_ns = destination.read_from_input_port_with_timestamp("frames_from_upstream")
+    assert payload is not None
     assert bytes(payload) == frame_index_payload(5)
     assert timestamp_ns == 123_456
 

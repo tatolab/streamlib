@@ -114,9 +114,7 @@ pub(crate) fn how_a_link_is_wired(
             (false, false) => HowALinkIsWired::ThroughAChannel,
             (true, true) => HowALinkIsWired::AsACallInsideAFunctionNodeIsland,
             (true, false) => HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead,
-            (false, true) => {
-                HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland
-            }
+            (false, true) => HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland,
         },
     )
 }
@@ -209,7 +207,10 @@ fn the_function_nodes_an_island_link_evaluates(
         return HashSet::new();
     };
     let mut function_nodes = HashSet::from([island_output_node_id.clone()]);
-    function_nodes.extend(the_function_nodes_upstream_of(graph, &island_output_node_id));
+    function_nodes.extend(the_function_nodes_upstream_of(
+        graph,
+        &island_output_node_id,
+    ));
     function_nodes
 }
 
@@ -2017,7 +2018,11 @@ pub(crate) mod tests {
         .unwrap();
 
         let reads = the_reads_of(&graph, &into_the_island);
-        assert_eq!(reads.len(), 1, "the link into the island is read at its reader once");
+        assert_eq!(
+            reads.len(),
+            1,
+            "the link into the island is read at its reader once"
+        );
         let read_at = reads[0].clone();
         assert_eq!(read_at.processor_id(), &reader);
         assert_eq!(
@@ -2184,13 +2189,13 @@ pub(crate) mod tests {
             "the source notifies each read under its own wiring identity"
         );
 
-        unwire_a_link_from_a_function_node_island_into_its_reader(
-            &mut graph,
-            &into_the_reader,
-        )
-        .unwrap();
+        unwire_a_link_from_a_function_node_island_into_its_reader(&mut graph, &into_the_reader)
+            .unwrap();
 
-        assert_eq!(the_reads_of(&graph, &into_the_island), vec![reads[1].clone()]);
+        assert_eq!(
+            the_reads_of(&graph, &into_the_island),
+            vec![reads[1].clone()]
+        );
         assert_eq!(link_state_of(&graph, &into_the_island), LinkState::Wired);
     }
 
@@ -2217,7 +2222,11 @@ pub(crate) mod tests {
 
         let reads = the_reads_of(&graph, &into_the_island);
         assert_eq!(reads.len(), 2);
-        assert!(reads.iter().all(|read_at| read_at.processor_id() == &reader));
+        assert!(
+            reads
+                .iter()
+                .all(|read_at| read_at.processor_id() == &reader)
+        );
         assert_ne!(
             reads[0].port_name(),
             reads[1].port_name(),
