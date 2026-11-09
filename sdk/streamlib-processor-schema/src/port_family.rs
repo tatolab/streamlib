@@ -156,6 +156,11 @@ pub struct PortFamilyDeclaration {
     /// it; [`Self::codec`] while the key is unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec_from_config_key: Option<String>,
+    /// The input port of the same node whose upstream family, names and
+    /// codec an output carries on, so `connect` resolves it through that
+    /// input's link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_follows_input_port: Option<String>,
 }
 
 /// Which end of a link a port declaration sits at.
@@ -182,6 +187,7 @@ impl PortFamilyDeclaration {
             also_takes_families: Vec::new(),
             family_from_config_key: None,
             codec_from_config_key: None,
+            family_follows_input_port: None,
         }
     }
 
@@ -214,7 +220,7 @@ impl PortFamilyDeclaration {
             .iter()
             .any(|family| family.has_names());
         let input_takes_packets = families_an_input_takes.contains(&PortFamily::Packets);
-        let stated_keys: [(&str, bool, bool); 13] = [
+        let stated_keys: [(&str, bool, bool); 14] = [
             (
                 "names",
                 self.names.is_some(),
@@ -278,6 +284,11 @@ impl PortFamilyDeclaration {
                 "codec_from_config_key",
                 self.codec_from_config_key.is_some(),
                 is_an_output && output_family_may_be_packets,
+            ),
+            (
+                "family_follows_input_port",
+                self.family_follows_input_port.is_some(),
+                is_an_output,
             ),
             ("family", false, true),
         ];

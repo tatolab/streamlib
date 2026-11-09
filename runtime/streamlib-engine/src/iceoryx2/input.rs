@@ -1435,10 +1435,10 @@ impl InputMailboxesInner {
     /// mailbox is empty.
     pub fn read_raw(&self, port: &str) -> Result<Option<MessageReadFromInputPort>> {
         if let Some(island_port) = self.function_node_island_feeding(port) {
-            return island_port.read_the_island_output().map(Some);
+            return island_port.read_the_island_output();
         }
         if let Some(pinned_port) = self.pin_value_read_by_an_unlinked(port) {
-            return pinned_port.read_the_island_output().map(Some);
+            return pinned_port.read_the_island_output();
         }
         Ok(self
             .next_bag_for_the_reader(port)?

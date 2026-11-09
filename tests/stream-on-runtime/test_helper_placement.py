@@ -43,6 +43,7 @@ from helper_placement_streams import (
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
+    python_source_through_a_gate_into_python_sink,
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
     pooled_counter_beside_a_pooled_node_that_hangs,
@@ -372,6 +373,94 @@ def the_first_value_batch_read_after(
         if batch["started_at_monotonic_ns"] > monotonic_ns:
             return batch, occurrence
         occurrence += 1
+
+
+def the_first_gated_count_batch_read_after(
+    tatolabd: TatolabdUnderTest, monotonic_ns: int, *, from_occurrence: int
+) -> "tuple[dict, int]":
+    """The first batch of gated counts the sink started reading after `monotonic_ns`, and its occurrence."""
+    occurrence = from_occurrence
+    while True:
+        batch = tatolabd.await_marker("GATED_COUNT_BATCH_READ", occurrence=occurrence)
+        if batch["started_at_monotonic_ns"] > monotonic_ns:
+            return batch, occurrence
+        occurrence += 1
+
+
+def a_gated_count_batch_read_wholly_after_a_live_edit(
+    tatolabd: TatolabdUnderTest, edit_returned_at_monotonic_ns: int, *, from_occurrence: int
+) -> "tuple[dict, int]":
+    """The batch after the first one the sink started once a live edit returned, which the sink reads with the edit applied.
+
+    A live pin edit returns before the sink's helper has installed the island
+    it changes, so the first batch started after it may span the change.
+    """
+    _, first_occurrence = the_first_gated_count_batch_read_after(
+        tatolabd, edit_returned_at_monotonic_ns, from_occurrence=from_occurrence
+    )
+    batch_after_it = tatolabd.await_marker("GATED_COUNT_BATCH_READ", occurrence=first_occurrence + 1)
+    return batch_after_it, first_occurrence + 1
+
+
+def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_while_closed(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`<Python class> -> Gate -> <Python class>`: the sink's helper reads the
+    source's channel and evaluates `Gate` inside each read, with no process for
+    `Gate`. While open the sink reads each count once, in order; closed live,
+    it reads nothing, not the last count; opened again, it reads counts again.
+    """
+    tatolabd = start_tatolabd_running_stream(python_source_through_a_gate_into_python_sink)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    opened, occurrence = the_first_gated_count_batch_read_after(tatolabd, 0, from_occurrence=2)
+    counts = opened["counts"]
+    assert counts, f"an open gate hands the source's counts on, and the sink read none: {opened}"
+    assert counts == sorted(set(counts)), (
+        f"each count is handed on once, in order, and the sink read {counts}"
+    )
+
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    (gate,) = [node for node in graph["nodes"] if node["name"] == "gate"]
+
+    def set_open_live(is_open: bool) -> None:
+        local_api.call_tool(
+            "set_pin_value",
+            {
+                "stream": stream_id,
+                "node": gate["id"],
+                "input": "open",
+                "value": is_open,
+                "mode": "live",
+            },
+        )
+
+    set_open_live(False)
+    closed, occurrence = a_gated_count_batch_read_wholly_after_a_live_edit(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert closed["counts"] == [], (
+        f"a closed gate hands out nothing, never the last count, and the sink read {closed}"
+    )
+    assert closed["sink_pid"] == opened["sink_pid"], "a pin edit restarts nothing"
+
+    set_open_live(True)
+    reopened, _ = a_gated_count_batch_read_wholly_after_a_live_edit(
+        tatolabd, time.monotonic_ns(), from_occurrence=occurrence + 1
+    )
+    assert reopened["counts"] and reopened["counts"][0] > counts[-1], (
+        f"opened again, the gate hands on the counts written since, and the sink read {reopened}"
+    )
+    assert reopened["counts"] == sorted(set(reopened["counts"])), (
+        f"opened again, each count is handed on once, in order, and the sink read {reopened}"
+    )
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+    assert len(helper_pids) == 2, (
+        f"only the two classes get a process, and the stream started {helper_pids}:\n"
+        f"{tatolabd.recent_stderr()}"
+    )
 
 
 def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_what_it_reads(

@@ -11,7 +11,7 @@ from typing import Any, Iterator
 
 import pytest
 
-from tatolab.stream import ImageFrame, State, Stateful, Time, node
+from tatolab.stream import ImageFrame, State, Stateful, Time, UnreadMessage, node
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
@@ -281,3 +281,70 @@ def _literally(text: str) -> str:
     import re
 
     return re.escape(text)
+
+
+
+@node.function
+def hand_on(value: UnreadMessage, open: bool = True) -> UnreadMessage | None:  # noqa: A002
+    return value if open else None
+
+
+@node.function
+def positive_or_nothing(x: float) -> float | None:
+    return x if x > 0.0 else None
+
+
+def pick_one_of_two(first: UnreadMessage, second: UnreadMessage) -> UnreadMessage:
+    return first
+
+
+def test_an_unread_message_input_takes_every_family_and_its_output_follows_it():
+    (value_port, _) = getattr(hand_on, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    assert value_port["family"]["family"] == "image"
+    assert set(value_port["family"]["also_takes_families"]) == {
+        "array",
+        "channels",
+        "packets",
+        "records",
+    }
+    (result_port,) = getattr(hand_on, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    assert result_port["family"] == {"family": "image", "family_follows_input_port": "value"}
+    signature = getattr(hand_on, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
+    assert signature["inputs"][0]["value_type"] == "unread_message"
+    assert signature["outputs"] == [
+        {"port": "result", "field": None, "value_type": "unread_message", "may_hand_out_nothing": True}
+    ]
+
+
+def test_an_output_that_may_be_none_is_one_that_may_hand_out_nothing():
+    signature = getattr(positive_or_nothing, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
+    assert signature["outputs"][0]["value_type"] == "float"
+    assert signature["outputs"][0]["may_hand_out_nothing"] is True
+    remap_signature = getattr(remap, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
+    assert remap_signature["outputs"][0]["may_hand_out_nothing"] is False
+
+
+def hand_on_a_message_it_was_never_handed(value: float) -> UnreadMessage:
+    raise NotImplementedError
+
+
+def test_an_unread_message_output_without_exactly_one_unread_message_input_is_refused():
+    with pytest.raises(TypeError, match="take exactly one `UnreadMessage` input"):
+        node.function(pick_one_of_two)
+    with pytest.raises(TypeError, match="take exactly one `UnreadMessage` input"):
+        node.function(hand_on_a_message_it_was_never_handed)
+
+
+@dataclass(frozen=True)
+class TwoLevels:
+    low: float = 0.0
+    high: float = 1.0
+
+
+def two_levels_or_nothing(x: float) -> TwoLevels | None:
+    return None
+
+
+def test_a_record_of_outputs_that_may_be_none_is_refused_naming_the_fix():
+    with pytest.raises(TypeError, match=_literally("type each field that may hand out nothing")):
+        node.function(two_levels_or_nothing)

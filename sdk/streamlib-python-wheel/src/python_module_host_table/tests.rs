@@ -318,6 +318,7 @@ fn a_native_thread_reads_an_input_a_compiled_island_feeds_while_python_holds_the
                 Vec::new(),
             )],
             (0, 0),
+            vec![Default::default()],
         )
         .unwrap();
         let (context, _) =
@@ -379,6 +380,7 @@ fn an_input_an_island_running_a_node_as_python_feeds_is_refused_naming_the_node(
                 vec![],
             )],
             (0, 0),
+            Vec::new(),
         )
         .unwrap();
         let (context, _) =

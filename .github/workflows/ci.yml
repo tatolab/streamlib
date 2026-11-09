@@ -596,7 +596,7 @@ jobs:
       - name: tatolab-ops suite
         working-directory: packages/tatolab-ops
         run: |
-          VIRTUAL_ENV="$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv" uv pip install --no-deps .
+          VIRTUAL_ENV="$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv" uv pip install --no-deps . pillow
           "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python" -m pytest tests -v
 
       - name: Driver-search tests against the lend

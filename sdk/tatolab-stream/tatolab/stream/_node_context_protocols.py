@@ -58,6 +58,15 @@ class PortPayloadBorrow(Protocol):
 
 
 @runtime_backed_protocol
+class UnreadMessage(Protocol):
+    """A message of any family a `@node.function` body hands on without reading it.
+
+    Its body can only return it, or `None` to hand out nothing; the output
+    takes the family of what is linked into the input it came from.
+    """
+
+
+@runtime_backed_protocol
 class ChannelsBlock(Protocol):
     """A Channels block a read returned: planar samples borrowed in the sample they arrived in.
 
