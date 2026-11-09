@@ -36,7 +36,8 @@ pub(crate) const FUNCTION_NODE_POOL_INTERVAL_MS: u32 = 10;
 /// The name the pool's processor class is known by in the catalog.
 const FUNCTION_NODE_POOL_SHORT_NAME: &str = "FunctionNodePool";
 
-fn the_function_node_pool_type() -> Result<ProcessorClassImportPath> {
+/// The import path the stream's function node pool is registered under.
+pub(crate) fn the_function_node_pool_type() -> Result<ProcessorClassImportPath> {
     ProcessorClassImportPath::new(FUNCTION_NODE_POOL_NODE_TYPE)
         .map_err(|refusal| Error::Configuration(refusal.to_string()))
 }
