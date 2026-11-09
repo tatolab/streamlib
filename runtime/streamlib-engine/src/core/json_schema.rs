@@ -1544,6 +1544,7 @@ mod graph_response_top_level_key_rendering_tests {
             [
                 "asset",
                 "clock",
+                "forked_from",
                 "groups",
                 "links",
                 "machine",

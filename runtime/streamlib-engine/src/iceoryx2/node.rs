@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use iceoryx2::identifiers::UniqueSubscriberId;
 use iceoryx2::node::{Node, NodeCleanupFailure, NodeView};
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::notifier::Notifier;
@@ -334,7 +335,9 @@ impl Iceoryx2Node {
                              reclaimed the node"
                         );
                     }
-                    return Ok(Iceoryx2Service { inner: service });
+                    return Ok(Iceoryx2Service {
+                        inner: Arc::new(service),
+                    });
                 }
                 Err(failure) => failure,
             };
@@ -371,7 +374,9 @@ impl Iceoryx2Node {
         let service_name = iceoryx2_service_name_of(service_name)?;
 
         match channel_data_service_builder(&node, &service_name).open() {
-            Ok(service) => Ok(Some(Iceoryx2Service { inner: service })),
+            Ok(service) => Ok(Some(Iceoryx2Service {
+                inner: Arc::new(service),
+            })),
             // A service whose last holder has let it go is recreated by the
             // next open-or-create, so it is as good as absent.
             Err(
@@ -677,11 +682,43 @@ fn channel_data_service_built_by_something_other_than_this_engine(
 }
 
 /// Handle to an iceoryx2 channel data service.
+#[derive(Clone)]
 pub struct Iceoryx2Service {
-    inner: ChannelDataServicePortFactory,
+    inner: Arc<ChannelDataServicePortFactory>,
 }
 
 impl Iceoryx2Service {
+    /// Replace `subscriber_ids` with the id of every subscriber connected to
+    /// this channel now, wherever it lives.
+    pub fn collect_connected_subscriber_ids_into(
+        &self,
+        subscriber_ids: &mut Vec<UniqueSubscriberId>,
+    ) {
+        subscriber_ids.clear();
+        self.inner.dynamic_config().list_subscribers(|subscriber| {
+            subscriber_ids.push(subscriber.subscriber_id);
+            CallbackProgression::Continue
+        });
+    }
+
+    /// Whether a subscriber connected to this channel now is missing from
+    /// `subscriber_ids`.
+    pub fn has_a_connected_subscriber_outside(
+        &self,
+        subscriber_ids: &[UniqueSubscriberId],
+    ) -> bool {
+        let mut found_one_outside = false;
+        self.inner.dynamic_config().list_subscribers(|subscriber| {
+            if subscriber_ids.contains(&subscriber.subscriber_id) {
+                CallbackProgression::Continue
+            } else {
+                found_one_outside = true;
+                CallbackProgression::Stop
+            }
+        });
+        found_one_outside
+    }
+
     /// The deepest ring a subscriber may take, read off the live service — on a
     /// reopen that is the depth the service was created at, not what the reopen
     /// asked for.
@@ -1515,6 +1552,7 @@ mod tests {
                 let publisher = data.create_publisher(64).expect("source publisher");
                 out_inner.set_channel_publisher(
                     "out",
+                    &data,
                     publisher,
                     ChannelEgressConfig {
                         service_name: data_name.clone(),

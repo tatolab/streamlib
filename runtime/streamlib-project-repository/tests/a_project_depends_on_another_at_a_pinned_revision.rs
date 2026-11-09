@@ -292,7 +292,12 @@ fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_depen
 
     let (fork, _) = cell
         .repository
-        .fork_dependency_stream(&a_person(), arm_project, arm.stream, Some("streams/arm.graph.json"))
+        .fork_dependency_stream(
+            &a_person(),
+            arm_project,
+            arm.stream,
+            Some("streams/arm.graph.json"),
+        )
         .unwrap();
     assert!(cell.repository.asset(fork.copy).is_ok());
     let reversal = cell.repository.undo_by(&a_person()).unwrap();
@@ -316,4 +321,42 @@ fn undo_of_a_fork_takes_the_copy_out_and_points_each_reference_back_at_the_depen
             .fork_dependency_stream(&a_person(), arm_project, Uuid::new_v4(), None),
         Err(ProjectRepositoryRefusal::DependencyHoldsNoStream { .. })
     ));
+}
+
+#[test]
+fn a_forked_stream_references_the_dependencys_own_assets_into_the_dependency() {
+    let root = tempfile::tempdir().unwrap();
+    let arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let lut = Uuid::new_v4();
+    std::fs::write(
+        arm.repository
+            .project_directory()
+            .join("streams/main.graph.json"),
+        json!({ "asset": arm.stream, "nodes": [{
+            "id": Uuid::new_v4(), "name": "lens", "type": "nodes.arm:Lens",
+            "config": { "lut": { "asset": lut } } }], "links": [] })
+        .to_string(),
+    )
+    .unwrap();
+    let mut arm = ProjectWithOneStream {
+        repository: ProjectRepository::open(arm.repository.project_directory()).unwrap(),
+        stream: arm.stream,
+    };
+    let revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &revision)
+        .unwrap();
+
+    let (fork, _) = cell
+        .repository
+        .fork_dependency_stream(&a_person(), arm_project, arm.stream, None)
+        .unwrap();
+
+    let copy = cell.repository.stream_graph_document(fork.copy).unwrap();
+    assert_eq!(
+        copy.node_named("lens").unwrap().config,
+        json!({ "lut": { "asset": lut, "from": arm_project } })
+    );
 }

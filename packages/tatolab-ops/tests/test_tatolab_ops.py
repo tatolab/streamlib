@@ -24,6 +24,8 @@ from tatolab.ops import (
     Divide,
     Feedback,
     Gate,
+    HeldFrame,
+    HoldFrame,
     Lag,
     LagValue,
     Lerp,
@@ -71,8 +73,18 @@ def test_clamp_holds_a_value_between_its_bounds():
     assert Clamp(4.0, low=1.0, high=2.0) == 2.0
 
 
+class _AMessageHandedOnUnread:
+    """Stands in for a message the runtime hands a function node to pass on unread."""
+
+    def __copy__(self) -> _AMessageHandedOnUnread:
+        return self
+
+    def __deepcopy__(self, memo: Any) -> _AMessageHandedOnUnread:
+        return self
+
+
 def test_gate_hands_its_message_on_while_open_and_nothing_while_closed():
-    message = object()
+    message = _AMessageHandedOnUnread()
     assert Gate(message) is message
     assert Gate(message, open=False) is None
 
@@ -83,6 +95,40 @@ def test_gate_takes_a_message_of_any_family_and_hands_on_the_family_linked_into_
     assert signature["outputs"][0]["may_hand_out_nothing"] is True
     (output_port,) = getattr(Gate, "__tatolab_node_output_ports__")
     assert output_port["family"]["family_follows_input_port"] == "value"
+
+
+def test_hold_frame_holds_its_first_frame_until_a_refresh_takes_a_newer_one():
+    first_frame, newer_frame = _AMessageHandedOnUnread(), _AMessageHandedOnUnread()
+    held, state = HoldFrame(None, previous=HeldFrame())
+    assert held is None and state == HeldFrame()
+    held, state = HoldFrame(first_frame, previous=state)
+    assert held is first_frame
+    held, state = HoldFrame(None, previous=state)
+    assert held is first_frame
+    held, state = HoldFrame(newer_frame, previous=state)
+    assert held is first_frame
+    held, state = HoldFrame(newer_frame, refresh=True, previous=state)
+    assert held is newer_frame and state.frame is newer_frame
+
+
+def test_hold_frame_takes_an_image_and_hands_on_an_image():
+    signature = getattr(HoldFrame, "__tatolab_node_function_signature__")
+    assert signature["inputs"][0]["value_type"] == "unread_message"
+    assert signature["outputs"][0]["may_hand_out_nothing"] is True
+    frame_input_port = getattr(HoldFrame, "__tatolab_node_input_ports__")[0]
+    assert frame_input_port["family"] == {"family": "image"}
+    (output_port,) = getattr(HoldFrame, "__tatolab_node_output_ports__")
+    assert output_port["family"] == {"family": "image", "family_follows_input_port": "frame"}
+
+
+def test_hold_frame_runs_as_python_since_its_state_holds_a_message(monkeypatch: pytest.MonkeyPatch):
+    compilation = pytest.importorskip("tatolab.runtime._function_node_compilation")
+    from tatolab.stream import log
+
+    monkeypatch.setattr(log, "_helper_process_sink", lambda level, message, attrs: None)
+    prepared = compilation.prepare_function_node_to_evaluate(HoldFrame, "tatolab.ops:HoldFrame")
+    assert isinstance(prepared, compilation.FunctionNodeRunAsPythonInItsReader), prepared
+    assert "state field `frame`" in prepared.why_it_does_not_compile
 
 
 def test_feedback_called_as_a_function_passes_its_value_on():
@@ -407,6 +453,10 @@ def test_each_node_compiles_and_its_evaluate_entry_returns_what_its_python_does(
         assert compiled_state == pytest.approx(python_state, rel=1e-12, abs=1e-12), call
 
 
+#: Function nodes whose state holds a message, so they run as Python in their reader.
+_FUNCTION_NODES_THAT_RUN_AS_PYTHON = {"HoldFrame"}
+
+
 def test_every_node_the_module_exports_is_held_to_compiled():
     import tatolab.ops
 
@@ -416,4 +466,4 @@ def test_every_node_the_module_exports_is_held_to_compiled():
         if hasattr(getattr(tatolab.ops, name), "__tatolab_node_function_signature__")
     }
     held = {function_node.__name__ for function_node, _ in _CALLS_EACH_NODE_IS_HELD_TO_COMPILED}
-    assert function_nodes == held
+    assert function_nodes == held | _FUNCTION_NODES_THAT_RUN_AS_PYTHON

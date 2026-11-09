@@ -298,14 +298,25 @@ impl StreamGraphOperation {
         }
     }
 
-    /// The config the operation leaves its node with, when it sets one.
-    pub fn config_it_sets(&self) -> Option<&Value> {
+    /// Each config the operation leaves a node with, by that node's UUID: its own node's, and
+    /// that of every node at every level of a fragment it places.
+    pub fn configs_it_sets(&self) -> Vec<(Uuid, &Value)> {
+        let mut configs = Vec::new();
         match self {
-            Self::AddNode { node, .. } => Some(&node.config),
-            Self::SetNodeConfig { to, .. } => Some(to),
-            Self::RefreshFragment { to, .. } => Some(&to.config),
-            _ => None,
+            Self::AddNode { node, .. } => {
+                configs.push((node.id, &node.config));
+                if let Some(fragment) = &node.fragment {
+                    push_the_config_of_each_node_at_every_level(fragment, &mut configs);
+                }
+            }
+            Self::SetNodeConfig { node, to, .. } => configs.push((*node, to)),
+            Self::RefreshFragment { node, to, .. } => {
+                configs.push((*node, &to.config));
+                push_the_config_of_each_node_at_every_level(&to.fragment, &mut configs);
+            }
+            _ => {}
         }
+        configs
     }
 }
 
@@ -959,6 +970,35 @@ fn groups_with_each_uuid_kept_by_its_title(
     Ok(groups)
 }
 
+/// Make each reference in `value` to an asset of the project it was written in,
+/// `{"asset": "<uuid>"}`, a reference into that project as a dependency, adding
+/// `"from": "<project>"`; a reference already naming a project is left as it is.
+pub fn asset_references_made_references_into_the_dependency(value: &mut Value, project: Uuid) {
+    match value {
+        Value::Object(object) => {
+            let names_an_asset = object
+                .get("asset")
+                .and_then(Value::as_str)
+                .is_some_and(|asset| Uuid::parse_str(asset).is_ok());
+            if names_an_asset {
+                object
+                    .entry("from")
+                    .or_insert_with(|| Value::String(project.to_string()));
+                return;
+            }
+            for entry in object.values_mut() {
+                asset_references_made_references_into_the_dependency(entry, project);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                asset_references_made_references_into_the_dependency(item, project);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// `config` with each reference to the asset `asset` of the dependency `project`,
 /// `{"asset": <asset>, "from": <project>}`, made a reference to this project's asset `copy`, or
 /// `None` when it holds no such reference.
@@ -997,14 +1037,16 @@ fn rewrite_the_dependency_asset_references(
             }
             let mut rewritten_any = false;
             for entry in object.values_mut() {
-                rewritten_any |= rewrite_the_dependency_asset_references(entry, project, asset, copy);
+                rewritten_any |=
+                    rewrite_the_dependency_asset_references(entry, project, asset, copy);
             }
             rewritten_any
         }
         Value::Array(items) => {
             let mut rewritten_any = false;
             for item in items {
-                rewritten_any |= rewrite_the_dependency_asset_references(item, project, asset, copy);
+                rewritten_any |=
+                    rewrite_the_dependency_asset_references(item, project, asset, copy);
             }
             rewritten_any
         }
@@ -1108,6 +1150,23 @@ pub fn a_graph_document_as_a_fragment_run(graph_document: &Value) -> Result<Valu
         run.insert(GROUPS_KEY.to_owned(), Value::Array(run_groups));
     }
     Ok(Value::Object(run))
+}
+
+fn push_the_config_of_each_node_at_every_level<'fragment>(
+    fragment: &'fragment Value,
+    configs: &mut Vec<(Uuid, &'fragment Value)>,
+) {
+    let Some(nodes) = fragment.get("nodes").and_then(Value::as_array) else {
+        return;
+    };
+    for node in nodes.iter().filter_map(Value::as_object) {
+        if let (Some(node_uuid), Some(config)) = (node_uuid_of(node), node.get("config")) {
+            configs.push((node_uuid, config));
+        }
+        if let Some(inner_fragment) = node.get("fragment") {
+            push_the_config_of_each_node_at_every_level(inner_fragment, configs);
+        }
+    }
 }
 
 /// Every asset of this project a node's config references, `{"asset": "<uuid>"}`, by UUID;

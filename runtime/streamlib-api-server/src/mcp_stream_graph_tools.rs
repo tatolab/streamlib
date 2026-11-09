@@ -24,6 +24,7 @@ use streamlib_project_repository::{
     StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, StreamGraphOperationOnAStream, a_graph_document_as_a_fragment_run,
+    asset_references_made_references_into_the_dependency,
     fragment_with_each_node_uuid_kept_by_its_name,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -1116,17 +1117,16 @@ impl GraphTransactionInFlight<'_> {
                     .to_owned(),
             );
         }
-        let pin_moved_in_this_transaction: HashMap<Uuid, String> = project_operations_first
-            .iter()
-            .filter_map(|project_operation| match project_operation {
-                ProjectOperation::Dependency(ProjectDependencyOperation::MoveDependencyPin {
-                    project,
-                    to,
-                    ..
-                }) => Some((*project, to.clone())),
-                _ => None,
-            })
-            .collect();
+        let pin_moved_in_this_transaction: HashMap<Uuid, String> =
+            project_operations_first
+                .iter()
+                .filter_map(|project_operation| match project_operation {
+                    ProjectOperation::Dependency(
+                        ProjectDependencyOperation::MoveDependencyPin { project, to, .. },
+                    ) => Some((*project, to.clone())),
+                    _ => None,
+                })
+                .collect();
         let stream_locations: HashMap<String, Option<StreamLocation>> = self
             .operations_on_the_loaded_streams
             .list_streams()
@@ -1862,7 +1862,8 @@ fn graph_operation_for_the_request(
                 .map_err(|_| format!("`{dependency_stream}` is no stream asset's UUID"))?;
             let (graph_document, stream_name) =
                 read_the_dependency_stream(project, dependency_stream)?;
-            let fragment_run = a_graph_document_as_a_fragment_run(&graph_document)?;
+            let mut fragment_run = a_graph_document_as_a_fragment_run(&graph_document)?;
+            asset_references_made_references_into_the_dependency(&mut fragment_run, project);
             let name = name.unwrap_or(stream_name);
             let config = json!({ STREAM_FRAGMENT_CONFIG_KEY: {
                 "asset": dependency_stream.to_string(),

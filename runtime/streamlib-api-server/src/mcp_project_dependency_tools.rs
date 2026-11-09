@@ -16,9 +16,9 @@ use serde_json::Value;
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_project_repository::{
     AppliedProjectTransaction, DependencyStreamFork, PinnedProjectDependency,
-    ProjectDependencyOperation, ProjectOperation,
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectTransactionAuthor,
-    ProjectTransactionLineage, StreamGraphOperation, StreamGraphOperationOnAStream,
+    ProjectDependencyOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
+    ProjectRepository, ProjectTransactionAuthor, ProjectTransactionLineage, StreamGraphOperation,
+    StreamGraphOperationOnAStream,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DependencyTransactionToolResult, ForkAssetToolResult, ForkedAssetOriginOnTheWire,
@@ -210,8 +210,7 @@ impl LocalApiMcpServerHandler {
             } else {
                 the_graph_transaction_applied(
                     &GraphTransactionInFlight {
-                        operations_on_the_loaded_streams: operations_on_the_loaded_streams
-                            .as_ref(),
+                        operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
                         project_repositories: &project_repositories,
                         async_runtime: &async_runtime,
                     },
@@ -324,8 +323,7 @@ impl LocalApiMcpServerHandler {
             } else {
                 the_graph_transaction_applied(
                     &GraphTransactionInFlight {
-                        operations_on_the_loaded_streams: operations_on_the_loaded_streams
-                            .as_ref(),
+                        operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
                         project_repositories: &project_repositories,
                         async_runtime: &async_runtime,
                     },
@@ -525,10 +523,7 @@ fn the_fork_split_by_loaded_stream(
             stream,
             graph_operation,
         } = reference;
-        match (
-            loaded_stream_ids.get(stream),
-            graph_operation,
-        ) {
+        match (loaded_stream_ids.get(stream), graph_operation) {
             (
                 Some(stream_id),
                 StreamGraphOperation::SetNodeConfig {

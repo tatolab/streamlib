@@ -49,15 +49,16 @@ pub use project_stream_document::{
 pub use project_transaction::{
     AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetOperation, ProjectDependencyOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
-    ProjectTransactionReversal, StreamGraphOperationOnAStream,
+    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
+    StreamGraphOperationOnAStream,
 };
 pub use stream_graph_document::{
     StreamGraphDocument, StreamGraphDocumentGroup, StreamGraphDocumentLink,
     StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
     StreamGraphGroupFields, StreamGraphOperation, a_graph_document_as_a_fragment_run,
-    assets_a_node_config_references, config_with_a_dependency_asset_reference_made_local,
+    asset_references_made_references_into_the_dependency, assets_a_node_config_references,
+    config_with_a_dependency_asset_reference_made_local,
     fragment_with_each_node_uuid_kept_by_its_name,
 };
 

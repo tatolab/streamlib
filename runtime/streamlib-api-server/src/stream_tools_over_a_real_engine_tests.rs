@@ -2537,21 +2537,22 @@ impl ProjectWithGraphDocuments {
                 vec![streamlib_project_repository::ProjectOperation::StreamGraph(
                     streamlib_project_repository::StreamGraphOperationOnAStream {
                         stream: self.stream_asset_of("main"),
-                        graph_operation: streamlib_project_repository::StreamGraphOperation::AddNode {
-                            node: streamlib_project_repository::StreamGraphDocumentNode {
-                                id: Uuid::new_v4(),
-                                name: name.to_owned(),
-                                node_type: StreamToolsTestSink::processor_class_import_path()
-                                    .as_str()
-                                    .to_owned(),
-                                config: json!({}),
-                                pins: serde_json::Map::new(),
-                                exposed_config_fields: Vec::new(),
-                                studio: serde_json::Map::new(),
-                                fragment: None,
+                        graph_operation:
+                            streamlib_project_repository::StreamGraphOperation::AddNode {
+                                node: streamlib_project_repository::StreamGraphDocumentNode {
+                                    id: Uuid::new_v4(),
+                                    name: name.to_owned(),
+                                    node_type: StreamToolsTestSink::processor_class_import_path()
+                                        .as_str()
+                                        .to_owned(),
+                                    config: json!({}),
+                                    pins: serde_json::Map::new(),
+                                    exposed_config_fields: Vec::new(),
+                                    studio: serde_json::Map::new(),
+                                    fragment: None,
+                                },
+                                links: Vec::new(),
                             },
-                            links: Vec::new(),
-                        },
                     },
                 )],
                 streamlib_project_repository::ProjectTransactionLineage::NewEdit,
@@ -2606,7 +2607,11 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
     )
     .await
     .expect("the arm is depended on");
-    assert_eq!(added["dependency"]["revision"], json!(first_revision), "{added}");
+    assert_eq!(
+        added["dependency"]["revision"],
+        json!(first_revision),
+        "{added}"
+    );
     let used = call(
         "use_dependency_stream",
         json!({ "stream": stream_id, "project": arm.project, "dependency_stream": arm_stream,
@@ -2640,7 +2645,11 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
     )
     .await
     .expect("the pin moves");
-    assert_eq!(updated["dependency"]["revision"], json!(second_revision), "{updated}");
+    assert_eq!(
+        updated["dependency"]["revision"],
+        json!(second_revision),
+        "{updated}"
+    );
     assert_eq!(
         updated["graph_operations"][0]["operation"], "refresh_fragment",
         "{updated}"
@@ -2657,7 +2666,10 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
         "the stored `shoulder` keeps its UUID across the update"
     );
     let live = the_node_named(&engine.the_live_graph_of(&stream_id), "arm");
-    assert_eq!(the_node_names_a_fragment_stores(&live), ["source", "shoulder", "elbow"]);
+    assert_eq!(
+        the_node_names_a_fragment_stores(&live),
+        ["source", "shoulder", "elbow"]
+    );
 
     let forked = call(
         "fork_asset",
@@ -2667,7 +2679,10 @@ async fn a_dependency_stream_is_updated_with_the_users_edits_kept_and_a_fork_sto
     .await
     .expect("the arm's stream is forked");
     let copy = forked["asset"]["asset"].clone();
-    assert_eq!(forked["asset"]["path"], "streams/main-fork.graph.json", "{forked}");
+    assert_eq!(
+        forked["asset"]["path"], "streams/main-fork.graph.json",
+        "{forked}"
+    );
     assert_eq!(
         forked["forked_from"],
         json!({ "asset": arm_stream, "from": arm.project, "revision": second_revision })

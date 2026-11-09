@@ -30,7 +30,8 @@ use crate::project_transaction::{
     ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{
-    StreamGraphDocument, StreamGraphOperation, assets_a_node_config_references,
+    StreamGraphDocument, StreamGraphOperation,
+    asset_references_made_references_into_the_dependency, assets_a_node_config_references,
     config_with_a_dependency_asset_reference_made_local,
 };
 
@@ -365,9 +366,7 @@ impl ProjectRepository {
                         Entry::Vacant(unstaged) => unstaged
                             .insert(self.read_stream_graph_document(&staged_assets, *stream)?.1),
                     };
-                    if let (Some(config), Some(node)) =
-                        (graph_operation.config_it_sets(), graph_operation.node())
-                    {
+                    for (node, config) in graph_operation.configs_it_sets() {
                         refuse_a_config_referencing_an_asset_the_project_does_not_hold(
                             &staged_assets,
                             node,
@@ -693,6 +692,9 @@ impl ProjectRepository {
                 why: "it is no JSON object".to_owned(),
             }
         })?;
+        if let Some(nodes) = document_object.get_mut("nodes") {
+            asset_references_made_references_into_the_dependency(nodes, project);
+        }
         document_object.insert(
             STREAM_DOCUMENT_ASSET_KEY.to_owned(),
             Value::String(copy.to_string()),
@@ -886,9 +888,8 @@ impl ProjectRepository {
         let mut taken_out = Vec::with_capacity(paths.len());
         for path in paths {
             let on_disk = path.on_disk_under(&self.project_directory);
-            let removed = std::fs::read(&on_disk).and_then(|bytes_before| {
-                std::fs::remove_file(&on_disk).map(|()| bytes_before)
-            });
+            let removed = std::fs::read(&on_disk)
+                .and_then(|bytes_before| std::fs::remove_file(&on_disk).map(|()| bytes_before));
             match removed {
                 Ok(bytes_before) => taken_out.push((on_disk, Some(bytes_before))),
                 Err(not_removed) => {
@@ -939,15 +940,17 @@ impl ProjectRepository {
                     path: path.to_string(),
                     why,
                 };
-                if document.get(STREAM_DOCUMENT_ASSET_KEY).and_then(Value::as_str)
+                if document
+                    .get(STREAM_DOCUMENT_ASSET_KEY)
+                    .and_then(Value::as_str)
                     != Some(stream.to_string().as_str())
                 {
                     return Err(unreadable(format!(
                         "its `{STREAM_DOCUMENT_ASSET_KEY}` does not name its stream asset {stream}"
                     )));
                 }
-                let staged_document = StreamGraphDocument::from_value(document.clone())
-                    .map_err(unreadable)?;
+                let staged_document =
+                    StreamGraphDocument::from_value(document.clone()).map_err(unreadable)?;
                 let bytes = staged_document.canonical_bytes()?;
                 staged_assets.insert(
                     *stream,
@@ -1604,7 +1607,7 @@ fn apply_operation_to_dependencies(
             project_file.dependencies.push(dependency.clone());
             project_file
                 .dependencies
-                .sort_by(|left, right| left.project.cmp(&right.project));
+                .sort_by_key(|dependency| dependency.project);
         }
         ProjectDependencyOperation::RemoveDependency { dependency } => {
             let before = project_file.dependencies.len();

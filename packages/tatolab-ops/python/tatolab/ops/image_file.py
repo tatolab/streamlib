@@ -64,8 +64,9 @@ def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
 class ImageFile:
     """Publishes the project image asset its config names, once at start and again on each config change.
 
-    A publish that fails is tried again at each process until one succeeds,
-    each failure raised once until it changes.
+    A reader that connects after a publish is sent the same picture again,
+    with no decode and no upload. A publish that fails is tried again at each
+    process until one succeeds, each failure raised once until it changes.
     """
 
     image = Output(Image, formats=(IMAGE_FILE_TEXTURE_FORMAT,))
@@ -77,6 +78,7 @@ class ImageFile:
         )
         self._publish_on_the_next_process = True
         self._failure_of_the_last_publish: str | None = None
+        self._frame_of_the_last_publish: Any = None
 
     def configure(self, config: ImageFileConfig) -> None:
         """Publish the asset `config` names on the next process."""
@@ -86,6 +88,7 @@ class ImageFile:
 
     def process(self, ctx) -> None:
         if not self._publish_on_the_next_process:
+            self._resend_the_last_publish_to_a_reader_it_missed(ctx)
             return
         try:
             self._publish_the_asset(ctx)
@@ -114,4 +117,12 @@ class ImageFile:
             slot.as_numpy()[:height, :width] = pixels
         finally:
             slot.unlock()
-        ctx.outputs.write(self.image, ImageFrameToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR))
+        frame = ImageFrameToWrite.of_texture(slot, DECODED_IMAGE_FILE_COLOUR)
+        ctx.outputs.write(self.image, frame)
+        self._frame_of_the_last_publish = frame
+
+    def _resend_the_last_publish_to_a_reader_it_missed(self, ctx) -> None:
+        if self._frame_of_the_last_publish is None:
+            return
+        if ctx.outputs.has_a_reader_the_last_write_missed(self.image):
+            ctx.outputs.write(self.image, self._frame_of_the_last_publish)
