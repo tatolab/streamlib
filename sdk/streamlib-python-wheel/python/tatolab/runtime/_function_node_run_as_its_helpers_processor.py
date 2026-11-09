@@ -5,7 +5,9 @@
 
 Each input reads the newest value its link carries, an island its own helper
 evaluates or a channel from a class node or another promoted node, and keeps
-its pin value until one arrives; an `UnreadMessage` input holds only the
+its pin value until one arrives. A number input reads the first sample of a
+Channels block, f32 or f64, exactly as an island reads one, and refuses any
+other message by name; an `UnreadMessage` input holds only the
 message that arrived since the last call, and the node is not called while it
 holds none. A live config update, and so each value a link gives a field the
 node exposes, reaches the next call. A number or bool output is written as a
@@ -35,6 +37,7 @@ from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 from tatolab.runtime._engine import (
     FunctionNodeEvaluatedAsItsHelpersProcessor,
     hand_an_unread_message_on,
+    read_the_control_value_at_an_input_port,
     read_the_message_at_an_input_port_unread,
 )
 from tatolab.runtime._function_node_compilation import (
@@ -48,7 +51,6 @@ from tatolab.runtime._function_node_compilation import (
 )
 
 # A control value on a wire: one f64 sample, at no regular rate.
-_CONTROL_VALUE_SAMPLE_FORMAT = "<d"
 _CONTROL_VALUE_SAMPLE_RATE = 0
 
 
@@ -198,11 +200,11 @@ class _FunctionNodeRunAsItsHelpersProcessor:
                 if record is not None:
                     self._input_values[input_index] = record
                 continue
-            payload = ctx.inputs.read(input_port)
-            if payload is not None:
-                (self._input_values[input_index],) = struct.unpack_from(
-                    _CONTROL_VALUE_SAMPLE_FORMAT, bytes(payload)
-                )
+            control_value = read_the_control_value_at_an_input_port(
+                link_data_access=self._link_data_access, node_id=self._node_id, input_port=input_port
+            )
+            if control_value is not None:
+                self._input_values[input_index] = control_value
         input_values = [value for value in self._input_values if value is not None]
         if len(input_values) != len(self._input_values):
             return

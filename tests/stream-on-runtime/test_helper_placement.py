@@ -45,6 +45,7 @@ from helper_placement_streams import (
     one_probe_forking_a_worker_that_outlives_it,
     python_level_source_through_a_gate_into_a_native_converter,
     python_source_through_a_gate_into_python_sink,
+    python_source_through_a_gate_that_crashes_on_cue_into_python_sink,
     python_source_through_a_gate_into_two_python_sinks,
     python_source_through_a_rust_gate_into_python_sink,
     one_probe_sleeping_through_its_own_setup,
@@ -470,6 +471,75 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
         f"only the two classes get a process, and the stream started {helper_pids}:\n"
         f"{tatolabd.recent_stderr()}"
     )
+
+
+def test_a_crash_moves_a_gate_reading_a_python_class_out_of_its_reader_and_the_reader_reads_on_through_it(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`<Python class> -> crash-on-cue gate -> <Python class>`: the gate runs
+    inside the sink's reads until its `crash` pin is set live, when its call
+    takes the sink's helper down. Before the sink's next helper starts, the gate
+    moves into a helper of its own, which reads the source's channel itself;
+    once `crash` is cleared live, the sink reads each count once, in order,
+    through it, and the sink's helper started only twice.
+
+    Fail-without-fix: a function node reading a class node is refused promotion,
+    so it stays inline and the sink's every new helper calls it and dies.
+    """
+    tatolabd = start_tatolabd_running_stream(python_source_through_a_gate_that_crashes_on_cue_into_python_sink)
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    local_api = tatolabd.local_api_client()
+    inline, occurrence = the_first_gated_count_batch_read_after(tatolabd, 0, from_occurrence=2)
+    assert inline["counts"], f"the inline gate hands the source's counts on, and the sink read none: {inline}"
+
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    (gate,) = [node for node in graph["nodes"] if node["name"] == "gate"]
+
+    def set_crash_live(crash: bool) -> None:
+        local_api.call_tool(
+            "set_pin_value",
+            {"stream": stream_id, "node": gate["id"], "input": "crash", "value": crash, "mode": "live"},
+        )
+
+    set_crash_live(True)
+    tatolabd.await_stderr_containing("promoted out of its islands into a helper process of its own")
+    set_crash_live(False)
+    cleared_at_monotonic_ns = time.monotonic_ns()
+    occurrence = len(tatolabd.marker_payloads("GATED_COUNT_BATCH_READ"))
+    while True:
+        first_with_counts, occurrence = the_first_gated_count_batch_read_after(
+            tatolabd, cleared_at_monotonic_ns, from_occurrence=occurrence + 1
+        )
+        if first_with_counts["counts"]:
+            break
+    promoted = tatolabd.await_marker("GATED_COUNT_BATCH_READ", occurrence=occurrence + 1)
+    graph = local_api.call_tool("graph", {"stream": stream_id})
+    sink_pids = {batch["sink_pid"] for batch in tatolabd.marker_payloads("GATED_COUNT_BATCH_READ")}
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert promoted["sink_pid"] != inline["sink_pid"], (
+        f"the crashed helper is replaced by a new process:\n{tatolabd.recent_stderr()}"
+    )
+    assert len(sink_pids) == 2, (
+        f"the sink's helper started {len(sink_pids)} times; once the gate moved out, its crash "
+        f"no longer ends the sink's helper:\n{tatolabd.recent_stderr()}"
+    )
+    counts = promoted["counts"]
+    assert counts and counts == sorted(set(counts)), (
+        f"the promoted gate hands each count on once, in order, and the sink read {promoted}"
+    )
+    assert counts[0] > inline["counts"][-1], (
+        f"the promoted gate reads the source's channel as it runs now, and the sink read {promoted}"
+    )
+    (gate,) = [node for node in graph["nodes"] if node["name"] == "gate"]
+    promotion = gate["components"]["metrics"]["promoted_out_of_its_readers_islands"]
+    assert promotion["promotions"] == 1, promotion
+    assert promotion["after_crashing_the_helper_of"] == "sink", promotion
+    assert "function node `gate` crashed its helper process during its call" in promotion["reason"], (
+        promotion
+    )
+    assert gate["components"]["ran_compiled"] is False, gate
 
 
 def test_a_gate_reading_a_python_class_hands_each_message_on_to_each_of_two_python_classes(

@@ -1572,6 +1572,24 @@ pub(crate) fn read_the_message_at_an_input_port_unread(
         }))
 }
 
+/// The number `input_port` holds for this read, read as an island reads one:
+/// the first sample of a Channels block, f32 or f64, and any other message
+/// refused by name; `None` when no message arrived since the last read.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, node_id, input_port))]
+pub(crate) fn read_the_control_value_at_an_input_port(
+    python: Python<'_>,
+    link_data_access: &PythonProcessorLinkDataAccess,
+    node_id: &str,
+    input_port: &str,
+) -> PyResult<Option<f64>> {
+    link_data_access
+        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
+        .map(|message| the_control_value_a_message_carries(&message, node_id, input_port))
+        .transpose()
+        .map_err(|refusal| PyValueError::new_err(refusal.to_string()))
+}
+
 /// Write `message` on `output_port` exactly as it arrived, its descriptor,
 /// stamp and group boundary unchanged.
 #[pyfunction]
@@ -2227,6 +2245,59 @@ mod tests {
             ),
             timestamp_ns,
         )
+    }
+
+    #[test]
+    fn a_control_value_is_the_first_sample_of_an_f32_or_f64_block_of_any_shape() {
+        let samples_of_two_channels_of_three: [f32; 6] = [0.25, 0.5, 0.75, -1.0, -0.5, 0.0];
+        let f32_block_of_two_channels_of_three = a_message_of(
+            samples_of_two_channels_of_three
+                .iter()
+                .flat_map(|sample| sample.to_le_bytes())
+                .collect(),
+            streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::channels_block(
+                ChannelsBlockDescriptorBody {
+                    start_sample: 0,
+                    sample_rate: 48_000,
+                    channel_count: 2,
+                    samples_per_channel: 3,
+                    sample_type: ChannelsBlockSampleType::F32 as u32,
+                },
+            ),
+            10,
+        );
+        assert_eq!(
+            the_control_value_a_message_carries(&f32_block_of_two_channels_of_three, "n", "x")
+                .unwrap(),
+            0.25
+        );
+        assert_eq!(
+            the_control_value_a_message_carries(
+                &a_channels_block_of_one_f64_sample(7.5, 20),
+                "n",
+                "x"
+            )
+            .unwrap(),
+            7.5
+        );
+    }
+
+    #[test]
+    fn a_control_value_read_off_a_message_that_is_no_channels_block_is_refused_by_name() {
+        let records_message = a_message_of(
+            vec![0x80],
+            streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor::records_message(),
+            10,
+        );
+        let refusal = the_control_value_a_message_carries(&records_message, "scale-1", "x")
+            .expect_err("a Records message carries no number");
+        assert!(
+            refusal
+                .to_string()
+                .contains("function node `scale-1` reads a number")
+                && refusal.to_string().contains("is no Channels block"),
+            "{refusal}"
+        );
     }
 
     fn a_gate_reading_a_link_from_outside_its_island(

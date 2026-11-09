@@ -10,13 +10,14 @@ feeds reads it: one f64 sample on one channel, evaluated at the read.
 
 from __future__ import annotations
 
+import array
 import ctypes
 import math
 import os
 import struct
 import itertools
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -429,16 +430,85 @@ def test_a_stateful_node_feeding_two_inputs_of_one_reader_is_refused_by_name():
         )
 
 
-class _InputsHandingOverControlValues:
-    """`ctx.inputs` handing each named port the control value set for it, once."""
+def _constructed_with_its_ports_declared(processor_class: Any, config: Any, data_plane: Any) -> Any:
+    """`processor_class` built on `data_plane` with its ports declared first, as a helper's bootstrap builds it."""
+    data_plane.declare_ports(
+        [port["name"] for port in getattr(processor_class, NODE_DECLARATION_INPUT_PORTS_STAMP)],
+        [port["name"] for port in getattr(processor_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)],
+    )
+    return construct_processor_instance(processor_class, config, data_plane)
+
+
+class _InputsHandingOverRecords:
+    """`ctx.inputs` handing each Records port attribute the record set for it, once."""
 
     def __init__(self) -> None:
-        self.control_value_by_port: "dict[str, float]" = {}
+        self.record_by_port: "dict[str, dict[str, Any]]" = {}
 
-    def read(self, port_name: str) -> "bytes | None":
-        if port_name not in self.control_value_by_port:
-            return None
-        return struct.pack("<d", self.control_value_by_port.pop(port_name))
+    def read(self, port: Any) -> "dict[str, Any] | None":
+        return self.record_by_port.pop(port.port_name, None)
+
+
+_links_into_promoted_nodes_opened = itertools.count()
+
+
+class _ChannelsBlocksWrittenIntoAPromotedNode:
+    """A source wired by a real link into each named number input of a promoted node's data plane."""
+
+    def __init__(self, data_plane: Any, input_ports: "list[str]") -> None:
+        self._source = _engine.open_node_link_data_access_for_helper_process()
+        self._blocks_written = 0
+        link_id_by_input_port = {
+            input_port: f"L-into-{input_port}-{next(_links_into_promoted_nodes_opened)}"
+            for input_port in input_ports
+        }
+        processor_interpreter_bootstrap.wire_link_data_access(
+            data_plane,
+            {
+                "inputs": [
+                    _wiring_of_one_link_end("input", input_port, link_id)
+                    for input_port, link_id in link_id_by_input_port.items()
+                ]
+            },
+        )
+        processor_interpreter_bootstrap.wire_link_data_access(
+            self._source,
+            {
+                "outputs": [
+                    _wiring_of_one_link_end("output", f"{input_port}_to_the_node", link_id)
+                    for input_port, link_id in link_id_by_input_port.items()
+                ]
+            },
+        )
+        self._source_outputs = _engine.open_runtime_context_full_access_for_helper_process(
+            {}, self._source, "runtime-under-test", "source-under-test"
+        ).outputs
+
+    def write_control_value(self, input_port: str, control_value: float) -> None:
+        """Write `control_value` as one f64 sample at rate 0, as an island or a pin hands it."""
+        self.write_block(input_port, "d", [[control_value]], sample_rate=0)
+
+    def write_block(
+        self,
+        input_port: str,
+        sample_format: 'Literal["f", "d"]',
+        samples: "list[list[float]]",
+        *,
+        sample_rate: int,
+    ) -> None:
+        """Write `samples`, `[channel][sample]` in `sample_format` (`"f"` or `"d"`), as one Channels block."""
+        flat = array.array(sample_format, [sample for channel in samples for sample in channel])
+        self._source_outputs.write_channels_block(
+            f"{input_port}_to_the_node",
+            memoryview(flat).cast("B").cast(sample_format, [len(samples), len(samples[0])]),
+            start_sample=self._blocks_written,
+            sample_rate=sample_rate,
+        )
+        self._blocks_written += 1
+
+    def write_bytes(self, input_port: str, payload: bytes) -> None:
+        """Write `payload` as a message of plain bytes, which carries no number."""
+        self._source_outputs.write(f"{input_port}_to_the_node", payload)
 
 
 class _OutputsRecordingEachControlValueWritten:
@@ -455,7 +525,7 @@ class _OutputsRecordingEachControlValueWritten:
 
 class _ContextOfOneProcess:
     def __init__(self) -> None:
-        self.inputs = _InputsHandingOverControlValues()
+        self.inputs = _InputsHandingOverRecords()
         self.outputs = _OutputsRecordingEachControlValueWritten()
 
 
@@ -468,19 +538,60 @@ def test_a_promoted_function_node_runs_as_a_process_writing_each_output_as_a_con
     assert [port["name"] for port in getattr(runner_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
         "result"
     ]
-    runner = construct_processor_instance(runner_class, {"gain": 3.0}, data_plane)
+    runner = _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
     ctx = _ContextOfOneProcess()
 
     runner.process(ctx)
     assert ctx.outputs.blocks_written == [], "an input with no pin value waits for its first value"
 
-    ctx.inputs.control_value_by_port["x"] = 2.0
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values.write_control_value("x", 2.0)
     runner.process(ctx)
     runner.process(ctx)
     assert ctx.outputs.blocks_written == [
         ("result", [[6.0]], 0, 0),
         ("result", [[6.0]], 1, 0),
     ], "each run writes one f64 at rate 0, the input keeping its newest value between reads"
+
+
+def test_a_promoted_function_node_reads_a_number_as_an_island_does_off_an_f32_block_of_any_shape():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner = _constructed_with_its_ports_declared(
+        the_processor_class_a_promoted_function_node_runs_as(
+            amplify, f"{__name__}:amplify", "amplify-1", data_plane
+        ),
+        {"gain": 2.0},
+        data_plane,
+    )
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    ctx = _ContextOfOneProcess()
+
+    control_values.write_block("x", "f", [[0.25]], sample_rate=0)
+    runner.process(ctx)
+    control_values.write_block("x", "f", [[0.75, 0.5, 0.0], [-1.0, -0.5, 0.25]], sample_rate=48_000)
+    runner.process(ctx)
+    control_values.write_block("x", "d", [[1.5, 3.0]], sample_rate=48_000)
+    runner.process(ctx)
+
+    assert [block[1] for block in ctx.outputs.blocks_written] == [[[0.5]], [[1.5]], [[3.0]]], (
+        "a number reads the first sample of an f32 or f64 block, whatever its channels and samples"
+    )
+
+
+def test_a_promoted_function_node_refuses_a_number_read_off_a_message_that_is_no_channels_block():
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner = _constructed_with_its_ports_declared(
+        the_processor_class_a_promoted_function_node_runs_as(
+            amplify, f"{__name__}:amplify", "amplify-1", data_plane
+        ),
+        {"gain": 2.0},
+        data_plane,
+    )
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values.write_bytes("x", struct.pack("<d", 4.0))
+
+    with pytest.raises(ValueError, match=r"function node `amplify-1` reads a number .* is no Channels block"):
+        runner.process(_ContextOfOneProcess())
 
 
 @node.function
@@ -554,7 +665,7 @@ def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
         port["name"]: port["family"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)
     }
     assert input_families["value"]["also_takes_families"] == ["array", "channels", "packets", "records"]
-    runner = construct_processor_instance(runner_class, None, data_plane)
+    runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
     destination = _engine.open_node_link_data_access_for_helper_process()
     processor_interpreter_bootstrap.wire_link_data_access(
         destination, {"inputs": [_wiring_of_one_link_end("input", "read", f"L-out-of-{import_path}")]}
@@ -585,7 +696,8 @@ def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
     if function_node is not gate_each_message:
         return
 
-    ctx.inputs.control_value_by_port["open"] = 0.0
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["open"])
+    control_values.write_control_value("open", 0.0)
     source.write_to_output_port("frames", b"second", timestamp_ns=12)
     runner.process(ctx)
     assert destination.read_from_input_port("read") is None, "a closed gate hands out nothing"
@@ -611,7 +723,7 @@ def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_famil
     assert [port["family"]["family"] for port in getattr(pool_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
         "image"
     ]
-    pool = construct_processor_instance(pool_class, None, data_plane)
+    pool = _constructed_with_its_ports_declared(pool_class, None, data_plane)
     destination = _engine.open_node_link_data_access_for_helper_process()
     processor_interpreter_bootstrap.wire_link_data_access(
         destination, {"inputs": [_wiring_of_one_link_end("input", "read", "L-out-of-the-pool")]}
@@ -641,9 +753,10 @@ def test_a_promoted_function_node_starts_from_its_pin_values():
     runner_class = the_processor_class_a_promoted_function_node_runs_as(
         tally, f"{__name__}:tally", "tally-1", data_plane
     )
-    runner = construct_processor_instance(runner_class, None, data_plane)
+    runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
     ctx = _ContextOfOneProcess()
-    ctx.inputs.control_value_by_port["x"] = 4.0
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values.write_control_value("x", 4.0)
 
     runner.process(ctx)
 
@@ -659,9 +772,10 @@ def test_a_promoted_function_node_reads_a_live_config_update_at_its_next_call():
     runner_class = the_processor_class_a_promoted_function_node_runs_as(
         amplify, f"{__name__}:amplify", "amplify-1", data_plane
     )
-    runner = construct_processor_instance(runner_class, {"gain": 3.0}, data_plane)
+    runner = _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
     ctx = _ContextOfOneProcess()
-    ctx.inputs.control_value_by_port["x"] = 2.0
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values.write_control_value("x", 2.0)
     runner.process(ctx)
 
     apply_configuration(runner, {"gain": 5.0, "inverted": True})
@@ -694,9 +808,10 @@ def test_a_promoted_function_node_run_as_python_reads_a_live_config_update_at_it
     runner_class = the_processor_class_a_promoted_function_node_runs_as(
         amplify_while_labelled, import_path, "amplify-1", data_plane
     )
-    runner = construct_processor_instance(runner_class, {"gain": 3.0}, data_plane)
+    runner = _constructed_with_its_ports_declared(runner_class, {"gain": 3.0}, data_plane)
     ctx = _ContextOfOneProcess()
-    ctx.inputs.control_value_by_port["x"] = 2.0
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values.write_control_value("x", 2.0)
     runner.process(ctx)
 
     apply_configuration(runner, {"gain": 0.5, "label": "half"})
@@ -737,9 +852,10 @@ def test_a_promoted_stateful_function_node_keeps_its_state_through_a_live_config
         "counter-1",
         data_plane,
     )
-    runner = construct_processor_instance(runner_class, None, data_plane)
+    runner = _constructed_with_its_ports_declared(runner_class, None, data_plane)
     ctx = _ContextOfOneProcess()
-    ctx.inputs.control_value_by_port["x"] = 0.0
+    control_values = _ChannelsBlocksWrittenIntoAPromotedNode(data_plane, ["x"])
+    control_values.write_control_value("x", 0.0)
     runner.process(ctx)
     runner.process(ctx)
 
@@ -1304,19 +1420,6 @@ class _OutputsRecordingEachWrite(_OutputsRecordingEachControlValueWritten):
         self.records_written.append((port.port_name, payload))
 
 
-class _InputsHandingOverControlValuesAndRecords(_InputsHandingOverControlValues):
-    """`ctx.inputs` handing each port the control value or record set for it, once."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.record_by_port: "dict[str, dict[str, Any]]" = {}
-
-    def read(self, port_name: Any) -> Any:
-        if isinstance(port_name, str):
-            return super().read(port_name)
-        return self.record_by_port.pop(port_name.port_name, None)
-
-
 def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compiled():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     compiled = the_processor_class_a_promoted_function_node_runs_as(
@@ -1339,7 +1442,7 @@ def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compile
 
 def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
-    labelling = construct_processor_instance(
+    labelling = _constructed_with_its_ports_declared(
         the_processor_class_a_promoted_function_node_runs_as(
             label_the_level, f"{__name__}:label_the_level", "label-1", data_plane
         ),
@@ -1353,7 +1456,7 @@ def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
         "the input keeps its pin value until one arrives"
     )
 
-    counting = construct_processor_instance(
+    counting = _constructed_with_its_ports_declared(
         the_processor_class_a_promoted_function_node_runs_as(
             count_the_label_letters, f"{__name__}:count_the_label_letters", "count-1", data_plane
         ),
@@ -1361,7 +1464,6 @@ def test_a_promoted_function_node_run_as_python_reads_and_writes_records():
         data_plane,
     )
     ctx = _ContextOfOneProcess()
-    ctx.inputs = _InputsHandingOverControlValuesAndRecords()
     counting.process(ctx)
     assert ctx.outputs.blocks_written == [], "an input with no pin value waits for its first record"
     ctx.inputs.record_by_port["record"] = {"label": "low"}
