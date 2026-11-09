@@ -16,6 +16,7 @@ from helper_placement_processors import (
     CountsItsOwnCalls,
     CrashesItsHelper,
     DiesAbruptlyProbe,
+    GateThatCrashesItsHelperOnCue,
     HoldsItsConfiguredLevelCountingItsCalls,
     HangsAfterItsFirstCalls,
     LabelsTheLevel,
@@ -333,6 +334,18 @@ def python_source_through_a_gate_into_python_sink(stream_builder: StreamBuilder)
     """A Python class's counts through `tatolab.ops`' `Gate` into another Python class."""
     source = stream_builder.add(CountsEachTickRecordsSource, name="source")
     gate = stream_builder.add(Gate, name="gate")
+    sink = stream_builder.add(ReportsEachBatchOfGatedCountsItReadSink, name="sink")
+    stream_builder.connect(source.output("counts_to_downstream"), gate.input("value"))
+    stream_builder.connect(gate.output("result"), sink.input("gated_counts"))
+
+
+@graph_generator
+def python_source_through_a_gate_that_crashes_on_cue_into_python_sink(
+    stream_builder: StreamBuilder,
+) -> None:
+    """A Python class's counts through a `Gate`-shaped node whose `crash` pin takes its helper down, into another Python class."""
+    source = stream_builder.add(CountsEachTickRecordsSource, name="source")
+    gate = stream_builder.add(GateThatCrashesItsHelperOnCue, name="gate")
     sink = stream_builder.add(ReportsEachBatchOfGatedCountsItReadSink, name="sink")
     stream_builder.connect(source.output("counts_to_downstream"), gate.input("value"))
     stream_builder.connect(gate.output("result"), sink.input("gated_counts"))

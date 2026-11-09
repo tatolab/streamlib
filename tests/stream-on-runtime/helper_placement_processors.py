@@ -17,7 +17,18 @@ import time
 
 import numpy
 
-from tatolab.stream import Channels, Input, Output, Packets, Records, State, Stateful, log, node
+from tatolab.stream import (
+    Channels,
+    Input,
+    Output,
+    Packets,
+    Records,
+    State,
+    Stateful,
+    UnreadMessage,
+    log,
+    node,
+)
 
 #: A payload no msgpack decoder reads: `0xc1` is the one type byte msgpack never
 #: uses, then every byte value once, so an encode or decode anywhere between
@@ -535,6 +546,15 @@ def CrashesItsHelper(start: float = 1.0) -> float:  # noqa: N802
     """Reads address zero, which no compiled body can do, so it runs as Python and takes its helper down with SIGSEGV."""
     ctypes.string_at(0)
     return start
+
+
+@node.function
+def GateThatCrashesItsHelperOnCue(value: UnreadMessage, crash: bool = False) -> UnreadMessage:  # noqa: N802
+    """`value` handed on unread, as an open `Gate` hands it; while `crash` is set, it reads address
+    zero and takes its helper down with SIGSEGV, which no compiled body can do, so it runs as Python."""
+    if crash:
+        ctypes.string_at(0)
+    return value
 
 
 #: How many records of a pooled island's level a sink reads before it reports them.
