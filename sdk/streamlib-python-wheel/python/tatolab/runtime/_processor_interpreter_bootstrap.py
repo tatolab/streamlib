@@ -185,6 +185,11 @@ from tatolab.runtime._function_node_run_as_its_helpers_processor import (
     ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs,
     the_processor_class_a_promoted_function_node_runs_as,
 )
+from tatolab.runtime._node_type_import_folder import (
+    NodeTypeModuleImportedFromTwoPlaces,
+    import_folder_and_class_import_path,
+    import_the_module_of_a_node_type,
+)
 from tatolab.runtime._processor_hosting import (
     apply_configuration,
     construct_processor_instance,
@@ -826,18 +831,23 @@ class CapturedEngineLogRecordForwarder:
 
 
 def load_processor_class(import_path: str) -> type:
-    """Import the class `import_path` names, as `module:qualname`.
+    """Import the class `import_path` names, as `module:qualname`, led by an import's folder
+    when the class is in that import's own node code.
 
     The qualname is walked attribute by attribute, so a class nested inside
     another resolves — `stream_builder.add` deliberately admits `Outer.Inner`, because
     a fresh interpreter can reach it.
     """
-    module_name, _, qualname = import_path.partition(":")
+    import_folder, class_import_path = import_folder_and_class_import_path(import_path)
+    module_name, _, qualname = class_import_path.partition(":")
     if not module_name or not qualname:
         raise HelperProcessProtocolError(
             f"{ENTRYPOINT_ENV} must be `module:qualname`, got {import_path!r}"
         )
-    resolved: Any = importlib.import_module(module_name)
+    try:
+        resolved: Any = import_the_module_of_a_node_type(module_name, import_folder)
+    except NodeTypeModuleImportedFromTwoPlaces as imported_from_two_places:
+        raise HelperProcessProtocolError(str(imported_from_two_places)) from None
     walked = module_name
     for attribute_name in qualname.split("."):
         try:
@@ -901,11 +911,14 @@ def describe_one_processor_class(import_path: str) -> "dict[str, Any]":
     `__module__:__qualname__` is the path, since that is the path its processor
     interpreter imports it back by.
     """
-    module_name, _, qualname = import_path.partition(":")
+    import_folder, class_import_path = import_folder_and_class_import_path(import_path)
+    module_name, _, qualname = class_import_path.partition(":")
     if not module_name or not qualname:
         raise ProcessorClassNotDescribable("an import path is `module:qualname`")
     try:
-        importlib.import_module(module_name)
+        import_the_module_of_a_node_type(module_name, import_folder)
+    except NodeTypeModuleImportedFromTwoPlaces as imported_from_two_places:
+        raise ProcessorClassNotDescribable(str(imported_from_two_places)) from None
     except (Exception, SystemExit):
         raise ProcessorClassNotDescribable(
             f"its module `{module_name}` did not import:\n{traceback.format_exc()}"
@@ -947,7 +960,7 @@ def _describe_the_processor_class_its_imported_module_defines(
     own_import_path = (
         f"{getattr(resolved, '__module__', None)}:{getattr(resolved, '__qualname__', None)}"
     )
-    if own_import_path != import_path:
+    if own_import_path != import_folder_and_class_import_path(import_path)[1]:
         raise ProcessorClassNotDescribable(
             f"the {what_it_names} it names identifies as `{own_import_path}`; a node is named by "
             f"its own import path, the one its processor interpreter imports it back by"

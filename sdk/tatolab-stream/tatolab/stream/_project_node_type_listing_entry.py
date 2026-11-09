@@ -12,7 +12,8 @@ Python files of each import as its folder under `imports/` holds them. Nothing i
 source. stdout carries exactly one JSON object, `{"sources": [...]}`, and the exit code is 0.
 Each source is the project itself outside `imports/`, an import or an installed distribution that declares
 `tatolab.nodes` entry points, with the `node_types`, `graph_generators` and
-`unreadable_modules` read from it.
+`unreadable_modules` read from it. An import's node type is led by its folder,
+`imports/<folder>/<module>:<qualname>`, the type a stream imports it from that folder by.
 """
 
 from __future__ import annotations
@@ -63,19 +64,34 @@ def list_the_node_types_and_graph_generators_of_a_project(
         }
     ]
     for dependency in dependencies:
+        read_from_source = read_node_types_and_graph_generators_from_module_sources(
+            _dependency_module_sources(dependency["files"])
+        )
         sources.append(
             {
                 "source": DEPENDENCY_SOURCE,
                 "project": dependency["project"],
                 "folder": dependency["folder"],
                 "version": dependency["version"],
-                **read_node_types_and_graph_generators_from_module_sources(
-                    _dependency_module_sources(dependency["files"])
-                ),
+                **read_from_source,
+                "node_types": [
+                    {
+                        **node_type,
+                        "type": _a_node_type_of_an_imports_own_code(
+                            dependency["folder"], node_type["type"]
+                        ),
+                    }
+                    for node_type in read_from_source["node_types"]
+                ],
             }
         )
     sources.extend(_installed_distribution_sources(installed_distribution_search_path))
     return {"sources": sources}
+
+
+def _a_node_type_of_an_imports_own_code(folder: str, class_import_path: str) -> str:
+    """The type a stream names a class of an import's own node code by: led by its folder."""
+    return f"{_PROJECT_IMPORTS_DIRECTORY_NAME}/{folder}/{class_import_path}"
 
 
 def _project_module_sources(project_directory: Path) -> Iterator[tuple[str, str, str | OSError]]:

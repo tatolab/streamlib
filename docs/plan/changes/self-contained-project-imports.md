@@ -85,9 +85,10 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
     `check_for_newer`, whether the source's head differs from the recorded version.
     `remove_dependency` deletes the folder and is refused while a reference names it.
   - A module's Python is the project's: its folder is a uv path dependency of the project
-    (`[tool.uv.sources] <name> = { path = "imports/<folder>", editable = true }`), written by the
-    runtime, so `uv sync` rebuilds `.venv` from the lock and the module's node code imports from
-    its folder (#3382 keys node types by module on top of this). An import whose requirements the
+    (`[tool.uv.sources] <name> = { path = "imports/<folder>", package = false }`), written by the
+    runtime, so `uv sync` rebuilds `.venv` from the lock with the module's requirements and none of
+    its code on the venv's path; its node code imports from its folder as "An import's node code"
+    states. An import whose requirements the
     project's lock cannot resolve beside the rest is refused in uv's own words, since a project
     has one interpreter.
 - **Stream fragments are references** (project-and-assets §Fragments, graph-groups-and-nested-
@@ -97,6 +98,16 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
   node's own, so two placements never share one and nothing is stored. A stream that holds itself,
   directly or through another, is refused at load by name. `@graph_generator` output stays stored
   as decided.
+- **An import's node code** (#3382): a node type the
+  import's own code defines — its module's top-level package or file is in the import's folder —
+  is led by that folder, relative to the project: `imports/<folder>/<module>:<qualname>`, nested
+  imports `imports/<folder>/imports/<other>/…`. The load names each such node of a fragment that
+  way, `list_project_node_types` answers it, and `add_node` takes it. An interpreter imports the
+  module with that folder first on `sys.path`; one interpreter holds one module per top-level name,
+  so each folder's types are described apart, and a top-level name already imported from another
+  folder, or from the project and its venv, is refused naming both rather than read from the wrong
+  place. A type the import's code does not define, such as an installed module's, resolves in the
+  project's venv. Nothing of an import is copied or put on the venv's shared path.
 - **Asset references** (project-and-assets §The asset verbs): `{"asset", "from"}` resolves to the
   file at that asset's path in the module's import; a node opens it through
   `asset_content_path(asset, from_project)` as today.

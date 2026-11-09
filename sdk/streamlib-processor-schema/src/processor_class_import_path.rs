@@ -25,8 +25,11 @@ use crate::error::{SchemaError, SchemaResult};
 /// constructors, there is no `Default`, and [`Deserialize`] validates rather
 /// than inheriting `String`'s.
 ///
-/// One module is read: a path in [`BUILT_IN_NODE_CLASS_MODULE`] names one of
-/// the runtime's built-ins, resolved from its own registry and never imported.
+/// Two things are read: a path in [`BUILT_IN_NODE_CLASS_MODULE`] names one of
+/// the runtime's built-ins, resolved from its own registry and never imported;
+/// and a Python path led by an import's folder,
+/// `imports/<folder>/<module>:<qualname>`, names a class in that import's own
+/// node code, imported from that folder.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(transparent)]
@@ -35,6 +38,10 @@ pub struct ProcessorClassImportPath(String);
 /// The module a stream imports every built-in node's class from, so a
 /// built-in's type is `tatolab.stream:<Class>`.
 pub const BUILT_IN_NODE_CLASS_MODULE: &str = "tatolab.stream";
+
+/// What ends the import folder leading a node type that names a class in an
+/// import's own node code; neither a Python nor a Rust import path holds it.
+pub const IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR: char = '/';
 
 impl ProcessorClassImportPath {
     /// Build a path, refusing one that names no class.
@@ -68,6 +75,32 @@ impl ProcessorClassImportPath {
         self.0
             .strip_prefix(BUILT_IN_NODE_CLASS_MODULE)
             .is_some_and(|after_the_module| after_the_module.starts_with(':'))
+    }
+
+    /// The type of the Python class `class_import_path`, `<module>:<qualname>`,
+    /// in the node code of the import whose folder is `import_folder`, relative
+    /// to the project holding it.
+    pub fn of_a_class_in_an_import_folder(
+        import_folder: &str,
+        class_import_path: &str,
+    ) -> SchemaResult<Self> {
+        Self::new(format!(
+            "{import_folder}{IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR}{class_import_path}"
+        ))
+    }
+
+    /// The import folder, relative to the project, whose node code defines
+    /// this type, and the class's `<module>:<qualname>` inside it; `None` for a
+    /// type the project's own code, its venv or the runtime defines.
+    pub fn import_folder_and_class_import_path(&self) -> Option<(&str, &str)> {
+        let (import_folder, class_import_path) =
+            self.0.rsplit_once(IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR)?;
+        let (module_name, qualname) = class_import_path.split_once(':')?;
+        (!import_folder.is_empty()
+            && !module_name.is_empty()
+            && !qualname.is_empty()
+            && !class_import_path.contains("::"))
+        .then_some((import_folder, class_import_path))
     }
 
     /// The path as written by the authoring surface.
@@ -134,6 +167,44 @@ mod tests {
                     .unwrap()
                     .names_a_built_in_node(),
                 "{not_a_built_in}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_class_in_an_import_folder_reads_back_its_folder_and_its_import_path() {
+        let gripper = ProcessorClassImportPath::of_a_class_in_an_import_folder(
+            "imports/robot-arm/imports/claws",
+            "nodes.gripper:Gripper",
+        )
+        .unwrap();
+
+        assert_eq!(
+            gripper.as_str(),
+            "imports/robot-arm/imports/claws/nodes.gripper:Gripper"
+        );
+        assert_eq!(
+            gripper.import_folder_and_class_import_path(),
+            Some(("imports/robot-arm/imports/claws", "nodes.gripper:Gripper"))
+        );
+    }
+
+    #[test]
+    fn a_path_with_no_import_folder_names_no_import_folder() {
+        for not_in_an_import in [
+            PYTHON_PATH,
+            RUST_PATH,
+            "tatolab.stream:CameraSource",
+            "/nodes.gripper:Gripper",
+            "imports/robot-arm/nodes.gripper",
+            "imports/robot-arm/:Gripper",
+        ] {
+            assert_eq!(
+                ProcessorClassImportPath::new(not_in_an_import)
+                    .unwrap()
+                    .import_folder_and_class_import_path(),
+                None,
+                "{not_in_an_import}"
             );
         }
     }
