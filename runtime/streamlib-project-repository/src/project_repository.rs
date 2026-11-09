@@ -16,15 +16,18 @@ use crate::project_asset::{
     project_files_the_history_records, read_every_asset_sidecar, the_dependency_asset_record_path,
     the_dependency_assets_recorded_at,
 };
+use crate::project_content_lfs_remote::{PROJECT_LFS_CONFIG_FILE_NAME, ProjectContentRemote};
 use crate::project_content_store::{
-    PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, content_sha256_of, is_a_sha256_digest,
+    PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent, content_sha256_of,
+    is_a_sha256_digest,
 };
 use crate::project_dependency_source::{
     ProjectDependencySource, the_project_directory_an_installed_package_ships,
 };
 use crate::project_file::{PROJECT_FILE_NAME, PinnedProjectDependency, TatolabProjectFile};
 use crate::project_history_repository::{
-    PROJECT_HISTORY_BRANCH, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
+    PROJECT_HISTORY_BRANCH, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRemote,
+    ProjectHistoryRepository,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{
@@ -190,6 +193,118 @@ impl ProjectRepository {
             project_file,
             assets_by_uuid,
         })
+    }
+
+    /// Clone the project `remote` holds into `project_directory`, which is missing or empty: its
+    /// history, every file its newest commit holds, and each asset's bytes from its content
+    /// remote, placed at the asset's path. Nothing is left behind when a step refuses.
+    pub fn clone_from_remote(
+        project_directory: &Path,
+        remote: &ProjectHistoryRemote,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        refuse_a_relative_project_directory(project_directory)?;
+        if project_directory.join(PROJECT_FILE_NAME).exists() {
+            return Err(ProjectRepositoryRefusal::AlreadyAProject {
+                project_directory: project_directory.to_path_buf(),
+            });
+        }
+        if project_directory.exists() && std::fs::read_dir(project_directory)?.next().is_some() {
+            return Err(ProjectRepositoryRefusal::CloneDestinationNotEmpty {
+                project_directory: project_directory.to_path_buf(),
+            });
+        }
+        std::fs::create_dir_all(project_directory)?;
+        let cloned = Self::clone_into_an_empty_directory(project_directory, remote);
+        if cloned.is_err() {
+            let _ = std::fs::remove_dir_all(project_directory);
+        }
+        cloned
+    }
+
+    fn clone_into_an_empty_directory(
+        project_directory: &Path,
+        remote: &ProjectHistoryRemote,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        let history = ProjectHistoryRepository::create_for_project(project_directory)?;
+        if history.fetch_main_from(remote)?.is_none() {
+            return Err(ProjectRepositoryRefusal::HistoryRemoteHoldsNoProject {
+                url: remote.url.clone(),
+            });
+        }
+        let files_at_head = history.files_at_head()?;
+        for (path, bytes) in &files_at_head {
+            refuse_a_path_a_clone_never_writes(path)?;
+            write_file_whole(&project_directory.join(path), bytes)?;
+        }
+        let content_store = ProjectContentStore::of_project(project_directory)?;
+        download_the_content_the_files_name(&files_at_head, &content_store, remote)?;
+        let repository = Self::open(project_directory)?;
+        for asset in repository.assets_by_uuid.values() {
+            if asset.kind == ProjectAssetKind::Stream {
+                continue;
+            }
+            let destination = asset.path.on_disk_under(project_directory);
+            if !destination.exists() {
+                content_store.place_content_at(&asset.content_sha256, &destination)?;
+            }
+        }
+        tracing::info!(
+            project = %project_directory.display(),
+            remote = %remote.url,
+            "cloned a project with its asset bytes"
+        );
+        Ok(repository)
+    }
+
+    /// Push the project to `remote`: first the asset bytes each commit on `main` names that its
+    /// content remote lacks, then `main`, so the remote never holds history naming bytes it
+    /// lacks. The bytes the newest commit names must be in the content store; older bytes it
+    /// lacks are left to the remote they were fetched from. A remote that is a directory on this
+    /// machine takes the history alone.
+    pub fn push_to_remote(
+        &self,
+        remote: &ProjectHistoryRemote,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let files_at_head = self.history.files_at_head()?;
+        if let Some(content_remote) =
+            ProjectContentRemote::beside_the_history_remote(remote, lfs_config_in(&files_at_head))
+        {
+            let mut contents_to_offer = contents_the_sidecars_name(&files_at_head);
+            for content_sha256 in contents_to_offer.keys() {
+                self.content_store.stored_content(content_sha256)?;
+            }
+            for older in self.history.commits_newest_first()?.iter().skip(1) {
+                for (content_sha256, content) in
+                    contents_the_sidecars_name(&self.history.files_at_commit(&older.commit)?)
+                {
+                    if self.content_store.stored_content(&content_sha256).is_ok() {
+                        contents_to_offer.entry(content_sha256).or_insert(content);
+                    }
+                }
+            }
+            content_remote.upload_each_content_it_lacks(
+                &self.content_store,
+                &contents_to_offer.into_values().collect::<Vec<_>>(),
+            )?;
+        }
+        self.history.push_main_to(remote)
+    }
+
+    /// Fetch `remote`'s `main` into the project's history as a fast-forward, then the asset bytes
+    /// its newest commit names that the content store lacks, answering that commit.
+    pub fn fetch_from_remote(
+        &self,
+        remote: &ProjectHistoryRemote,
+    ) -> Result<Option<String>, ProjectRepositoryRefusal> {
+        let head = self.history.fetch_main_from(remote)?;
+        if head.is_some() {
+            download_the_content_the_files_name(
+                &self.history.files_at_head()?,
+                &self.content_store,
+                remote,
+            )?;
+        }
+        Ok(head)
     }
 
     /// The project's directory.
@@ -563,6 +678,7 @@ impl ProjectRepository {
             project_file_at_the_pin.project,
             source,
             &commit,
+            bearer_token,
         )?;
         self.apply_project_operations(
             author,
@@ -695,7 +811,13 @@ impl ProjectRepository {
                 },
             );
         }
-        self.record_and_copy_the_dependency_assets_at(&history, project, &pinned.source, &commit)?;
+        self.record_and_copy_the_dependency_assets_at(
+            &history,
+            project,
+            &pinned.source,
+            &commit,
+            bearer_token,
+        )?;
         Ok(ProjectDependencyOperation::MoveDependencyPin {
             project,
             from: pinned.revision,
@@ -873,6 +995,7 @@ impl ProjectRepository {
                     pinned.project,
                     &pinned.source,
                     &pinned.revision,
+                    None,
                 )?,
             recorded => recorded?,
         };
@@ -1017,18 +1140,20 @@ impl ProjectRepository {
         project: Uuid,
         source: &str,
         commit: &str,
+        bearer_token: Option<&str>,
     ) -> Result<Vec<ProjectAsset>, ProjectRepositoryRefusal> {
         let record_path =
             the_dependency_asset_record_path(&self.project_directory, project, commit)?;
         let mut sidecar_path_of_each_asset: BTreeMap<Uuid, String> = BTreeMap::new();
         let mut asset_uuids_named_twice = BTreeSet::new();
         let mut recorded_assets = Vec::new();
-        for (file_path, bytes) in history.files_at_commit(commit)? {
+        let files_at_the_commit = history.files_at_commit(commit)?;
+        for (file_path, bytes) in &files_at_the_commit {
             let Some(asset_path) = file_path.strip_suffix(ASSET_SIDECAR_FILE_SUFFIX) else {
                 continue;
             };
             let read = ProjectRelativeAssetPath::parse(asset_path).and_then(|asset_path| {
-                let sidecar: ProjectAssetSidecar = serde_json::from_slice(&bytes)?;
+                let sidecar: ProjectAssetSidecar = serde_json::from_slice(bytes)?;
                 Ok(ProjectAsset::from_sidecar(asset_path, sidecar))
             });
             let recorded_asset = match read {
@@ -1085,7 +1210,16 @@ impl ProjectRepository {
                 .ok()
                 .map(|shipped| shipped.join(PROJECT_CONTENT_STORE_DIRECTORY))
             }
-            ProjectDependencySource::GitRemote(_) => None,
+            ProjectDependencySource::GitRemote(url) => {
+                self.download_the_dependency_content_from_its_remote(
+                    project,
+                    &url,
+                    bearer_token,
+                    &files_at_the_commit,
+                    &recorded_assets,
+                );
+                None
+            }
         };
         for recorded_asset in &recorded_assets {
             if self
@@ -1147,6 +1281,47 @@ impl ProjectRepository {
             return Err(not_placed.into());
         }
         Ok(recorded_assets)
+    }
+
+    /// Download into the content store the bytes of `recorded_assets` it lacks from the content
+    /// remote beside the dependency's history remote `url`; bytes that do not arrive are left to
+    /// be refused by name when read.
+    fn download_the_dependency_content_from_its_remote(
+        &self,
+        project: Uuid,
+        url: &str,
+        bearer_token: Option<&str>,
+        files_at_the_commit: &BTreeMap<String, Vec<u8>>,
+        recorded_assets: &[ProjectAsset],
+    ) {
+        let history_remote = ProjectHistoryRemote {
+            url: url.to_owned(),
+            bearer_token: bearer_token.map(str::to_owned),
+            content_remote: None,
+        };
+        let Some(content_remote) = ProjectContentRemote::beside_the_history_remote(
+            &history_remote,
+            lfs_config_in(files_at_the_commit),
+        ) else {
+            return;
+        };
+        let contents: Vec<StoredProjectContent> = recorded_assets
+            .iter()
+            .map(|recorded_asset| StoredProjectContent {
+                content_sha256: recorded_asset.content_sha256.clone(),
+                content_byte_len: recorded_asset.content_byte_len,
+            })
+            .collect();
+        if let Err(refusal) =
+            content_remote.download_each_content_into(&self.content_store, &contents)
+        {
+            tracing::warn!(
+                dependency = %project,
+                remote = %content_remote.lfs_endpoint_url,
+                %refusal,
+                "a dependency's asset bytes did not arrive from its content remote, so reading them is refused"
+            );
+        }
     }
 
     /// Every dependency the project file pins, each with, when `check_for_newer`, the newest
@@ -1309,6 +1484,7 @@ impl ProjectRepository {
                 project,
                 &pinned.source,
                 &pinned.revision,
+                bearer_token,
             )?;
             return Ok(history);
         }
@@ -2312,6 +2488,79 @@ fn apply_operation_to_dependencies(
             }
             held.revision = to.clone();
         }
+    }
+    Ok(())
+}
+
+/// The project's `.lfsconfig` among `files`, which names its content remote.
+fn lfs_config_in(files: &BTreeMap<String, Vec<u8>>) -> Option<&[u8]> {
+    files.get(PROJECT_LFS_CONFIG_FILE_NAME).map(Vec::as_slice)
+}
+
+/// The bytes each asset sidecar among `files` names, by SHA-256; a sidecar that does not parse,
+/// names a stream or holds no digest names none.
+fn contents_the_sidecars_name(
+    files: &BTreeMap<String, Vec<u8>>,
+) -> BTreeMap<String, StoredProjectContent> {
+    files
+        .iter()
+        .filter(|(path, _)| path.ends_with(ASSET_SIDECAR_FILE_SUFFIX))
+        .filter_map(|(_, bytes)| serde_json::from_slice::<ProjectAssetSidecar>(bytes).ok())
+        .filter(|sidecar| {
+            sidecar.kind != ProjectAssetKind::Stream && is_a_sha256_digest(&sidecar.content_sha256)
+        })
+        .map(|sidecar| {
+            (
+                sidecar.content_sha256.clone(),
+                StoredProjectContent {
+                    content_sha256: sidecar.content_sha256,
+                    content_byte_len: sidecar.content_byte_len,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Download into `content_store` the bytes the sidecars among `files` name that it lacks, from
+/// the content remote beside `remote`.
+fn download_the_content_the_files_name(
+    files: &BTreeMap<String, Vec<u8>>,
+    content_store: &ProjectContentStore,
+    remote: &ProjectHistoryRemote,
+) -> Result<(), ProjectRepositoryRefusal> {
+    let Some(content_remote) =
+        ProjectContentRemote::beside_the_history_remote(remote, lfs_config_in(files))
+    else {
+        return Ok(());
+    };
+    content_remote.download_each_content_into(
+        content_store,
+        &contents_the_sidecars_name(files)
+            .into_values()
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Refuse a path of a fetched commit that would land outside the project or in what the runtime
+/// keeps for it.
+fn refuse_a_path_a_clone_never_writes(path: &str) -> Result<(), ProjectRepositoryRefusal> {
+    let refuse = |why: &'static str| ProjectRepositoryRefusal::ClonedFilePathRefused {
+        path: path.to_owned(),
+        why,
+    };
+    if path.is_empty() || path.starts_with('/') || path.contains('\\') {
+        return Err(refuse("it is not a relative `/`-separated path"));
+    }
+    if path
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(refuse("it holds an empty segment, `.` or `..`"));
+    }
+    if path.split('/').next() == Some(crate::PROJECT_RUNTIME_DIRECTORY) {
+        return Err(refuse(
+            "it is inside what the runtime keeps for the project",
+        ));
     }
     Ok(())
 }

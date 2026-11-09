@@ -15,6 +15,12 @@ pub enum ProjectRepositoryRefusal {
     },
     #[error("{project_directory} already holds a project")]
     AlreadyAProject { project_directory: PathBuf },
+    #[error("{project_directory} is not empty, so a clone is not written into it")]
+    CloneDestinationNotEmpty { project_directory: PathBuf },
+    #[error("the history remote {url} holds no commit on `main`, so it holds no project to clone")]
+    HistoryRemoteHoldsNoProject { url: String },
+    #[error("the history remote's newest commit holds `{path}`, which a clone never writes: {why}")]
+    ClonedFilePathRefused { path: String, why: &'static str },
     #[error("the project in {project_directory} already has a first commit")]
     ProjectAlreadyCommitted { project_directory: PathBuf },
     #[error("the project directory {0} is not an absolute path")]
@@ -60,6 +66,24 @@ pub enum ProjectRepositoryRefusal {
     ImportSourceUnreadable { path: PathBuf, why: String },
     #[error("the project's content store holds no content {0}")]
     ContentNotInTheStore(String),
+    #[error(
+        "the content store was sent {arrived_byte_len} bytes hashing to {arrived_sha256} for the \
+         content {expected_sha256} of {expected_byte_len} bytes, so it kept none of them"
+    )]
+    ContentArrivedAsOtherBytes {
+        expected_sha256: String,
+        expected_byte_len: u64,
+        arrived_sha256: String,
+        arrived_byte_len: u64,
+    },
+    #[error("the content remote {url} refused the transfer: {why}")]
+    ContentRemoteRefused { url: String, why: String },
+    #[error("the content remote {url} holds no content {content_sha256}: {why}")]
+    ContentRemoteHoldsNoSuchContent {
+        url: String,
+        content_sha256: String,
+        why: String,
+    },
     #[error("a transaction must hold at least one change")]
     EmptyTransaction,
     #[error("the transaction's author needs a name")]
@@ -125,8 +149,7 @@ pub enum ProjectRepositoryRefusal {
     DependencyPinNamesNoCommitHash { project: Uuid, revision: String },
     #[error(
         "the bytes of the asset {asset} of the dependency {project} are not in this project's \
-         content store: its source {dependency_source} held none of them, and a Git remote carries \
-         no content store"
+         content store: neither this machine nor its source {dependency_source} held them"
     )]
     DependencyAssetContentNotFetched {
         project: Uuid,

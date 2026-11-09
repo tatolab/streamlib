@@ -48,6 +48,47 @@ impl ProjectContentStore {
             why: error.to_string(),
         };
         let mut source_file = File::open(source).map_err(unreadable)?;
+        let incoming = self.write_incoming_content(|partial_file, hasher| {
+            copy_while_hashing(&mut source_file, partial_file, hasher, unreadable)
+        })?;
+        incoming.keep_in(self)
+    }
+
+    #[cfg(feature = "history")]
+    /// Store the bytes `fill` writes, kept only when they hash to `expected` at its length; other
+    /// bytes are refused naming both hashes and leave nothing in the store.
+    pub(crate) fn store_content_expected_to_be(
+        &self,
+        expected: &StoredProjectContent,
+        fill: impl FnOnce(&mut dyn Write) -> Result<(), ProjectRepositoryRefusal>,
+    ) -> Result<StoredProjectContent, ProjectRepositoryRefusal> {
+        let incoming = self.write_incoming_content(|partial_file, hasher| {
+            let mut hashing_writer = HashingWriter {
+                partial_file,
+                hasher,
+                written_byte_len: 0,
+            };
+            fill(&mut hashing_writer)?;
+            Ok(hashing_writer.written_byte_len)
+        })?;
+        if incoming.content.content_sha256 != expected.content_sha256
+            || incoming.content.content_byte_len != expected.content_byte_len
+        {
+            let _ = std::fs::remove_file(&incoming.partial_path);
+            return Err(ProjectRepositoryRefusal::ContentArrivedAsOtherBytes {
+                expected_sha256: expected.content_sha256.clone(),
+                expected_byte_len: expected.content_byte_len,
+                arrived_sha256: incoming.content.content_sha256,
+                arrived_byte_len: incoming.content.content_byte_len,
+            });
+        }
+        incoming.keep_in(self)
+    }
+
+    fn write_incoming_content(
+        &self,
+        write: impl FnOnce(&mut File, &mut Sha256) -> Result<u64, ProjectRepositoryRefusal>,
+    ) -> Result<IncomingProjectContent, ProjectRepositoryRefusal> {
         let partial_path = self
             .store_directory
             .join(format!(".incoming-{}", Uuid::new_v4()));
@@ -56,38 +97,21 @@ impl ProjectContentStore {
             .create_new(true)
             .open(&partial_path)?;
         let mut hasher = Sha256::new();
-        let mut content_byte_len = 0u64;
-        let mut chunk = vec![0u8; CONTENT_COPY_CHUNK_BYTE_LEN];
-        let copied = (|| -> Result<(), ProjectRepositoryRefusal> {
-            loop {
-                let read = source_file.read(&mut chunk).map_err(unreadable)?;
-                if read == 0 {
-                    return Ok(());
-                }
-                hasher.update(&chunk[..read]);
-                partial_file.write_all(&chunk[..read])?;
-                content_byte_len += read as u64;
+        let written = write(&mut partial_file, &mut hasher)
+            .and_then(|content_byte_len| Ok((content_byte_len, partial_file.sync_all()?)));
+        match written {
+            Ok((content_byte_len, ())) => Ok(IncomingProjectContent {
+                partial_path,
+                content: StoredProjectContent {
+                    content_sha256: lowercase_hex(&hasher.finalize()),
+                    content_byte_len,
+                },
+            }),
+            Err(refusal) => {
+                let _ = std::fs::remove_file(&partial_path);
+                Err(refusal)
             }
-        })();
-        if let Err(refusal) = copied.and_then(|()| Ok(partial_file.sync_all()?)) {
-            let _ = std::fs::remove_file(&partial_path);
-            return Err(refusal);
         }
-        let content_sha256 = lowercase_hex(&hasher.finalize());
-        let stored_path = self.content_path(&content_sha256);
-        let kept = if stored_path.exists() {
-            std::fs::remove_file(&partial_path)
-        } else {
-            std::fs::rename(&partial_path, &stored_path)
-        };
-        if let Err(not_kept) = kept {
-            let _ = std::fs::remove_file(&partial_path);
-            return Err(not_kept.into());
-        }
-        Ok(StoredProjectContent {
-            content_sha256,
-            content_byte_len,
-        })
     }
 
     /// The bytes held under `content_sha256`, or a refusal naming the hash when they are not held.
@@ -136,6 +160,70 @@ impl ProjectContentStore {
             return Err(not_copied.into());
         }
         Ok(())
+    }
+}
+
+struct IncomingProjectContent {
+    partial_path: PathBuf,
+    content: StoredProjectContent,
+}
+
+impl IncomingProjectContent {
+    fn keep_in(
+        self,
+        content_store: &ProjectContentStore,
+    ) -> Result<StoredProjectContent, ProjectRepositoryRefusal> {
+        let stored_path = content_store.content_path(&self.content.content_sha256);
+        let kept = if stored_path.exists() {
+            std::fs::remove_file(&self.partial_path)
+        } else {
+            std::fs::rename(&self.partial_path, &stored_path)
+        };
+        if let Err(not_kept) = kept {
+            let _ = std::fs::remove_file(&self.partial_path);
+            return Err(not_kept.into());
+        }
+        Ok(self.content)
+    }
+}
+
+#[cfg(feature = "history")]
+struct HashingWriter<'partial> {
+    partial_file: &'partial mut File,
+    hasher: &'partial mut Sha256,
+    written_byte_len: u64,
+}
+
+#[cfg(feature = "history")]
+impl Write for HashingWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.partial_file.write(bytes)?;
+        self.hasher.update(&bytes[..written]);
+        self.written_byte_len += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.partial_file.flush()
+    }
+}
+
+fn copy_while_hashing(
+    source: &mut impl Read,
+    partial_file: &mut File,
+    hasher: &mut Sha256,
+    unreadable: impl Fn(std::io::Error) -> ProjectRepositoryRefusal,
+) -> Result<u64, ProjectRepositoryRefusal> {
+    let mut chunk = vec![0u8; CONTENT_COPY_CHUNK_BYTE_LEN];
+    let mut content_byte_len = 0u64;
+    loop {
+        let read = source.read(&mut chunk).map_err(&unreadable)?;
+        if read == 0 {
+            return Ok(content_byte_len);
+        }
+        hasher.update(&chunk[..read]);
+        partial_file.write_all(&chunk[..read])?;
+        content_byte_len += read as u64;
     }
 }
 

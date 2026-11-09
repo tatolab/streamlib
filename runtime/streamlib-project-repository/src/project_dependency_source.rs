@@ -54,6 +54,7 @@ impl ProjectDependencySource {
                 .display()
                 .to_string(),
             bearer_token: None,
+            content_remote: None,
         };
         match self {
             Self::ProjectDirectory(project_directory) => {
@@ -68,6 +69,7 @@ impl ProjectDependencySource {
             Self::GitRemote(url) => Ok(ProjectHistoryRemote {
                 url: url.clone(),
                 bearer_token: bearer_token.map(str::to_owned),
+                content_remote: None,
             }),
         }
     }
