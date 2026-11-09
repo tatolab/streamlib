@@ -1895,16 +1895,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   revision, updated when the person chooses and copied only when they fork it. A dependency's
   assets travel with it: each fetch copies the bytes of its media, scene and data assets into the
   depending project's content store from the source's own, so the project reads them at the pin
-  offline and a fork of one needs no second copy; a Git remote carries the content store beside its
-  history through the Git LFS batch API, keyed by each sidecar's SHA-256 and size. A push uploads
-  the bytes the remote's LFS endpoint lacks before it pushes history, so a remote never names bytes
-  it lacks; a clone, a fetch and a dependency fetch download the bytes the commit they reach names,
-  each kept only when it hashes to its name, and an older revision's bytes arrive when it is
-  reached. The endpoint is the one a remote names, else the `[lfs] url` of the project's tracked
-  `.lfsconfig`, else Git LFS's default `<remote>/info/lfs`, so a Git host serving LFS needs nothing
-  more; Artifacts serves no LFS, so a project on Artifacts names a store of its own (owner,
-  2026-11-09). Rejected: a byte store of our own over plain PUT and GET — nothing else speaks it,
-  so every remote would need one (owner, 2026-11-09). Python stays the
+  offline and a fork of one needs no second copy; a Git remote carries no content store yet, so its
+  bytes are refused by name until content storage beside a remote lands (owner, 2026-11-09). Python stays the
   language of nodes: a `@graph_generator` function, replacing `@stream`, builds graph, and its
   output is stored as a frozen, read-only fragment, never one-to-one with a stream, and nothing writes a graph edit back into Python. Data on links and runtime
   state are never saved. Single player first; the cloud hub, branches, roles and releases build on

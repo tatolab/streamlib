@@ -5,8 +5,6 @@
 
 mod canonical_project_json;
 mod project_asset;
-#[cfg(feature = "history")]
-mod project_content_lfs_remote;
 mod project_content_store;
 #[cfg(feature = "history")]
 mod project_dependency_source;
@@ -15,8 +13,6 @@ mod project_file;
 mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_history_smart_http_transport;
-#[cfg(feature = "history")]
-mod project_remote_http_exchange;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
 #[cfg(feature = "history")]
@@ -35,8 +31,6 @@ pub use project_asset::{
     the_content_path_of_an_asset, the_dependency_asset_record_path,
     the_dependency_assets_recorded_at,
 };
-#[cfg(feature = "history")]
-pub use project_content_lfs_remote::{PROJECT_LFS_CONFIG_FILE_NAME, ProjectContentRemote};
 pub use project_content_store::{
     PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,
 };

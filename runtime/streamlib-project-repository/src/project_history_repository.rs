@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use git2::{FileMode, ObjectType, Oid, Repository, Signature, Sort};
 
-use crate::project_content_lfs_remote::ProjectContentRemote;
 use crate::project_history_smart_http_transport::with_the_bearer_token_on_this_thread;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::ProjectTransactionAuthor;
@@ -23,9 +22,6 @@ pub struct ProjectHistoryRemote {
     pub url: String,
     /// The token sent as `Authorization: Bearer`; an Artifacts repo takes one scoped to it.
     pub bearer_token: Option<String>,
-    /// The Git LFS endpoint the project's asset bytes go to and come from; `None` finds it as
-    /// [`ProjectContentRemote::beside_the_history_remote`] does.
-    pub content_remote: Option<ProjectContentRemote>,
 }
 
 impl std::fmt::Debug for ProjectHistoryRemote {
@@ -34,7 +30,6 @@ impl std::fmt::Debug for ProjectHistoryRemote {
             .debug_struct("ProjectHistoryRemote")
             .field("url", &self.url)
             .field("bearer_token", &self.bearer_token.as_ref().map(|_| "set"))
-            .field("content_remote", &self.content_remote)
             .finish()
     }
 }
@@ -444,7 +439,6 @@ mod tests {
         let remote = ProjectHistoryRemote {
             url: source.history_directory().display().to_string(),
             bearer_token: None,
-            content_remote: None,
         };
         fetched.fetch_every_branch_and_tag_from(&remote).unwrap();
         assert_eq!(fetched.commit_a_revision_names("feature").unwrap(), commit);
