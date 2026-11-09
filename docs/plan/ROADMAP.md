@@ -109,7 +109,9 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
    Python class reads. It is required, not optional.
 
 - Landed: #3225, #3228, #3229 and #3232 of item 1, with most of #3224 (PRs #3276 to #3278);
-  item 2 in full, #3222 (PR #3272) and #3223 (PR #3288); and #3230 of item 3 (PR #3292).
+  item 2 in full, #3222 (PR #3272) and #3223 (PR #3288); #3230 of item 3 (PR #3292); #3234 of
+  item 4 (PR #3297); and the first of item 5's pool, islands a built-in reads (PRs #3305 and
+  #3310).
 
 Step 6 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
 transaction ticket, #3258, so live edits and pin values are built once, as transactions. Nothing in steps

@@ -39,10 +39,10 @@ use streamlib_ipc_types::{
     create_the_reserved_slot_subscriber_of,
 };
 use streamlib_ipc_types::{
-    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessFunctionNodeStateBoardEntry,
-    HelperProcessLossCountBoardKey, HelperProcessStepProgressBoardEntry,
-    InboundLinkLossCountBoardSlot, OutputPortBagCountBoardEntry, StreamClockBoardEntry,
-    StreamClockBoardKey,
+    HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessFunctionNodeOverrunBoardEntry,
+    HelperProcessFunctionNodeStateBoardEntry, HelperProcessLossCountBoardKey,
+    HelperProcessStepProgressBoardEntry, InboundLinkLossCountBoardSlot,
+    OutputPortBagCountBoardEntry, StreamClockBoardEntry, StreamClockBoardKey,
 };
 
 /// Nodes a channel or notify service admits per subscriber or notifier slot.
@@ -392,8 +392,8 @@ impl Iceoryx2Node {
     }
     /// Create the loss-count board a helper spawn writes on: every inbound-link
     /// slot, an entry per declared output port, the step-progress entry, the
-    /// call breadcrumb and a state entry per stateful function node the helper
-    /// calls, all zero.
+    /// call breadcrumb, the overrun entry and a state entry per stateful
+    /// function node the helper calls, all zero.
     pub fn create_helper_process_loss_count_board(
         &self,
         service_name: &str,
@@ -421,6 +421,9 @@ impl Iceoryx2Node {
                 .add_with_default::<HelperProcessFunctionNodeCallBreadcrumbBoardEntry>(
                     HelperProcessLossCountBoardKey::FUNCTION_NODE_CALL_BREADCRUMB,
                 );
+            creator = creator.add_with_default::<HelperProcessFunctionNodeOverrunBoardEntry>(
+                HelperProcessLossCountBoardKey::FUNCTION_NODE_OVERRUN,
+            );
             for &breadcrumb_number in &stateful_function_node_breadcrumb_numbers {
                 creator = creator.add_with_default::<HelperProcessFunctionNodeStateBoardEntry>(
                     HelperProcessLossCountBoardKey::function_node_state(breadcrumb_number),

@@ -37,6 +37,7 @@ use crate::core::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };
+use crate::core::compiler::compiler_ops::function_node_pool::FUNCTION_NODE_POOL_NODE_TYPE;
 use crate::core::context::{
     CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE, CaptureDeviceAccessPrompting,
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
@@ -50,7 +51,8 @@ use crate::core::graph::{
 use crate::core::media_clock::MediaClock;
 use crate::core::processors::{
     DynGeneratedProcessor, FunctionNodeCallUnderWayInTheFarSide,
-    FunctionNodePromotionAwaitedBeforeTheReaderRestarts, OutOfProcessLinkWiringEnvelope,
+    FunctionNodePromotionAwaitedBeforeTheReaderRestarts,
+    FunctionNodeThatOverranItsFarSidesFrameInterval, OutOfProcessLinkWiringEnvelope,
 };
 use crate::core::runtime::{
     LoadedStreamTag, ShutdownEscalationOfOneStream, StreamEnvironment,
@@ -59,6 +61,7 @@ use crate::core::runtime::{
 use crate::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
 };
+use streamlib_ipc_types::FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED;
 
 /// The bootstrap a processor interpreter runs, relative to the lend directory.
 pub const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
@@ -676,6 +679,64 @@ impl ProcessorInterpreterSpawnHostProcessor {
             .max(FUNCTION_NODE_CALL_WATCHDOG_FLOOR)
     }
 
+    /// The frame interval the helper times each function-node call against: the
+    /// pool's own interval, since a node too slow to keep the pool's pace holds
+    /// back every island the pool carries; `None` for any other helper.
+    fn frame_interval_its_helper_times_function_node_calls_against(&self) -> Option<Duration> {
+        if self.processor_class_import_path != FUNCTION_NODE_POOL_NODE_TYPE {
+            return None;
+        }
+        self.link_wiring
+            .far_side_process_execution()
+            .interval_ms()
+            .filter(|interval_ms| *interval_ms > 0)
+            .map(|interval_ms| Duration::from_millis(interval_ms as u64))
+    }
+
+    /// End a helper that named a function node for overrunning its frame
+    /// interval, keeping the node for promotion as a crash's would be.
+    fn end_the_helper_whose_function_node_overran_its_frame_interval(
+        &mut self,
+        helper_process_id: u32,
+        function_node_that_overran: FunctionNodeThatOverranItsFarSidesFrameInterval,
+    ) {
+        let FunctionNodeThatOverranItsFarSidesFrameInterval {
+            function_node_id,
+            function_node_name,
+            longest_overrunning_call,
+        } = function_node_that_overran;
+        let frame_interval = self
+            .frame_interval_its_helper_times_function_node_calls_against()
+            .unwrap_or_default();
+        tracing::error!(
+            "[{}] function node `{function_node_name}` overran its island's {} ms frame interval \
+             {FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED} times \
+             running; ending its helper process (pid={helper_process_id})",
+            self.processor_display_name,
+            frame_interval.as_millis(),
+        );
+        let how_the_helper_process_ended = self
+            .take_the_helper_process_group_down()
+            .as_ref()
+            .map(HelperProcessShutdownOutcome::how_the_helper_process_ended)
+            .unwrap_or_else(|| "its helper process ended".to_string());
+        self.why_the_helper_process_died_on_its_own = Some(format!(
+            "function node `{function_node_name}` overran its island's {} ms frame interval \
+             {FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED} times \
+             running, the longest call {} ms, so its helper process was ended. \
+             {how_the_helper_process_ended} (pid={helper_process_id}).",
+            frame_interval.as_millis(),
+            longest_overrunning_call.as_millis(),
+        ));
+        self.function_node_call_that_lost_the_helper = (function_node_id != self.processor_id)
+            .then_some(FunctionNodeCallUnderWayInTheFarSide {
+                function_node_id,
+                function_node_name,
+                call_started_at_monotonic_ns: 0,
+                function_node_calls_under_way: 1,
+            });
+    }
+
     fn take_the_helper_process_group_down(&mut self) -> Option<HelperProcessShutdownOutcome> {
         let outcome = self.child.take().map(|child| {
             HelperProcessShutdownLadder::taking_over(
@@ -802,7 +863,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
 
         // Before the child exists, so its first counts have a board to land on
         // and the board outlives whatever becomes of it.
-        let loss_count_board = self
+        let mut loss_count_board = self
             .link_wiring
             .create_the_loss_count_board_for_this_helper_spawn(
                 ctx,
@@ -820,6 +881,15 @@ impl ProcessorInterpreterSpawnHostProcessor {
                     self.processor_display_name
                 ))
             })?;
+        if let (Some(frame_interval), Some(board_named_to_the_helper)) = (
+            self.frame_interval_its_helper_times_function_node_calls_against(),
+            loss_count_board.as_object_mut(),
+        ) {
+            board_named_to_the_helper.insert(
+                "function_node_frame_interval_ns".to_string(),
+                serde_json::json!(frame_interval.as_nanos() as u64),
+            );
+        }
         let stream_clock = &ctx.host_base().stream_clock;
         let stream_clock_named_to_the_helper = serde_json::json!({
             "mode": stream_clock.spec().mode_name(),
@@ -1442,7 +1512,20 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
                         read_again.is_the_same_call_as(first_read)
                     })
             });
+        let function_node_that_overran = (!the_helper_died && stalled_function_node_call.is_none())
+            .then(|| {
+                self.link_wiring
+                    .function_node_that_overran_its_far_sides_frame_interval()
+            })
+            .flatten();
         if !the_helper_died && stalled_function_node_call.is_none() {
+            let Some(function_node_that_overran) = function_node_that_overran else {
+                return;
+            };
+            self.end_the_helper_whose_function_node_overran_its_frame_interval(
+                helper_process_id,
+                function_node_that_overran,
+            );
             return;
         }
         tracing::error!(
@@ -2808,6 +2891,44 @@ sys.exit(0)
             .expect("the stall is kept for the restart, as a crash would be");
         assert!(why.starts_with("function node `lfo-1` stalled"), "{why}");
         assert!(why.contains("past the 250 ms"), "{why}");
+    }
+
+    /// A helper that names a node for overrunning its frame interval three
+    /// times running is ended, and the node is kept for promotion, as a crash
+    /// would keep it.
+    #[test]
+    fn a_function_node_named_for_overrunning_its_frame_interval_ends_its_helper_for_promotion() {
+        let (mut host, board_writer, _helper_node) =
+            a_spawn_host_whose_helper_calls_function_node_lfo_1();
+        host.child = Some(a_stand_in_helper_in_its_own_process_group("sleep 30"));
+        board_writer
+            .time_each_function_node_call_against_the_frame_interval(Duration::from_millis(10));
+        for _ in 0..FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED {
+            let call = board_writer.note_a_function_node_call_started(0, 1_000_000_000);
+            board_writer.note_the_function_node_call_returned_at(call, 1_020_000_000);
+        }
+
+        host.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+
+        assert!(
+            host.child.is_none(),
+            "the helper of the node that overran was not ended"
+        );
+        let why = host
+            .why_the_out_of_process_helper_died_on_its_own()
+            .expect("the overrun is kept for the restart, as a crash would be");
+        assert!(
+            why.starts_with("function node `lfo-1` overran its island's"),
+            "{why}"
+        );
+        assert!(why.contains("the longest call 20 ms"), "{why}");
+        assert_eq!(
+            host.function_node_call_that_lost_the_helper
+                .as_ref()
+                .map(|call| call.function_node_name.as_str()),
+            Some("lfo-1"),
+            "the node that overran is the one promoted"
+        );
     }
 
     /// A continuous reader's budget is three of its frame intervals once they
