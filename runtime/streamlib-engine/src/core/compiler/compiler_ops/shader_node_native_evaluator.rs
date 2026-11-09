@@ -143,6 +143,9 @@ impl ShaderNodeNativeEvaluatorProcessor {
             .map(str::to_string)
             .collect();
         for (float_index, port) in float_input_ports.iter().enumerate() {
+            if !input_mailboxes.has_port(port) {
+                continue;
+            }
             while let Some(message) = input_mailboxes.read_raw(port)? {
                 if let Some(latest_value) = last_sample_of_the_first_channel(
                     message.payload_descriptor,
