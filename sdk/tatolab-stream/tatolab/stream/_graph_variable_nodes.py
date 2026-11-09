@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`SetVariable` and `GetVariable`: one value named once and read anywhere in a stream."""
+"""`SetVariable` and `GetVariable`: one value named once and read with no drawn wire."""
 
 from __future__ import annotations
 
@@ -28,7 +28,8 @@ class SetVariableConfig(TypedDict):
 
 class SetVariable(BuiltInNode[SetVariableConfig]):
     """Names one value under `variable`: the port's output linked into `value`, or the node
-    in `node_reference`. It runs nothing; every `GetVariable` of the name reads the value.
+    in `node_reference`. It runs nothing; every `GetVariable` of the name on its level, the
+    stream's or a fragment's, or on a fragment inside that level, reads the value.
 
     Inputs:
         `value`: The port whose output the variable holds.
@@ -46,7 +47,8 @@ class GetVariableConfig(TypedDict):
 
 
 class GetVariable(BuiltInNode[GetVariableConfig]):
-    """Reads the variable `variable`. A variable holding a port's output is read by linking
+    """Reads the variable `variable` from the setter on its own level, or else from the
+    nearest enclosing level's. A variable holding a port's output is read by linking
     `value`, which runs as a link from the setter's source with that port's family; one
     holding a node is read by passing this node's reference as a config value, which names
     the setter's node.

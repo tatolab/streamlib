@@ -113,9 +113,10 @@ returned — a track naming its gateway, a send node its track — recorded in t
 at load and rendered by `graph`; it carries no data and is never a link. _Avoid_: "link" for
 it, "handle".
 
-**Variable** _(user)_: a value a `SetVariable` node names and `GetVariable` nodes read anywhere in
-the graph with no drawn wire, as in Unreal Blueprints — a port's output, resolved to a link, or a
-node reference, resolved to a reference edge. _Avoid_: "global", "bus".
+**Variable** _(user)_: a value a `SetVariable` node names and `GetVariable` nodes read with no
+drawn wire, as in Unreal Blueprints — a port's output, resolved to a link, or a node reference,
+resolved to a reference edge. A get reads the setter on its own level, the stream's or a
+fragment's, or else the nearest enclosing one. _Avoid_: "global", "bus".
 
 **Broadcast** / **Track**: MoQ's words, used as they are — a gateway publishes one broadcast at a
 relay, each of its track nodes one track in it. A receive node names what it reads by them

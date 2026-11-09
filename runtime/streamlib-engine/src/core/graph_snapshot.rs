@@ -379,7 +379,7 @@ impl GraphSnapshot {
         let fragments = self.with_graph_fragments_flattened(node_types)?;
         let variables = fragments
             .graph_the_runtime_runs
-            .with_graph_variables_resolved()?;
+            .with_graph_variables_resolved(&fragments.fragments_as_drawn)?;
         let interface = variables
             .graph_the_runtime_runs
             .with_graph_interface_resolved()?;
