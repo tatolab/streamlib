@@ -15,6 +15,8 @@ pub(crate) mod processor_interpreter_shutdown_ladder;
 pub(crate) mod processor_interpreter_spawn_host;
 pub(crate) mod project_node_types_listed_from_source;
 pub(crate) mod python_processor_declaration;
+pub(crate) mod shader_node_island;
+pub(crate) mod shader_node_island_program;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod shader_node_native_evaluator;
 pub(crate) mod shader_node_program;
@@ -28,6 +30,8 @@ pub(crate) use apply_processor_config_update_op::{
 };
 pub(crate) use open_iceoryx2_service_op::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
+    close_iceoryx2_service_into_the_host_of_a_shader_node_island,
+    open_iceoryx2_service_into_the_host_of_a_shader_node_island,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};

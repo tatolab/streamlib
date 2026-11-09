@@ -1,16 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A shader node's program: the signature its describe states, and the compute
-//! kernel the engine wraps around its Slang function for the backings its
-//! Image inputs arrive in.
+//! A shader node's program: its Slang function and the signature its describe
+//! states.
 
-use std::fmt::Write as _;
-
-use crate::core::rhi::{ComputeBindingDeclaration, ComputeBindingKind, TextureFormat};
-
-/// The entry point of every shader node's compute kernel.
-pub(crate) const SHADER_NODE_KERNEL_ENTRY_POINT: &str = "streamlib_shader_node_main";
+use crate::core::rhi::{ComputeBindingKind, TextureFormat};
 
 /// The side of the square workgroup each shader node's kernel runs in.
 pub(crate) const SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE: u32 = 8;
@@ -75,7 +69,7 @@ impl ShaderNodeImageInputBacking {
         }
     }
 
-    fn binding_kind(self) -> ComputeBindingKind {
+    pub(crate) fn binding_kind(self) -> ComputeBindingKind {
         match self {
             Self::SampledTexture => ComputeBindingKind::SampledTexture,
             Self::Rgba8PixelBuffer
@@ -208,251 +202,10 @@ impl ShaderNodeProgram {
         4 * (2 + 3 * self.image_input_count() + self.float_input_ports().count())
     }
 
-    /// The push constants of one evaluation, laid out as
-    /// [`Self::push_constant_byte_len`] states.
-    pub(crate) fn push_constants(
-        &self,
-        output_extent: (u32, u32),
-        image_input_extents: &[ShaderNodeImageInputExtent],
-        float_values: &[f32],
-    ) -> Vec<u8> {
-        let mut push_constants = Vec::with_capacity(self.push_constant_byte_len());
-        push_constants.extend_from_slice(&output_extent.0.to_le_bytes());
-        push_constants.extend_from_slice(&output_extent.1.to_le_bytes());
-        for extent in image_input_extents {
-            push_constants.extend_from_slice(&extent.width.to_le_bytes());
-            push_constants.extend_from_slice(&extent.height.to_le_bytes());
-            push_constants.extend_from_slice(&extent.row_pitch_in_pixels.to_le_bytes());
-        }
-        for float_value in float_values {
-            push_constants.extend_from_slice(&float_value.to_le_bytes());
-        }
-        push_constants
+    /// Whether the node reads an Image beyond its own pixel, through `sample(uv)`.
+    pub(crate) fn samples_beyond_its_own_pixel(&self) -> bool {
+        self.slang_source.contains(".sample(")
     }
-
-    /// The binding name of the Image input at `image_input_index`.
-    pub(crate) fn image_input_binding_name(image_input_index: usize) -> String {
-        format!("streamlib_shader_node_input_{image_input_index}")
-    }
-
-    /// Every binding the kernel for `image_input_backings` declares, by name.
-    pub(crate) fn declared_bindings(
-        image_input_backings: &[ShaderNodeImageInputBacking],
-    ) -> Vec<ComputeBindingDeclaration> {
-        std::iter::once(ComputeBindingDeclaration {
-            name: SHADER_NODE_OUTPUT_BINDING_NAME.to_string(),
-            kind: ComputeBindingKind::StorageBuffer,
-        })
-        .chain(
-            image_input_backings
-                .iter()
-                .enumerate()
-                .map(|(image_input_index, backing)| ComputeBindingDeclaration {
-                    name: Self::image_input_binding_name(image_input_index),
-                    kind: backing.binding_kind(),
-                }),
-        )
-        .collect()
-    }
-
-    /// The Slang compute kernel that calls the node's function once per output
-    /// pixel, its Image inputs bound as `image_input_backings` states. The
-    /// node's source comes first, so a compiler diagnostic names its own lines.
-    pub(crate) fn compute_kernel_slang_source(
-        &self,
-        image_input_backings: &[ShaderNodeImageInputBacking],
-    ) -> String {
-        let mut kernel = String::new();
-        kernel.push_str(&self.slang_source);
-        kernel.push_str(SHADER_NODE_IMAGE_INPUT_PRELUDE);
-
-        kernel.push_str("\nstruct StreamlibShaderNodePushConstants\n{\n");
-        kernel.push_str("    uint output_width;\n    uint output_height;\n");
-        for image_input_index in 0..image_input_backings.len() {
-            let _ = write!(
-                kernel,
-                "    uint input_{image_input_index}_width;\n    uint \
-                 input_{image_input_index}_height;\n    uint \
-                 input_{image_input_index}_row_pitch_in_pixels;\n"
-            );
-        }
-        for float_index in 0..self.float_input_ports().count() {
-            let _ = writeln!(kernel, "    float float_{float_index};");
-        }
-        kernel.push_str(
-            "};\n[[vk::push_constant]] ConstantBuffer<StreamlibShaderNodePushConstants> \
-             streamlib_shader_node_push_constants;\n\n",
-        );
-
-        let _ = writeln!(
-            kernel,
-            "[[vk::binding(0, 0)]] RWStructuredBuffer<uint> {SHADER_NODE_OUTPUT_BINDING_NAME};"
-        );
-        for (image_input_index, backing) in image_input_backings.iter().enumerate() {
-            let binding_type = match backing {
-                ShaderNodeImageInputBacking::SampledTexture => "Sampler2D",
-                ShaderNodeImageInputBacking::Rgba8PixelBuffer => "StructuredBuffer<uint>",
-                ShaderNodeImageInputBacking::Rgba16FloatPixelBuffer => "StructuredBuffer<uint2>",
-                ShaderNodeImageInputBacking::Rgba32FloatPixelBuffer => "StructuredBuffer<float4>",
-            };
-            let _ = writeln!(
-                kernel,
-                "[[vk::binding({}, 0)]] {binding_type} {};",
-                image_input_index + 1,
-                Self::image_input_binding_name(image_input_index)
-            );
-        }
-
-        for (image_input_index, backing) in image_input_backings.iter().enumerate() {
-            kernel.push_str(&image_input_load_and_sample_functions(
-                image_input_index,
-                *backing,
-            ));
-        }
-
-        kernel.push_str(
-            "\nfloat4 streamlib_shader_node_sample_input(uint input_index, float2 uv)\n{\n    \
-             switch (input_index)\n    {\n",
-        );
-        for image_input_index in 0..image_input_backings.len() {
-            let _ = writeln!(
-                kernel,
-                "    case {image_input_index}: return \
-                 streamlib_shader_node_sample_input_{image_input_index}(uv);"
-            );
-        }
-        kernel.push_str("    default: return float4(0.0, 0.0, 0.0, 0.0);\n    }\n}\n");
-
-        let _ = write!(
-            kernel,
-            "\n[numthreads({SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE}, \
-             {SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE}, 1)]\nvoid \
-             {SHADER_NODE_KERNEL_ENTRY_POINT}(uint3 invocation : SV_DispatchThreadID)\n{{\n    \
-             uint2 output_extent = uint2(streamlib_shader_node_push_constants.output_width, \
-             streamlib_shader_node_push_constants.output_height);\n    if (any(invocation.xy >= \
-             output_extent))\n    {{\n        return;\n    }}\n    float2 uv = \
-             (float2(invocation.xy) + 0.5) / float2(output_extent);\n"
-        );
-        let mut call_arguments = Vec::with_capacity(self.inputs.len());
-        let (mut image_input_index, mut float_index) = (0usize, 0usize);
-        for input in &self.inputs {
-            match input.value_type {
-                ShaderNodeInputValueType::ImageFrame => {
-                    let _ = write!(
-                        kernel,
-                        "    ImageInput image_input_{image_input_index};\n    \
-                         image_input_{image_input_index}.streamlib_shader_node_input_index = \
-                         {image_input_index};\n    image_input_{image_input_index}.pixel = \
-                         streamlib_shader_node_pixel_of_input_{image_input_index}(uv);\n"
-                    );
-                    call_arguments.push(format!("image_input_{image_input_index}"));
-                    image_input_index += 1;
-                }
-                ShaderNodeInputValueType::Float => {
-                    call_arguments.push(format!(
-                        "streamlib_shader_node_push_constants.float_{float_index}"
-                    ));
-                    float_index += 1;
-                }
-            }
-        }
-        let _ = write!(
-            kernel,
-            "    float4 pixel = {}({});\n    {SHADER_NODE_OUTPUT_BINDING_NAME}[invocation.y * \
-             output_extent.x + invocation.x] = streamlib_shader_node_pack_rgba8(pixel);\n}}\n",
-            self.function_name,
-            call_arguments.join(", ")
-        );
-        kernel
-    }
-}
-
-/// What every shader node's kernel declares beside the node's own source:
-/// `ImageInput`, and the packing of pixel-buffer channels.
-const SHADER_NODE_IMAGE_INPUT_PRELUDE: &str = r#"
-
-struct ImageInput
-{
-    float4 pixel;
-    uint streamlib_shader_node_input_index;
-
-    float4 sample(float2 uv)
-    {
-        return streamlib_shader_node_sample_input(streamlib_shader_node_input_index, uv);
-    }
-};
-
-float4 streamlib_shader_node_unpack_rgba8(uint packed)
-{
-    return float4(packed & 0xFFu, (packed >> 8) & 0xFFu, (packed >> 16) & 0xFFu, packed >> 24) / 255.0;
-}
-
-float4 streamlib_shader_node_unpack_rgba16_float(uint2 packed)
-{
-    return float4(f16tof32(packed.x & 0xFFFFu), f16tof32(packed.x >> 16), f16tof32(packed.y & 0xFFFFu), f16tof32(packed.y >> 16));
-}
-
-uint streamlib_shader_node_pack_rgba8(float4 pixel)
-{
-    uint4 channel_bytes = uint4(round(saturate(pixel) * 255.0));
-    return channel_bytes.x | (channel_bytes.y << 8) | (channel_bytes.z << 16) | (channel_bytes.w << 24);
-}
-"#;
-
-/// The functions reading Image input `image_input_index` bound as `backing`:
-/// its pixel nearest `uv`, and its bilinear sample at `uv`, clamped at the edge.
-fn image_input_load_and_sample_functions(
-    image_input_index: usize,
-    backing: ShaderNodeImageInputBacking,
-) -> String {
-    let binding = ShaderNodeProgram::image_input_binding_name(image_input_index);
-    let extent = format!(
-        "uint2(streamlib_shader_node_push_constants.input_{image_input_index}_width, \
-         streamlib_shader_node_push_constants.input_{image_input_index}_height)"
-    );
-    let row_pitch = format!(
-        "streamlib_shader_node_push_constants.input_{image_input_index}_row_pitch_in_pixels"
-    );
-    let texel_decoded = match backing {
-        ShaderNodeImageInputBacking::SampledTexture => {
-            format!("{binding}.Load(int3(clamped_texel, 0))")
-        }
-        ShaderNodeImageInputBacking::Rgba8PixelBuffer => format!(
-            "streamlib_shader_node_unpack_rgba8({binding}[clamped_texel.y * {row_pitch} + \
-             clamped_texel.x])"
-        ),
-        ShaderNodeImageInputBacking::Rgba16FloatPixelBuffer => format!(
-            "streamlib_shader_node_unpack_rgba16_float({binding}[clamped_texel.y * {row_pitch} + \
-             clamped_texel.x])"
-        ),
-        ShaderNodeImageInputBacking::Rgba32FloatPixelBuffer => {
-            format!("{binding}[clamped_texel.y * {row_pitch} + clamped_texel.x]")
-        }
-    };
-    let sample = match backing {
-        ShaderNodeImageInputBacking::SampledTexture => {
-            format!("    return {binding}.SampleLevel(uv, 0.0);\n")
-        }
-        _ => format!(
-            "    float2 at = uv * float2({extent}) - 0.5;\n    int2 base = int2(floor(at));\n    \
-             float2 weight = at - float2(base);\n    float4 top = \
-             lerp(streamlib_shader_node_load_input_{image_input_index}(base), \
-             streamlib_shader_node_load_input_{image_input_index}(base + int2(1, 0)), \
-             weight.x);\n    float4 bottom = \
-             lerp(streamlib_shader_node_load_input_{image_input_index}(base + int2(0, 1)), \
-             streamlib_shader_node_load_input_{image_input_index}(base + int2(1, 1)), \
-             weight.x);\n    return lerp(top, bottom, weight.y);\n"
-        ),
-    };
-    format!(
-        "\nfloat4 streamlib_shader_node_load_input_{image_input_index}(int2 \
-         texel)\n{{\n    uint2 extent = {extent};\n    uint2 clamped_texel = uint2(clamp(texel, \
-         int2(0, 0), int2(extent) - 1));\n    return {texel_decoded};\n}}\n\nfloat4 \
-         streamlib_shader_node_pixel_of_input_{image_input_index}(float2 uv)\n{{\n    return \
-         streamlib_shader_node_load_input_{image_input_index}(int2(floor(uv * \
-         float2({extent}))));\n}}\n\nfloat4 \
-         streamlib_shader_node_sample_input_{image_input_index}(float2 uv)\n{{\n{sample}}}\n"
-    )
 }
 
 #[cfg(test)]
@@ -483,24 +236,6 @@ mod tests {
         assert_eq!(program.image_input_ports().collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(program.float_input_ports().collect::<Vec<_>>(), ["amount"]);
         assert_eq!(program.output_port, "result");
-    }
-
-    #[test]
-    fn the_push_constants_are_the_output_extent_each_image_extent_then_each_float() {
-        let program = blend_program();
-        let image_extent = ShaderNodeImageInputExtent {
-            width: 64,
-            height: 32,
-            row_pitch_in_pixels: 80,
-        };
-        let push_constants =
-            program.push_constants((64, 32), &[image_extent, image_extent], &[0.25]);
-
-        assert_eq!(push_constants.len(), program.push_constant_byte_len());
-        assert_eq!(push_constants.len(), 4 * (2 + 3 * 2 + 1));
-        assert_eq!(&push_constants[8..12], &64u32.to_le_bytes());
-        assert_eq!(&push_constants[16..20], &80u32.to_le_bytes());
-        assert_eq!(&push_constants[32..36], &0.25f32.to_le_bytes());
     }
 
     #[test]
@@ -551,91 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn the_kernel_declares_the_output_then_each_image_input_as_its_backing_binds_it() {
-        let declared = ShaderNodeProgram::declared_bindings(&[
-            ShaderNodeImageInputBacking::Rgba8PixelBuffer,
-            ShaderNodeImageInputBacking::SampledTexture,
-        ]);
-        assert_eq!(
-            declared
-                .iter()
-                .map(|binding| (binding.name.as_str(), binding.kind))
-                .collect::<Vec<_>>(),
-            [
-                (
-                    SHADER_NODE_OUTPUT_BINDING_NAME,
-                    ComputeBindingKind::StorageBuffer
-                ),
-                (
-                    "streamlib_shader_node_input_0",
-                    ComputeBindingKind::StorageBuffer
-                ),
-                (
-                    "streamlib_shader_node_input_1",
-                    ComputeBindingKind::SampledTexture
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn the_kernel_starts_with_the_nodes_own_source_and_calls_its_function() {
-        let program = blend_program();
-        let kernel = program.compute_kernel_slang_source(&[
-            ShaderNodeImageInputBacking::Rgba8PixelBuffer,
-            ShaderNodeImageInputBacking::SampledTexture,
-        ]);
-        assert!(kernel.starts_with(&program.slang_source));
-        assert!(
-            kernel.contains(
-                "blend(image_input_0, image_input_1, streamlib_shader_node_push_constants.float_0)"
-            ),
-            "{kernel}"
-        );
-        assert!(
-            kernel.contains("Sampler2D streamlib_shader_node_input_1"),
-            "{kernel}"
-        );
-        assert!(
-            kernel.contains("StructuredBuffer<uint> streamlib_shader_node_input_0"),
-            "{kernel}"
-        );
-    }
-
-    #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn the_kernel_compiles_for_every_backing_and_reflects_the_bindings_it_declares() {
-        use crate::core::rhi::{
-            ShaderCompilationTargetStage, SlangShaderSourceCompiler, derive_bindings_from_spirv,
-        };
-
-        let program = blend_program();
-        let compiler = SlangShaderSourceCompiler::new();
-        for backing in [
-            ShaderNodeImageInputBacking::SampledTexture,
-            ShaderNodeImageInputBacking::Rgba8PixelBuffer,
-            ShaderNodeImageInputBacking::Rgba16FloatPixelBuffer,
-            ShaderNodeImageInputBacking::Rgba32FloatPixelBuffer,
-        ] {
-            let backings = [backing, ShaderNodeImageInputBacking::Rgba8PixelBuffer];
-            let spirv = compiler
-                .compile_or_reuse(
-                    &program.compute_kernel_slang_source(&backings),
-                    ShaderCompilationTargetStage::Compute,
-                    SHADER_NODE_KERNEL_ENTRY_POINT,
-                    &program.function_name,
-                )
-                .unwrap_or_else(|refusal| panic!("{backing:?}: {refusal}"));
-            let (reflected, push_constant_byte_len) = derive_bindings_from_spirv(&spirv).unwrap();
-            crate::core::rhi::reconcile_compute_binding_declarations(
-                &ShaderNodeProgram::declared_bindings(&backings),
-                &reflected,
-            )
-            .unwrap_or_else(|refusal| panic!("{backing:?}: {refusal}"));
-            assert_eq!(
-                push_constant_byte_len as usize,
-                program.push_constant_byte_len()
-            );
-        }
+    fn a_shader_calling_sample_reads_beyond_its_own_pixel() {
+        assert!(blend_program().samples_beyond_its_own_pixel());
     }
 }
