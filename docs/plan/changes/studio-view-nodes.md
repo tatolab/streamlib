@@ -35,15 +35,15 @@ This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folde
 ## ADDED
 
 - **The `StudioView` built-in.** A native built-in, `tatolab.studio:StudioView`, takes
-  `view_type` (the view's id, `<project or import folder>/<view name>`) and the view's settings as
+  `view_type` (the view's id, `<project name>:<view folder>`, as `list_project_views` lists it) and the view's settings as
   its config. At load the runtime reads that view's manifest and gives the node one input per
   declared input and one output per declared output, each of its declared family. A view that is
   missing or does not open fails the node by name, the way an unregistered `type` is refused.
 - **Panel reads.** A panel reads a `StudioView` node's inputs through `open_viewer` on the port
-  linked into it. An Image stays zero-copy, and the node may hold one GPU copy of an inbound Image
-  where the view keeps a frame.
+  linked into it, and an Image stays zero-copy.
 - **Panel writes.** `write_studio_view_output {stream, node, port, value}` hands a value to the
-  node. The node owns its outputs' values and publishes each new one on that port, and a
+  node, an Image written from a panel taking at most one GPU copy into the node's own frame. The
+  node owns its outputs' values and publishes each new one on that port, and a
   downstream reader keeps the last value. Many panels may write one node, and the last write wins.
   A write is live data, never recorded, since data on links is never saved (§Processor model).
 - **Listing views.** `list_project_views {project_directory}` lists every `views/<name>/` of the
