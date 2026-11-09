@@ -166,12 +166,21 @@ impl LocalApiMcpServerHandler {
         operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         local_api_stopping_token: CancellationToken,
     ) -> Self {
+        let runtime_locking_python_requirements = Arc::clone(&operations_on_the_loaded_streams);
+        let project_repositories_open_in_this_runtime = Arc::new(
+            ProjectRepositoriesOpenInThisRuntime::locking_python_requirements_with(Arc::new(
+                move |project_directory| {
+                    runtime_locking_python_requirements
+                        .lock_the_python_requirements_of_the_project_in(project_directory)
+                },
+            )),
+        );
         Self {
             operations_on_the_loaded_streams,
             local_api_stopping_token,
             mcp_connection: LocalApiMcpConnection::OneShotStreamableHttpRequest,
             viewers_this_connection_holds_open: Arc::default(),
-            project_repositories_open_in_this_runtime: Arc::default(),
+            project_repositories_open_in_this_runtime,
             tool_router: Arc::new(
                 Self::tool_router()
                     + Self::project_asset_tool_router()

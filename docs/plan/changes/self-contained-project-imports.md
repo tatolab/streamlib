@@ -178,7 +178,10 @@ into the project, so each runtime release gives every project its version; it is
 exception to copying in, because we make them and guarantee them. The project file records the
 runtime version that created it, as a `.uproject` records its engine, and a load under another
 version says so in the project's log and never refuses or holds it: the version is a record,
-not a lock. It replaces the PyPI requirement PR #3392 added.
+not a lock. It replaces the PyPI requirement PR #3392 added. Each time the runtime makes or
+syncs a project's `.venv`, it installs the first-party modules it carries into that `.venv`; a
+project's `pyproject.toml` and `uv.lock` never name them, and the `.venv` is synced again when
+the runtime or one of its modules changes.
 
 ## Assumptions to correct if wrong
 

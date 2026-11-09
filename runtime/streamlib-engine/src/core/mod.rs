@@ -102,10 +102,12 @@ pub mod processor_interpreter {
         APP_BUNDLE_CONTENTS_DIRECTORY_NAME, APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME,
         BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, BROWSER_HOST_DIRECTORY_NAME,
         BROWSER_HOST_EXECUTABLE_FILE_NAME, BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME,
-        BUNDLED_ICD_MANIFEST_FILE_NAME, LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS,
+        BUNDLED_ICD_MANIFEST_FILE_NAME, FIRST_PARTY_MODULES_DIRECTORY_NAME,
+        LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS,
         LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
         app_bundle_contents_directory_holding_the_executable_directory,
         browser_host_executable_beside_the_lend, bundled_vulkan_driver_directory_in_the_lend,
-        lend_directory_in_the_app_bundle_contents, lend_directory_in_the_runtime_unit,
+        first_party_modules_directory_beside_the_lend, lend_directory_in_the_app_bundle_contents,
+        lend_directory_in_the_runtime_unit,
     };
 }

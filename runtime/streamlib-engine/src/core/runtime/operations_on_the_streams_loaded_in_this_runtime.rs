@@ -119,6 +119,12 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::set_stream_clock_scale`].
     fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading>;
+
+    /// [`Runner::lock_the_python_requirements_of_the_project_in`].
+    fn lock_the_python_requirements_of_the_project_in(
+        &self,
+        project_directory: &Path,
+    ) -> std::result::Result<(), String>;
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
@@ -241,5 +247,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading> {
         Runner::set_stream_clock_scale(self, stream_id, scale)
+    }
+
+    fn lock_the_python_requirements_of_the_project_in(
+        &self,
+        project_directory: &Path,
+    ) -> std::result::Result<(), String> {
+        Runner::lock_the_python_requirements_of_the_project_in(self, project_directory)
     }
 }

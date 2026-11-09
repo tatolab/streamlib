@@ -56,6 +56,22 @@ pub enum ProjectRepositoryRefusal {
     NothingToUndo { author: String },
     #[error("{author} has undone nothing that is left to redo")]
     NothingToRedo { author: String },
+    #[error("the Python project file {path} could not be read: {why}")]
+    PyprojectUnreadable { path: PathBuf, why: String },
+    #[error(
+        "`{first_folder}` and `{second_folder}` both declare the Python distribution \
+         `{distribution_name}`; a project imports one module of each name"
+    )]
+    ImportsDeclareOneDistribution {
+        distribution_name: String,
+        first_folder: String,
+        second_folder: String,
+    },
+    #[error(
+        "the project's Python requirements, with this import change, cannot be resolved, so \
+         nothing changed: {resolver_refusal}"
+    )]
+    ImportRequirementsUnresolvable { resolver_refusal: String },
     #[error("the import source {path} could not be read: {why}")]
     ImportSourceUnreadable { path: PathBuf, why: String },
     #[error("the project's content store holds no content {0}")]
