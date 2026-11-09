@@ -16,6 +16,9 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use super::function_node_island::{
+    runs_inside_the_read_of_each_node_it_feeds, the_reader_input_ports_a_function_node_feeds,
+};
 use crate::core::ProcessorUniqueId;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
@@ -23,6 +26,7 @@ use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, Link,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
+    ReadOfALinkByTheReaderOfAFunctionNodeIsland,
     LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
     ProcessorLossCounts, ProcessorMetrics, SourceSideHeldOpenForAReaderOutsideItsStream,
@@ -68,40 +72,195 @@ pub fn open_iceoryx2_service(
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    open_iceoryx2_service_read_at(graph, link_id, None, iceoryx2_node)
+    open_iceoryx2_service_read_at(graph, link_id, iceoryx2_node)
 }
 
-/// Open the channel of `link_id`, into a function node, at `reader_input_port`
-/// of the reader that evaluates the function node's island: the reader reads
-/// the link's messages there under the delivery profile of the function node's
-/// own input port, and the link is marked so a disconnect reclaims that port.
-pub(crate) fn open_iceoryx2_service_into_the_reader_of_a_function_node_island(
+/// The identity the read of `link_id` by the reader of `island_link_id` is
+/// wired under on both ends of the channel.
+pub(crate) fn the_wiring_link_id_of_a_read_by_the_reader_of_an_island(
+    link_id: &LinkUniqueId,
+    island_link_id: &LinkUniqueId,
+) -> LinkUniqueId {
+    LinkUniqueId::from(format!("{link_id}_read_for_{island_link_id}"))
+}
+
+/// Open a read of the channel of `link_id`, into a function node, at
+/// `reader_input_port` of the reader `island_link_id` carries the function
+/// node's island to: the reader reads the link's messages there under the
+/// delivery profile of the function node's own input port. The read is kept
+/// on the link beside every other, and the link is stamped by the answers all
+/// of them await; a read that cannot be opened is rolled back.
+pub(crate) fn open_a_read_of_a_link_by_the_reader_of_a_function_node_island(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
+    island_link_id: &LinkUniqueId,
     reader_input_port: InputLinkPortRef,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    graph
+    let (from_port, to_port) = {
+        let link = graph
+            .traversal()
+            .e(link_id)
+            .first()
+            .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+        (link.source().clone(), link.to_port().clone())
+    };
+    let wiring_link_id =
+        the_wiring_link_id_of_a_read_by_the_reader_of_an_island(link_id, island_link_id);
+    let destination =
+        read_the_destination_of_a_link(graph, &reader_input_port, &to_port, &wiring_link_id)?;
+    let opened_source_side = open_the_source_side_of_a_link(
+        graph,
+        &from_port,
+        &wiring_link_id,
+        &destination,
+        iceoryx2_node,
+    )?;
+    let wire_reply_awaited_from_the_destination = match open_the_destination_side_of_a_link(
+        graph,
+        &wiring_link_id,
+        &opened_source_side,
+        destination,
+    ) {
+        Ok(wire_reply) => wire_reply,
+        Err(refusal) => {
+            release_both_sides_of_a_read_by_the_reader_of_an_island(
+                graph,
+                &from_port,
+                &reader_input_port,
+                &wiring_link_id,
+            );
+            return Err(refusal);
+        }
+    };
+    let read = ReadOfALinkByTheReaderOfAFunctionNodeIsland {
+        island_link_id: island_link_id.clone(),
+        reader_input_port,
+        wiring_link_id,
+        wire_replies_awaited: opened_source_side
+            .wire_reply_awaited_from_the_source
+            .into_iter()
+            .chain(wire_reply_awaited_from_the_destination)
+            .collect(),
+        services_held_open: Iceoryx2ServicesHeldOpenForLinkComponent {
+            channel_data_service: opened_source_side.channel_data_service,
+            destination_notify_service: opened_source_side.destination_notify_service,
+        },
+    };
+    tracing::info!(
+        channel = %opened_source_side.channel_service_name,
+        "Opened a read of iceoryx2 channel [{}] at {}",
+        link_id,
+        read.reader_input_port
+    );
+    let link = graph
         .traversal_mut()
         .e(link_id)
         .first_mut()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?
-        .insert(LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
-            reader_input_port: reader_input_port.clone(),
-        });
-    if let Err(refusal) =
-        open_iceoryx2_service_read_at(graph, link_id, Some(&reader_input_port), iceoryx2_node)
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    if let Some(read_through) =
+        link.get_mut::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
     {
-        close_iceoryx2_service(graph, link_id)?;
-        return Err(refusal);
+        read_through.reads_by_island_link.push(read);
+    } else {
+        link.insert(LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
+            reads_by_island_link: vec![read],
+        });
     }
+    stamp_a_link_by_the_answers_its_reads_await(link);
     Ok(())
+}
+
+/// Close the read of `link_id` the reader of `island_link_id` holds, if it
+/// holds one, and stamp the link by the answers the reads left await: `Wired`
+/// with no channel once none is left.
+pub(crate) fn close_a_read_of_a_link_by_the_reader_of_a_function_node_island(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    island_link_id: &LinkUniqueId,
+) -> Result<()> {
+    let Some(link) = graph.traversal_mut().e(link_id).first_mut() else {
+        return Ok(());
+    };
+    let source = link.source().clone();
+    let Some(read_through) =
+        link.get_mut::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+    else {
+        return Ok(());
+    };
+    let Some(read_index) = read_through
+        .reads_by_island_link
+        .iter()
+        .position(|read| &read.island_link_id == island_link_id)
+    else {
+        return Ok(());
+    };
+    let closed_read = read_through.reads_by_island_link.remove(read_index);
+    let no_read_is_left = read_through.reads_by_island_link.is_empty();
+    if no_read_is_left {
+        link.remove::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>();
+    }
+    stamp_a_link_by_the_answers_its_reads_await(link);
+    tracing::info!(
+        "Closing the read of {link_id} at {}",
+        closed_read.reader_input_port
+    );
+    release_both_sides_of_a_read_by_the_reader_of_an_island(
+        graph,
+        &source,
+        &closed_read.reader_input_port,
+        &closed_read.wiring_link_id,
+    );
+    Ok(())
+}
+
+/// Stamp `link` `Wired`, or `Pending` with every answer its reads still
+/// await.
+fn stamp_a_link_by_the_answers_its_reads_await(link: &mut Link) {
+    let wire_replies_awaited: Vec<Arc<OutOfProcessLinkWireReply>> = link
+        .get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+        .map(|read_through| {
+            read_through
+                .reads_by_island_link
+                .iter()
+                .flat_map(|read| read.wire_replies_awaited.iter().cloned())
+                .collect()
+        })
+        .unwrap_or_default();
+    if wire_replies_awaited.is_empty() {
+        link.remove::<OutOfProcessLinkWireRepliesComponent>();
+        link.insert(LinkStateComponent(LinkState::Wired));
+    } else {
+        link.insert(LinkStateComponent(LinkState::Pending));
+        link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(
+            wire_replies_awaited,
+        ));
+    }
+}
+
+fn release_both_sides_of_a_read_by_the_reader_of_an_island(
+    graph: &mut Graph,
+    source: &OutputLinkPortRef,
+    reader_input_port: &InputLinkPortRef,
+    wiring_link_id: &LinkUniqueId,
+) {
+    release_the_source_side_of_a_link(
+        graph,
+        source.processor_id(),
+        source.port_name(),
+        wiring_link_id,
+    );
+    release_the_destination_side_of_a_link(
+        graph,
+        reader_input_port.processor_id(),
+        reader_input_port.port_name(),
+        wiring_link_id,
+    );
 }
 
 fn open_iceoryx2_service_read_at(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
-    reader_input_port: Option<&InputLinkPortRef>,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
     let (from_port, to_port) = {
@@ -112,12 +271,7 @@ fn open_iceoryx2_service_read_at(
         (link.source().clone(), link.to_port().clone())
     };
 
-    let destination = read_the_destination_of_a_link(
-        graph,
-        reader_input_port.unwrap_or(&to_port),
-        &to_port,
-        link_id,
-    )?;
+    let destination = read_the_destination_of_a_link(graph, &to_port, &to_port, link_id)?;
     let opened_source_side =
         open_the_source_side_of_a_link(graph, &from_port, link_id, &destination, iceoryx2_node)?;
     let wire_reply_awaited_from_the_destination =
@@ -582,19 +736,42 @@ pub(crate) fn open_the_destination_side_of_a_link(
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
+    let island_links_reading_it: Vec<LinkUniqueId> = graph
+        .traversal()
+        .e(link_id)
+        .first()
+        .and_then(|link| link.get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>())
+        .map(|read_through| {
+            read_through
+                .reads_by_island_link
+                .iter()
+                .map(|read| read.island_link_id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !island_links_reading_it.is_empty() {
+        for island_link_id in &island_links_reading_it {
+            close_a_read_of_a_link_by_the_reader_of_a_function_node_island(
+                graph,
+                link_id,
+                island_link_id,
+            )?;
+        }
+        if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+            link.remove::<OutOfProcessLinkWireRepliesComponent>();
+            link.insert(LinkStateComponent(LinkState::Disconnected));
+        }
+        tracing::info!("Closed every read of {} (state: Disconnected)", link_id);
+        return Ok(());
+    }
+
     let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
         graph.traversal_mut().e(link_id).first().map(|link| {
-            let read_at = link
-                .get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
-                .map_or_else(
-                    || link.to_port().clone(),
-                    |read_through| read_through.reader_input_port.clone(),
-                );
             (
                 link.source().processor_id().clone(),
                 link.source().port_name().to_string(),
-                read_at.processor_id().clone(),
-                read_at.port_name().to_string(),
+                link.to_port().processor_id().clone(),
+                link.to_port().port_name().to_string(),
             )
         })
     else {
@@ -613,7 +790,6 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
         link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
-        link.remove::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>();
         // The answers go with the link: a refusal is rendered until the link is
         // disconnected, and this is that point.
         link.remove::<OutOfProcessLinkWireRepliesComponent>();
@@ -729,9 +905,21 @@ fn every_link_carrying_from<'a>(
 }
 
 /// How many destinations the channel `source` publishes to feeds: the
-/// `connect()` links carrying from it.
+/// `connect()` links carrying from it, a link into a function node counted
+/// once for each reader input port its island is read at.
 fn channel_destination_count(graph: &Graph, source: &OutputLinkPortRef) -> usize {
-    every_link_carrying_from(graph, source).count()
+    every_link_carrying_from(graph, source)
+        .map(|link| {
+            let destination_id = link.to_port().processor_id();
+            if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
+                the_reader_input_ports_a_function_node_feeds(graph, destination_id)
+                    .len()
+                    .max(1)
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 /// The `max_subscribers` every channel data service is created with:
@@ -838,6 +1026,11 @@ fn creation_depth_of_the_live_channel(
 ) -> Result<Option<usize>> {
     let held_open_by_a_link = every_link_carrying_from(graph, source).find_map(|link| {
         link.get::<Iceoryx2ServicesHeldOpenForLinkComponent>()
+            .or_else(|| {
+                link.get::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+                    .and_then(|read_through| read_through.reads_by_island_link.first())
+                    .map(|read| &read.services_held_open)
+            })
             .map(|held| held.channel_data_service.channel_service_creation_depth())
     });
     if held_open_by_a_link.is_some() {

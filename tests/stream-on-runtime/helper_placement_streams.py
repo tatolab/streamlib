@@ -11,6 +11,7 @@ from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder,
 from helper_placement_processors import (
     STEPPED_LFO_STEP_MS,
     STEPPED_LFO_STEPS_REPORTED,
+    CountsEachTickAsALevelSource,
     CountsEachTickRecordsSource,
     CountsItsOwnCalls,
     CrashesItsHelper,
@@ -335,3 +336,33 @@ def python_source_through_a_gate_into_python_sink(stream_builder: StreamBuilder)
     sink = stream_builder.add(ReportsEachBatchOfGatedCountsItReadSink, name="sink")
     stream_builder.connect(source.output("counts_to_downstream"), gate.input("value"))
     stream_builder.connect(gate.output("result"), sink.input("gated_counts"))
+
+
+@graph_generator
+def python_source_through_a_gate_into_two_python_sinks(stream_builder: StreamBuilder) -> None:
+    """A Python class's counts through one `Gate` into two Python classes."""
+    source = stream_builder.add(CountsEachTickRecordsSource, name="source")
+    gate = stream_builder.add(Gate, name="gate")
+    first_sink = stream_builder.add(ReportsEachBatchOfGatedCountsItReadSink, name="first-sink")
+    second_sink = stream_builder.add(ReportsEachBatchOfGatedCountsItReadSink, name="second-sink")
+    stream_builder.connect(source.output("counts_to_downstream"), gate.input("value"))
+    stream_builder.connect(gate.output("result"), first_sink.input("gated_counts"))
+    stream_builder.connect(gate.output("result"), second_sink.input("gated_counts"))
+
+
+@graph_generator
+def python_level_source_through_a_gate_into_a_native_converter(stream_builder: StreamBuilder) -> None:
+    """A Python class's levels through `Gate` into a native `ChannelsToRecords`, read by a Python class.
+
+    The converter runs no node code, so the stream's function node pool reads
+    the source's channel and evaluates `Gate`, handing each level on unread.
+    """
+    source = stream_builder.add(CountsEachTickAsALevelSource, name="source")
+    gate = stream_builder.add(Gate, name="gate")
+    converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["level"]}, name="converter"
+    )
+    sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
+    stream_builder.connect(source.output("level_to_downstream"), gate.input("value"))
+    stream_builder.connect(gate.output("result"), converter.input("channels"))
+    stream_builder.connect(converter.output("records"), sink.input("level_records"))

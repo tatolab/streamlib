@@ -4,11 +4,13 @@
 """The processor a helper runs a function node as, once the node is promoted out of its readers' islands.
 
 Each input reads the newest value its link carries, an island its own helper
-evaluates or a channel from another promoted node, and keeps its pin value
-until one arrives. A live config update, and so each value a link gives a
-field the node exposes, reaches the next call. A number or bool output is
-written as a control value, one f64 sample on one channel at rate 0, and a
-`dict` output as a Records message.
+evaluates or a channel from a class node or another promoted node, and keeps
+its pin value until one arrives; an `UnreadMessage` input holds only the
+message that arrived since the last call, and the node is not called while it
+holds none. A live config update, and so each value a link gives a field the
+node exposes, reaches the next call. A number or bool output is written as a
+control value, one f64 sample on one channel at rate 0, a `dict` output as a
+Records message, and an `UnreadMessage` output exactly as the message arrived.
 """
 
 from __future__ import annotations
@@ -17,10 +19,24 @@ import dataclasses
 import struct
 from typing import Any, Optional
 
-from tatolab.stream import Channels, Input, NodeLinkDataAccess, Output, Records, node
+from tatolab.stream import (
+    Array,
+    Channels,
+    Image,
+    Input,
+    NodeLinkDataAccess,
+    Output,
+    Packets,
+    Records,
+    node,
+)
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
-from tatolab.runtime._engine import FunctionNodeEvaluatedAsItsHelpersProcessor
+from tatolab.runtime._engine import (
+    FunctionNodeEvaluatedAsItsHelpersProcessor,
+    hand_an_unread_message_on,
+    read_the_message_at_an_input_port_unread,
+)
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeBodyRunAsPython,
     FunctionNodeCompiledToItsEvaluateEntry,
@@ -52,15 +68,7 @@ def the_processor_class_a_promoted_function_node_runs_as(
         if port in vars(_FunctionNodeRunAsItsHelpersProcessor)
         or port in _FunctionNodeRunAsItsHelpersProcessor.__annotations__
     )
-    how_its_values_are_carried = prepared.how_its_values_are_carried
-    if (
-        how_its_values_are_carried["inputs_carrying_an_unread_message"]
-        or how_its_values_are_carried["outputs_carrying_an_unread_message"]
-    ):
-        raise FunctionNodeDoesNotCompile(
-            f"function node `{node_id}` ({import_path}) cannot run in a helper of its own: it "
-            "hands on an `UnreadMessage`, which runs only inside the read of the node it feeds"
-        )
+    ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
     if ports_named_like_a_runner_member:
         raise FunctionNodeDoesNotCompile(
             f"function node `{node_id}` ({import_path}) cannot run in a helper of its own: its "
@@ -68,16 +76,23 @@ def the_processor_class_a_promoted_function_node_runs_as(
             "named like a member of the processor it would run as"
         )
 
-    class_attributes: "dict[str, Any]" = {
-        input_port: Input(Records if input_port in ports_carrying_records else Channels, delivery="newest")
-        for input_port in prepared.input_ports
-    }
-    class_attributes.update(
-        {
-            output_port: Output(Records if output_port in ports_carrying_records else Channels)
-            for output_port in prepared.output_ports
-        }
-    )
+    class_attributes: "dict[str, Any]" = {}
+    for input_port in prepared.input_ports:
+        if input_port in ports_carrying_an_unread_message:
+            class_attributes[input_port] = Input(
+                Image, also_takes=(Array, Channels, Packets, Records), delivery="newest"
+            )
+        else:
+            class_attributes[input_port] = Input(
+                Records if input_port in ports_carrying_records else Channels, delivery="newest"
+            )
+    for output_port in prepared.output_ports:
+        if output_port in ports_carrying_an_unread_message:
+            class_attributes[output_port] = Output(Image)
+        else:
+            class_attributes[output_port] = Output(
+                Records if output_port in ports_carrying_records else Channels
+            )
     class_attributes["__doc__"] = f"Function node `{node_id}` ({import_path}), run in its own helper."
     class_attributes["__module__"] = __name__
     runner_class = type(
@@ -149,6 +164,12 @@ class _FunctionNodeRunAsItsHelpersProcessor:
             outputs_that_may_hand_out_nothing=list(
                 prepared.how_its_values_are_carried["outputs_that_may_hand_out_nothing"]
             ),
+            inputs_carrying_an_unread_message=list(
+                prepared.how_its_values_are_carried["inputs_carrying_an_unread_message"]
+            ),
+            outputs_carrying_an_unread_message=list(
+                prepared.how_its_values_are_carried["outputs_carrying_an_unread_message"]
+            ),
         )
 
     def configure(self, config: Any) -> None:
@@ -165,7 +186,13 @@ class _FunctionNodeRunAsItsHelpersProcessor:
     def process(self, ctx: Any) -> None:
         prepared = self._prepared
         ports_carrying_records = _ports_carrying_records(prepared)
+        ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
         for input_index, input_port in enumerate(prepared.input_ports):
+            if input_port in ports_carrying_an_unread_message:
+                self._input_values[input_index] = read_the_message_at_an_input_port_unread(
+                    link_data_access=self._link_data_access, input_port=input_port
+                )
+                continue
             if input_port in ports_carrying_records:
                 record = ctx.inputs.read(getattr(type(self), input_port))
                 if record is not None:
@@ -185,6 +212,13 @@ class _FunctionNodeRunAsItsHelpersProcessor:
         for output_port, output_value in zip(prepared.output_ports, output_values):
             if output_value is None:
                 continue
+            if output_port in ports_carrying_an_unread_message:
+                hand_an_unread_message_on(
+                    link_data_access=self._link_data_access,
+                    output_port=output_port,
+                    message=output_value,
+                )
+                continue
             if output_port in ports_carrying_records:
                 ctx.outputs.write(getattr(type(self), output_port), output_value)
                 continue
@@ -195,6 +229,20 @@ class _FunctionNodeRunAsItsHelpersProcessor:
                 sample_rate=_CONTROL_VALUE_SAMPLE_RATE,
             )
         self._control_values_written += 1
+
+
+def _ports_carrying_an_unread_message(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":
+    how_its_values_are_carried = prepared.how_its_values_are_carried
+    return frozenset(
+        [
+            prepared.input_ports[input_index]
+            for input_index in how_its_values_are_carried["inputs_carrying_an_unread_message"]
+        ]
+        + [
+            prepared.output_ports[output_index]
+            for output_index in how_its_values_are_carried["outputs_carrying_an_unread_message"]
+        ]
+    )
 
 
 def _ports_carrying_records(prepared: FunctionNodeReadyToEvaluate) -> "frozenset[str]":

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import os
 import struct
 import itertools
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from typing import Any
 import pytest
 
 from tatolab.runtime import _engine
+from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
 from tatolab.runtime._function_node_compilation import (
     FunctionNodeBodyRunAsPython,
     FunctionNodeCompiledToItsEvaluateEntry,
@@ -477,6 +479,151 @@ def test_a_promoted_function_node_runs_as_a_process_writing_each_output_as_a_con
         ("result", [[6.0]], 0, 0),
         ("result", [[6.0]], 1, 0),
     ], "each run writes one f64 at rate 0, the input keeping its newest value between reads"
+
+
+@node.function
+def gate_each_message(value: UnreadMessage, open: bool = True) -> "UnreadMessage | None":
+    return value if open else None
+
+
+@node.function
+def hand_each_message_on_once_it_has_built_an_object(value: UnreadMessage) -> UnreadMessage:
+    repr(object())
+    return value
+
+
+def _wiring_of_one_link_end(direction: str, port_name: str, link_id: str) -> "dict[str, Any]":
+    """One entry of the envelope the engine's wiring path hands a helper."""
+    channel_service_name = f"promoted{os.getpid()}_{link_id}/channel"
+    notify_service_name = f"promoted{os.getpid()}_{link_id}_dest/notify"
+    shared = {
+        "name": port_name,
+        "link_id": link_id,
+        "channel_service_name": channel_service_name,
+        "channel_service_creation_depth": 16,
+        "max_subscribers": 2,
+        "notify_max_notifiers": 1,
+    }
+    if direction == "output":
+        return {
+            **shared,
+            "dest_notify_service_name": notify_service_name,
+            "expected_payload_bytes": 1024,
+            "max_payload_bytes_per_channel": 1 << 20,
+            "output_port_wiring_generation": 1,
+        }
+    return {
+        **shared,
+        "inbound_link_name": channel_service_name,
+        "notify_service_name": notify_service_name,
+        "read_mode": "read_next_in_order",
+        "input_port_ring_depth": 16,
+        "loss_count_slot": 0,
+        "wiring_generation": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("function_node", "is_compiled"),
+    [(gate_each_message, True), (hand_each_message_on_once_it_has_built_an_object, False)],
+)
+def test_a_promoted_node_hands_each_message_on_unread_as_it_arrived(
+    function_node: Any, is_compiled: bool
+):
+    import_path = f"{__name__}:{function_node.__name__}"
+    assert (
+        isinstance(
+            prepare_function_node_to_evaluate(function_node, import_path),
+            FunctionNodeCompiledToItsEvaluateEntry,
+        )
+        is is_compiled
+    )
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    runner_class = the_processor_class_a_promoted_function_node_runs_as(
+        function_node, import_path, "gate-1", data_plane
+    )
+    input_families = {
+        port["name"]: port["family"] for port in getattr(runner_class, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    }
+    assert input_families["value"]["also_takes_families"] == ["array", "channels", "packets", "records"]
+    runner = construct_processor_instance(runner_class, None, data_plane)
+    destination = _engine.open_node_link_data_access_for_helper_process()
+    processor_interpreter_bootstrap.wire_link_data_access(
+        destination, {"inputs": [_wiring_of_one_link_end("input", "read", "L-out-of-the-gate")]}
+    )
+    processor_interpreter_bootstrap.wire_link_data_access(
+        data_plane,
+        {
+            "inputs": [_wiring_of_one_link_end("input", "value", "L-into-the-gate")],
+            "outputs": [_wiring_of_one_link_end("output", "result", "L-out-of-the-gate")],
+        },
+    )
+    source = _engine.open_node_link_data_access_for_helper_process()
+    processor_interpreter_bootstrap.wire_link_data_access(
+        source, {"outputs": [_wiring_of_one_link_end("output", "frames", "L-into-the-gate")]}
+    )
+    ctx = _ContextOfOneProcess()
+
+    runner.process(ctx)
+    assert destination.read_from_input_port("read") is None, "no message arrived, so none is handed on"
+
+    source.write_to_output_port("frames", b"first", timestamp_ns=11)
+    runner.process(ctx)
+    payload, timestamp_ns = destination.read_from_input_port_with_timestamp("read")
+    assert (bytes(payload), timestamp_ns) == (b"first", 11)
+    runner.process(ctx)
+    assert destination.read_from_input_port("read") is None, "each message is handed on once"
+    if function_node is not gate_each_message:
+        return
+
+    ctx.inputs.control_value_by_port["open"] = 0.0
+    source.write_to_output_port("frames", b"second", timestamp_ns=12)
+    runner.process(ctx)
+    assert destination.read_from_input_port("read") is None, "a closed gate hands out nothing"
+
+
+def test_the_pool_hands_a_message_its_island_hands_on_as_it_arrived_in_its_family():
+    from tatolab.runtime._function_node_pool import the_processor_class_the_function_node_pool_runs_as
+
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    pool_class = the_processor_class_the_function_node_pool_runs_as(
+        {
+            "carries": [
+                {
+                    "input_port": "island_0",
+                    "output_port": "island_0_output",
+                    "family": "message",
+                    "message_family": "image",
+                }
+            ]
+        },
+        data_plane,
+    )
+    assert [port["family"]["family"] for port in getattr(pool_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP)] == [
+        "image"
+    ]
+    pool = construct_processor_instance(pool_class, None, data_plane)
+    destination = _engine.open_node_link_data_access_for_helper_process()
+    processor_interpreter_bootstrap.wire_link_data_access(
+        destination, {"inputs": [_wiring_of_one_link_end("input", "read", "L-out-of-the-pool")]}
+    )
+    processor_interpreter_bootstrap.wire_link_data_access(
+        data_plane,
+        {
+            "inputs": [_wiring_of_one_link_end("input", "island_0", "L-into-the-pool")],
+            "outputs": [_wiring_of_one_link_end("output", "island_0_output", "L-out-of-the-pool")],
+        },
+    )
+    source = _engine.open_node_link_data_access_for_helper_process()
+    processor_interpreter_bootstrap.wire_link_data_access(
+        source, {"outputs": [_wiring_of_one_link_end("output", "frames", "L-into-the-pool")]}
+    )
+
+    source.write_to_output_port("frames", b"a frame's descriptor", timestamp_ns=21)
+    pool.process(_ContextOfOneProcess())
+
+    payload, timestamp_ns = destination.read_from_input_port_with_timestamp("read")
+    assert (bytes(payload), timestamp_ns) == (b"a frame's descriptor", 21)
 
 
 def test_a_promoted_function_node_starts_from_its_pin_values():

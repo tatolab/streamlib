@@ -35,6 +35,7 @@ pub use graph_readiness::ObservableGraphReadiness;
 pub(crate) use port_family_link_checks::{
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     refuse_a_link_between_ports_whose_families_do_not_match,
+    the_family_a_link_out_of_an_output_carries,
 };
 pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
 pub(crate) use streamlib_processor_schema::is_in_exposed_name_cast_form;

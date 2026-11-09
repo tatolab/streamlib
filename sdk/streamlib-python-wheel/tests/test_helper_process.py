@@ -268,6 +268,55 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     assert payload_bytes_read_from(destination, "frames_from_upstream") == frame_index_payload(11)
 
 
+def test_a_message_read_unread_is_handed_on_exactly_as_it_arrived():
+    """A function node's helper hands a message on without reading it: the
+    same payload, stamp and group flag reach the next reader."""
+    from tatolab.runtime._engine import (
+        hand_an_unread_message_on,
+        read_the_message_at_an_input_port_unread,
+    )
+
+    into_the_relay = "L-unread-into-the-relay"
+    out_of_the_relay = "L-unread-out-of-the-relay"
+    destination = _engine.open_node_link_data_access_for_helper_process()
+    processor_interpreter_bootstrap.wire_link_data_access(
+        destination, {"inputs": [engine_shaped_link_wiring("input", out_of_the_relay)]}
+    )
+    relay = _engine.open_node_link_data_access_for_helper_process()
+    processor_interpreter_bootstrap.wire_link_data_access(
+        relay,
+        {
+            "inputs": [engine_shaped_link_wiring("input", into_the_relay)],
+            "outputs": [engine_shaped_link_wiring("output", out_of_the_relay)],
+        },
+    )
+    source = _engine.open_node_link_data_access_for_helper_process()
+    processor_interpreter_bootstrap.wire_link_data_access(
+        source, {"outputs": [engine_shaped_link_wiring("output", into_the_relay)]}
+    )
+    assert (
+        read_the_message_at_an_input_port_unread(
+            link_data_access=relay, input_port="frames_from_upstream"
+        )
+        is None
+    )
+
+    source.write_to_output_port(
+        "frames_to_downstream", frame_index_payload(5), timestamp_ns=123_456, starts_group=False
+    )
+    message = read_the_message_at_an_input_port_unread(
+        link_data_access=relay, input_port="frames_from_upstream"
+    )
+    assert message is not None
+    hand_an_unread_message_on(
+        link_data_access=relay, output_port="frames_to_downstream", message=message
+    )
+
+    payload, timestamp_ns = destination.read_from_input_port_with_timestamp("frames_from_upstream")
+    assert bytes(payload) == frame_index_payload(5)
+    assert timestamp_ns == 123_456
+
+
 def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_ports_depth():
     """A helper opens a channel at the creation depth the envelope names and
     reads through a ring its own port's depth, so a shallow port that opens a

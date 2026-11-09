@@ -1204,6 +1204,8 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         initial_state_values,
         output_count,
         outputs_that_may_hand_out_nothing = Vec::new(),
+        inputs_carrying_an_unread_message = Vec::new(),
+        outputs_carrying_an_unread_message = Vec::new(),
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -1216,6 +1218,8 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         initial_state_values: Vec<f64>,
         output_count: usize,
         outputs_that_may_hand_out_nothing: Vec<usize>,
+        inputs_carrying_an_unread_message: Vec<usize>,
+        outputs_carrying_an_unread_message: Vec<usize>,
     ) -> PyResult<Self> {
         let breadcrumb_number =
             BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
@@ -1243,6 +1247,8 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
             output_count,
             &HowAFunctionNodeCarriesValuesBeyondNumbers {
                 outputs_that_may_hand_out_nothing,
+                inputs_carrying_an_unread_message,
+                outputs_carrying_an_unread_message,
                 ..HowAFunctionNodeCarriesValuesBeyondNumbers::default()
             },
         )
@@ -1264,9 +1270,9 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
     }
 
     /// Call the node with `input_values` at the stream's time now, answering
-    /// its outputs, a `float` for a number or bool, a `dict` as given and
-    /// `None` for one that hands out nothing; refused when it refuses,
-    /// keeping the state it had.
+    /// its outputs, a `float` for a number or bool, a `dict` as given, the
+    /// `UnreadMessage` it hands on, and `None` for one that hands out nothing;
+    /// refused when it refuses, keeping the state it had.
     fn evaluate<'py>(
         &self,
         python: Python<'py>,
@@ -1413,6 +1419,36 @@ pub(crate) fn stop_feeding_an_input_port_from_a_function_node_island(
             )
         })?;
     Ok(input_mailboxes.stop_feeding_an_input_port_from_a_function_node_island(input_port))
+}
+
+/// The message `input_port` holds for this read, handed back unread: an
+/// island's output at the port, or the newest message its link carried;
+/// `None` when it holds none.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, input_port))]
+pub(crate) fn read_the_message_at_an_input_port_unread(
+    python: Python<'_>,
+    link_data_access: &PythonProcessorLinkDataAccess,
+    input_port: &str,
+) -> PyResult<Option<UnreadMessageAFunctionNodeHandsOn>> {
+    Ok(link_data_access
+        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
+        .map(|message| UnreadMessageAFunctionNodeHandsOn {
+            message: MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(&message),
+        }))
+}
+
+/// Write `message` on `output_port` exactly as it arrived, its descriptor,
+/// stamp and group boundary unchanged.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, output_port, message))]
+pub(crate) fn hand_an_unread_message_on(
+    python: Python<'_>,
+    link_data_access: &PythonProcessorLinkDataAccess,
+    output_port: &str,
+    message: &UnreadMessageAFunctionNodeHandsOn,
+) -> PyResult<()> {
+    link_data_access.hand_a_message_on_unread(python, output_port, &message.message)
 }
 
 #[cfg(test)]

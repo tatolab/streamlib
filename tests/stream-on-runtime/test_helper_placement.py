@@ -43,7 +43,9 @@ from helper_placement_streams import (
     lfo_into_remap_into_python_sink,
     native_channels_to_records_into_python_records_sink,
     one_probe_forking_a_worker_that_outlives_it,
+    python_level_source_through_a_gate_into_a_native_converter,
     python_source_through_a_gate_into_python_sink,
+    python_source_through_a_gate_into_two_python_sinks,
     one_probe_sleeping_through_its_own_setup,
     one_probe_sleeping_through_its_own_shutdown,
     pooled_counter_beside_a_pooled_node_that_hangs,
@@ -459,6 +461,67 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
     assert len(helper_pids) == 2, (
         f"only the two classes get a process, and the stream started {helper_pids}:\n"
+        f"{tatolabd.recent_stderr()}"
+    )
+
+
+def test_a_gate_reading_a_python_class_hands_each_message_on_to_each_of_two_python_classes(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`<Python class> -> Gate -> two <Python class>es`: each sink's helper reads
+    the source's channel and evaluates `Gate` inside its own reads, so each
+    reads the source's counts once, in order, with no process for `Gate`.
+    """
+    tatolabd = start_tatolabd_running_stream(python_source_through_a_gate_into_two_python_sinks)
+    tatolabd.await_the_latest_stream_loaded()
+    counts_read_by_each_sink: "dict[int, list[int]]" = {}
+    occurrence = 2
+    while len(counts_read_by_each_sink) < 2 or not all(counts_read_by_each_sink.values()):
+        batch = tatolabd.await_marker("GATED_COUNT_BATCH_READ", occurrence=occurrence)
+        counts_read_by_each_sink.setdefault(batch["sink_pid"], []).extend(batch["counts"])
+        occurrence += 1
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    for sink_pid, counts in counts_read_by_each_sink.items():
+        assert counts == sorted(set(counts)), (
+            f"each sink reads each count once, in order, and sink {sink_pid} read {counts}"
+        )
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+    assert len(helper_pids) == 3 and set(counts_read_by_each_sink) <= set(helper_pids), (
+        f"only the three classes get a process, and the stream started {helper_pids}:\n"
+        f"{tatolabd.recent_stderr()}"
+    )
+
+
+def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """`<Python class> -> Gate -> ChannelsToRecords -> <Python class>`: the
+    converter runs no node code, so the stream's pool reads the source's
+    channel, evaluates `Gate` and hands each level on unread, in its family.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        python_level_source_through_a_gate_into_a_native_converter
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    records_read = tatolabd.await_marker("LEVEL_RECORDS_READ")
+    graph = tatolabd.local_api_client().call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    (pool,) = [
+        node for node in graph["nodes"] if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
+    ]
+    (carry,) = pool["config"]["carries"]
+    assert carry["family"] == "message", f"the pool hands `Gate`'s message on unread: {carry}"
+    levels = [record["level"] for record in records_read["records"]]
+    assert levels == sorted(levels) and len(set(levels)) > 1 and levels[0] >= 1.0, (
+        f"the pool hands the source's levels on in order, and the sink read {levels}"
+    )
+    helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
+    assert len(helper_pids) == 3 and records_read["sink_pid"] in helper_pids, (
+        f"the source, the sink and one pool get a process, and the stream started {helper_pids}:\n"
         f"{tatolabd.recent_stderr()}"
     )
 
