@@ -31,7 +31,6 @@ from typing import Any, Callable, Optional
 from tatolab.stream import NodeLinkDataAccess, log
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
-    UNREAD_MESSAGE_VALUE_TYPE,
     FunctionNode,
 )
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
@@ -46,6 +45,11 @@ from tatolab.runtime._engine import (
     feed_an_input_port_from_a_function_node_island,
     stop_feeding_an_input_port_from_a_function_node_island,
 )
+
+#: The value type a function node signature gives an `UnreadMessage` input or output. Spelled
+#: here, not imported, because the `tatolab-stream` in a project's venv may predate it, and the
+#: string is the wire contract both sides hold.
+UNREAD_MESSAGE_VALUE_TYPE = "unread_message"
 
 # The scalar value types an evaluate entry carries, each as an f64.
 _SCALAR_VALUE_TYPES_AN_EVALUATE_ENTRY_CARRIES = {float: "float", int: "int", bool: "bool"}

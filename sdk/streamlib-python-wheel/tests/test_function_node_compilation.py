@@ -25,6 +25,7 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeCompiledToItsEvaluateEntry,
     FunctionNodeDoesNotCompile,
     FunctionNodeRunAsPythonInItsReader,
+    UNREAD_MESSAGE_VALUE_TYPE,
     compile_function_node_to_its_evaluate_entry,
     feed_each_input_port_from_its_function_node_island,
     prepare_function_node_to_evaluate,
@@ -35,6 +36,7 @@ from tatolab.runtime._function_node_run_as_its_helpers_processor import (
 )
 from tatolab.runtime._processor_hosting import apply_configuration, construct_processor_instance
 from tatolab.stream import State, Stateful, Time, UnreadMessage, node
+from tatolab.stream import _function_node_declaration
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -822,6 +824,10 @@ def test_a_body_run_as_python_answers_each_output_as_a_float_or_a_dict():
         [{"label": "high"}], 0
     )
     assert letters == [4.0] and isinstance(letters[0], float)
+
+
+def test_the_runtime_spells_the_unread_message_value_type_as_tatolab_stream_does():
+    assert UNREAD_MESSAGE_VALUE_TYPE == _function_node_declaration.UNREAD_MESSAGE_VALUE_TYPE
 
 
 @node.function
