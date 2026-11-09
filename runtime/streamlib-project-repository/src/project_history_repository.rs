@@ -11,6 +11,8 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::ProjectTransactionAuthor;
 
 const MAIN_BRANCH_REFSPEC: &str = "refs/heads/main:refs/heads/main";
+const EVERY_BRANCH_REFSPEC: &str = "+refs/heads/*:refs/heads/*";
+const EVERY_TAG_REFSPEC: &str = "+refs/tags/*:refs/tags/*";
 
 /// A Git smart-HTTP remote a project's history is pushed to and fetched from, such as a
 /// Cloudflare Artifacts repo: `https://<account>.artifacts.cloudflare.net/git/<namespace>/<repo>.git`.
@@ -85,6 +87,56 @@ impl ProjectHistoryRepository {
             history_directory,
             repository,
         })
+    }
+
+    /// Open the bare history at `history_directory`, making an empty one when none is there:
+    /// the copy of another project's history a dependency is fetched into.
+    pub fn open_or_create_at(history_directory: &Path) -> Result<Self, ProjectRepositoryRefusal> {
+        let repository = if history_directory.exists() {
+            Repository::open_bare(history_directory)?
+        } else {
+            let mut options = git2::RepositoryInitOptions::new();
+            options
+                .bare(true)
+                .initial_head(PROJECT_HISTORY_BRANCH)
+                .mkpath(true);
+            Repository::init_opts(history_directory, &options)?
+        };
+        Ok(Self {
+            history_directory: history_directory.to_path_buf(),
+            repository,
+        })
+    }
+
+    /// Fetch every branch and tag of `remote` into this history, each replacing the one of its
+    /// name.
+    pub fn fetch_every_branch_and_tag_from(
+        &self,
+        remote: &ProjectHistoryRemote,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        with_the_bearer_token_on_this_thread(remote.bearer_token.as_deref(), || {
+            let mut anonymous_remote = self.repository.remote_anonymous(&remote.url)?;
+            anonymous_remote.fetch(&[EVERY_BRANCH_REFSPEC, EVERY_TAG_REFSPEC], None, None)
+        })?;
+        tracing::info!(remote = %remote.url, "fetched a dependency's history");
+        Ok(())
+    }
+
+    /// The commit `revision` names in this history: a commit id, whole or abbreviated, a tag or
+    /// a branch.
+    pub fn commit_a_revision_names(
+        &self,
+        revision: &str,
+    ) -> Result<String, ProjectRepositoryRefusal> {
+        let named = self
+            .repository
+            .revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|_| ProjectRepositoryRefusal::NoSuchRevision {
+                revision: revision.to_owned(),
+                history: self.history_directory.clone(),
+            })?;
+        Ok(named.id().to_string())
     }
 
     /// The history's directory on disk.
@@ -191,11 +243,26 @@ impl ProjectHistoryRepository {
 
     /// Every file `main`'s newest commit holds, by project-relative path.
     pub fn files_at_head(&self) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
+        match self.head_commit_oid()? {
+            None => Ok(BTreeMap::new()),
+            Some(head_oid) => self.files_at_commit_oid(head_oid),
+        }
+    }
+
+    /// Every file the commit `commit` holds, by project-relative path.
+    pub fn files_at_commit(
+        &self,
+        commit: &str,
+    ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
+        self.files_at_commit_oid(Oid::from_str(commit)?)
+    }
+
+    fn files_at_commit_oid(
+        &self,
+        commit_oid: Oid,
+    ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
         let mut files = BTreeMap::new();
-        let Some(head_oid) = self.head_commit_oid()? else {
-            return Ok(files);
-        };
-        let tree = self.repository.find_commit(head_oid)?.tree()?;
+        let tree = self.repository.find_commit(commit_oid)?.tree()?;
         let mut walk_error = None;
         tree.walk(git2::TreeWalkMode::PreOrder, |directory, entry| {
             if entry.kind() != Some(ObjectType::Blob) {
