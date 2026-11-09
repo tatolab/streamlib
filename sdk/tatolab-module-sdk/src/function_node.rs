@@ -13,6 +13,11 @@
 //! or one output per field of a returned record. A value is an `f64`, an `i64`
 //! or a `bool`; a record is a struct of them deriving `FunctionNodeRecord`,
 //! whose `Default` is its first state or its config's defaults.
+//!
+//! A pin typed [`UnreadMessage`] takes a message of any family, which the body
+//! can only hand on, to an `UnreadMessage` output; `Option<UnreadMessage>` takes
+//! `None` when it holds none. An output typed `Option<T>` hands out nothing on
+//! `None`, and a record of outputs types each such field `Option<T>`.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -42,6 +47,9 @@ pub enum FunctionNodeValueType {
     Int,
     /// A `bool`, carried as 0 or 1; wire name `bool`.
     Bool,
+    /// A message handed on unread, carried as the index of the input holding
+    /// it plus one, or 0 for none; wire name `unread_message`.
+    UnreadMessage,
 }
 
 impl FunctionNodeValueType {
@@ -51,11 +59,16 @@ impl FunctionNodeValueType {
             Self::Float => "float",
             Self::Int => "int",
             Self::Bool => "bool",
+            Self::UnreadMessage => "unread_message",
         }
     }
 }
 
 /// A value an evaluate entry carries as one f64.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a number or a bool a function node carries as one f64",
+    label = "a config field, a state field and a pin default are `f64`, `i64` or `bool`"
+)]
 pub trait FunctionNodeValue: Copy {
     /// Its value type.
     const VALUE_TYPE: FunctionNodeValueType;
@@ -105,6 +118,11 @@ pub struct FunctionNodeNamedValue {
 }
 
 /// A struct of values a function node takes as its state or its config, or returns as its outputs.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a function node's state or config record",
+    label = "derive `FunctionNodeRecord` on a struct of `f64`, `i64` and `bool` fields; one with an \
+             `Option` or `UnreadMessage` field is a record of outputs only"
+)]
 pub trait FunctionNodeRecord: Default + Copy {
     /// Its fields, in the order the evaluate entry carries their values.
     const FIELDS: &'static [FunctionNodeNamedValue];
@@ -114,29 +132,256 @@ pub trait FunctionNodeRecord: Default + Copy {
     fn from_function_node_values(values: &[f64]) -> Self;
 }
 
+/// A message of any family a function node was handed, which its body can only hand on unread.
+///
+/// ABI contract with the read seam: it travels through the evaluate entry as
+/// the index of the input holding it plus one, and `0.0` stands for none.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UnreadMessage {
+    token_naming_the_input_holding_it: f64,
+}
+
+/// A value an input pin takes: a number, a bool, or a message it hands on unread.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a function node input pin",
+    label = "an input pin is `f64`, `i64`, `bool`, `UnreadMessage` or `Option<UnreadMessage>`"
+)]
+pub trait FunctionNodeInputPinValue: Sized {
+    /// Its value type.
+    const VALUE_TYPE: FunctionNodeValueType;
+    /// Whether the pin takes `None` when it holds nothing, rather than leaving its node uncalled.
+    const TAKES_NONE: bool;
+    /// The value the f64 the evaluate entry is handed for this pin stands for.
+    fn from_function_node_input_f64(value: f64) -> Self;
+}
+
+macro_rules! a_value_is_an_input_pin {
+    ($($value:ty),*) => {$(
+        impl FunctionNodeInputPinValue for $value {
+            const VALUE_TYPE: FunctionNodeValueType = <$value as FunctionNodeValue>::VALUE_TYPE;
+            const TAKES_NONE: bool = false;
+            fn from_function_node_input_f64(value: f64) -> Self {
+                <$value as FunctionNodeValue>::from_function_node_f64(value)
+            }
+        }
+    )*};
+}
+
+a_value_is_an_input_pin!(f64, i64, bool);
+
+impl FunctionNodeInputPinValue for UnreadMessage {
+    const VALUE_TYPE: FunctionNodeValueType = FunctionNodeValueType::UnreadMessage;
+    const TAKES_NONE: bool = false;
+    fn from_function_node_input_f64(value: f64) -> Self {
+        Self {
+            token_naming_the_input_holding_it: value,
+        }
+    }
+}
+
+impl FunctionNodeInputPinValue for Option<UnreadMessage> {
+    const VALUE_TYPE: FunctionNodeValueType = FunctionNodeValueType::UnreadMessage;
+    const TAKES_NONE: bool = true;
+    fn from_function_node_input_f64(value: f64) -> Self {
+        (value != 0.0).then_some(UnreadMessage {
+            token_naming_the_input_holding_it: value,
+        })
+    }
+}
+
+/// A value an output port hands out: a number, a bool or a message handed on, or an `Option` of one that may hand out nothing.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a function node output",
+    label = "an output is `f64`, `i64`, `bool`, `UnreadMessage`, or an `Option` of one"
+)]
+pub trait FunctionNodeOutputPortValue: Copy {
+    /// Its value type.
+    const VALUE_TYPE: FunctionNodeValueType;
+    /// Whether it may hand out nothing, which gives its port a handed-out flag slot.
+    const MAY_HAND_OUT_NOTHING: bool;
+    /// The f64 its output slot carries, or `None` when it hands out nothing.
+    fn to_function_node_output_f64(self) -> Option<f64>;
+}
+
+macro_rules! a_value_and_its_option_are_outputs {
+    ($($value:ty),*) => {$(
+        impl FunctionNodeOutputPortValue for $value {
+            const VALUE_TYPE: FunctionNodeValueType = <$value as FunctionNodeValue>::VALUE_TYPE;
+            const MAY_HAND_OUT_NOTHING: bool = false;
+            fn to_function_node_output_f64(self) -> Option<f64> {
+                Some(self.to_function_node_f64())
+            }
+        }
+
+        impl FunctionNodeOutputPortValue for Option<$value> {
+            const VALUE_TYPE: FunctionNodeValueType = <$value as FunctionNodeValue>::VALUE_TYPE;
+            const MAY_HAND_OUT_NOTHING: bool = true;
+            fn to_function_node_output_f64(self) -> Option<f64> {
+                self.map(FunctionNodeValue::to_function_node_f64)
+            }
+        }
+    )*};
+}
+
+a_value_and_its_option_are_outputs!(f64, i64, bool);
+
+impl FunctionNodeOutputPortValue for UnreadMessage {
+    const VALUE_TYPE: FunctionNodeValueType = FunctionNodeValueType::UnreadMessage;
+    const MAY_HAND_OUT_NOTHING: bool = false;
+    fn to_function_node_output_f64(self) -> Option<f64> {
+        Some(self.token_naming_the_input_holding_it)
+    }
+}
+
+impl FunctionNodeOutputPortValue for Option<UnreadMessage> {
+    const VALUE_TYPE: FunctionNodeValueType = FunctionNodeValueType::UnreadMessage;
+    const MAY_HAND_OUT_NOTHING: bool = true;
+    fn to_function_node_output_f64(self) -> Option<f64> {
+        self.map(|unread_message| unread_message.token_naming_the_input_holding_it)
+    }
+}
+
+/// One output port of a function node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FunctionNodeOutputPort {
+    /// The port name: `result`, or its record field's.
+    pub name: &'static str,
+    /// What it carries.
+    pub value_type: FunctionNodeValueType,
+    /// Whether it may hand out nothing, which gives it a handed-out flag slot past every output.
+    pub may_hand_out_nothing: bool,
+}
+
+impl FunctionNodeOutputPort {
+    /// The port `name` that hands out `OutputValue`.
+    pub const fn handing_out<OutputValue: FunctionNodeOutputPortValue>(name: &'static str) -> Self {
+        Self {
+            name,
+            value_type: OutputValue::VALUE_TYPE,
+            may_hand_out_nothing: OutputValue::MAY_HAND_OUT_NOTHING,
+        }
+    }
+}
+
 /// What a function node returns as its outputs: one value as `result`, or a record's fields.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a function node's output",
+    label = "return `f64`, `i64`, `bool`, `UnreadMessage`, an `Option` of one, or a record deriving \
+             `FunctionNodeRecord`; a record of outputs is never `None` as a whole, so type each \
+             field that may hand out nothing `Option<T>`"
+)]
 pub trait FunctionNodeOutput {
     /// Its output ports, in the order the evaluate entry writes their values.
-    const OUTPUT_PORTS: &'static [FunctionNodeNamedValue];
-    /// Write each output's f64 into `output_values`, in [`Self::OUTPUT_PORTS`] order.
+    const OUTPUT_PORTS: &'static [FunctionNodeOutputPort];
+    /// Write each output's slot, and the handed-out flag slot of each output that may hand out nothing.
     fn write_function_node_output_values(&self, output_values: &mut [f64]);
 }
 
 macro_rules! one_value_is_the_result_output {
     ($($value:ty),*) => {$(
         impl FunctionNodeOutput for $value {
-            const OUTPUT_PORTS: &'static [FunctionNodeNamedValue] = &[FunctionNodeNamedValue {
-                name: "result",
-                value_type: <$value as FunctionNodeValue>::VALUE_TYPE,
-            }];
+            const OUTPUT_PORTS: &'static [FunctionNodeOutputPort] =
+                &[FunctionNodeOutputPort::handing_out::<$value>("result")];
             fn write_function_node_output_values(&self, output_values: &mut [f64]) {
-                output_values[0] = self.to_function_node_f64();
+                write_one_function_node_output_value(Self::OUTPUT_PORTS, 0, *self, output_values);
             }
         }
     )*};
 }
 
-one_value_is_the_result_output!(f64, i64, bool);
+one_value_is_the_result_output!(
+    f64,
+    i64,
+    bool,
+    UnreadMessage,
+    Option<f64>,
+    Option<i64>,
+    Option<bool>,
+    Option<UnreadMessage>
+);
+
+/// The slots an evaluate entry writes for `output_ports`: one per output, then
+/// one handed-out flag per output that may hand out nothing, in output order.
+///
+/// ABI contract with the read seam: a flag holds `1.0` when its output handed
+/// one out and `0.0` when it did not.
+pub const fn function_node_output_slot_count(output_ports: &[FunctionNodeOutputPort]) -> usize {
+    let mut slot_count = output_ports.len();
+    let mut output_index = 0;
+    while output_index < output_ports.len() {
+        if output_ports[output_index].may_hand_out_nothing {
+            slot_count += 1;
+        }
+        output_index += 1;
+    }
+    slot_count
+}
+
+/// The slot of output `output_index`'s handed-out flag; none when it always hands one out.
+pub fn function_node_handed_out_flag_slot(
+    output_ports: &[FunctionNodeOutputPort],
+    output_index: usize,
+) -> Option<usize> {
+    if !output_ports.get(output_index)?.may_hand_out_nothing {
+        return None;
+    }
+    let flags_before_it = output_ports[..output_index]
+        .iter()
+        .filter(|output_port| output_port.may_hand_out_nothing)
+        .count();
+    Some(output_ports.len() + flags_before_it)
+}
+
+/// Write output `output_index`'s `value` into its slot, and its handed-out flag when it has one.
+pub fn write_one_function_node_output_value<OutputValue: FunctionNodeOutputPortValue>(
+    output_ports: &[FunctionNodeOutputPort],
+    output_index: usize,
+    value: OutputValue,
+    output_values: &mut [f64],
+) {
+    let handed_out = value.to_function_node_output_f64();
+    output_values[output_index] = handed_out.unwrap_or(0.0);
+    if let Some(handed_out_flag_slot) =
+        function_node_handed_out_flag_slot(output_ports, output_index)
+    {
+        output_values[handed_out_flag_slot] = if handed_out.is_some() { 1.0 } else { 0.0 };
+    }
+}
+
+/// Refuse at compile time an `UnreadMessage` output with no one `UnreadMessage` input to follow.
+///
+/// Such an output takes the family linked into the input it hands on, so a
+/// function handing one out takes exactly one.
+pub const fn refuse_an_unread_message_output_following_no_one_input(
+    input_value_types: &[FunctionNodeValueType],
+    output_ports: &[FunctionNodeOutputPort],
+) {
+    let mut unread_message_inputs = 0;
+    let mut input_index = 0;
+    while input_index < input_value_types.len() {
+        if matches!(
+            input_value_types[input_index],
+            FunctionNodeValueType::UnreadMessage
+        ) {
+            unread_message_inputs += 1;
+        }
+        input_index += 1;
+    }
+    let mut output_index = 0;
+    while output_index < output_ports.len() {
+        if matches!(
+            output_ports[output_index].value_type,
+            FunctionNodeValueType::UnreadMessage
+        ) && unread_message_inputs != 1
+        {
+            panic!(
+                "a function node's `UnreadMessage` output takes the family of the one \
+                 `UnreadMessage` input it hands on; take exactly one `UnreadMessage` input"
+            );
+        }
+        output_index += 1;
+    }
+}
 
 /// An input pin of a function node.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,6 +392,8 @@ pub struct FunctionNodeInputPin {
     pub value_type: FunctionNodeValueType,
     /// Its value when nothing is wired to it; `None` when it must be wired.
     pub pin_default: Option<f64>,
+    /// Whether it takes `None` when it holds nothing, rather than leaving its node uncalled.
+    pub takes_none: bool,
 }
 
 /// A field of a function node's config or state record, with the value its record's `Default` gives it.
@@ -185,7 +432,7 @@ pub struct FunctionNodeDeclaration {
     /// Its input pins, in the order the evaluate entry reads their values.
     pub input_pins: Vec<FunctionNodeInputPin>,
     /// Its output ports, in the order the evaluate entry writes their values.
-    pub output_ports: Vec<FunctionNodeNamedValue>,
+    pub output_ports: Vec<FunctionNodeOutputPort>,
     /// Its config record's fields; none when it takes no `config`.
     pub config_fields: Vec<FunctionNodeRecordFieldWithItsDefault>,
     /// Its state record's fields, each defaulted to its first call's value; none when stateless.

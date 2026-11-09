@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The native half of `rust-function-node-fixture`, imported as
-//! `rust_function_node_fixture._native`: one stateless and one stateful Rust
-//! function node, each handed to the Python half as its declaration.
+//! `rust_function_node_fixture._native`: a stateless, a stateful and a gating
+//! Rust function node, each handed to the Python half as its declaration.
 
 use pyo3::prelude::*;
 use tatolab_module_sdk::function_node::{
-    FunctionNodeRecord, State, Stateful, function_node,
+    FunctionNodeRecord, State, Stateful, UnreadMessage, function_node,
 };
 
 /// `x` scaled by `gain`, then moved by `offset`.
@@ -48,6 +48,12 @@ fn counts_its_own_calls(
     (calls, CallsCountedSoFar { calls })
 }
 
+/// `value` handed on unread while `open`, and nothing while closed.
+#[function_node]
+fn rust_gate(value: UnreadMessage, #[pin_default(true)] open: bool) -> Option<UnreadMessage> {
+    open.then_some(value)
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let python = module.py();
@@ -58,6 +64,10 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add(
         "CountsItsOwnCalls",
         counts_its_own_calls_function_node_declaration().to_python_declaration(python)?,
+    )?;
+    module.add(
+        "RustGate",
+        rust_gate_function_node_declaration().to_python_declaration(python)?,
     )?;
     Ok(())
 }

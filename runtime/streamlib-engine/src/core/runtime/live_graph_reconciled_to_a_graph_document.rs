@@ -64,15 +64,11 @@ impl LoadedStreamInThisRuntime {
         &self,
         graph_document: Value,
     ) -> Result<()> {
-        let resolution = GraphSnapshot::from_graph_document(graph_document)?
-            .with_a_uuid_minted_for_each_node_holding_none()
-            .with_graph_only_nodes_resolved()?;
-        let node_types_the_document_names: Vec<ProcessorClassImportPath> = resolution
-            .graph_the_runtime_runs
-            .nodes
-            .iter()
-            .map(|node| node.processor_type.clone())
-            .collect();
+        let graph_whose_every_node_holds_a_uuid =
+            GraphSnapshot::from_graph_document(graph_document)?
+                .with_a_uuid_minted_for_each_node_holding_none();
+        let node_types_the_document_names =
+            graph_whose_every_node_holds_a_uuid.node_types_its_running_nodes_name_at_every_level();
         let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
         let lend_directory = self.lend_directory();
         tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
@@ -87,6 +83,8 @@ impl LoadedStreamInThisRuntime {
                 "the describe of the graph's node types did not finish: {join_failure}"
             ))
         })??;
+        let resolution = graph_whose_every_node_holds_a_uuid
+            .with_graph_only_nodes_resolved(self.node_types_this_stream_resolves())?;
         resolution.validate(self.node_types_this_stream_resolves())?;
         let graph = &resolution.graph_the_runtime_runs;
 

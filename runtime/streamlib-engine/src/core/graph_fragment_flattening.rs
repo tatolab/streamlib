@@ -11,7 +11,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::graph::cast_exposed_name_to_url_safe;
+use streamlib_processor_schema::{
+    ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references,
+};
+
+use crate::core::graph::{
+    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
+};
 use crate::core::graph_interface_resolution::{
     GraphInterfaceAsDrawn, GraphInterfacePort, GraphInterfacePortDirection,
     is_a_graph_interface_node_type,
@@ -72,15 +78,19 @@ pub struct GraphSnapshotWithFragmentsFlattened {
 
 impl GraphSnapshot {
     /// Flatten this graph's fragments into it, refusing by name a link to a port a fragment's
-    /// interface does not declare.
-    pub fn with_graph_fragments_flattened(&self) -> Result<GraphSnapshotWithFragmentsFlattened> {
+    /// interface does not declare. An inner node's config is renamed only at the keys its type's
+    /// config schema, as `node_types` resolves it, marks as node references.
+    pub fn with_graph_fragments_flattened(
+        &self,
+        node_types: &NodeTypesOneStreamResolves,
+    ) -> Result<GraphSnapshotWithFragmentsFlattened> {
         if self.nodes.iter().all(|node| node.fragment.is_none()) {
             return Ok(GraphSnapshotWithFragmentsFlattened {
                 graph_the_runtime_runs: self.clone(),
                 fragments_as_drawn: GraphFragmentsAsDrawn::default(),
             });
         }
-        let level = flatten_one_level(None, &self.nodes, &self.links)?;
+        let level = flatten_one_level(None, &self.nodes, &self.links, node_types)?;
         Ok(GraphSnapshotWithFragmentsFlattened {
             graph_the_runtime_runs: GraphSnapshot {
                 asset: self.asset,
@@ -114,6 +124,7 @@ fn flatten_one_level(
     path_of_names: Option<&str>,
     nodes: &[GraphSnapshotNode],
     links: &[GraphSnapshotLink],
+    node_types: &NodeTypesOneStreamResolves,
 ) -> Result<OneLevelFlattened> {
     let name_on_this_level = |name: &str| match path_of_names {
         Some(path_of_names) => format!("{path_of_names}{GRAPH_FRAGMENT_NODE_PATH_SEPARATOR}{name}"),
@@ -144,8 +155,12 @@ fn flatten_one_level(
         let Some(fragment) = &node.fragment else {
             let mut config = node.config.clone();
             if path_of_names.is_some() {
-                name_each_node_reference_on_this_level_by_its_path(
+                name_each_node_reference_its_schema_marks_on_this_level_by_its_path(
                     &mut config,
+                    &config_keys_of_a_node_type_holding_a_node_reference(
+                        node_types,
+                        &node.processor_type,
+                    ),
                     &names_of_the_levels_running_nodes_cast,
                     &name_on_this_level,
                 );
@@ -162,6 +177,7 @@ fn flatten_one_level(
             Some(&fragment_path_of_names),
             &fragment.nodes,
             &fragment.links,
+            node_types,
         )?;
         let interface = GraphSnapshot {
             asset: None,
@@ -260,42 +276,31 @@ fn end_on_this_level(
     }
 }
 
-/// Rename, in `config`, each node reference — an object of `node` and at most `port` — that
+/// Rename, in `config`, the node reference under each of `keys_holding_a_node_reference` that
 /// names a running node of this level, to the name that node runs under.
-fn name_each_node_reference_on_this_level_by_its_path(
+fn name_each_node_reference_its_schema_marks_on_this_level_by_its_path(
     config: &mut serde_json::Value,
+    keys_holding_a_node_reference: &[ConfigKeyHoldingANodeReference],
     names_of_the_levels_running_nodes_cast: &HashSet<String>,
     name_on_this_level: &impl Fn(&str) -> String,
 ) {
-    match config {
-        serde_json::Value::Object(object) => {
-            let is_a_node_reference = object.keys().all(|key| key == "node" || key == "port");
-            if is_a_node_reference
-                && let Some(serde_json::Value::String(referenced_node)) = object.get_mut("node")
-                && cast_of(referenced_node)
-                    .is_ok_and(|cast| names_of_the_levels_running_nodes_cast.contains(&cast))
-            {
-                *referenced_node = name_on_this_level(referenced_node);
-                return;
-            }
-            for value in object.values_mut() {
-                name_each_node_reference_on_this_level_by_its_path(
-                    value,
-                    names_of_the_levels_running_nodes_cast,
-                    name_on_this_level,
-                );
-            }
+    let Some(config_object) = config.as_object_mut() else {
+        return;
+    };
+    for ConfigKeyHoldingANodeReference { config_key, .. } in keys_holding_a_node_reference {
+        let Some(config_value) = config_object.get_mut(config_key) else {
+            continue;
+        };
+        let Some(referenced_node) = node_name_a_config_value_references(config_value) else {
+            continue;
+        };
+        if cast_of(referenced_node)
+            .is_ok_and(|cast| names_of_the_levels_running_nodes_cast.contains(&cast))
+        {
+            *config_value = serde_json::json!({
+                NODE_REFERENCE_NODE_KEY: name_on_this_level(referenced_node)
+            });
         }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                name_each_node_reference_on_this_level_by_its_path(
-                    item,
-                    names_of_the_levels_running_nodes_cast,
-                    name_on_this_level,
-                );
-            }
-        }
-        _ => {}
     }
 }
 
@@ -648,6 +653,36 @@ mod tests {
     const BLUR_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a03";
     const TINT_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a04";
 
+    const TINT_NODE_TYPE: &str = "looks.nodes:Tint";
+
+    /// A stream that described `Tint`, whose config schema marks `reads_radius_of` alone as a
+    /// node reference.
+    fn node_types_describing_a_tint_that_reads_a_radius_by_reference() -> NodeTypesOneStreamResolves
+    {
+        let node_types = NodeTypesOneStreamResolves::new();
+        let descriptor = crate::core::descriptors::ProcessorDescriptor::new(
+            crate::core::descriptors::ProcessorClassShortName::new("Tint").unwrap(),
+            crate::core::descriptors::ProcessorClassImportPath::new(TINT_NODE_TYPE).unwrap(),
+            "fragment flattening test",
+        )
+        .with_config_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "reads_radius_of": {streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
+                "label_shaped_like_a_reference": {"type": "object"},
+            }
+        }));
+        node_types
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                descriptor,
+                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                ),
+            )
+            .expect("the type is described into the stream");
+        node_types
+    }
+
     fn blur_then_tint_fragment() -> serde_json::Value {
         serde_json::json!({
             "nodes": [
@@ -655,8 +690,11 @@ mod tests {
                  "config": {"port": "video", "family": "image"}},
                 {"id": BLUR_UUID, "name": "blur", "type": "looks.nodes:Blur",
                  "config": {"radius": 8}},
-                {"id": TINT_UUID, "name": "tint", "type": "looks.nodes:Tint",
-                 "config": {"reads_radius_of": {"node": "blur"}}},
+                {"id": TINT_UUID, "name": "tint", "type": TINT_NODE_TYPE,
+                 "config": {
+                     "reads_radius_of": {"node": "blur"},
+                     "label_shaped_like_a_reference": {"node": "blur"},
+                 }},
                 {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE,
                  "config": {"port": "video", "family": "image"}},
             ],
@@ -707,8 +745,11 @@ mod tests {
     }
 
     fn flattened(graph: serde_json::Value) -> Result<GraphSnapshotWithFragmentsFlattened> {
-        GraphSnapshot::from_graph_document(graph)
-            .and_then(|graph| graph.with_graph_fragments_flattened())
+        GraphSnapshot::from_graph_document(graph).and_then(|graph| {
+            graph.with_graph_fragments_flattened(
+                &node_types_describing_a_tint_that_reads_a_radius_by_reference(),
+            )
+        })
     }
 
     fn link_named(source: (&str, &str), target: (&str, &str)) -> GraphSnapshotLink {
@@ -759,12 +800,16 @@ mod tests {
     }
 
     #[test]
-    fn a_node_reference_inside_a_fragment_names_the_node_by_its_path() {
+    fn a_node_reference_inside_a_fragment_names_the_node_by_its_path_at_the_keys_its_schema_marks()
+    {
         let flattening =
             flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
         assert_eq!(
             flattening.graph_the_runtime_runs.nodes[3].config,
-            serde_json::json!({"reads_radius_of": {"node": "look/soft/blur"}})
+            serde_json::json!({
+                "reads_radius_of": {"node": "look/soft/blur"},
+                "label_shaped_like_a_reference": {"node": "blur"},
+            })
         );
     }
 
@@ -905,7 +950,10 @@ mod tests {
         assert_eq!(blur_into_tint.state, LinkStateOutput::Wired);
         assert_eq!(
             soft_holds.nodes[2].config,
-            Some(serde_json::json!({"reads_radius_of": {"node": "blur"}}))
+            Some(serde_json::json!({
+                "reads_radius_of": {"node": "blur"},
+                "label_shaped_like_a_reference": {"node": "blur"},
+            }))
         );
         let outer_links: Vec<(&str, &str)> = render
             .links
@@ -921,11 +969,15 @@ mod tests {
                 .unwrap();
         assert_eq!(
             read_back
-                .with_graph_fragments_flattened()
+                .with_graph_fragments_flattened(
+                    &node_types_describing_a_tint_that_reads_a_radius_by_reference()
+                )
                 .unwrap()
                 .graph_the_runtime_runs,
             written
-                .with_graph_fragments_flattened()
+                .with_graph_fragments_flattened(
+                    &node_types_describing_a_tint_that_reads_a_radius_by_reference()
+                )
                 .unwrap()
                 .graph_the_runtime_runs
         );

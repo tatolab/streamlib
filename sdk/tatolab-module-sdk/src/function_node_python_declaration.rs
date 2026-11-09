@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use crate::function_node::{
-    FunctionNodeDeclaration, FunctionNodeNamedValue, FunctionNodeRecordFieldWithItsDefault,
+    FunctionNodeDeclaration, FunctionNodeOutputPort, FunctionNodeRecordFieldWithItsDefault,
 };
 use crate::module_host_table_abi::{MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR};
 
@@ -23,12 +23,13 @@ impl FunctionNodeDeclaration {
             python_input_pin.set_item("port", input_pin.port)?;
             python_input_pin.set_item("value_type", input_pin.value_type.wire_name())?;
             python_input_pin.set_item("pin_default", input_pin.pin_default)?;
+            python_input_pin.set_item("takes_none", input_pin.takes_none)?;
             input_pins.append(python_input_pin)?;
         }
         declaration.set_item("input_pins", input_pins)?;
         declaration.set_item(
             "output_ports",
-            python_named_values(python, &self.output_ports)?,
+            python_output_ports(python, &self.output_ports)?,
         )?;
         declaration.set_item(
             "config_fields",
@@ -48,18 +49,19 @@ impl FunctionNodeDeclaration {
     }
 }
 
-fn python_named_values<'py>(
+fn python_output_ports<'py>(
     python: Python<'py>,
-    named_values: &[FunctionNodeNamedValue],
+    output_ports: &[FunctionNodeOutputPort],
 ) -> PyResult<Bound<'py, PyList>> {
-    let python_named_values = PyList::empty(python);
-    for named_value in named_values {
-        let python_named_value = PyDict::new(python);
-        python_named_value.set_item("name", named_value.name)?;
-        python_named_value.set_item("value_type", named_value.value_type.wire_name())?;
-        python_named_values.append(python_named_value)?;
+    let python_output_ports = PyList::empty(python);
+    for output_port in output_ports {
+        let python_output_port = PyDict::new(python);
+        python_output_port.set_item("name", output_port.name)?;
+        python_output_port.set_item("value_type", output_port.value_type.wire_name())?;
+        python_output_port.set_item("may_hand_out_nothing", output_port.may_hand_out_nothing)?;
+        python_output_ports.append(python_output_port)?;
     }
-    Ok(python_named_values)
+    Ok(python_output_ports)
 }
 
 fn python_record_fields<'py>(
