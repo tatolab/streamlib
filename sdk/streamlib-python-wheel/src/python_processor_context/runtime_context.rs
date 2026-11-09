@@ -54,9 +54,7 @@ impl StreamAndNodeTheHelperHosts {
         let asset = uuid_named_by(asset, "an asset")?;
         let project_directory = std::path::Path::new(&self.stream_project_directory);
         let content_path = match from_project {
-            None => {
-                streamlib_project_repository::the_content_path_of_an_asset(project_directory, asset)
-            }
+            None => streamlib_project_repository::the_file_of_an_asset(project_directory, asset),
             Some(from_project) => streamlib_project_repository::the_file_of_an_imported_asset(
                 project_directory,
                 uuid_named_by(from_project, "a project")?,

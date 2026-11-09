@@ -42,7 +42,7 @@ INSTALLED_DISTRIBUTION_SOURCE = "installed_distribution"
 LISTING_FAILED_BECAUSE_DOCUMENT_KEY = "failed_because"
 
 # Directories under a project that hold no node code of its own: its venv, its history,
-# its content store and every other dot-directory, and bytecode caches.
+# its uploads and every other dot-directory, and bytecode caches.
 _PROJECT_DIRECTORY_NAMES_NEVER_READ = ("__pycache__", "node_modules")
 
 # The project's own directory whose folders each hold an import, listed as its own source.

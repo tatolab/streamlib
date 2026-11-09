@@ -54,10 +54,6 @@ const PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-s
 const PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER: &str =
     "\"tatolab-testpattern>=0.68.18\"";
 
-/// The template's `tatolab-ops` requirement, raised on render to this runtime's own version,
-/// which the module is released at.
-const PYPROJECT_TOML_TATOLAB_OPS_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-ops>=0.68.41\"";
-
 /// The distribution name a directory whose name casts to nothing is given.
 const FALLBACK_DISTRIBUTION_NAME: &str = "tatolab-stream-project";
 
@@ -160,10 +156,6 @@ pub(crate) fn render_scaffold_template_files(
         .replace(
             PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER,
             &format!("\"tatolab-testpattern>={}\"", env!("CARGO_PKG_VERSION")),
-        )
-        .replace(
-            PYPROJECT_TOML_TATOLAB_OPS_REQUIREMENT_PLACEHOLDER,
-            &format!("\"tatolab-ops>={}\"", env!("CARGO_PKG_VERSION")),
         );
 
     Ok(vec![
@@ -401,12 +393,12 @@ mod tests {
         assert!(
             rendered_pyproject_toml.contains(&format!(
                 "dependencies = [\"tatolab-stream>={runtime_version}\", \
-                 \"tatolab-testpattern>={runtime_version}\", \
-                 \"tatolab-ops>={runtime_version}\", \"numpy>=2.1\"]",
+                 \"tatolab-testpattern>={runtime_version}\", \"numpy>=2.1\"]",
                 runtime_version = env!("CARGO_PKG_VERSION")
             )),
-            "a new project floors tatolab-stream, tatolab-testpattern and tatolab-ops at \
-             the version of the runtime that created it"
+            "a new project floors tatolab-stream and tatolab-testpattern at the version of \
+             the runtime that created it, and never names tatolab-ops, which the runtime \
+             installs into its .venv"
         );
         assert!(rendered_pyproject_toml.contains("name = \"probe-app\""));
         let rendered_pyproject: toml::Table = toml::from_str(rendered_pyproject_toml).unwrap();

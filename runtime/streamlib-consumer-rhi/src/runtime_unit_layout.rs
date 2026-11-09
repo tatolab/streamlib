@@ -134,6 +134,21 @@ pub fn browser_host_directory_beside_the_lend(lend_directory: &Path) -> Option<P
     Some(lend_directory.parent()?.join(BROWSER_HOST_DIRECTORY_NAME))
 }
 
+/// The directory beside the lend that holds the first-party modules the
+/// runtime unit carries, one folder each, installed into every project's
+/// `.venv`.
+pub const FIRST_PARTY_MODULES_DIRECTORY_NAME: &str = "imports";
+
+/// The first-party modules directory beside the lend at `lend_directory`, or
+/// `None` for a lend at the filesystem root.
+pub fn first_party_modules_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(FIRST_PARTY_MODULES_DIRECTORY_NAME),
+    )
+}
+
 /// The browser host's executable beside the lend at `lend_directory`, or `None`
 /// for a lend at the filesystem root: in its directory on Linux, inside its
 /// app bundle there on macOS.

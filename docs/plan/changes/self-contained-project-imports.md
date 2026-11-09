@@ -85,9 +85,10 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
     `check_for_newer`, whether the source's head differs from the recorded version.
     `remove_dependency` deletes the folder and is refused while a reference names it.
   - A module's Python is the project's: its folder is a uv path dependency of the project
-    (`[tool.uv.sources] <name> = { path = "imports/<folder>", editable = true }`), written by the
-    runtime, so `uv sync` rebuilds `.venv` from the lock and the module's node code imports from
-    its folder (#3382 keys node types by module on top of this). An import whose requirements the
+    (`[tool.uv.sources] <name> = { path = "imports/<folder>", package = false }`), written by the
+    runtime, so `uv sync` rebuilds `.venv` from the lock with the module's requirements and none of
+    its code on the venv's path; its node code imports from its folder as "An import's node code"
+    states. An import whose requirements the
     project's lock cannot resolve beside the rest is refused in uv's own words, since a project
     has one interpreter.
 - **Stream fragments are references** (project-and-assets §Fragments, graph-groups-and-nested-
@@ -188,7 +189,10 @@ into the project, so each runtime release gives every project its version; it is
 exception to copying in, because we make them and guarantee them. The project file records the
 runtime version that created it, as a `.uproject` records its engine, and a load under another
 version says so in the project's log and never refuses or holds it: the version is a record,
-not a lock. It replaces the PyPI requirement PR #3392 added.
+not a lock. It replaces the PyPI requirement PR #3392 added. Each time the runtime makes or
+syncs a project's `.venv`, it installs the first-party modules it carries into that `.venv`; a
+project's `pyproject.toml` and `uv.lock` never name them, and the `.venv` is synced again when
+the runtime or one of its modules changes.
 
 ## Assumptions to correct if wrong
 

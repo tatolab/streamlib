@@ -510,6 +510,15 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             scale,
         )
     }
+    fn lock_the_python_requirements_of_the_project_in(
+        &self,
+        project_directory: &Path,
+    ) -> std::result::Result<(), String> {
+        OperationsOnTheStreamsLoadedInThisRuntime::lock_the_python_requirements_of_the_project_in(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
 }
 
 /// The one stream a finished stream action took in.

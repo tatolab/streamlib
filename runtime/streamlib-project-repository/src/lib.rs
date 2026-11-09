@@ -5,13 +5,16 @@
 
 mod canonical_project_json;
 mod project_asset;
-mod project_content_store;
+#[cfg(feature = "history")]
+mod project_asset_file_bytes;
 mod project_file;
 #[cfg(feature = "history")]
 mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_import_copy;
 mod project_import_folders;
+#[cfg(feature = "history")]
+mod project_pyproject_import_sources;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
 #[cfg(feature = "history")]
@@ -26,11 +29,10 @@ pub use canonical_project_json::canonical_project_json_bytes;
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,
     ProjectAssetKind, ProjectAssetSidecar, ProjectRelativeAssetPath,
-    every_asset_uuid_the_project_holds, the_content_path_of_an_asset,
+    every_asset_uuid_the_project_holds, the_file_of_an_asset,
 };
-pub use project_content_store::{
-    PROJECT_CONTENT_STORE_DIRECTORY, ProjectContentStore, StoredProjectContent,
-};
+#[cfg(feature = "history")]
+pub use project_asset_file_bytes::{PROJECT_UPLOADS_DIRECTORY, the_upload_file_of};
 pub use project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
@@ -46,7 +48,9 @@ pub use project_repositories_open_in_this_runtime::{
     ProjectTransactionAnnouncement,
 };
 #[cfg(feature = "history")]
-pub use project_repository::{ProjectImportListed, ProjectRepository};
+pub use project_repository::{
+    ProjectImportListed, ProjectPythonRequirementsLock, ProjectRepository,
+};
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,

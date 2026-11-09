@@ -4,6 +4,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::Value;
 use uuid::Uuid;
@@ -15,7 +16,11 @@ use crate::project_asset::{
     ProjectAssetSidecar, ProjectRelativeAssetPath, project_files_ending_with,
     project_files_the_history_records, read_every_asset_sidecar,
 };
-use crate::project_content_store::{ProjectContentStore, content_sha256_of};
+use crate::project_asset_file_bytes::{
+    AssetFileBytesRecorded, PROJECT_UPLOADS_DIRECTORY, content_sha256_of,
+    copy_the_file_into_the_uploads_hashing_it, is_a_sha256_digest,
+    the_bytes_recorded_of_the_file_at, the_upload_file_of,
+};
 use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
@@ -26,6 +31,9 @@ use crate::project_import_copy::{
     PROJECT_IMPORT_STAGING_DIRECTORY, files_an_import_carries, files_edited_since_the_copy,
     refuse_an_import_folder_name, sha256_of_each_file_under, stage_a_copy_of_the_project_source,
     the_import_folder_in, the_import_folder_named_after, version_of_the_copied_files,
+};
+use crate::project_pyproject_import_sources::{
+    PYPROJECT_FILE_NAME, pyproject_with_each_import_as_a_uv_path_source,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
@@ -49,14 +57,27 @@ pub struct ProjectImportListed {
     pub version_on_the_source: Option<Result<String, String>>,
 }
 
-/// A project the runtime opened: the one writer of its files, its imports, its content store and
-/// its history.
+/// The file uv locks a project's Python requirements in, beside its `pyproject.toml`.
+const UV_LOCK_FILE_NAME: &str = "uv.lock";
+
+/// What the host hands a project to lock the Python requirements of the project in a
+/// directory with, refused in the resolver's own words when they cannot be resolved.
+pub type ProjectPythonRequirementsLock = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
+
+/// A project the runtime opened: the one writer of its files, its imports and its history.
 pub struct ProjectRepository {
     project_directory: PathBuf,
     project_file: TatolabProjectFile,
     assets_by_uuid: BTreeMap<Uuid, ProjectAsset>,
-    content_store: ProjectContentStore,
     history: ProjectHistoryRepository,
+    python_requirements_lock: Option<ProjectPythonRequirementsLock>,
+    asset_files_waiting_for_their_import: BTreeMap<Uuid, AssetFileWaitingForItsImport>,
+}
+
+/// The bytes an import of an asset moves to its path once the transaction applies.
+struct AssetFileWaitingForItsImport {
+    file: PathBuf,
+    removed_when_the_import_is_refused: bool,
 }
 
 enum PerformedImportEffect {
@@ -74,8 +95,46 @@ enum PerformedImportEffect {
 
 enum PerformedAssetEffect {
     Operation(ProjectAssetOperation),
-    ImportThatPlacedItsFile(ProjectAsset),
-    DeleteThatRemovedItsFile(ProjectAsset),
+    ImportThatPlacedItsFile {
+        asset: ProjectAsset,
+        moved_from: PathBuf,
+    },
+    DeleteThatSetItsFileAside {
+        asset: ProjectAsset,
+        set_aside: PathBuf,
+    },
+}
+
+/// One change a caller asked of a project's assets as the operation it stages, with the file
+/// its import moves into place.
+struct StagedAssetChange {
+    operation: ProjectOperation,
+    asset_file_waiting_for_its_import: Option<(Uuid, AssetFileWaitingForItsImport)>,
+}
+
+impl StagedAssetChange {
+    fn of(asset_operation: ProjectAssetOperation) -> Self {
+        Self {
+            operation: ProjectOperation::Asset(asset_operation),
+            asset_file_waiting_for_its_import: None,
+        }
+    }
+}
+
+/// Remove the file each delete of a committed transaction set aside.
+fn remove_what_asset_effects_set_aside(performed_effects: Vec<PerformedAssetEffect>) {
+    for performed in performed_effects {
+        let PerformedAssetEffect::DeleteThatSetItsFileAside { set_aside, .. } = performed else {
+            continue;
+        };
+        if let Err(not_removed) = std::fs::remove_file(&set_aside) {
+            tracing::warn!(
+                set_aside = %set_aside.display(),
+                %not_removed,
+                "could not remove the file of an asset a committed transaction deleted"
+            );
+        }
+    }
 }
 
 /// A graph document's path and the bytes it held before a transaction wrote it, `None` when
@@ -121,10 +180,11 @@ impl ProjectRepository {
         )?;
         let repository = Self {
             project_directory: project_directory.to_path_buf(),
-            content_store: ProjectContentStore::of_project(project_directory)?,
             history: ProjectHistoryRepository::create_for_project(project_directory)?,
             project_file,
             assets_by_uuid: BTreeMap::new(),
+            python_requirements_lock: None,
+            asset_files_waiting_for_their_import: BTreeMap::new(),
         };
         repository.history.commit_tracked_files(
             &repository.tracked_files(&repository.assets_by_uuid)?,
@@ -170,11 +230,22 @@ impl ProjectRepository {
         let assets_by_uuid = read_every_asset_sidecar(project_directory)?;
         Ok(Self {
             project_directory: project_directory.to_path_buf(),
-            content_store: ProjectContentStore::of_project(project_directory)?,
             history: ProjectHistoryRepository::open_for_project(project_directory)?,
             project_file,
             assets_by_uuid,
+            python_requirements_lock: None,
+            asset_files_waiting_for_their_import: BTreeMap::new(),
         })
+    }
+
+    /// Lock the project's Python requirements with `python_requirements_lock` each time an
+    /// import change rewrites its `pyproject.toml`, refusing the change when they cannot be
+    /// resolved; a project never handed one leaves them to be resolved when it loads.
+    pub fn lock_the_python_requirements_with(
+        &mut self,
+        python_requirements_lock: ProjectPythonRequirementsLock,
+    ) {
+        self.python_requirements_lock = Some(python_requirements_lock);
     }
 
     /// The project's directory.
@@ -233,11 +304,6 @@ impl ProjectRepository {
         Ok(every_asset)
     }
 
-    /// The project's content store, which an upload writes into before its import.
-    pub fn content_store(&self) -> &ProjectContentStore {
-        &self.content_store
-    }
-
     /// The project's history.
     pub fn history(&self) -> &ProjectHistoryRepository {
         &self.history
@@ -277,15 +343,46 @@ impl ProjectRepository {
         changes: Vec<ProjectAssetChangeRequest>,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        let applied = self.operations_for_changes(changes).and_then(|operations| {
+            self.apply_project_operations(author, operations, ProjectTransactionLineage::NewEdit)
+        });
+        for waiting in std::mem::take(&mut self.asset_files_waiting_for_their_import).into_values()
+        {
+            if waiting.removed_when_the_import_is_refused && waiting.file.exists() {
+                let _ = std::fs::remove_file(&waiting.file);
+            }
+        }
+        applied
+    }
+
+    fn operations_for_changes(
+        &mut self,
+        changes: Vec<ProjectAssetChangeRequest>,
+    ) -> Result<Vec<ProjectOperation>, ProjectRepositoryRefusal> {
         let mut staged_assets = self.every_asset()?;
         let mut operations = Vec::with_capacity(changes.len());
         for change in changes {
-            if let Some(operation) = self.operation_for_change(&staged_assets, change)? {
-                apply_operation_to_assets(&mut staged_assets, &operation);
-                operations.push(ProjectOperation::Asset(operation));
+            let Some(staged) = self.operation_for_change(&staged_assets, change)? else {
+                continue;
+            };
+            match &staged.operation {
+                ProjectOperation::Asset(asset_operation) => {
+                    apply_operation_to_assets(&mut staged_assets, asset_operation);
+                }
+                ProjectOperation::StreamDocument(
+                    ProjectStreamDocumentOperation::DeleteStreamDocument { stream, .. },
+                ) => {
+                    staged_assets.remove(stream);
+                }
+                _ => {}
             }
+            if let Some((asset, waiting)) = staged.asset_file_waiting_for_its_import {
+                self.asset_files_waiting_for_their_import
+                    .insert(asset, waiting);
+            }
+            operations.push(staged.operation);
         }
-        self.apply_project_operations(author, operations, ProjectTransactionLineage::NewEdit)
+        Ok(operations)
     }
 
     /// The graph document of the stream asset `stream`, as it is on disk now.
@@ -478,6 +575,35 @@ impl ProjectRepository {
             }
             self.project_file = staged_project_file;
         }
+        let pyproject_as_it_was = match self.write_each_import_into_the_pyproject_if_they_changed(
+            &project_file_as_it_was.dependencies,
+        ) {
+            Ok(pyproject_as_it_was) => pyproject_as_it_was,
+            Err(refusal) => {
+                self.restore_the_project_file(&project_file_as_it_was);
+                self.restore_written_documents(written_documents);
+                self.undo_performed_import_effects(performed_import_effects);
+                self.undo_performed_effects(performed_effects);
+                return Err(refusal);
+            }
+        };
+        let uv_lock_as_it_was = match pyproject_as_it_was
+            .as_deref()
+            .map(|pyproject_as_it_was| {
+                self.lock_the_python_requirements_of_the_rewritten_pyproject()
+                    .inspect_err(|_| self.restore_the_pyproject(pyproject_as_it_was))
+            })
+            .transpose()
+        {
+            Ok(uv_lock_as_it_was) => uv_lock_as_it_was.flatten(),
+            Err(refusal) => {
+                self.restore_the_project_file(&project_file_as_it_was);
+                self.restore_written_documents(written_documents);
+                self.undo_performed_import_effects(performed_import_effects);
+                self.undo_performed_effects(performed_effects);
+                return Err(refusal);
+            }
+        };
         let committed = self
             .tracked_files(&staged_assets)
             .and_then(|tracked_files| {
@@ -490,23 +616,13 @@ impl ProjectRepository {
         let commit = match committed {
             Ok(commit) => commit,
             Err(refusal) => {
-                if self.project_file != project_file_as_it_was {
-                    if let Err(not_restored) =
-                        project_file_as_it_was.canonical_bytes().and_then(|bytes| {
-                            write_file_whole(
-                                &self.project_directory.join(PROJECT_FILE_NAME),
-                                &bytes,
-                            )
-                        })
-                    {
-                        tracing::error!(
-                            project = %self.project_directory.display(),
-                            %not_restored,
-                            "could not restore the project file after a refused commit"
-                        );
-                    }
-                    self.project_file = project_file_as_it_was;
+                if let Some(uv_lock_as_it_was) = uv_lock_as_it_was {
+                    self.restore_the_uv_lock(uv_lock_as_it_was);
                 }
+                if let Some(pyproject_as_it_was) = pyproject_as_it_was {
+                    self.restore_the_pyproject(&pyproject_as_it_was);
+                }
+                self.restore_the_project_file(&project_file_as_it_was);
                 self.restore_written_documents(written_documents);
                 self.undo_performed_import_effects(performed_import_effects);
                 self.undo_performed_effects(performed_effects);
@@ -514,6 +630,7 @@ impl ProjectRepository {
             }
         };
         self.remove_what_import_effects_set_aside(performed_import_effects);
+        remove_what_asset_effects_set_aside(performed_effects);
         staged_assets.retain(|_, asset| asset.kind != ProjectAssetKind::Stream);
         self.assets_by_uuid = staged_assets;
         tracing::info!(
@@ -764,6 +881,108 @@ impl ProjectRepository {
                 referencing_nodes,
             })
         }
+    }
+
+    /// Write each import the project file holds into `pyproject.toml` as a uv path source when
+    /// they differ from `imports_as_they_were` and the project has a `pyproject.toml`, answering the file's text as it was so a refused
+    /// commit can put it back; `None` when nothing was written.
+    fn write_each_import_into_the_pyproject_if_they_changed(
+        &self,
+        imports_as_they_were: &[ProjectImport],
+    ) -> Result<Option<String>, ProjectRepositoryRefusal> {
+        if self.project_file.dependencies == imports_as_they_were {
+            return Ok(None);
+        }
+        let pyproject_path = self.project_directory.join(PYPROJECT_FILE_NAME);
+        let pyproject_as_it_was = match std::fs::read_to_string(&pyproject_path) {
+            Ok(text) => text,
+            Err(not_read) if not_read.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(not_read) => return Err(not_read.into()),
+        };
+        let pyproject = pyproject_with_each_import_as_a_uv_path_source(
+            &pyproject_as_it_was,
+            &self.project_directory,
+            &self.project_file.dependencies,
+        )?;
+        if pyproject == pyproject_as_it_was {
+            return Ok(None);
+        }
+        write_file_whole(&pyproject_path, pyproject.as_bytes())?;
+        Ok(Some(pyproject_as_it_was))
+    }
+
+    /// Lock the Python requirements the rewritten `pyproject.toml` declares with what the host
+    /// handed, answering the `uv.lock` as it was, `None` inside when there was none, so a
+    /// refused commit can put it back; refused in the resolver's words, `uv.lock` put back.
+    /// `None` when the project was handed nothing to lock with.
+    fn lock_the_python_requirements_of_the_rewritten_pyproject(
+        &self,
+    ) -> Result<Option<Option<Vec<u8>>>, ProjectRepositoryRefusal> {
+        let Some(python_requirements_lock) = &self.python_requirements_lock else {
+            return Ok(None);
+        };
+        let uv_lock_path = self.project_directory.join(UV_LOCK_FILE_NAME);
+        let uv_lock_as_it_was = match std::fs::read(&uv_lock_path) {
+            Ok(bytes) => Some(bytes),
+            Err(not_read) if not_read.kind() == std::io::ErrorKind::NotFound => None,
+            Err(not_read) => return Err(not_read.into()),
+        };
+        if let Err(resolver_refusal) = python_requirements_lock(&self.project_directory) {
+            self.restore_the_uv_lock(uv_lock_as_it_was);
+            return Err(ProjectRepositoryRefusal::ImportRequirementsUnresolvable {
+                resolver_refusal,
+            });
+        }
+        Ok(Some(uv_lock_as_it_was))
+    }
+
+    fn restore_the_uv_lock(&self, uv_lock_as_it_was: Option<Vec<u8>>) {
+        let uv_lock_path = self.project_directory.join(UV_LOCK_FILE_NAME);
+        let restored = match uv_lock_as_it_was {
+            Some(bytes) => write_file_whole(&uv_lock_path, &bytes),
+            None => match std::fs::remove_file(&uv_lock_path) {
+                Err(not_removed) if not_removed.kind() != std::io::ErrorKind::NotFound => {
+                    Err(not_removed.into())
+                }
+                _ => Ok(()),
+            },
+        };
+        if let Err(not_restored) = restored {
+            tracing::error!(
+                project = %self.project_directory.display(),
+                %not_restored,
+                "could not restore uv.lock after a refused change"
+            );
+        }
+    }
+
+    fn restore_the_pyproject(&self, pyproject_as_it_was: &str) {
+        if let Err(not_restored) = write_file_whole(
+            &self.project_directory.join(PYPROJECT_FILE_NAME),
+            pyproject_as_it_was.as_bytes(),
+        ) {
+            tracing::error!(
+                project = %self.project_directory.display(),
+                %not_restored,
+                "could not restore pyproject.toml after a refused commit"
+            );
+        }
+    }
+
+    fn restore_the_project_file(&mut self, project_file_as_it_was: &TatolabProjectFile) {
+        if self.project_file == *project_file_as_it_was {
+            return;
+        }
+        if let Err(not_restored) = project_file_as_it_was.canonical_bytes().and_then(|bytes| {
+            write_file_whole(&self.project_directory.join(PROJECT_FILE_NAME), &bytes)
+        }) {
+            tracing::error!(
+                project = %self.project_directory.display(),
+                %not_restored,
+                "could not restore the project file after a refused commit"
+            );
+        }
+        self.project_file = project_file_as_it_was.clone();
     }
 
     /// Put the import an operation places or takes out in place on disk, answering how to undo
@@ -1297,7 +1516,7 @@ impl ProjectRepository {
         &self,
         staged_assets: &BTreeMap<Uuid, ProjectAsset>,
         change: ProjectAssetChangeRequest,
-    ) -> Result<Option<ProjectAssetOperation>, ProjectRepositoryRefusal> {
+    ) -> Result<Option<StagedAssetChange>, ProjectRepositoryRefusal> {
         let staged_asset = |asset: Uuid| {
             staged_assets
                 .get(&asset)
@@ -1320,7 +1539,8 @@ impl ProjectRepository {
                 refuse_a_graph_document_path(&path)?;
                 refuse_a_path_another_asset_holds(staged_assets, &path, None)?;
                 let destination = path.on_disk_under(&self.project_directory);
-                let stored = match &source {
+                let asset = Uuid::new_v4();
+                let (recorded, waiting) = match &source {
                     ProjectAssetImportSource::FileOnThisMachine(source_path) => {
                         if !source_path.is_absolute() {
                             return Err(ProjectRepositoryRefusal::ImportSourceUnreadable {
@@ -1335,33 +1555,56 @@ impl ProjectRepository {
                         }
                         if destination.exists() {
                             self.refuse_a_file_another_asset_already_is(staged_assets, &path)?;
+                            (the_bytes_recorded_of_the_file_at(&destination)?, None)
+                        } else {
+                            let (copy, recorded) = copy_the_file_into_the_uploads_hashing_it(
+                                &self.project_directory,
+                                source_path,
+                            )?;
+                            (
+                                recorded,
+                                Some(AssetFileWaitingForItsImport {
+                                    file: copy,
+                                    removed_when_the_import_is_refused: true,
+                                }),
+                            )
                         }
-                        self.content_store.store_the_file_at(source_path)?
                     }
-                    ProjectAssetImportSource::StoredContent(content_sha256) => {
+                    ProjectAssetImportSource::UploadedContent(content_sha256) => {
                         if destination.exists() {
                             return Err(ProjectRepositoryRefusal::AssetPathHoldsAnotherFile {
                                 path: path.to_string(),
                             });
                         }
-                        self.content_store.stored_content(content_sha256)?
+                        (
+                            self.the_bytes_recorded_of_the_upload(content_sha256)?,
+                            Some(AssetFileWaitingForItsImport {
+                                file: the_upload_file_of(&self.project_directory, content_sha256),
+                                removed_when_the_import_is_refused: false,
+                            }),
+                        )
                     }
                 };
-                Ok(Some(ProjectAssetOperation::ImportAsset {
-                    asset: ProjectAsset {
-                        asset: Uuid::new_v4(),
-                        kind,
-                        path,
-                        content_sha256: stored.content_sha256,
-                        content_byte_len: stored.content_byte_len,
-                        import_settings,
-                    },
+                Ok(Some(StagedAssetChange {
+                    operation: ProjectOperation::Asset(ProjectAssetOperation::ImportAsset {
+                        asset: ProjectAsset {
+                            asset,
+                            kind,
+                            path,
+                            content_sha256: recorded.content_sha256,
+                            content_byte_len: recorded.content_byte_len,
+                            import_settings,
+                        },
+                    }),
+                    asset_file_waiting_for_its_import: waiting.map(|waiting| (asset, waiting)),
                 }))
             }
             ProjectAssetChangeRequest::RenameAsset { asset, file_name } => {
                 let current = staged_asset(asset)?;
                 let to = current.path.renamed_to(&file_name)?;
-                self.relocation(staged_assets, current, to)
+                Ok(self
+                    .relocation(staged_assets, current, to)?
+                    .map(StagedAssetChange::of))
             }
             ProjectAssetChangeRequest::MoveAsset {
                 asset,
@@ -1369,18 +1612,31 @@ impl ProjectRepository {
             } => {
                 let current = staged_asset(asset)?;
                 let to = current.path.moved_into_directory(&into_directory)?;
-                self.relocation(staged_assets, current, to)
+                Ok(self
+                    .relocation(staged_assets, current, to)?
+                    .map(StagedAssetChange::of))
             }
             ProjectAssetChangeRequest::DeleteAsset { asset } => {
                 let current = staged_asset(asset)?;
                 self.refuse_a_path_through_a_symbolic_link(&current.path)?;
                 if current.kind == ProjectAssetKind::Stream {
-                    self.content_store
-                        .store_the_file_at(&current.path.on_disk_under(&self.project_directory))?;
+                    let (path, document) = self.read_stream_graph_document(staged_assets, asset)?;
+                    return Ok(Some(StagedAssetChange {
+                        operation: ProjectOperation::StreamDocument(
+                            ProjectStreamDocumentOperation::DeleteStreamDocument {
+                                stream: asset,
+                                path,
+                                document: serde_json::from_slice(&document.canonical_bytes()?)?,
+                            },
+                        ),
+                        asset_file_waiting_for_its_import: None,
+                    }));
                 }
-                Ok(Some(ProjectAssetOperation::DeleteAsset {
-                    asset: current.clone(),
-                }))
+                Ok(Some(StagedAssetChange::of(
+                    ProjectAssetOperation::DeleteAsset {
+                        asset: current.clone(),
+                    },
+                )))
             }
             ProjectAssetChangeRequest::SetAssetSettings {
                 asset,
@@ -1396,14 +1652,40 @@ impl ProjectRepository {
                 if current.import_settings == import_settings {
                     return Ok(None);
                 }
-                Ok(Some(ProjectAssetOperation::SetAssetSettings {
-                    asset,
-                    path: current.path.clone(),
-                    from: current.import_settings.clone(),
-                    to: import_settings,
-                }))
+                Ok(Some(StagedAssetChange::of(
+                    ProjectAssetOperation::SetAssetSettings {
+                        asset,
+                        path: current.path.clone(),
+                        from: current.import_settings.clone(),
+                        to: import_settings,
+                    },
+                )))
             }
         }
+    }
+
+    /// What an upload named `content_sha256` records, refused when the project holds no such
+    /// upload or its bytes hash otherwise.
+    fn the_bytes_recorded_of_the_upload(
+        &self,
+        content_sha256: &str,
+    ) -> Result<AssetFileBytesRecorded, ProjectRepositoryRefusal> {
+        let no_such_upload = || ProjectRepositoryRefusal::NoSuchUpload(content_sha256.to_owned());
+        if !is_a_sha256_digest(content_sha256) {
+            return Err(no_such_upload());
+        }
+        let upload = the_upload_file_of(&self.project_directory, content_sha256);
+        if !upload.is_file() {
+            return Err(no_such_upload());
+        }
+        let recorded = the_bytes_recorded_of_the_file_at(&upload)?;
+        if !recorded.content_sha256.eq_ignore_ascii_case(content_sha256) {
+            return Err(ProjectRepositoryRefusal::UploadHoldsOtherBytes {
+                content_sha256: content_sha256.to_owned(),
+                held_sha256: recorded.content_sha256,
+            });
+        }
+        Ok(recorded)
     }
 
     fn relocation(
@@ -1442,21 +1724,28 @@ impl ProjectRepository {
         match operation {
             ProjectAssetOperation::ImportAsset { asset } => {
                 let destination = asset.path.on_disk_under(&self.project_directory);
-                let placed_its_file = !destination.exists();
-                if placed_its_file {
-                    self.content_store
-                        .place_content_at(&asset.content_sha256, &destination)?;
-                }
+                let moved_from = match self.asset_files_waiting_for_their_import.get(&asset.asset) {
+                    Some(waiting) if !destination.exists() => {
+                        if let Some(parent) = destination.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        std::fs::rename(&waiting.file, &destination)?;
+                        Some(waiting.file.clone())
+                    }
+                    _ => None,
+                };
                 if let Err(refusal) = self.write_sidecar(asset) {
-                    if placed_its_file {
-                        let _ = std::fs::remove_file(&destination);
+                    if let Some(moved_from) = &moved_from {
+                        let _ = std::fs::rename(&destination, moved_from);
                     }
                     return Err(refusal);
                 }
-                Ok(if placed_its_file {
-                    PerformedAssetEffect::ImportThatPlacedItsFile(asset.clone())
-                } else {
-                    PerformedAssetEffect::Operation(operation.clone())
+                Ok(match moved_from {
+                    Some(moved_from) => PerformedAssetEffect::ImportThatPlacedItsFile {
+                        asset: asset.clone(),
+                        moved_from,
+                    },
+                    None => PerformedAssetEffect::Operation(operation.clone()),
                 })
             }
             ProjectAssetOperation::DeleteAsset { asset } => {
@@ -1465,13 +1754,22 @@ impl ProjectRepository {
                 if !file.exists() {
                     return Ok(PerformedAssetEffect::Operation(operation.clone()));
                 }
-                if let Err(not_removed) = std::fs::remove_file(file) {
+                let set_aside = self
+                    .project_directory
+                    .join(PROJECT_UPLOADS_DIRECTORY)
+                    .join(format!(".deleted-{}", Uuid::new_v4()));
+                let set = set_aside
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| std::fs::rename(&file, &set_aside));
+                if let Err(not_set_aside) = set {
                     self.restore_the_sidecar_of(asset);
-                    return Err(not_removed.into());
+                    return Err(not_set_aside.into());
                 }
-                Ok(PerformedAssetEffect::DeleteThatRemovedItsFile(
-                    asset.clone(),
-                ))
+                Ok(PerformedAssetEffect::DeleteThatSetItsFileAside {
+                    asset: asset.clone(),
+                    set_aside,
+                })
             }
             ProjectAssetOperation::RelocateAsset { from, to, .. } => {
                 let from_file = from.on_disk_under(&self.project_directory);
@@ -1509,21 +1807,24 @@ impl ProjectRepository {
     fn undo_performed_effects(&self, performed_effects: Vec<PerformedAssetEffect>) {
         for performed in performed_effects.into_iter().rev() {
             let undone = match performed {
-                PerformedAssetEffect::ImportThatPlacedItsFile(asset) => self
-                    .perform_effect(&ProjectAssetOperation::DeleteAsset { asset })
-                    .map(|_| ()),
+                PerformedAssetEffect::ImportThatPlacedItsFile { asset, moved_from } => {
+                    self.remove_the_sidecar_of(&asset).and_then(|()| {
+                        Ok(std::fs::rename(
+                            asset.path.on_disk_under(&self.project_directory),
+                            moved_from,
+                        )?)
+                    })
+                }
                 PerformedAssetEffect::Operation(ProjectAssetOperation::ImportAsset { asset }) => {
                     self.remove_the_sidecar_of(&asset)
                 }
                 PerformedAssetEffect::Operation(ProjectAssetOperation::DeleteAsset { asset }) => {
                     self.write_sidecar(&asset)
                 }
-                PerformedAssetEffect::DeleteThatRemovedItsFile(asset) => {
+                PerformedAssetEffect::DeleteThatSetItsFileAside { asset, set_aside } => {
                     self.restore_the_sidecar_of(&asset);
-                    self.content_store.place_content_at(
-                        &asset.content_sha256,
-                        &asset.path.on_disk_under(&self.project_directory),
-                    )
+                    std::fs::rename(set_aside, asset.path.on_disk_under(&self.project_directory))
+                        .map_err(ProjectRepositoryRefusal::from)
                 }
                 PerformedAssetEffect::Operation(operation) => {
                     self.perform_effect(&operation.inverse()).map(|_| ())
@@ -1593,19 +1894,19 @@ impl ProjectRepository {
     }
 
     /// The whole project as its history records it with `assets`: every file the project's
-    /// scan records, an asset whose bytes the content store holds as its sidecar alone.
+    /// scan records, a media, scene or data asset as its sidecar alone, never its bytes.
     fn tracked_files(
         &self,
         assets: &BTreeMap<Uuid, ProjectAsset>,
     ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
-        let content_store_asset_paths: BTreeSet<&str> = assets
+        let asset_paths_recorded_by_their_sidecar: BTreeSet<&str> = assets
             .values()
             .filter(|asset| asset.kind != ProjectAssetKind::Stream)
             .map(|asset| asset.path.as_str())
             .collect();
         let mut tracked_files = BTreeMap::new();
         for project_file in project_files_the_history_records(&self.project_directory)? {
-            if content_store_asset_paths.contains(project_file.as_str()) {
+            if asset_paths_recorded_by_their_sidecar.contains(project_file.as_str()) {
                 continue;
             }
             let bytes = std::fs::read(self.project_directory.join(&project_file))?;

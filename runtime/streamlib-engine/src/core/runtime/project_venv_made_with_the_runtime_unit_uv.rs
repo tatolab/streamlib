@@ -1,11 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Making a project's `.venv` with the uv the runtime unit carries, whenever
-//! the venv's interpreter does not run. A venv whose interpreter runs is never
-//! touched; one whose interpreter does not is removed and made again by
+//! Keeping a project's `.venv` current with the uv the runtime unit carries.
+//! A venv whose interpreter does not run is removed and made again by
 //! `uv sync`, which takes the Python the project's `.python-version` pins from
-//! the machine or fetches it.
+//! the machine or fetches it; one whose interpreter runs is synced again only
+//! when what it was synced from changed. Each sync installs the first-party
+//! modules the runtime unit carries into the venv, never into the project's
+//! `pyproject.toml` or `uv.lock`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -84,13 +86,18 @@ impl From<ProjectVenvNotMade> for Error {
     }
 }
 
-/// Make the `.venv` of the project in `project_directory` with
-/// `runtime_unit_uv` unless its `.venv/bin/python` runs, its sync unbounded —
-/// uv's own network timeouts end a stalled download — and cut short whenever
-/// `is_interrupted_by_the_host` reports true.
-pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
+/// Make the `.venv` of the project in `project_directory` current with
+/// `runtime_unit_uv`: one whose interpreter does not run is removed and made
+/// again by `uv sync`, one whose interpreter runs is synced again when the
+/// project's `pyproject.toml` or `uv.lock`, the runtime's version or the
+/// first-party modules it carries changed since its last sync, and after each
+/// sync every module of `first_party_module_folders` is installed into it.
+/// A sync is unbounded — uv's own network timeouts end a stalled download —
+/// and cut short whenever `is_interrupted_by_the_host` reports true.
+pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
+    first_party_module_folders: &[PathBuf],
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
@@ -108,14 +115,44 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
         )))
     };
     let interpreter = the_projects_venv_interpreter(project_directory);
+    let venv = project_directory.join(".venv");
     let why_the_interpreter_does_not_run = match probe_the_venv_interpreter(
         &interpreter,
         project_directory,
         is_interrupted_by_the_host,
     ) {
-        VenvInterpreterProbe::Runs => return Ok(()),
+        VenvInterpreterProbe::Runs => None,
         VenvInterpreterProbe::CutShortByTheHost => return Err(an_interrupt_refusal()),
-        VenvInterpreterProbe::DoesNotRun { why } => why,
+        VenvInterpreterProbe::DoesNotRun { why } => Some(why),
+    };
+    let sync_stamp_now = the_venv_sync_stamp_of(project_directory, first_party_module_folders);
+    let Some(why_the_interpreter_does_not_run) = why_the_interpreter_does_not_run else {
+        let synced_with_what_it_holds_now = sync_stamp_now.as_deref()
+            == std::fs::read_to_string(venv.join(PROJECT_VENV_SYNC_STAMP_FILE_NAME))
+                .ok()
+                .as_deref();
+        let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) else {
+            return Ok(());
+        };
+        let current = synced_with_what_it_holds_now
+            && every_first_party_module_is_installed_in(&venv, first_party_module_folders);
+        if current || sync_stamp_now.is_none() {
+            return Ok(());
+        }
+        tracing::info!(
+            "{} was synced with another pyproject.toml, uv.lock, runtime or first-party \
+             module, or a sync outside the runtime took a first-party module out, so it is \
+             synced again with {}",
+            venv.display(),
+            runtime_unit_uv.display()
+        );
+        return sync_the_venv_and_install_the_first_party_modules(
+            project_directory,
+            runtime_unit_uv,
+            first_party_module_folders,
+            is_interrupted_by_the_host,
+            WhatAFailedSyncLeaves::TheVenvAsItWas,
+        );
     };
     let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) else {
         return Err(ProjectVenvNotMade::Failed {
@@ -124,7 +161,7 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
             ),
         });
     };
-    if !project_directory.join("pyproject.toml").is_file() {
+    if sync_stamp_now.is_none() {
         return Err(ProjectVenvNotMade::Failed {
             failed_because: format!(
                 "{why_the_interpreter_does_not_run}, and {project} holds no pyproject.toml to \
@@ -136,46 +173,337 @@ pub(crate) fn make_the_projects_venv_unless_its_interpreter_runs(
     if is_interrupted_by_the_host() {
         return Err(an_interrupt_refusal());
     }
-    let venv = project_directory.join(".venv");
     tracing::info!(
         "{why_the_interpreter_does_not_run}, so {} is made again with {}",
         venv.display(),
         runtime_unit_uv.display()
     );
     remove_the_venv(&venv)?;
+    sync_the_venv_and_install_the_first_party_modules(
+        project_directory,
+        runtime_unit_uv,
+        first_party_module_folders,
+        is_interrupted_by_the_host,
+        WhatAFailedSyncLeaves::NoVenv,
+    )
+}
 
-    let sync = run_a_child_process_to_its_exit_within(
-        &mut project_venv_sync_command(runtime_unit_uv, project_directory),
+/// The file in a project's `.venv` naming what its last sync was made from.
+const PROJECT_VENV_SYNC_STAMP_FILE_NAME: &str = "tatolab-runtime-sync";
+
+/// The files of a project whose change makes its `.venv` sync again.
+const PROJECT_FILES_A_VENV_IS_SYNCED_FROM: [&str; 3] =
+    ["pyproject.toml", "uv.lock", ".python-version"];
+
+/// What a project's `.venv` would be synced from now: the SHA-256 over its
+/// `pyproject.toml`, `uv.lock` and `.python-version`, each import's
+/// `pyproject.toml`, this runtime's version and the folder of each first-party
+/// module with its `pyproject.toml`. `None` when the project
+/// holds no `pyproject.toml`, which uv syncs nothing from.
+fn the_venv_sync_stamp_of(
+    project_directory: &Path,
+    first_party_module_folders: &[PathBuf],
+) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if !project_directory.join("pyproject.toml").is_file() {
+        return None;
+    }
+    let mut stamp = Sha256::new();
+    stamp.update(env!("CARGO_PKG_VERSION").as_bytes());
+    for file_name in PROJECT_FILES_A_VENV_IS_SYNCED_FROM {
+        stamp.update(file_name.as_bytes());
+        stamp.update(std::fs::read(project_directory.join(file_name)).unwrap_or_default());
+    }
+    for import_pyproject in each_import_pyproject_of_the_project_in(project_directory) {
+        stamp.update(import_pyproject.as_os_str().as_encoded_bytes());
+        stamp.update(std::fs::read(&import_pyproject).unwrap_or_default());
+    }
+    for module_folder in first_party_module_folders {
+        stamp.update(module_folder.as_os_str().as_encoded_bytes());
+        stamp.update(std::fs::read(module_folder.join("pyproject.toml")).unwrap_or_default());
+    }
+    Some(
+        stamp
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
+/// Each folder in `first_party_modules_directory` holding a `pyproject.toml`,
+/// in name order; none when the directory is not there.
+pub(crate) fn every_first_party_module_folder_in(
+    first_party_modules_directory: &Path,
+) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(first_party_modules_directory) else {
+        return Vec::new();
+    };
+    let mut module_folders: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|folder| folder.join("pyproject.toml").is_file())
+        .collect();
+    module_folders.sort();
+    module_folders
+}
+
+/// Whether `venv` holds a `.dist-info` of every module of
+/// `first_party_module_folders`; a `uv sync` or `uv run` outside the runtime
+/// takes out each package the project's lock does not name.
+fn every_first_party_module_is_installed_in(
+    venv: &Path,
+    first_party_module_folders: &[PathBuf],
+) -> bool {
+    let Ok(library_entries) = std::fs::read_dir(venv.join("lib")) else {
+        return first_party_module_folders.is_empty();
+    };
+    let installed_dist_info_names: Vec<String> = library_entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|python_directory| {
+            std::fs::read_dir(python_directory.path().join("site-packages")).ok()
+        })
+        .flatten()
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".dist-info"))
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    first_party_module_folders.iter().all(|module_folder| {
+        the_dist_info_prefix_of_the_module_in(module_folder).is_some_and(|prefix| {
+            installed_dist_info_names
+                .iter()
+                .any(|installed| installed.starts_with(&prefix))
+        })
+    })
+}
+
+/// `<name>-` as a `.dist-info` directory spells the distribution that
+/// `module_folder`'s `pyproject.toml` names: lowercase, each `-` and `.` an `_`.
+fn the_dist_info_prefix_of_the_module_in(module_folder: &Path) -> Option<String> {
+    let pyproject: toml::Table = std::fs::read_to_string(module_folder.join("pyproject.toml"))
+        .ok()?
+        .parse()
+        .ok()?;
+    let name = pyproject.get("project")?.get("name")?.as_str()?;
+    Some(format!(
+        "{}-",
+        name.to_ascii_lowercase().replace(['-', '.'], "_")
+    ))
+}
+
+/// Write into the project's `.venv` what it is synced from now, so a load
+/// finding the same runs no uv.
+pub(crate) fn record_the_venv_synced_with_what_the_project_holds_now(
+    project_directory: &Path,
+    first_party_module_folders: &[PathBuf],
+) -> std::io::Result<()> {
+    match the_venv_sync_stamp_of(project_directory, first_party_module_folders) {
+        Some(sync_stamp) => std::fs::write(
+            project_directory
+                .join(".venv")
+                .join(PROJECT_VENV_SYNC_STAMP_FILE_NAME),
+            sync_stamp,
+        ),
+        None => Ok(()),
+    }
+}
+
+/// The `pyproject.toml` of each folder in the project's `imports/`, in name
+/// order: uv reads each one as a path source of the project.
+fn each_import_pyproject_of_the_project_in(project_directory: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(
+        project_directory.join(streamlib_project_repository::PROJECT_IMPORTS_DIRECTORY),
+    ) else {
+        return Vec::new();
+    };
+    let mut import_pyprojects: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path().join("pyproject.toml")))
+        .filter(|import_pyproject| import_pyproject.is_file())
+        .collect();
+    import_pyprojects.sort();
+    import_pyprojects
+}
+
+/// What a sync that fails leaves of the project's `.venv`.
+#[derive(Clone, Copy)]
+enum WhatAFailedSyncLeaves {
+    /// The venv was made from nothing, so its half-made remains are removed.
+    NoVenv,
+    /// The venv's interpreter ran before the sync, so it is kept for the next one.
+    TheVenvAsItWas,
+}
+
+/// `uv sync` in `project_directory`, then `uv pip install` of every
+/// first-party module into the venv, then the stamp naming what it was made
+/// from, taken after the sync since it may write `uv.lock`; each refused in
+/// uv's own words.
+fn sync_the_venv_and_install_the_first_party_modules(
+    project_directory: &Path,
+    runtime_unit_uv: &Path,
+    first_party_module_folders: &[PathBuf],
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+    what_a_failed_sync_leaves: WhatAFailedSyncLeaves,
+) -> Result<(), ProjectVenvNotMade> {
+    let project = project_directory.display();
+    let venv = project_directory.join(".venv");
+    let leave_what_a_failed_sync_leaves = || match what_a_failed_sync_leaves {
+        WhatAFailedSyncLeaves::NoVenv => remove_the_venv(&venv),
+        WhatAFailedSyncLeaves::TheVenvAsItWas => Ok(()),
+    };
+    let an_interrupt_refusal = || {
+        ProjectVenvNotMade::Refused(Error::Runtime(format!(
+            "the .venv of {project} was not made: {}",
+            what_interrupted_a_load()
+        )))
+    };
+    let mut steps = vec![(
+        "uv sync",
+        project_venv_sync_command(runtime_unit_uv, project_directory),
+    )];
+    if !first_party_module_folders.is_empty() {
+        steps.push((
+            "uv export",
+            project_lock_constraints_export_command(runtime_unit_uv, project_directory),
+        ));
+        steps.push((
+            "uv pip install",
+            first_party_module_install_command(
+                runtime_unit_uv,
+                project_directory,
+                first_party_module_folders,
+            ),
+        ));
+    }
+    for (step, mut command) in steps {
+        let run = run_a_child_process_to_its_exit_within(
+            &mut command,
+            PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
+            Duration::MAX,
+            is_interrupted_by_the_host,
+        )
+        .map_err(|spawn_failure| {
+            let failed = ProjectVenvNotMade::Failed {
+                failed_because: format!(
+                    "`{} {}` could not be started in {project}: {spawn_failure}",
+                    runtime_unit_uv.display(),
+                    step.trim_start_matches("uv ")
+                ),
+            };
+            leave_what_a_failed_sync_leaves().err().unwrap_or(failed)
+        })?;
+        if run.exited_successfully() {
+            continue;
+        }
+        let quoted_standard_error = run.standard_error_as_a_refusal_quotes_it();
+        let failed_because = match run.ended {
+            HowABoundedChildProcessRunEnded::Exited
+            | HowABoundedChildProcessRunEnded::BoundElapsed => format!(
+                "`{step}` failed for {}: it exited with {}. {quoted_standard_error}",
+                venv.display(),
+                run.exit_status_rendered()
+            ),
+            HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
+                leave_what_a_failed_sync_leaves()?;
+                return Err(an_interrupt_refusal());
+            }
+        };
+        leave_what_a_failed_sync_leaves()?;
+        return Err(ProjectVenvNotMade::Failed { failed_because });
+    }
+    tracing::info!("`uv sync` made {}", venv.display());
+    if let Err(not_written) = record_the_venv_synced_with_what_the_project_holds_now(
+        project_directory,
+        first_party_module_folders,
+    ) {
+        tracing::warn!(
+            venv = %venv.display(),
+            %not_written,
+            "the venv's sync stamp was not written, so its next load syncs it again"
+        );
+    }
+    Ok(())
+}
+
+/// `<runtime_unit_uv> lock` in `project_directory`, refused in uv's own words when the
+/// requirements its `pyproject.toml` declares cannot be resolved.
+pub(crate) fn lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+    project_directory: &Path,
+    runtime_unit_uv: &Path,
+) -> Result<(), String> {
+    let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
+    command.arg("lock");
+    let run = run_a_child_process_to_its_exit_within(
+        &mut command,
         PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
         Duration::MAX,
-        is_interrupted_by_the_host,
+        &|| false,
     )
-    .map_err(|spawn_failure| ProjectVenvNotMade::Failed {
-        failed_because: format!(
-            "`{} sync` could not be started in {project}: {spawn_failure}",
-            runtime_unit_uv.display()
-        ),
+    .map_err(|spawn_failure| {
+        format!(
+            "`{} lock` could not be started in {}: {spawn_failure}",
+            runtime_unit_uv.display(),
+            project_directory.display()
+        )
     })?;
-    if sync.exited_successfully() {
-        tracing::info!("`uv sync` made {}", venv.display());
+    if run.exited_successfully() {
         return Ok(());
     }
-    let quoted_standard_error = sync.standard_error_as_a_refusal_quotes_it();
-    let failed_because = match sync.ended {
-        HowABoundedChildProcessRunEnded::Exited | HowABoundedChildProcessRunEnded::BoundElapsed => {
-            format!(
-                "`uv sync` did not make {}: it exited with {}. {quoted_standard_error}",
-                venv.display(),
-                sync.exit_status_rendered()
-            )
-        }
-        HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
-            remove_the_venv(&venv)?;
-            return Err(an_interrupt_refusal());
-        }
-    };
-    remove_the_venv(&venv)?;
-    Err(ProjectVenvNotMade::Failed { failed_because })
+    Err(format!(
+        "`uv lock` failed in {}: it exited with {}. {}",
+        project_directory.display(),
+        run.exit_status_rendered(),
+        run.standard_error_as_a_refusal_quotes_it()
+    ))
+}
+
+/// `<runtime_unit_uv> pip install --python <the project's venv interpreter>
+/// <each first-party module folder>` in `project_directory`, started as a
+/// sync is.
+fn first_party_module_install_command(
+    runtime_unit_uv: &Path,
+    project_directory: &Path,
+    first_party_module_folders: &[PathBuf],
+) -> Command {
+    let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
+    command
+        .args(["pip", "install", "--python"])
+        .arg(the_projects_venv_interpreter(project_directory))
+        .arg("--constraint")
+        .arg(the_project_lock_constraints_file(project_directory))
+        .args(first_party_module_folders);
+    command
+}
+
+/// The file in a project's `.venv` pinning every package its `uv.lock` holds,
+/// which a first-party module's install is constrained by so it never changes
+/// a version the project locked.
+const PROJECT_LOCK_CONSTRAINTS_FILE_NAME: &str = "tatolab-project-lock-constraints.txt";
+
+fn the_project_lock_constraints_file(project_directory: &Path) -> PathBuf {
+    project_directory
+        .join(".venv")
+        .join(PROJECT_LOCK_CONSTRAINTS_FILE_NAME)
+}
+
+/// `<runtime_unit_uv> export` of the project's `uv.lock`, every package but the
+/// project and its path sources, into its constraints file.
+fn project_lock_constraints_export_command(
+    runtime_unit_uv: &Path,
+    project_directory: &Path,
+) -> Command {
+    let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
+    command
+        .args([
+            "export",
+            "--frozen",
+            "--no-hashes",
+            "--no-emit-project",
+            "--no-emit-local",
+            "--quiet",
+            "--output-file",
+        ])
+        .arg(the_project_lock_constraints_file(project_directory));
+    command
 }
 
 /// What a probe of a venv's interpreter found.
@@ -246,8 +574,16 @@ fn a_command_detached_from_the_terminal_in(program: &Path, project_directory: &P
 /// `<runtime_unit_uv> sync` in `project_directory`, started without the
 /// variables that would point uv at another environment or Python.
 fn project_venv_sync_command(runtime_unit_uv: &Path, project_directory: &Path) -> Command {
+    let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
+    command.arg("sync");
+    command
+}
+
+/// `runtime_unit_uv` started in `project_directory` without the variables
+/// that would point it at another Python or another venv.
+fn project_venv_uv_command(runtime_unit_uv: &Path, project_directory: &Path) -> Command {
     let mut command = a_command_detached_from_the_terminal_in(runtime_unit_uv, project_directory);
-    command.arg("sync").stderr(Stdio::piped());
+    command.stderr(Stdio::piped());
     remove_every_python_variable_named_in(
         &mut command,
         std::env::vars_os().map(|(variable_name, _)| variable_name),
@@ -338,11 +674,40 @@ mod tests {
         }
 
         fn make_the_venv(&self) -> Result<(), ProjectVenvNotMade> {
-            make_the_projects_venv_unless_its_interpreter_runs(
+            make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &self.project_directory,
                 Some(&self.stub_uv),
+                &[],
                 &|| false,
             )
+        }
+
+        fn make_the_venv_with_the_first_party_modules(
+            &self,
+            first_party_module_folders: &[PathBuf],
+        ) -> Result<(), ProjectVenvNotMade> {
+            make_the_projects_venv_current_with_the_runtime_unit_uv(
+                &self.project_directory,
+                Some(&self.stub_uv),
+                first_party_module_folders,
+                &|| false,
+            )
+        }
+
+        /// Record the venv as synced with what the project holds now.
+        fn given_the_venv_synced_with_what_the_project_holds_now(&self) {
+            std::fs::write(
+                self.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME),
+                the_venv_sync_stamp_of(&self.project_directory, &[]).unwrap(),
+            )
+            .unwrap();
+        }
+
+        fn the_project_directory_resolved(&self) -> String {
+            std::fs::canonicalize(&self.project_directory)
+                .expect("the project directory resolves")
+                .display()
+                .to_string()
         }
 
         /// Each run of the stub uv, as `<arguments> in <working directory>`.
@@ -379,9 +744,10 @@ mod tests {
     }
 
     #[test]
-    fn a_venv_whose_interpreter_runs_is_untouched_and_uv_never_runs() {
+    fn a_venv_whose_interpreter_runs_and_was_synced_with_what_the_project_holds_is_untouched() {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 1");
         project.given_a_venv_interpreter_running("exit 0");
+        project.given_the_venv_synced_with_what_the_project_holds_now();
         std::fs::write(project.venv().join("kept"), "kept").unwrap();
 
         project
@@ -498,7 +864,7 @@ mod tests {
             "{failed_because}"
         );
         assert!(
-            failed_because.contains("`uv sync` did not make"),
+            failed_because.contains("`uv sync` failed for"),
             "{failed_because}"
         );
         assert!(!project.venv().exists(), "the half-made venv was left");
@@ -510,9 +876,10 @@ mod tests {
         project.given_a_venv_interpreter_running("exit 3");
 
         let failed_because =
-            the_reason_it_failed(make_the_projects_venv_unless_its_interpreter_runs(
+            the_reason_it_failed(make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &project.project_directory,
                 None,
+                &[],
                 &|| false,
             ));
 
@@ -533,9 +900,10 @@ mod tests {
             PathBuf::from("relative/project"),
             project.project_directory.join("missing"),
         ] {
-            the_refusal(make_the_projects_venv_unless_its_interpreter_runs(
+            the_refusal(make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &project_directory,
                 Some(&project.stub_uv),
+                &[],
                 &|| false,
             ));
         }
@@ -547,9 +915,10 @@ mod tests {
         let project = ProjectAndAStubUv::whose_uv_runs("mkdir -p .venv/bin\nsleep 30");
         let interrupted_after = std::time::Instant::now() + Duration::from_millis(300);
 
-        let refusal = the_refusal(make_the_projects_venv_unless_its_interpreter_runs(
+        let refusal = the_refusal(make_the_projects_venv_current_with_the_runtime_unit_uv(
             &project.project_directory,
             Some(&project.stub_uv),
+            &[],
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 
@@ -563,9 +932,10 @@ mod tests {
         project.given_a_venv_interpreter_running("sleep 30");
         let interrupted_after = std::time::Instant::now() + Duration::from_millis(300);
 
-        let refusal = the_refusal(make_the_projects_venv_unless_its_interpreter_runs(
+        let refusal = the_refusal(make_the_projects_venv_current_with_the_runtime_unit_uv(
             &project.project_directory,
             None,
+            &[],
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 
@@ -606,6 +976,266 @@ mod tests {
                 .all(|(name, value)| value.is_none()
                     || !name.to_string_lossy().starts_with("PYTHON")),
             "the sync is handed a PYTHON* variable"
+        );
+    }
+
+    #[test]
+    fn a_made_venv_records_what_it_was_synced_from_so_the_next_load_runs_no_uv() {
+        let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
+
+        project.make_the_venv().expect("the venv is made");
+        project.make_the_venv().expect("the venv is current");
+
+        assert_eq!(project.uv_runs(), project.one_sync_in_the_project());
+    }
+
+    #[test]
+    fn a_running_venv_is_synced_again_once_the_projects_pyproject_changes() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        project.given_a_venv_interpreter_running("exit 0");
+        project.given_the_venv_synced_with_what_the_project_holds_now();
+        std::fs::write(
+            project.project_directory.join("pyproject.toml"),
+            "[project]\nname = \"p\"\ndependencies = [\"numpy\"]\n",
+        )
+        .unwrap();
+
+        project.make_the_venv().expect("the venv is synced again");
+
+        assert_eq!(project.uv_runs(), project.one_sync_in_the_project());
+        assert!(project.interpreter().is_file());
+    }
+
+    #[test]
+    fn a_running_venv_is_synced_again_once_an_imports_pyproject_or_the_python_pin_changes() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        project.given_a_venv_interpreter_running("exit 0");
+        let import_folder = project.project_directory.join("imports/robot-arm");
+        std::fs::create_dir_all(&import_folder).unwrap();
+        std::fs::write(
+            import_folder.join("pyproject.toml"),
+            "[project]\nname = \"robot-arm\"\n",
+        )
+        .unwrap();
+        project.given_the_venv_synced_with_what_the_project_holds_now();
+
+        std::fs::write(
+            import_folder.join("pyproject.toml"),
+            "[project]\nname = \"robot-arm\"\ndependencies = [\"pyserial\"]\n",
+        )
+        .unwrap();
+        project.make_the_venv().expect("the venv is synced again");
+        std::fs::write(project.project_directory.join(".python-version"), "3.13\n").unwrap();
+        project.make_the_venv().expect("the venv is synced again");
+
+        assert_eq!(project.uv_runs().len(), 2, "{:?}", project.uv_runs());
+    }
+
+    #[test]
+    fn a_failed_sync_of_a_running_venv_fails_in_uvs_words_and_keeps_the_venv() {
+        let project = ProjectAndAStubUv::whose_uv_runs(
+            "echo 'error: Failed to fetch: `https://get.tatolab.com/simple/`' >&2\nexit 2",
+        );
+        project.given_a_venv_interpreter_running("exit 0");
+        std::fs::write(
+            project.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME),
+            "stale",
+        )
+        .unwrap();
+
+        let failed_because = the_reason_it_failed(project.make_the_venv());
+
+        assert!(
+            failed_because.contains("error: Failed to fetch"),
+            "{failed_because}"
+        );
+        assert!(
+            project.interpreter().is_file(),
+            "a venv whose interpreter ran was removed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME))
+                .unwrap(),
+            "stale"
+        );
+    }
+
+    #[test]
+    fn each_first_party_module_is_installed_into_the_venv_after_its_sync() {
+        let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
+        let modules = project.project_directory.parent().unwrap().join("imports");
+        let ops = modules.join("tatolab-ops");
+        std::fs::create_dir_all(&ops).unwrap();
+        std::fs::write(
+            ops.join("pyproject.toml"),
+            "[project]\nname = \"tatolab-ops\"\n",
+        )
+        .unwrap();
+
+        project
+            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
+            .expect("the venv is made");
+
+        let project_directory = project.the_project_directory_resolved();
+        assert_eq!(
+            project.uv_runs(),
+            [
+                format!("sync in {project_directory}"),
+                format!(
+                    "export --frozen --no-hashes --no-emit-project --no-emit-local --quiet \
+                     --output-file {} in {project_directory}",
+                    project
+                        .venv()
+                        .join(PROJECT_LOCK_CONSTRAINTS_FILE_NAME)
+                        .display()
+                ),
+                format!(
+                    "pip install --python {} --constraint {} {} in {project_directory}",
+                    project.interpreter().display(),
+                    project
+                        .venv()
+                        .join(PROJECT_LOCK_CONSTRAINTS_FILE_NAME)
+                        .display(),
+                    ops.display()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_running_venv_is_synced_again_once_a_first_party_module_changes() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        project.given_a_venv_interpreter_running("exit 0");
+        project.given_the_venv_synced_with_what_the_project_holds_now();
+        let ops = project
+            .project_directory
+            .parent()
+            .unwrap()
+            .join("tatolab-ops");
+        std::fs::create_dir_all(&ops).unwrap();
+        std::fs::write(
+            ops.join("pyproject.toml"),
+            "[project]\nname = \"tatolab-ops\"\n",
+        )
+        .unwrap();
+
+        project
+            .make_the_venv_with_the_first_party_modules(&[ops])
+            .expect("the venv is synced again");
+
+        assert_eq!(project.uv_runs().len(), 3, "{:?}", project.uv_runs());
+    }
+
+    #[test]
+    fn a_running_venv_a_sync_outside_the_runtime_took_a_first_party_module_out_of_is_synced_again()
+    {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        project.given_a_venv_interpreter_running("exit 0");
+        let ops = project
+            .project_directory
+            .parent()
+            .unwrap()
+            .join("tatolab-ops");
+        std::fs::create_dir_all(&ops).unwrap();
+        std::fs::write(
+            ops.join("pyproject.toml"),
+            "[project]\nname = \"tatolab-ops\"\n",
+        )
+        .unwrap();
+        let site_packages = project.venv().join("lib/python3.12/site-packages");
+        std::fs::create_dir_all(site_packages.join("tatolab_ops-0.68.41.dist-info")).unwrap();
+        std::fs::write(
+            project.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME),
+            the_venv_sync_stamp_of(&project.project_directory, std::slice::from_ref(&ops)).unwrap(),
+        )
+        .unwrap();
+
+        project
+            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
+            .expect("the venv is current");
+        assert!(project.uv_runs().is_empty(), "{:?}", project.uv_runs());
+
+        std::fs::remove_dir(site_packages.join("tatolab_ops-0.68.41.dist-info")).unwrap();
+        project
+            .make_the_venv_with_the_first_party_modules(&[ops])
+            .expect("the venv is synced again");
+        assert_eq!(project.uv_runs().len(), 3, "{:?}", project.uv_runs());
+    }
+
+    #[test]
+    fn a_failed_first_party_install_fails_in_uvs_words() {
+        let project = ProjectAndAStubUv::whose_uv_runs(&format!(
+            "case \"$1\" in pip) echo 'error: tatolab-ops has no build backend' >&2; exit 1;; esac\n{MAKES_A_VENV_WHOSE_INTERPRETER_RUNS}"
+        ));
+        let ops = project
+            .project_directory
+            .parent()
+            .unwrap()
+            .join("tatolab-ops");
+        std::fs::create_dir_all(&ops).unwrap();
+
+        let failed_because =
+            the_reason_it_failed(project.make_the_venv_with_the_first_party_modules(&[ops]));
+
+        assert!(
+            failed_because.contains("`uv pip install` failed for")
+                && failed_because.contains("error: tatolab-ops has no build backend"),
+            "{failed_because}"
+        );
+    }
+
+    #[test]
+    fn the_first_party_modules_are_each_folder_holding_a_pyproject_in_name_order() {
+        let modules = tempfile::tempdir().unwrap();
+        for folder in ["tatolab-ops", "a-module", "no-pyproject"] {
+            std::fs::create_dir(modules.path().join(folder)).unwrap();
+        }
+        for folder in ["tatolab-ops", "a-module"] {
+            std::fs::write(modules.path().join(folder).join("pyproject.toml"), "").unwrap();
+        }
+        std::fs::write(modules.path().join("pyproject.toml"), "").unwrap();
+
+        assert_eq!(
+            every_first_party_module_folder_in(modules.path()),
+            [
+                modules.path().join("a-module"),
+                modules.path().join("tatolab-ops")
+            ]
+        );
+        assert!(every_first_party_module_folder_in(&modules.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn a_lock_runs_uv_lock_in_the_project() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+            &project.project_directory,
+            &project.stub_uv,
+        )
+        .unwrap();
+        assert_eq!(
+            project.uv_runs(),
+            vec![format!(
+                "lock in {}",
+                project.the_project_directory_resolved()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_lock_uv_cannot_resolve_is_refused_in_uvs_own_words() {
+        let project = ProjectAndAStubUv::whose_uv_runs(
+            "echo 'No solution found when resolving dependencies' >&2\nexit 1",
+        );
+        let refusal = lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+            &project.project_directory,
+            &project.stub_uv,
+        )
+        .unwrap_err();
+        assert!(refusal.contains("`uv lock` failed"), "{refusal}");
+        assert!(
+            refusal.contains("No solution found when resolving dependencies"),
+            "{refusal}"
         );
     }
 }

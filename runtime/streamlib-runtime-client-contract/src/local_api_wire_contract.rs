@@ -386,7 +386,7 @@ pub struct ProjectAssetOnTheWire {
     pub kind: String,
     /// Its path in the project, `/`-separated, relative to the project directory.
     pub path: String,
-    /// The SHA-256 its bytes are kept under in the project's content store, in lowercase hex.
+    /// The SHA-256 of its bytes as its sidecar records them, in lowercase hex.
     pub content_sha256: String,
     /// The size of its bytes.
     pub content_byte_len: u64,
@@ -526,8 +526,8 @@ pub struct ProjectTransactionsResourceContents {
 pub struct DescribeAssetToolResult {
     /// The asset.
     pub asset: ProjectAssetOnTheWire,
-    /// Whether the project's content store holds its bytes.
-    pub content_held: bool,
+    /// Whether a file is at the asset's path.
+    pub file_at_its_path: bool,
 }
 
 /// The result of an asset tool that changed one asset and committed the change.

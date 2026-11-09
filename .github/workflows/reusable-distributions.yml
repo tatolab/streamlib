@@ -273,7 +273,7 @@ jobs:
           path: /tmp/this-runs-distributions
           merge-multiple: true
 
-      - name: The scaffold locks this run's tatolab-stream, tatolab-testpattern and tatolab-ops
+      - name: The scaffold locks this run's tatolab-stream and tatolab-testpattern
         run: |
           set -euo pipefail
           mkdir /tmp/this-runs-tatolab-stream
@@ -289,7 +289,7 @@ jobs:
           import tomllib
           print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
           ")"
-          for distribution_name in tatolab-stream tatolab-testpattern tatolab-ops; do
+          for distribution_name in tatolab-stream tatolab-testpattern; do
             locked_version="$(python3 - "$distribution_name" <<'EOF'
           import sys
           import tomllib

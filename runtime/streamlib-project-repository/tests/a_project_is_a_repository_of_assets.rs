@@ -6,11 +6,12 @@ use std::process::Command;
 
 use serde_json::{Map, json};
 use streamlib_project_repository::{
-    PROJECT_CONTENT_STORE_DIRECTORY, PROJECT_FILE_NAME, PROJECT_HISTORY_DIRECTORY,
-    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectAssetChangeRequest, ProjectAssetImportSource,
+    PROJECT_FILE_NAME, PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER,
+    PROJECT_UPLOADS_DIRECTORY, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetKind, ProjectAssetOperation, ProjectOperation, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, the_content_path_of_an_asset,
+    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, the_file_of_an_asset,
+    the_upload_file_of,
 };
 use uuid::Uuid;
 
@@ -272,13 +273,6 @@ fn stock_git_clones_the_history_and_finds_sidecars_but_never_the_content() {
         .status()
         .unwrap();
     assert!(!every_object.success(), "the content reached history");
-    assert!(
-        fixture
-            .project_directory
-            .join(PROJECT_CONTENT_STORE_DIRECTORY)
-            .join(&repository.assets().unwrap()[0].content_sha256)
-            .exists()
-    );
 }
 
 #[test]
@@ -457,50 +451,186 @@ fn a_path_another_asset_or_another_file_holds_is_refused() {
 }
 
 #[test]
-fn bytes_an_upload_put_in_the_content_store_are_imported_by_their_hash() {
+fn an_upload_is_moved_to_its_assets_path_by_its_hash_and_leaves_the_uploads() {
+    use sha2::Digest as _;
     let fixture = ProjectBesideItsImportSources::new();
     let mut repository =
         ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
-    let upload = fixture.import_source("upload.bin", b"uploaded weights");
-    let stored = repository
-        .content_store()
-        .store_the_file_at(&upload)
-        .unwrap();
+    let content_sha256: String = sha2::Sha256::digest(b"uploaded weights")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let upload = the_upload_file_of(&fixture.project_directory, &content_sha256);
+    std::fs::create_dir_all(upload.parent().unwrap()).unwrap();
+    std::fs::write(&upload, b"uploaded weights").unwrap();
+    let import_the_upload =
+        |content_sha256: &str, asset_path: &str| ProjectAssetChangeRequest::ImportAsset {
+            source: ProjectAssetImportSource::UploadedContent(content_sha256.to_owned()),
+            asset_path: asset_path.to_owned(),
+            kind: Some(ProjectAssetKind::Data),
+            import_settings: Map::new(),
+        };
 
     let applied = repository
         .apply_asset_changes(
             &agent(),
-            vec![ProjectAssetChangeRequest::ImportAsset {
-                source: ProjectAssetImportSource::StoredContent(stored.content_sha256.clone()),
-                asset_path: "models/weights.safetensors".to_owned(),
-                kind: Some(ProjectAssetKind::Data),
-                import_settings: Map::new(),
-            }],
+            vec![import_the_upload(
+                &content_sha256,
+                "models/weights.safetensors",
+            )],
         )
         .unwrap();
+
     assert_eq!(
         repository
             .asset(imported_asset(&applied))
             .unwrap()
             .content_sha256,
-        stored.content_sha256
+        content_sha256
     );
     assert_eq!(
         std::fs::read(fixture.project_directory.join("models/weights.safetensors")).unwrap(),
         b"uploaded weights"
     );
+    assert!(!upload.exists(), "the import empties the uploads");
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
-            vec![ProjectAssetChangeRequest::ImportAsset {
-                source: ProjectAssetImportSource::StoredContent("0".repeat(64)),
-                asset_path: "models/absent.bin".to_owned(),
-                kind: None,
-                import_settings: Map::new(),
-            }],
+            vec![import_the_upload(&"0".repeat(64), "models/absent.bin")],
         ),
-        Err(ProjectRepositoryRefusal::ContentNotInTheStore(_))
+        Err(ProjectRepositoryRefusal::NoSuchUpload(_))
     ));
+    std::fs::write(&upload, b"other bytes").unwrap();
+    assert!(matches!(
+        repository.apply_asset_changes(
+            &agent(),
+            vec![import_the_upload(&content_sha256, "models/other.bin")],
+        ),
+        Err(ProjectRepositoryRefusal::UploadHoldsOtherBytes { .. })
+    ));
+    assert!(
+        upload.exists(),
+        "a refused import leaves the upload where it landed"
+    );
+}
+
+#[test]
+fn an_import_copies_the_file_once_to_its_path_and_nothing_into_the_project_beside_it() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let video = fixture.import_source("intro.mp4", b"video");
+
+    repository
+        .apply_asset_changes(&agent(), vec![import_from(&video, "media/intro.mp4")])
+        .unwrap();
+
+    assert!(!fixture.project_directory.join(".tatolab/content").exists());
+    let uploads = fixture.project_directory.join(PROJECT_UPLOADS_DIRECTORY);
+    assert!(
+        !uploads.exists() || std::fs::read_dir(&uploads).unwrap().next().is_none(),
+        "the copy on its way is moved into place"
+    );
+    assert_eq!(
+        std::fs::read(fixture.project_directory.join("media/intro.mp4")).unwrap(),
+        b"video"
+    );
+}
+
+#[test]
+fn a_refused_import_leaves_no_copy_in_the_project() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let video = fixture.import_source("intro.mp4", b"video");
+
+    repository
+        .apply_asset_changes(
+            &agent(),
+            vec![
+                import_from(&video, "media/intro.mp4"),
+                ProjectAssetChangeRequest::DeleteAsset {
+                    asset: Uuid::new_v4(),
+                },
+            ],
+        )
+        .unwrap_err();
+
+    assert!(!fixture.project_directory.join("media/intro.mp4").exists());
+    let uploads = fixture.project_directory.join(PROJECT_UPLOADS_DIRECTORY);
+    assert!(!uploads.exists() || std::fs::read_dir(&uploads).unwrap().next().is_none());
+}
+
+#[test]
+fn a_file_replaced_at_its_path_is_what_its_asset_reads_and_history_grows_by_no_bytes() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let video = fixture.import_source("intro.mp4", b"take one");
+    let applied = repository
+        .apply_asset_changes(&agent(), vec![import_from(&video, "media/intro.mp4")])
+        .unwrap();
+    let asset = imported_asset(&applied);
+    let file = fixture.project_directory.join("media/intro.mp4");
+    let large_take = vec![7u8; 4 << 20];
+
+    std::fs::write(&file, &large_take).unwrap();
+    repository
+        .apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::RenameAsset {
+                asset,
+                file_name: "intro-take-two.mp4".to_owned(),
+            }],
+        )
+        .unwrap();
+
+    let renamed = the_file_of_an_asset(&fixture.project_directory, asset).unwrap();
+    assert_eq!(std::fs::read(&renamed).unwrap(), large_take);
+    let files_at_head = repository.history().files_at_head().unwrap();
+    assert!(files_at_head.contains_key("media/intro-take-two.mp4.asset.json"));
+    assert!(!files_at_head.contains_key("media/intro-take-two.mp4"));
+    assert!(files_at_head.values().all(|bytes| bytes.len() < 4 << 10));
+}
+
+#[test]
+fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_its_file_returns() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let lut = fixture.import_source("grade.cube", b"LUT_3D_SIZE 2");
+    let asset = imported_asset(
+        &repository
+            .apply_asset_changes(&agent(), vec![import_from(&lut, "looks/grade.cube")])
+            .unwrap(),
+    );
+    repository
+        .apply_asset_changes(
+            &agent(),
+            vec![ProjectAssetChangeRequest::DeleteAsset { asset }],
+        )
+        .unwrap();
+    let file = fixture.project_directory.join("looks/grade.cube");
+    assert!(!file.exists());
+
+    let reversal = repository.undo_by(&agent()).unwrap();
+    repository
+        .apply_project_operations(&agent(), reversal.operations, reversal.lineage)
+        .unwrap();
+
+    assert_eq!(
+        repository.asset(asset).unwrap().path.as_str(),
+        "looks/grade.cube"
+    );
+    assert!(matches!(
+        the_file_of_an_asset(&fixture.project_directory, asset),
+        Err(ProjectRepositoryRefusal::AssetFileMissing { file: missing, .. }) if missing == file
+    ));
+    std::fs::write(&file, b"LUT_3D_SIZE 2").unwrap();
+    assert_eq!(
+        the_file_of_an_asset(&fixture.project_directory, asset).unwrap(),
+        file
+    );
 }
 
 #[test]
@@ -833,16 +963,17 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
         Err(ProjectRepositoryRefusal::NoSuchAsset(_))
     ));
     match &deleted.transaction.inverse_operations[..] {
-        [ProjectOperation::Asset(ProjectAssetOperation::ImportAsset { asset })] => {
-            assert!(
-                repository
-                    .content_store()
-                    .stored_content(&asset.content_sha256)
-                    .is_ok(),
-                "the deleted document's bytes stay in the store so its delete can be undone"
-            );
+        [
+            ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::CreateStreamDocument {
+                    stream, document, ..
+                },
+            ),
+        ] => {
+            assert_eq!(*stream, stream_asset);
+            assert_eq!(document["asset"], stream_asset.to_string());
         }
-        other => panic!("expected the delete's inverse to be one import, got {other:?}"),
+        other => panic!("expected the delete's inverse to write its document back, got {other:?}"),
     }
 }
 
@@ -912,8 +1043,7 @@ fn a_project_whose_files_are_already_written_is_committed_whole_as_its_first_com
 }
 
 #[test]
-fn the_history_records_the_whole_project_but_what_is_generated_hidden_or_held_by_the_content_store()
-{
+fn the_history_records_the_whole_project_but_what_is_generated_hidden_or_an_assets_bytes() {
     let fixture = ProjectBesideItsImportSources::new();
     let project = &fixture.project_directory;
     let project_file = streamlib_project_repository::TatolabProjectFile::of_a_new_project("rig");
@@ -979,7 +1109,7 @@ fn the_history_records_the_whole_project_but_what_is_generated_hidden_or_held_by
 }
 
 #[test]
-fn an_assets_content_path_holds_its_bytes_and_an_unknown_or_missing_asset_is_refused() {
+fn an_assets_file_is_the_file_at_its_path_and_an_unknown_or_missing_asset_is_refused() {
     let fixture = ProjectBesideItsImportSources::new();
     let mut repository =
         ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
@@ -989,25 +1119,19 @@ fn an_assets_content_path_holds_its_bytes_and_an_unknown_or_missing_asset_is_ref
         .unwrap();
     let asset = imported_asset(&applied);
 
-    let content_path = the_content_path_of_an_asset(&fixture.project_directory, asset).unwrap();
-    assert_eq!(std::fs::read(&content_path).unwrap(), b"LUT_3D_SIZE 2");
-    assert!(
-        content_path.starts_with(
-            fixture
-                .project_directory
-                .join(PROJECT_CONTENT_STORE_DIRECTORY)
-        )
-    );
+    let file = the_file_of_an_asset(&fixture.project_directory, asset).unwrap();
+    assert_eq!(file, fixture.project_directory.join("looks/grade.cube"));
+    assert_eq!(std::fs::read(&file).unwrap(), b"LUT_3D_SIZE 2");
 
     let unknown_asset = Uuid::new_v4();
     assert!(matches!(
-        the_content_path_of_an_asset(&fixture.project_directory, unknown_asset),
+        the_file_of_an_asset(&fixture.project_directory, unknown_asset),
         Err(ProjectRepositoryRefusal::NoSuchAsset(refused)) if refused == unknown_asset
     ));
 
-    std::fs::remove_file(&content_path).unwrap();
+    std::fs::remove_file(&file).unwrap();
     assert!(matches!(
-        the_content_path_of_an_asset(&fixture.project_directory, asset),
-        Err(ProjectRepositoryRefusal::ContentNotInTheStore(_))
+        the_file_of_an_asset(&fixture.project_directory, asset),
+        Err(ProjectRepositoryRefusal::AssetFileMissing { .. })
     ));
 }
