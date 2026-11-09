@@ -94,9 +94,9 @@ graph document, UUIDs, transactions, undo and redo, one local history per projec
 - **Asset references** (project-and-assets §The asset verbs): `{"asset", "from"}` resolves to the
   file at that asset's path in the module's import; a node opens it through
   `asset_content_path(asset, from_project)` as today.
-- **Editing a module** is opening its source folder as its own project, and the edit reaches
-  this project through `update_dependency`; the runtime needs nothing new, and Tato Studio's
-  window for it is app work.
+- **Editing a module** is opening its folder, `imports/<folder>/` included, as its own project in
+  its own window, the module as the project root; nothing is written back to the source it was
+  copied from. Tato Studio's window for it is app work.
 - **Tato Studio's "Get more"** adds a module or a Python requirement through the runtime's
   dependency verbs; the runtime is the only writer of `pyproject.toml`.
 
@@ -154,10 +154,11 @@ and regenerates derived outputs, as Unreal's compile does, is open for later.
 
 ## Assumptions to correct if wrong
 
-- **Editing a module in place.** A project open at another project's `imports/<folder>/` is not
-  the way to edit it: edits there would land in history the enclosing project never committed, so
-  undo and its change feed could not account for them. The module is edited at its source and
-  arrives by `update_dependency`.
+- **Editing a module in place.** A transaction on a project open at `imports/<folder>/` is
+  recorded in that module's own history and also as one commit on the enclosing project, the
+  runtime being the one writer of both, so the enclosing project's history and change feed account
+  for it; undo stays per window. `update_dependency` on an import edited since its copy is refused,
+  naming the edited files, so it never silently replaces them.
 - **Offline first open.** Self-contained covers the project's own files and its imports; a
   third-party wheel (numpy, torch) comes from uv's cache or the index when `.venv` is rebuilt, and
   a sync that reaches neither fails the run in uv's words, as `.venv` is a cache.
