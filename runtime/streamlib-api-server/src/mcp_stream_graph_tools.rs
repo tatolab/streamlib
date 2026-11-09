@@ -20,13 +20,14 @@ use streamlib::sdk::runtime::{
 use streamlib_project_repository::{
     ProjectOperation, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
     ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphDocument, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphOperation,
-    StreamGraphOperationOnAStream, fragment_with_each_node_uuid_kept_by_its_name,
+    StreamGraphDocument, StreamGraphDocumentGroup, StreamGraphDocumentLink,
+    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
+    StreamGraphGroupFields, StreamGraphOperation, StreamGraphOperationOnAStream,
+    fragment_with_each_node_uuid_kept_by_its_name,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    GraphLinkEndOnTheWire, GraphTransactionAddedNode, GraphTransactionConnectedLink,
-    GraphTransactionToolResult,
+    GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
+    GraphTransactionConnectedLink, GraphTransactionToolResult,
 };
 use uuid::Uuid;
 
@@ -41,6 +42,14 @@ const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph
 const IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION: &str = "The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`.";
 const IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import.";
 const IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION: &str = "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.";
+const GROUP_ARGUMENT_DESCRIPTION: &str =
+    "The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers.";
+const GROUP_TITLE_ARGUMENT_DESCRIPTION: &str =
+    "The group's title, which Tato Studio draws on its frame.";
+const GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION: &str =
+    "What the group's nodes do, for the next person who reads the graph.";
+const GROUP_COLOUR_ARGUMENT_DESCRIPTION: &str =
+    "The colour Tato Studio draws the group's frame with, e.g. `#3b82f6`.";
 const GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.";
 
 /// Whether a graph edit is kept.
@@ -205,6 +214,41 @@ pub(crate) enum StreamGraphOperationToolArgument {
         #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
         exposed_config_fields: Vec<String>,
     },
+    /// Make a labelled group of nodes of the stream's own level.
+    AddGroup {
+        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+        stream: String,
+        #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
+        title: String,
+        #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
+        description: Option<String>,
+        #[schemars(description = GROUP_COLOUR_ARGUMENT_DESCRIPTION)]
+        colour: Option<String>,
+        #[schemars(
+            description = "The nodes that join it, each as `node` names one; a node of another group is refused."
+        )]
+        nodes: Vec<String>,
+    },
+    /// Set a labelled group's title, description or colour.
+    SetGroupFields {
+        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+        stream: String,
+        #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
+        group: String,
+        #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
+        title: Option<String>,
+        #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
+        description: Option<String>,
+        #[schemars(description = GROUP_COLOUR_ARGUMENT_DESCRIPTION)]
+        colour: Option<String>,
+    },
+    /// Take out a labelled group, its nodes left ungrouped.
+    RemoveGroup {
+        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+        stream: String,
+        #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
+        group: String,
+    },
 }
 
 /// What a node's `exposed_config_fields` are, as every tool that takes them says.
@@ -222,7 +266,10 @@ impl StreamGraphOperationToolArgument {
             | Self::RenameNode { stream, .. }
             | Self::SetStudioFields { stream, .. }
             | Self::ImportGraphGenerator { stream, .. }
-            | Self::SetExposedConfigFields { stream, .. } => stream,
+            | Self::SetExposedConfigFields { stream, .. }
+            | Self::AddGroup { stream, .. }
+            | Self::SetGroupFields { stream, .. }
+            | Self::RemoveGroup { stream, .. } => stream,
         }
     }
 }
@@ -232,7 +279,7 @@ impl StreamGraphOperationToolArgument {
 #[serde(deny_unknown_fields)]
 struct TransactToolArguments {
     #[schemars(
-        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields` or `import_graph_generator` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields` or `remove_group` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
     operations: Vec<StreamGraphOperationToolArgument>,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -378,6 +425,62 @@ struct SetStudioFieldsToolArguments {
         description = "What the studio draws the node with: canvas position, group, comment, colour. It replaces the old fields whole."
     )]
     studio: Map<String, Value>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct AddGroupToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
+    title: String,
+    #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
+    description: Option<String>,
+    #[schemars(description = GROUP_COLOUR_ARGUMENT_DESCRIPTION)]
+    colour: Option<String>,
+    #[schemars(
+        description = "The nodes that join it, each by the UUID `graph` lists as its `id`; a node of another group is refused."
+    )]
+    nodes: Vec<String>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct SetGroupFieldsToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
+    group: String,
+    #[schemars(description = "The group's new title; kept when omitted.")]
+    title: Option<String>,
+    #[schemars(description = "What the group's nodes do; kept when omitted, cleared by `\"\"`.")]
+    description: Option<String>,
+    #[schemars(description = "The group's new colour; kept when omitted, cleared by `\"\"`.")]
+    colour: Option<String>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RemoveGroupToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
+    group: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     mode: Option<GraphEditMode>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
@@ -716,6 +819,78 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
+        description = "Make a labelled group of nodes of a loaded stream's own level, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`."
+    )]
+    async fn add_group(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(AddGroupToolArguments {
+            stream,
+            title,
+            description,
+            colour,
+            nodes,
+            mode,
+            author,
+        }): Parameters<AddGroupToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphOperationToolArgument::AddGroup {
+            stream,
+            title,
+            description,
+            colour,
+            nodes,
+        };
+        self.one_graph_transaction("add_group", vec![operation], mode, author, &peer)
+            .await
+    }
+
+    #[tool(
+        description = "Set a labelled group's title, description or colour, as one transaction; a field omitted is kept. Its nodes stay as they are."
+    )]
+    async fn set_group_fields(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(SetGroupFieldsToolArguments {
+            stream,
+            group,
+            title,
+            description,
+            colour,
+            mode,
+            author,
+        }): Parameters<SetGroupFieldsToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphOperationToolArgument::SetGroupFields {
+            stream,
+            group,
+            title,
+            description,
+            colour,
+        };
+        self.one_graph_transaction("set_group_fields", vec![operation], mode, author, &peer)
+            .await
+    }
+
+    #[tool(
+        description = "Take out a labelled group, as one transaction: its nodes stay, ungrouped. Undo brings the group back with every node that belonged to it."
+    )]
+    async fn remove_group(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(RemoveGroupToolArguments {
+            stream,
+            group,
+            mode,
+            author,
+        }): Parameters<RemoveGroupToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphOperationToolArgument::RemoveGroup { stream, group };
+        self.one_graph_transaction("remove_group", vec![operation], mode, author, &peer)
+            .await
+    }
+
+    #[tool(
         description = "Refresh, as one transaction, every fragment of the project's loaded streams whose graph generator, or a generator nested in it, is defined in a module one of `changed_files` holds: each is run again with the promoted settings its fragment keeps, as `import_graph_generator` refreshes it, each node keeping its UUID by name. Answers as `transact` does; with no such fragment, it answers no operation and records no transaction. A generator that raises refuses the whole refresh with its traceback, nothing changed."
     )]
     async fn refresh_fragments(
@@ -759,6 +934,7 @@ impl LocalApiMcpServerHandler {
                     operations: Vec::new(),
                     added_nodes: Vec::new(),
                     connected_links: Vec::new(),
+                    added_groups: Vec::new(),
                 },
             );
         }
@@ -1260,6 +1436,7 @@ impl GraphTransactionInFlight<'_> {
         labels_of_added_nodes: &HashMap<Uuid, String>,
     ) -> GraphTransactionToolResult {
         let mut added_nodes = Vec::new();
+        let mut added_groups = Vec::new();
         let mut connected_links = Vec::new();
         let mut graph_render_of_each_stream: HashMap<String, Option<Value>> = HashMap::new();
         let mut operations = Vec::with_capacity(applied_live.len());
@@ -1271,6 +1448,13 @@ impl GraphTransactionInFlight<'_> {
                         node: node.id.to_string(),
                         name: node.name.clone(),
                         label: labels_of_added_nodes.get(&node.id).cloned(),
+                    });
+                }
+                StreamGraphOperation::AddGroup { group, .. } => {
+                    added_groups.push(GraphTransactionAddedGroup {
+                        stream: stream_id.clone(),
+                        group: group.id.to_string(),
+                        title: group.fields.title.clone(),
                     });
                 }
                 StreamGraphOperation::Connect { link } => {
@@ -1320,6 +1504,7 @@ impl GraphTransactionInFlight<'_> {
             operations,
             added_nodes,
             connected_links,
+            added_groups,
         }
     }
 }
@@ -1539,7 +1724,68 @@ fn graph_operation_for_the_request(
                 to: exposed_config_fields,
             })
         }
+        StreamGraphOperationToolArgument::AddGroup {
+            title,
+            description,
+            colour,
+            nodes,
+            ..
+        } => {
+            if title.is_empty() {
+                return Err("a group needs a `title`".to_owned());
+            }
+            let nodes = nodes
+                .iter()
+                .map(|node| node_named(node, node_by_label))
+                .collect::<Result<Vec<Uuid>, String>>()?;
+            Ok(StreamGraphOperation::AddGroup {
+                group: StreamGraphDocumentGroup {
+                    id: Uuid::new_v4(),
+                    fields: StreamGraphGroupFields {
+                        title,
+                        description: description.unwrap_or_default(),
+                        colour: colour.unwrap_or_default(),
+                    },
+                },
+                nodes,
+            })
+        }
+        StreamGraphOperationToolArgument::SetGroupFields {
+            group,
+            title,
+            description,
+            colour,
+            ..
+        } => {
+            let from = staged_graph.group(the_group_named(&group)?)?;
+            if title.as_deref() == Some("") {
+                return Err("a group needs a `title`".to_owned());
+            }
+            let to = StreamGraphGroupFields {
+                title: title.unwrap_or_else(|| from.fields.title.clone()),
+                description: description.unwrap_or_else(|| from.fields.description.clone()),
+                colour: colour.unwrap_or_else(|| from.fields.colour.clone()),
+            };
+            Ok(StreamGraphOperation::SetGroupFields {
+                group: from.id,
+                from: from.fields,
+                to,
+            })
+        }
+        StreamGraphOperationToolArgument::RemoveGroup { group, .. } => {
+            let group = staged_graph.group(the_group_named(&group)?)?;
+            Ok(StreamGraphOperation::RemoveGroup {
+                nodes: staged_graph.nodes_of_the_group(group.id),
+                group,
+            })
+        }
     }
+}
+
+fn the_group_named(group: &str) -> Result<Uuid, String> {
+    Uuid::parse_str(group).map_err(|_| {
+        format!("`{group}` is no group's UUID; `graph` lists each group's under `groups`")
+    })
 }
 
 /// The module a project's Python file at `changed_file` is imported as: its path from the

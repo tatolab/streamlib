@@ -2426,3 +2426,96 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
         ["source/video -> look/video"]
     );
 }
+
+/// A labelled group is made, edited and taken out, each as one transaction kept in the graph
+/// document and rendered by `graph`; a fresh runtime loading the document renders it too, and
+/// undo of its removal brings it back with every node that belonged to it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its_nodes() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+
+    let added = call(
+        "add_group",
+        json!({ "stream": stream_id, "title": "sources", "description": "every camera",
+                "colour": "#3b82f6", "nodes": [SOURCE_NODE_UUID],
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the group is made");
+    let group = added["added_groups"][0]["group"]
+        .as_str()
+        .expect("add_group answers the group's UUID")
+        .to_owned();
+    assert_eq!(added["added_groups"][0]["title"], "sources", "{added}");
+    call(
+        "set_group_fields",
+        json!({ "stream": stream_id, "group": group, "colour": "#22c55e",
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the group's fields are set");
+
+    let the_group_as = json!([{ "id": group, "title": "sources",
+                                "description": "every camera", "colour": "#22c55e" }]);
+    let source_of = |graph: &Value| {
+        graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["id"] == SOURCE_NODE_UUID)
+            .cloned()
+            .expect("the graph holds the source")
+    };
+    let kept = project.the_graph_document_of("main");
+    assert_eq!(kept["groups"], the_group_as, "{kept}");
+    assert_eq!(source_of(&kept)["studio"]["group"], json!(group), "{kept}");
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(live["groups"], the_group_as, "{live}");
+    assert_eq!(source_of(&live)["studio"]["group"], json!(group), "{live}");
+    let restarted = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let reloaded_stream_id = restarted.a_stream_loaded_from_its_graph_document(&project, "main");
+    let reloaded = restarted.the_live_graph_of(&reloaded_stream_id);
+    assert_eq!(reloaded["groups"], the_group_as, "{reloaded}");
+
+    let removed = call(
+        "remove_group",
+        json!({ "stream": stream_id, "group": group, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the group is taken out");
+    assert_eq!(
+        removed["operations"][0]["nodes"],
+        json!([SOURCE_NODE_UUID]),
+        "{removed}"
+    );
+    let ungrouped = project.the_graph_document_of("main");
+    assert!(ungrouped.get("groups").is_none(), "{ungrouped}");
+    assert!(source_of(&ungrouped).get("studio").is_none(), "{ungrouped}");
+    assert!(
+        engine.the_live_graph_of(&stream_id).get("groups").is_none(),
+        "the live graph still renders the group"
+    );
+
+    call(
+        "undo",
+        json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the undo applies");
+    let restored = project.the_graph_document_of("main");
+    assert_eq!(restored["groups"], the_group_as, "{restored}");
+    assert_eq!(
+        source_of(&restored)["studio"]["group"],
+        json!(group),
+        "{restored}"
+    );
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(live["groups"], the_group_as, "{live}");
+    assert_eq!(source_of(&live)["studio"]["group"], json!(group), "{live}");
+}

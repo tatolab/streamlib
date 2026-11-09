@@ -30,8 +30,7 @@ use crate::core::graph_interface_resolution::GraphInterfaceAsDrawn;
 use crate::core::graph_variable_resolution::{
     GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
 };
-use crate::core::json_schema::GraphResponse;
-use crate::core::json_schema::LinkPortRefOutput;
+use crate::core::json_schema::{GraphResponse, LabelledNodeGroup, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
@@ -59,6 +58,10 @@ pub struct GraphSnapshot {
 
     /// Every link, each end a node's port.
     pub links: Vec<GraphSnapshotLink>,
+
+    /// Every labelled group of the stream's own level, which nothing that runs reads.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<LabelledNodeGroup>,
 }
 
 /// The spec keys a graph document is read through, before its keys are checked.
@@ -73,6 +76,8 @@ struct GraphSnapshotAsWritten {
     nodes: Vec<GraphSnapshotNode>,
     #[serde(default)]
     links: Vec<GraphSnapshotLink>,
+    #[serde(default)]
+    groups: Vec<LabelledNodeGroup>,
 }
 
 /// One JSON object of a graph document: the graph, a node, a link or a link
@@ -92,7 +97,7 @@ struct GraphDocumentObjectKeys {
 
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
-    spec_keys: &["asset", "stream", "clock", "nodes", "links"],
+    spec_keys: &["asset", "stream", "clock", "nodes", "links", "groups"],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &["extensions", "machine", "references", "runtime_name"],
 };
@@ -121,7 +126,7 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_FRAGMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a fragment",
-    spec_keys: &["nodes", "links"],
+    spec_keys: &["nodes", "links", "groups"],
     live_keys: &[],
 };
 
@@ -199,6 +204,10 @@ pub struct GraphFragment {
     /// Every link between those nodes' ports.
     #[serde(default)]
     pub links: Vec<GraphSnapshotLink>,
+
+    /// Every labelled group the generator made of those nodes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<LabelledNodeGroup>,
 }
 
 fn a_config_naming_no_setting() -> serde_json::Value {
@@ -244,6 +253,7 @@ impl GraphSnapshot {
             clock,
             nodes,
             links,
+            groups,
         } = GraphSnapshotAsWritten::deserialize(&graph_document)
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
         let mut graph = Self {
@@ -252,7 +262,9 @@ impl GraphSnapshot {
             clock,
             nodes,
             links,
+            groups,
         };
+        refuse_a_group_of_no_uuid_or_one_uuid_twice(&graph.groups, &graph.nodes, "")?;
         graph.name_each_link_end_by_its_nodes_name()?;
         Ok(graph)
     }
@@ -354,7 +366,11 @@ impl GraphSnapshot {
     pub fn with_graph_only_nodes_resolved(
         &self,
     ) -> Result<GraphSnapshotWithGraphOnlyNodesResolved> {
-        let fragments = self.with_graph_fragments_flattened()?;
+        let fragments = Self {
+            groups: Vec::new(),
+            ..self.clone()
+        }
+        .with_graph_fragments_flattened()?;
         let variables = fragments
             .graph_the_runtime_runs
             .with_graph_variables_resolved()?;
@@ -367,6 +383,7 @@ impl GraphSnapshot {
                 fragments_as_drawn: fragments.fragments_as_drawn,
                 variables_as_drawn: variables.variables_as_drawn,
                 interface_as_drawn: interface.interface_as_drawn,
+                groups_as_drawn: self.groups.clone(),
             },
             values_the_set_variables_hold: variables.values_the_set_variables_hold,
         })
@@ -462,13 +479,14 @@ impl GraphSnapshot {
     }
 }
 
-/// What the nodes that run nothing were drawn as: fragments, variables and interface
-/// nodes, so `graph` renders them back.
+/// What the graph holds that runs nothing, as drawn: fragments, variables, interface nodes and
+/// the stream level's labelled groups, so `graph` renders them back.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GraphOnlyNodesAsDrawn {
     pub fragments_as_drawn: GraphFragmentsAsDrawn,
     pub variables_as_drawn: GraphVariablesAsDrawn,
     pub interface_as_drawn: GraphInterfaceAsDrawn,
+    pub groups_as_drawn: Vec<LabelledNodeGroup>,
 }
 
 /// A change to a node that a drawn link naming it by name blocks.
@@ -574,6 +592,7 @@ impl GraphOnlyNodesAsDrawn {
         self.interface_as_drawn.render_into(graph_response);
         self.variables_as_drawn.render_into(graph_response);
         self.fragments_as_drawn.render_into(graph_response);
+        graph_response.groups = self.groups_as_drawn.clone();
     }
 }
 
@@ -663,6 +682,50 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
 /// machine or a stream is refused naming how a stream reads a port outside it.
 /// An object the walk expects and does not find is left for the read to
 /// refuse.
+/// Refuse a labelled group of `groups`, one level's, whose `id` is no UUID or names another
+/// group of the level too, and the same in every fragment `nodes` holds; `node_path` is the
+/// path of names down to the level, each followed by `/`.
+fn refuse_a_group_of_no_uuid_or_one_uuid_twice(
+    groups: &[LabelledNodeGroup],
+    nodes: &[GraphSnapshotNode],
+    node_path: &str,
+) -> Result<()> {
+    let level_named = || {
+        if node_path.is_empty() {
+            "the graph".to_string()
+        } else {
+            format!("fragment `{}`", node_path.trim_end_matches('/'))
+        }
+    };
+    let mut group_uuids = HashSet::new();
+    for group in groups {
+        let group_uuid = Uuid::parse_str(&group.id).map_err(|_| {
+            Error::GraphError(format!(
+                "group `{}` of {} has the id `{}`, which is no UUID",
+                group.title,
+                level_named(),
+                group.id
+            ))
+        })?;
+        if !group_uuids.insert(group_uuid) {
+            return Err(Error::GraphError(format!(
+                "{} holds two groups of the UUID {group_uuid}",
+                level_named()
+            )));
+        }
+    }
+    for node in nodes {
+        if let Some(fragment) = &node.fragment {
+            refuse_a_group_of_no_uuid_or_one_uuid_twice(
+                &fragment.groups,
+                &fragment.nodes,
+                &format!("{node_path}{}/", node.name),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -> Result<()> {
     if let Some(graph_object) = graph_document.as_object() {
         refuse_a_key_no_such_object_holds(graph_object, &GRAPH_DOCUMENT_KEYS, || {
@@ -1055,6 +1118,7 @@ mod tests {
                 fragment: None,
             }],
             links: vec![],
+            groups: vec![],
         };
 
         let serialized = serde_json::to_value(&graph).unwrap();
@@ -1383,7 +1447,7 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`asset`, `stream`, `clock`, `nodes` and `links`",
+                    "`asset`, `stream`, `clock`, `nodes`, `links` and `groups`",
                 ],
             ),
             (
@@ -2095,5 +2159,94 @@ mod tests {
             graph_only_nodes.node_names_cast(),
             HashSet::from(["video", "encoded", "set-unread"].map(String::from))
         );
+    }
+
+    const A_GROUP_UUID: &str = "5e1f9c2a-0d8b-4c47-9a35-7a3b2f1c6d10";
+
+    fn a_camera_graph_document(groups: serde_json::Value) -> serde_json::Value {
+        let mut document = serde_json::json!({
+            "nodes": [
+                {"id": "0b7d3c1e-6a2f-4e98-b5c4-1d9e8f7a6b52", "name": "camera",
+                 "type": A_CAMERA_CLASS, "config": {}, "studio": {"group": A_GROUP_UUID}},
+                {"id": "7f4e2d9a-1c3b-4a5e-8d6f-0e9c8b7a6d54", "name": "look",
+                 "type": "generators.look:look", "config": {},
+                 "fragment": {
+                     "nodes": [{"id": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c65", "name": "blur",
+                                "type": A_CAMERA_CLASS, "config": {},
+                                "studio": {"group": "2c6a1f7e-93b4-4d0a-8e15-b6f0c3a9d421"}}],
+                     "links": [],
+                     "groups": [{"id": "2c6a1f7e-93b4-4d0a-8e15-b6f0c3a9d421",
+                                 "title": "soften"}],
+                 }},
+            ],
+            "links": [],
+        });
+        if !groups.is_null() {
+            document["groups"] = groups;
+        }
+        document
+    }
+
+    #[test]
+    fn a_graph_with_groups_compiles_to_the_graph_it_compiles_to_without_them() {
+        let grouped = GraphSnapshot::from_graph_document(a_camera_graph_document(
+            serde_json::json!([{"id": A_GROUP_UUID, "title": "sources",
+                                "description": "every camera", "colour": "#3b82f6"}]),
+        ))
+        .unwrap();
+        let ungrouped =
+            GraphSnapshot::from_graph_document(a_camera_graph_document(serde_json::Value::Null))
+                .unwrap();
+
+        let grouped_resolved = grouped.with_graph_only_nodes_resolved().unwrap();
+        let ungrouped_resolved = ungrouped.with_graph_only_nodes_resolved().unwrap();
+
+        assert_eq!(
+            grouped_resolved.graph_the_runtime_runs,
+            ungrouped_resolved.graph_the_runtime_runs
+        );
+        assert!(grouped_resolved.graph_the_runtime_runs.groups.is_empty());
+        assert_eq!(
+            grouped_resolved.graph_only_nodes_as_drawn.groups_as_drawn,
+            grouped.groups
+        );
+        assert_eq!(grouped.groups[0].title, "sources");
+        assert_eq!(
+            grouped.nodes[1].fragment.as_ref().unwrap().groups[0].title,
+            "soften"
+        );
+    }
+
+    #[test]
+    fn a_group_whose_id_is_no_uuid_is_refused_naming_its_title_and_level() {
+        let mut document = a_camera_graph_document(serde_json::Value::Null);
+        document["nodes"][1]["fragment"]["groups"][0]["id"] = serde_json::json!("soften");
+
+        let refusal = GraphSnapshot::from_graph_document(document)
+            .unwrap_err()
+            .to_string();
+
+        assert!(refusal.contains("group `soften`"), "{refusal}");
+        assert!(refusal.contains("fragment `look`"), "{refusal}");
+    }
+
+    #[test]
+    fn a_graph_with_groups_writes_them_into_its_graph_document() {
+        let graph = GraphSnapshot {
+            asset: Some(Uuid::new_v4()),
+            ..GraphSnapshot::from_graph_document(a_camera_graph_document(serde_json::json!([
+                {"id": A_GROUP_UUID, "title": "sources"}
+            ])))
+            .unwrap()
+        };
+
+        let document: serde_json::Value =
+            serde_json::from_slice(&graph.graph_document_bytes().unwrap()).unwrap();
+
+        assert_eq!(
+            document["groups"],
+            serde_json::json!([{"id": A_GROUP_UUID, "title": "sources"}])
+        );
+        assert_eq!(GraphSnapshot::from_graph_document(document).unwrap(), graph);
     }
 }

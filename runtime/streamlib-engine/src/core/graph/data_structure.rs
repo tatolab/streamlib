@@ -240,6 +240,7 @@ impl Graph {
                 .collect(),
             references: Vec::new(),
             machine,
+            groups: Vec::new(),
         }
     }
 }

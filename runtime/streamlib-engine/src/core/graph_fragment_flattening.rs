@@ -88,6 +88,7 @@ impl GraphSnapshot {
                 clock: self.clock,
                 nodes: level.nodes,
                 links: level.links,
+                groups: self.groups.clone(),
             },
             fragments_as_drawn: GraphFragmentsAsDrawn {
                 fragments: level.fragments,
@@ -168,6 +169,7 @@ fn flatten_one_level(
             clock: Default::default(),
             nodes: inner.nodes,
             links: inner.links,
+            groups: Vec::new(),
         }
         .with_graph_interface_resolved()
         .map_err(|refusal| {
@@ -454,7 +456,11 @@ impl GraphFragmentAsDrawn {
             inputs_waiting_for_a_value: Vec::new(),
             ports: ProcessorNodePortsOutput { inputs, outputs },
             components: serde_json::Map::new(),
-            fragment: Some(GraphFragmentOutput { nodes, links }),
+            fragment: Some(GraphFragmentOutput {
+                nodes,
+                links,
+                groups: stored.groups.clone(),
+            }),
         }
     }
 
@@ -850,6 +856,7 @@ mod tests {
                 .collect(),
             references: Vec::new(),
             machine: "rig".to_string(),
+            groups: Vec::new(),
         }
     }
 
