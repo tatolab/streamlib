@@ -2312,3 +2312,117 @@ async fn an_import_under_the_name_of_a_node_that_is_no_fragment_is_refused() {
     );
     assert_eq!(project.the_graph_document_of("main"), before);
 }
+
+/// `refresh_fragments` re-runs each fragment whose generator a changed module defines, keeping
+/// each node's UUID by name, and answers no operation for a change no fragment's generator is in.
+#[tokio::test(flavor = "multi_thread")]
+async fn refresh_fragments_reruns_the_fragments_a_changed_module_defines() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source()
+        .with_a_generator_run_printed_from_generator_run_json();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    project.next_look_run_places(a_source_into_a_sink_fragment(false));
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "import_graph_generator",
+            json!({ "stream": stream_id, "generator": LOOK_GENERATOR }),
+        )
+        .await,
+    )
+    .expect("the import applies");
+    let first_uuids = the_uuid_of_each_node_of_look_in(&project.the_graph_document_of("main"));
+    let refresh_after_a_change_to = |changed_file: &'static str| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        let arguments = json!({
+            "project_directory": project.path(), "changed_files": [changed_file],
+        });
+        async move {
+            tool_answer(
+                &tool_call_result(
+                    operations_on_the_loaded_streams,
+                    "refresh_fragments",
+                    arguments,
+                )
+                .await,
+            )
+            .expect("the refresh applies")
+        }
+    };
+
+    let untouched = refresh_after_a_change_to("nodes/blur.py").await;
+    assert_eq!(untouched["operations"], json!([]), "{untouched}");
+    assert_eq!(untouched["transaction"], json!(null), "{untouched}");
+
+    project.next_look_run_places(a_source_into_a_sink_fragment(true));
+    let refreshed = refresh_after_a_change_to("generators/look.py").await;
+
+    assert_eq!(
+        refreshed["operations"][0]["operation"], "refresh_fragment",
+        "{refreshed}"
+    );
+    let refreshed_uuids = the_uuid_of_each_node_of_look_in(&project.the_graph_document_of("main"));
+    assert_eq!(refreshed_uuids["pass-source"], first_uuids["pass-source"]);
+    assert!(refreshed_uuids.contains_key("pass-spare"));
+    assert_eq!(
+        the_uuid_of_each_node_of_look_in(&engine.the_live_graph_of(&stream_id)),
+        refreshed_uuids
+    );
+}
+
+/// A `connect` to a port a fragment's `GraphInput` declares links the running stream to each
+/// node that input feeds, and `graph` draws the link to the fragment.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source()
+        .with_a_generator_run_printed_from_generator_run_json();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    project.next_look_run_places(json!({
+        "nodes": [
+            { "name": "graphinput", "type": "tatolab.stream:GraphInput",
+              "config": { "port": "video", "family": "image" } },
+            { "name": "pass-sink", "type": sink_type.as_str(), "config": {} },
+        ],
+        "links": [{
+            "source": { "node": "graphinput", "port": "value" },
+            "target": { "node": "pass-sink", "port": "video" },
+        }],
+    }));
+    let placed = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "import_graph_generator",
+            json!({ "stream": stream_id, "generator": LOOK_GENERATOR }),
+        )
+        .await,
+    )
+    .expect("the import applies");
+    let look = placed["added_nodes"][0]["node"].clone();
+
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "connect",
+            json!({
+                "stream": stream_id,
+                "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+                "target": { "node": look, "port": "video" },
+            }),
+        )
+        .await,
+    )
+    .expect("the connect applies");
+
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(
+        links_by_node_name_in(&live),
+        ["source/video -> look/video"],
+        "{live}"
+    );
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_of("main")),
+        ["source/video -> look/video"]
+    );
+}
