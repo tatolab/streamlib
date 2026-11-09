@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Annotated, Any, Iterator
 
 import pytest
 
-from tatolab.stream import ImageFrame, State, Stateful, Time, UnreadMessage, node
+from tatolab.stream import Image, ImageFrame, State, Stateful, Time, UnreadMessage, node
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
@@ -298,6 +298,32 @@ def pick_one_of_two(first: UnreadMessage, second: UnreadMessage) -> UnreadMessag
     return first
 
 
+@node.function
+def hand_on_an_image(frame: Annotated[UnreadMessage, Image] | None = None) -> UnreadMessage | None:
+    return frame
+
+
+@dataclass(frozen=True)
+class HeldMessage:
+    message: UnreadMessage | None = None
+
+
+@node.function
+def hold_the_first_message(
+    value: UnreadMessage, *, previous: State[HeldMessage]
+) -> Stateful[UnreadMessage | None, HeldMessage]:
+    held = previous.message or value
+    return held, HeldMessage(held)
+
+
+def scale_by_an_image(x: Annotated[float, Image]) -> float:
+    return x
+
+
+def scale_by_a_described_level(x: Annotated[float, "How far to scale."]) -> float:
+    return x
+
+
 def test_an_unread_message_input_takes_every_family_and_its_output_follows_it():
     (value_port, _) = getattr(hand_on, NODE_DECLARATION_INPUT_PORTS_STAMP)
     assert value_port["family"]["family"] == "image"
@@ -348,3 +374,28 @@ def two_levels_or_nothing(x: float) -> TwoLevels | None:
 def test_a_record_of_outputs_that_may_be_none_is_refused_naming_the_fix():
     with pytest.raises(TypeError, match=_literally("type each field that may hand out nothing")):
         node.function(two_levels_or_nothing)
+
+
+def test_an_unread_message_annotated_with_a_family_takes_that_family_alone():
+    (frame_port,) = getattr(hand_on_an_image, NODE_DECLARATION_INPUT_PORTS_STAMP)
+    assert frame_port["family"] == {"family": "image"}
+    (result_port,) = getattr(hand_on_an_image, NODE_DECLARATION_OUTPUT_PORTS_STAMP)
+    assert result_port["family"] == {"family": "image", "family_follows_input_port": "frame"}
+    signature = getattr(hand_on_an_image, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
+    assert signature["inputs"][0]["value_type"] == "unread_message"
+    assert signature["inputs"][0]["optional"] is True
+
+
+def test_a_state_field_may_hold_an_unread_message():
+    signature = getattr(hold_the_first_message, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)
+    assert signature["state_parameter"] == "previous"
+    assert signature["outputs"][0]["value_type"] == "unread_message"
+
+
+def test_a_family_named_on_anything_but_an_unread_message_is_refused_and_other_metadata_is_not():
+    with pytest.raises(TypeError, match=_literally("only an `UnreadMessage` takes one")):
+        node.function(scale_by_an_image)
+    signature = getattr(
+        node.function(scale_by_a_described_level), NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
+    )
+    assert signature["inputs"][0]["value_type"] == "float"

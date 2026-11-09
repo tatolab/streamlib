@@ -454,7 +454,11 @@ Each was settled by the owner on the date it names.
 - **DECIDED 14 — `HoldFrame` (owner, 2026-11-08).** `HoldFrame(frame: Image, refresh: bool =
   False) -> Image` takes the first frame and any frame arriving while `refresh` is true, and
   otherwise hands back the frame it holds. It holds the producer's slot with no copy, which ties
-  up one pool slot; a helper restart drops the frame until the next one arrives.
+  up one pool slot; a helper restart drops the frame until the next one arrives. The frame is
+  held in an ordinary `State` record whose field is an `UnreadMessage` (owner, 2026-11-09), so
+  any function node can keep a message and `HoldFrame` is plain `tatolab-ops` code that runs as
+  Python in its reader; `Annotated[UnreadMessage, Image]` narrows its input to Image. A message
+  an island holds keeps the pooled GPU frame it names claimed while any copy of it lives.
 - **DECIDED 15 — `ImageFile` (owner, 2026-11-08).** A Python `@node.process` in `tatolab-ops`.
   Its config names a project image asset by UUID, opened through `asset_content_path`, never a
   raw path. It decodes PNG and JPEG with Pillow, uploads to one Image slot, and publishes once
