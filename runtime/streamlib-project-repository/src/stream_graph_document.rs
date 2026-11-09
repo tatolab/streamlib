@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -946,6 +948,104 @@ fn groups_with_each_uuid_kept_by_its_title(
         );
     }
     Ok(groups)
+}
+
+/// `graph_document`, another project's stream as its graph document holds it, as a graph
+/// generator's run would build it: each node and link end named by name at every level, each
+/// group naming its nodes, and no UUID, so
+/// [`fragment_with_each_node_uuid_kept_by_its_name`] places it as a fragment.
+pub fn a_graph_document_as_a_fragment_run(graph_document: &Value) -> Result<Value, String> {
+    let Value::Object(level) = graph_document else {
+        return Err("a graph document is a JSON object".to_owned());
+    };
+    let mut name_of_the_uuid: Map<String, Value> = Map::new();
+    let mut names_in_each_group: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    let mut nodes = Vec::new();
+    for node in level
+        .get("nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Value::Object(node) = node else {
+            return Err("a graph document's node is a JSON object".to_owned());
+        };
+        let mut run_node = node.clone();
+        let name = node_name_of(node)
+            .ok_or("a graph document's node holds its `name`")?
+            .to_owned();
+        if let Some(Value::String(node_uuid)) = run_node.remove("id") {
+            name_of_the_uuid.insert(node_uuid, Value::String(name.clone()));
+        }
+        if let Some(Value::Object(studio)) = run_node.get_mut("studio") {
+            if let Some(Value::String(group)) = studio.remove(STUDIO_GROUP_KEY) {
+                names_in_each_group
+                    .entry(group)
+                    .or_default()
+                    .push(Value::String(name.clone()));
+            }
+            if studio.is_empty() {
+                run_node.remove("studio");
+            }
+        }
+        if let Some(fragment) = node.get("fragment") {
+            run_node.insert(
+                "fragment".to_owned(),
+                a_graph_document_as_a_fragment_run(fragment)?,
+            );
+        }
+        nodes.push(Value::Object(run_node));
+    }
+    let mut links = Vec::new();
+    for link in level
+        .get("links")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let mut run_link = link.clone();
+        for end_key in ["source", "target"] {
+            if let Some(Value::Object(end)) = run_link.get_mut(end_key)
+                && let Some(name) = end
+                    .get("node")
+                    .and_then(Value::as_str)
+                    .and_then(|named| name_of_the_uuid.get(named))
+                    .cloned()
+            {
+                end.insert("node".to_owned(), name);
+            }
+        }
+        links.push(run_link);
+    }
+    let mut run = Map::new();
+    run.insert("nodes".to_owned(), Value::Array(nodes));
+    run.insert("links".to_owned(), Value::Array(links));
+    let groups: Vec<StreamGraphDocumentGroup> = match level.get(GROUPS_KEY) {
+        None => Vec::new(),
+        Some(groups) => serde_json::from_value(groups.clone())
+            .map_err(|not_read| format!("the graph's `groups` do not read: {not_read}"))?,
+    };
+    if !groups.is_empty() {
+        let mut run_groups = Vec::new();
+        for group in groups {
+            let Value::Object(mut run_group) = serde_json::to_value(&group.fields)
+                .map_err(|not_written| format!("a group does not write: {not_written}"))?
+            else {
+                continue;
+            };
+            run_group.insert(
+                "nodes".to_owned(),
+                Value::Array(
+                    names_in_each_group
+                        .remove(&group.id.to_string())
+                        .unwrap_or_default(),
+                ),
+            );
+            run_groups.push(Value::Object(run_group));
+        }
+        run.insert(GROUPS_KEY.to_owned(), Value::Array(run_groups));
+    }
+    Ok(Value::Object(run))
 }
 
 /// Every asset of this project a node's config references, `{"asset": "<uuid>"}`, by UUID;

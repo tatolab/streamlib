@@ -507,7 +507,21 @@ impl ProjectRepository {
         project: Uuid,
         revision: &str,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
-        refuse_an_author_without_a_name(author)?;
+        let pin_move = self.the_pin_move_a_dependency_update_makes(project, revision)?;
+        self.apply_project_operations(
+            author,
+            vec![ProjectOperation::Dependency(pin_move)],
+            ProjectTransactionLineage::NewEdit,
+        )
+    }
+
+    /// Fetch the dependency `project` from its source again and answer the move of its pin to
+    /// the commit `revision` names there, applying nothing.
+    pub fn the_pin_move_a_dependency_update_makes(
+        &self,
+        project: Uuid,
+        revision: &str,
+    ) -> Result<ProjectDependencyOperation, ProjectRepositoryRefusal> {
         let pinned = self.dependency(project)?;
         let history = self.dependency_history(project)?;
         history.fetch_every_branch_and_tag_from(&the_remote_a_source_names(&pinned.source))?;
@@ -523,17 +537,11 @@ impl ProjectRepository {
                 },
             );
         }
-        self.apply_project_operations(
-            author,
-            vec![ProjectOperation::Dependency(
-                ProjectDependencyOperation::MoveDependencyPin {
-                    project,
-                    from: pinned.revision,
-                    to: commit,
-                },
-            )],
-            ProjectTransactionLineage::NewEdit,
-        )
+        Ok(ProjectDependencyOperation::MoveDependencyPin {
+            project,
+            from: pinned.revision,
+            to: commit,
+        })
     }
 
     /// The dependency `project` as the project file pins it.
@@ -556,8 +564,16 @@ impl ProjectRepository {
         project: Uuid,
     ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
         let pinned = self.dependency(project)?;
-        self.dependency_history(project)?
-            .files_at_commit(&pinned.revision)
+        self.dependency_files_at_commit(project, &pinned.revision)
+    }
+
+    /// Every file of the dependency `project` at `commit` of its fetched history, by path.
+    pub fn dependency_files_at_commit(
+        &self,
+        project: Uuid,
+        commit: &str,
+    ) -> Result<BTreeMap<String, Vec<u8>>, ProjectRepositoryRefusal> {
+        self.dependency_history(project)?.files_at_commit(commit)
     }
 
     fn dependency_history(
