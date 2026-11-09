@@ -5,6 +5,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
+use streamlib_processor_schema::{
+    IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR, ProcessorClassImportPath,
+};
 use uuid::Uuid;
 
 use crate::project_file::TatolabProjectFile;
@@ -22,8 +25,9 @@ const KEYS_OF_A_HELD_STREAM_A_FRAGMENT_PLACES: [&str; 3] = ["nodes", "links", "g
 /// it holds, `{"stream": {"asset", "from"?}}`, given the graph of the stream it names as its
 /// `fragment`: read from this project, or from the import `from` names, as its document is on
 /// disk now, and resolved in turn. Each node and group the fragment places takes the UUID
-/// UUIDv5(fragment node's UUID, its own UUID), and each asset reference into an import names
-/// that import with `from`. Refused, naming each stream, when a stream holds itself, directly
+/// UUIDv5(fragment node's UUID, its own UUID), each asset reference into an import names
+/// that import with `from`, and each node type an import's own node code defines is led by the
+/// import's folder, `imports/<folder>/<module>:<qualname>`, so it is imported from there. Refused, naming each stream, when a stream holds itself, directly
 /// or through another stream, and when a held stream does not read.
 pub fn graph_document_with_each_stream_fragment_reference_resolved(
     project_directory: &Path,
@@ -52,6 +56,7 @@ pub fn graph_document_with_each_stream_fragment_reference_resolved(
         project_directory: project_directory.to_path_buf(),
         project,
         root_project: project,
+        root_project_directory: project_directory.to_path_buf(),
     };
     if let Value::Object(level) = &mut resolved {
         resolve_each_stream_fragment_of_the_level(&context, level, &mut streams_being_resolved)?;
@@ -73,6 +78,7 @@ pub fn the_fragment_a_stream_fragment_places(
         project_directory: project_directory.to_path_buf(),
         project,
         root_project: project,
+        root_project_directory: project_directory.to_path_buf(),
     };
     the_fragment_held_stream_places(&context, fragment_node, held_stream, &mut Vec::new())
 }
@@ -108,6 +114,7 @@ struct ProjectHoldingTheReferences {
     project_directory: PathBuf,
     project: Uuid,
     root_project: Uuid,
+    root_project_directory: PathBuf,
 }
 
 struct HeldStreamBeingResolved {
@@ -181,12 +188,14 @@ fn the_fragment_held_stream_places(
             project_directory: context.project_directory.clone(),
             project: context.project,
             root_project: context.root_project,
+            root_project_directory: context.root_project_directory.clone(),
         },
         Some(from) => ProjectHoldingTheReferences {
             project_directory: the_folder_of_an_import(&context.project_directory, from)
                 .map_err(|refusal| format!("stream fragment {fragment_node}: {refusal}"))?,
             project: from,
             root_project: context.root_project,
+            root_project_directory: context.root_project_directory.clone(),
         },
     };
     let (held_document, stream_name) = read_the_held_stream(
@@ -228,12 +237,96 @@ fn the_fragment_held_stream_places(
         streams_being_resolved,
     )?;
     streams_being_resolved.pop();
+    if let Some(import_folder) = held_context.import_folder_relative_to_the_root_project() {
+        each_node_type_the_imports_own_code_defines_led_by_its_folder(
+            &mut fragment,
+            &held_context.project_directory,
+            &import_folder,
+        )?;
+    }
     each_node_and_group_given_its_uuid_under(&mut fragment, fragment_node);
     let mut fragment = Value::Object(fragment);
     if held_context.project != held_context.root_project {
         asset_references_made_references_into_the_import(&mut fragment, held_context.project);
     }
     Ok(fragment)
+}
+
+impl ProjectHoldingTheReferences {
+    /// The folder of the import holding the references, relative to the root project, as a
+    /// node type names it; `None` for the root project itself.
+    fn import_folder_relative_to_the_root_project(&self) -> Option<String> {
+        let relative = self
+            .project_directory
+            .strip_prefix(&self.root_project_directory)
+            .ok()?;
+        let components: Vec<String> = relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        (!components.is_empty())
+            .then(|| components.join(&IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR.to_string()))
+    }
+}
+
+/// Lead each node type of `level`, at every level of a graph generator's stored output it holds,
+/// with `import_folder` where the import at `import_directory` holds its module's top-level
+/// package or file. A stream fragment's own nodes are left alone: they were named when it was
+/// placed, from the project holding its stream.
+fn each_node_type_the_imports_own_code_defines_led_by_its_folder(
+    level: &mut Map<String, Value>,
+    import_directory: &Path,
+    import_folder: &str,
+) -> Result<(), String> {
+    let Some(Value::Array(nodes)) = level.get_mut("nodes") else {
+        return Ok(());
+    };
+    for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
+        if node.get("type").and_then(Value::as_str) == Some(STREAM_FRAGMENT_NODE_TYPE) {
+            continue;
+        }
+        if let Some(Value::Object(stored_output)) = node.get_mut("fragment") {
+            each_node_type_the_imports_own_code_defines_led_by_its_folder(
+                stored_output,
+                import_directory,
+                import_folder,
+            )?;
+            continue;
+        }
+        let Some(Value::String(node_type)) = node.get_mut("type") else {
+            continue;
+        };
+        if the_imports_own_code_defines(import_directory, node_type) {
+            *node_type =
+                ProcessorClassImportPath::of_a_class_in_an_import_folder(import_folder, node_type)
+                    .map_err(|refusal| refusal.to_string())?
+                    .as_str()
+                    .to_owned();
+        }
+    }
+    Ok(())
+}
+
+/// Whether `node_type`, a Python `<module>:<qualname>`, names a module whose top-level package
+/// or file the import at `import_directory` holds.
+fn the_imports_own_code_defines(import_directory: &Path, node_type: &str) -> bool {
+    let Some((module_name, qualname)) = node_type.split_once(':') else {
+        return false;
+    };
+    if module_name.is_empty()
+        || qualname.is_empty()
+        || node_type.contains("::")
+        || node_type.contains(IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR)
+        || ProcessorClassImportPath::new(node_type)
+            .map_or(true, |path| path.names_a_built_in_node())
+    {
+        return false;
+    }
+    let top_level_module = module_name.split('.').next().unwrap_or(module_name);
+    import_directory.join(top_level_module).is_dir()
+        || import_directory
+            .join(format!("{top_level_module}.py"))
+            .is_file()
 }
 
 fn read_the_held_stream(

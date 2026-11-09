@@ -273,7 +273,10 @@ def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: 
     assert [
         (node_type["type"], node_type["inputs"]) for node_type in dependency_source["node_types"]
     ] == [
-        ("nodes.gripper:Gripper", [{"name": "grip", "family": "channels", "description": "", "annotation": None}])
+        (
+            "imports/gripper/nodes.gripper:Gripper",
+            [{"name": "grip", "family": "channels", "description": "", "annotation": None}],
+        )
     ]
 
 

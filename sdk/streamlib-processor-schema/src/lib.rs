@@ -56,7 +56,9 @@ pub use port_stream_facts::{
     ImageStreamMasteringDisplayColourVolume, PacketsStreamFacts, PortStreamFacts,
     StreamFactsOfAnotherFamily, refuse_stream_facts_of_another_family,
 };
-pub use processor_class_import_path::{BUILT_IN_NODE_CLASS_MODULE, ProcessorClassImportPath};
+pub use processor_class_import_path::{
+    BUILT_IN_NODE_CLASS_MODULE, IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR, ProcessorClassImportPath,
+};
 pub use processor_class_short_name::ProcessorClassShortName;
 pub use processor_schema::{
     DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES,

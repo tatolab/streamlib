@@ -876,3 +876,102 @@ fn an_import_folder_linked_back_to_its_enclosing_project_ends_the_search() {
         "{refusal}"
     );
 }
+
+#[test]
+fn a_node_type_an_imports_own_code_defines_is_led_by_its_folder_at_every_depth() {
+    let root = tempfile::tempdir().unwrap();
+    let write_node_code = |project: &ProjectWithOneStream, module_file: &str| {
+        let module_path = project.directory().join(module_file);
+        std::fs::create_dir_all(module_path.parent().unwrap()).unwrap();
+        std::fs::write(module_path, "class Node: ...\n").unwrap();
+    };
+    let mut gripper = ProjectWithOneStream::created_in(root.path(), "gripper");
+    write_node_code(&gripper, "nodes/gripper.py");
+    gripper.add_a_node("grip", "nodes.gripper:Gripper", json!({}));
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "robot-arm");
+    write_node_code(&arm, "nodes/arm.py");
+    write_node_code(&arm, "arm_helpers.py");
+    arm.add_a_node("grade", "nodes.arm:Grade", json!({}));
+    arm.add_a_node("helped", "arm_helpers:Helped", json!({}));
+    arm.add_a_node("pattern", "tatolab.testpattern:TestPattern", json!({}));
+    arm.add_a_node("display", "tatolab.stream:Display", json!({}));
+    arm.repository
+        .add_dependency(
+            &a_person(),
+            &gripper.directory().display().to_string(),
+            None,
+        )
+        .unwrap();
+    arm.add_a_node(
+        "claw",
+        STREAM_FRAGMENT_NODE_TYPE,
+        json!({ "stream": { "asset": gripper.stream, "from": gripper.project() } }),
+    );
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    write_node_code(&cell, "nodes/cell.py");
+    cell.add_a_node("own", "nodes.cell:Own", json!({}));
+    cell.repository
+        .add_dependency(&a_person(), &arm.directory().display().to_string(), None)
+        .unwrap();
+    cell.add_a_node(
+        "arm",
+        STREAM_FRAGMENT_NODE_TYPE,
+        json!({ "stream": { "asset": arm.stream, "from": arm.project() } }),
+    );
+
+    let resolved = graph_document_with_each_stream_fragment_reference_resolved(
+        &cell.directory(),
+        &cell.main_document(),
+    )
+    .unwrap();
+
+    let type_named = |level: &Value, name: &str| -> Value {
+        level["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["name"] == name)
+            .unwrap_or_else(|| panic!("no node `{name}` in {level}"))["type"]
+            .clone()
+    };
+    assert_eq!(type_named(&resolved, "own"), "nodes.cell:Own");
+    let arm_fragment = &resolved["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "arm")
+        .unwrap()["fragment"];
+    assert_eq!(
+        type_named(arm_fragment, "grade"),
+        "imports/robot-arm/nodes.arm:Grade"
+    );
+    assert_eq!(
+        type_named(arm_fragment, "helped"),
+        "imports/robot-arm/arm_helpers:Helped"
+    );
+    assert_eq!(
+        type_named(arm_fragment, "pattern"),
+        "tatolab.testpattern:TestPattern",
+        "a type the import's own code does not define resolves in the project's venv"
+    );
+    assert_eq!(
+        type_named(arm_fragment, "display"),
+        "tatolab.stream:Display"
+    );
+    assert_eq!(type_named(arm_fragment, "claw"), STREAM_FRAGMENT_NODE_TYPE);
+    let claw_fragment = &arm_fragment["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "claw")
+        .unwrap()["fragment"];
+    assert_eq!(
+        type_named(claw_fragment, "grip"),
+        "imports/robot-arm/imports/gripper/nodes.gripper:Gripper"
+    );
+    assert_eq!(
+        cell.main_document()["nodes"][1]["config"],
+        json!({ "stream": { "asset": arm.stream, "from": arm.project() } }),
+        "the stored document keeps its reference; nothing is written back"
+    );
+}

@@ -179,17 +179,21 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
                     .to_string(),
             });
         };
-        describe_and_register_node_types_in_a_processor_interpreter(
-            &self.node_types_this_stream_resolves,
-            node_types,
-            stream_environment,
-            lend_directory,
-            &self.the_stream_its_helpers_belong_to,
-            &|| {
-                self.describes_interrupted_by_the_host
-                    .load(Ordering::SeqCst)
-            },
-        )?;
+        for node_types_of_one_import_folder in
+            node_types_grouped_by_the_import_folder_holding_their_code(node_types)
+        {
+            describe_and_register_node_types_in_a_processor_interpreter(
+                &self.node_types_this_stream_resolves,
+                &node_types_of_one_import_folder,
+                stream_environment,
+                lend_directory,
+                &self.the_stream_its_helpers_belong_to,
+                &|| {
+                    self.describes_interrupted_by_the_host
+                        .load(Ordering::SeqCst)
+                },
+            )?;
+        }
         for node_type in node_types {
             self.stream_identity.publish_on_this_streams_topic(
                 RuntimeEvent::RuntimeDidRegisterProcessorType {
@@ -199,6 +203,29 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
         }
         Ok(())
     }
+}
+
+/// `node_types` split by the import folder whose node code defines each, the project's own and
+/// its venv's first, in their order: one interpreter imports one module per top-level name, so
+/// each folder's types are described in an interpreter of their own.
+fn node_types_grouped_by_the_import_folder_holding_their_code(
+    node_types: &[ProcessorClassImportPath],
+) -> Vec<Vec<ProcessorClassImportPath>> {
+    let mut node_types_by_import_folder: std::collections::BTreeMap<
+        Option<&str>,
+        Vec<ProcessorClassImportPath>,
+    > = std::collections::BTreeMap::new();
+    for node_type in node_types {
+        node_types_by_import_folder
+            .entry(
+                node_type
+                    .import_folder_and_class_import_path()
+                    .map(|(import_folder, _)| import_folder),
+            )
+            .or_default()
+            .push(node_type.clone());
+    }
+    node_types_by_import_folder.into_values().collect()
 }
 
 /// A path in the runtime unit that the runtime's host hands it once, before any
@@ -250,6 +277,36 @@ mod tests {
         StreamLoadObservingInterrupts, TheMachinesShutdownEscalationClearedOnDrop,
     };
     use serial_test::serial;
+
+    #[test]
+    fn each_import_folders_node_types_are_described_apart_from_the_projects_own() {
+        let node_type = |path: &str| ProcessorClassImportPath::new(path).unwrap();
+
+        let groups = node_types_grouped_by_the_import_folder_holding_their_code(&[
+            node_type("nodes.cell:Own"),
+            node_type("imports/robot-arm/nodes.arm:Grade"),
+            node_type("tatolab.testpattern:TestPattern"),
+            node_type("imports/robot-arm/imports/claws/nodes.gripper:Gripper"),
+            node_type("imports/robot-arm/arm_helpers:Helped"),
+        ]);
+
+        assert_eq!(
+            groups,
+            vec![
+                vec![
+                    node_type("nodes.cell:Own"),
+                    node_type("tatolab.testpattern:TestPattern"),
+                ],
+                vec![
+                    node_type("imports/robot-arm/nodes.arm:Grade"),
+                    node_type("imports/robot-arm/arm_helpers:Helped"),
+                ],
+                vec![node_type(
+                    "imports/robot-arm/imports/claws/nodes.gripper:Gripper"
+                )],
+            ]
+        );
+    }
 
     #[test]
     fn a_second_lend_directory_is_refused_and_the_first_kept() {
