@@ -1073,7 +1073,7 @@ mod tests {
         .unwrap();
 
         project
-            .make_the_venv_with_the_first_party_modules(&[ops.clone()])
+            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
             .expect("the venv is made");
 
         let project_directory = project.the_project_directory_resolved();
