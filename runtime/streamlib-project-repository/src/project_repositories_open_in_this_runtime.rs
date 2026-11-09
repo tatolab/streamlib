@@ -66,12 +66,15 @@ impl ProjectRepositoriesOpenInThisRuntime {
             .find(|open| open.lock().project_file().project == project)
     }
 
-    /// Announce `applied`, which `project_repository` just applied, on the change feed.
+    /// Announce `applied`, which `project_repository` just applied, on the change feed, and
+    /// when the project is an import open as its own project, commit the edit on each project
+    /// enclosing it, under that project's own writer.
     pub fn announce_applied_transaction(
         &self,
         project_repository: &ProjectRepository,
         applied: AppliedProjectTransaction,
     ) {
+        self.commit_the_edit_on_each_enclosing_project(project_repository, &applied);
         let announcement = ProjectTransactionAnnouncement {
             project: project_repository.project_file().project,
             project_directory: project_repository.project_directory().to_path_buf(),
@@ -79,6 +82,38 @@ impl ProjectRepositoriesOpenInThisRuntime {
         };
         if self.project_transaction_feed.send(announcement).is_err() {
             tracing::trace!("no change-feed listener is subscribed");
+        }
+    }
+
+    /// Commit `applied` on each project enclosing `project_repository`, nearest first, each
+    /// through its one writer, so no transaction of its own lands between its read and commit.
+    fn commit_the_edit_on_each_enclosing_project(
+        &self,
+        project_repository: &ProjectRepository,
+        applied: &AppliedProjectTransaction,
+    ) {
+        let mut enclosing = project_repository.the_project_enclosing_this_one();
+        while let Some((enclosing_directory, folder)) = enclosing {
+            let committed = self
+                .the_project_repository_at(&enclosing_directory)
+                .and_then(|enclosing_repository| {
+                    let enclosing_repository = enclosing_repository.lock();
+                    enclosing_repository
+                        .commit_an_edit_of_the_import(&folder, &applied.transaction)?;
+                    Ok(enclosing_repository.the_project_enclosing_this_one())
+                });
+            match committed {
+                Ok(next) => enclosing = next,
+                Err(refusal) => {
+                    tracing::warn!(
+                        project = %project_repository.project_directory().display(),
+                        enclosing = %enclosing_directory.display(),
+                        %refusal,
+                        "an edit of an import did not commit on the project enclosing it"
+                    );
+                    return;
+                }
+            }
         }
     }
 

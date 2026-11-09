@@ -25,7 +25,7 @@ use crate::project_history_repository::{
 use crate::project_import_copy::{
     PROJECT_IMPORT_STAGING_DIRECTORY, files_an_import_carries, files_edited_since_the_copy,
     refuse_an_import_folder_name, sha256_of_each_file_under, stage_a_copy_of_the_project_source,
-    the_import_folder_in, the_import_folder_named_after,
+    the_import_folder_in, the_import_folder_named_after, version_of_the_copied_files,
 };
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
@@ -514,7 +514,6 @@ impl ProjectRepository {
             }
         };
         self.remove_what_import_effects_set_aside(performed_import_effects);
-        self.commit_the_edit_on_each_enclosing_project(author, &transaction);
         staged_assets.retain(|_, asset| asset.kind != ProjectAssetKind::Stream);
         self.assets_by_uuid = staged_assets;
         tracing::info!(
@@ -685,6 +684,10 @@ impl ProjectRepository {
         &self,
         source: &str,
     ) -> Result<String, ProjectRepositoryRefusal> {
+        let source_path = Path::new(source);
+        if source_path.is_absolute() && source_path.is_dir() {
+            return version_of_the_copied_files(&sha256_of_each_file_under(source_path)?);
+        }
         let staged = stage_a_copy_of_the_project_source(&self.project_directory, source)?;
         let version = staged.version();
         let _ = std::fs::remove_dir_all(self.project_directory.join(&staged.staged_at));
@@ -928,49 +931,30 @@ impl ProjectRepository {
         }
     }
 
-    /// When this project is an import of the project enclosing it, `<enclosing>/imports/<folder>`,
-    /// commit what the transaction changed on the enclosing project's history too, as one commit
-    /// by `author`, and so on outwards.
-    fn commit_the_edit_on_each_enclosing_project(
+    /// The project enclosing this one as its import, and the folder it holds it in, when this
+    /// project is open at `<enclosing>/imports/<folder>/`.
+    pub fn the_project_enclosing_this_one(&self) -> Option<(PathBuf, String)> {
+        the_project_enclosing_an_import(&self.project_directory, self.project_file.project)
+    }
+
+    /// Commit this project's files as they are now, recording the edit `transaction` made in
+    /// its import `folder` as one commit by its author.
+    pub fn commit_an_edit_of_the_import(
         &self,
-        author: &ProjectTransactionAuthor,
+        folder: &str,
         transaction: &ProjectTransaction,
-    ) {
-        let mut imported_directory = self.project_directory.clone();
-        let mut imported_project = self.project_file.project;
-        while let Some((enclosing_directory, folder)) =
-            the_project_enclosing_an_import(&imported_directory, imported_project)
-        {
-            let committed = ProjectRepository::open(&enclosing_directory).and_then(|enclosing| {
-                let summary = transaction
-                    .operations
-                    .iter()
-                    .map(ProjectOperation::summary)
-                    .collect::<Vec<_>>()
-                    .join("; ");
-                enclosing.history.commit_tracked_files(
-                    &enclosing.tracked_files(&enclosing.assets_by_uuid)?,
-                    author,
-                    &format!("edit {PROJECT_IMPORTS_DIRECTORY}/{folder}: {summary}"),
-                )?;
-                Ok(enclosing.project_file.project)
-            });
-            match committed {
-                Ok(enclosing_project) => {
-                    imported_directory = enclosing_directory;
-                    imported_project = enclosing_project;
-                }
-                Err(refusal) => {
-                    tracing::warn!(
-                        project = %self.project_directory.display(),
-                        enclosing = %enclosing_directory.display(),
-                        %refusal,
-                        "an edit of an import did not commit on the project enclosing it"
-                    );
-                    return;
-                }
-            }
-        }
+    ) -> Result<String, ProjectRepositoryRefusal> {
+        let summary = transaction
+            .operations
+            .iter()
+            .map(ProjectOperation::summary)
+            .collect::<Vec<_>>()
+            .join("; ");
+        self.history.commit_tracked_files(
+            &self.tracked_files(&self.assets_by_uuid)?,
+            &transaction.author,
+            &format!("edit {PROJECT_IMPORTS_DIRECTORY}/{folder}: {summary}"),
+        )
     }
 
     /// Commit the project's files as they are when its history holds no commit yet, as for an

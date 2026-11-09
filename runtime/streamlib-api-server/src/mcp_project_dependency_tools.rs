@@ -197,7 +197,8 @@ impl LocalApiMcpServerHandler {
                 .update_dependency(&author, project, source.as_deref(), overwrite_edited_files)
                 .map_err(|refusal| refusal.to_string())?;
             let updated = the_import_the_transaction_placed(&applied)?;
-            let importing_project = project_repository_held.project_file().project;
+            let importing_project_directory =
+                project_repository_held.project_directory().to_path_buf();
             project_repositories
                 .announce_applied_transaction(&project_repository_held, applied.clone());
             drop(project_repository_held);
@@ -206,7 +207,7 @@ impl LocalApiMcpServerHandler {
                 project_repositories: &project_repositories,
                 async_runtime: &async_runtime,
             }
-            .reconcile_each_loaded_stream_holding_a_stream_fragment(importing_project);
+            .reconcile_each_loaded_stream_holding_a_stream_fragment(&importing_project_directory);
             Ok(UpdateDependencyToolResult {
                 dependency: the_dependency_on_the_wire(&updated),
                 edited_files,

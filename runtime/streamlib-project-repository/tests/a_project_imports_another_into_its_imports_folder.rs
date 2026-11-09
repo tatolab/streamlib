@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
     ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectOperation,
-    ProjectRelativeAssetPath, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionLineage, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentNode,
-    StreamGraphOperation, StreamGraphOperationOnAStream,
+    ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, STREAM_FRAGMENT_NODE_TYPE,
+    StreamGraphDocumentNode, StreamGraphOperation, StreamGraphOperationOnAStream,
     graph_document_with_each_stream_fragment_reference_resolved, the_file_of_an_imported_asset,
 };
 use uuid::Uuid;
@@ -636,22 +636,39 @@ fn a_transaction_in_an_import_opened_as_its_own_project_commits_on_the_enclosing
         .unwrap()
         .len();
     let import_folder = imports.cell.directory().join("imports/robot-arm");
-    let mut module = ProjectWithOneStream {
-        repository: ProjectRepository::open(&import_folder).unwrap(),
-        stream: imports.arm.stream,
-    };
+    let open_in_this_runtime = ProjectRepositoriesOpenInThisRuntime::default();
+    let module = open_in_this_runtime
+        .the_project_repository_at(&import_folder)
+        .unwrap();
+    let mut module = module.lock();
 
-    module.add_a_node("tint", "nodes.arm:Tint", json!({}));
+    let applied = module
+        .apply_project_operations(
+            &a_person(),
+            vec![ProjectOperation::StreamGraph(
+                StreamGraphOperationOnAStream {
+                    stream: imports.arm.stream,
+                    graph_operation: StreamGraphOperation::AddNode {
+                        node: StreamGraphDocumentNode {
+                            id: Uuid::new_v4(),
+                            name: "tint".to_owned(),
+                            node_type: "nodes.arm:Tint".to_owned(),
+                            config: json!({}),
+                            pins: Map::new(),
+                            exposed_config_fields: Vec::new(),
+                            studio: Map::new(),
+                            fragment: None,
+                        },
+                        links: Vec::new(),
+                    },
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+    open_in_this_runtime.announce_applied_transaction(&module, applied);
 
-    assert!(
-        module
-            .repository
-            .history()
-            .commits_newest_first()
-            .unwrap()
-            .len()
-            >= 2
-    );
+    assert!(module.history().commits_newest_first().unwrap().len() >= 2);
     let cell = ProjectRepository::open(&imports.cell.directory()).unwrap();
     let cell_commits = cell.history().commits_newest_first().unwrap();
     assert_eq!(cell_commits.len(), cell_commits_before + 1);
@@ -719,4 +736,29 @@ fn a_created_stream_document_referencing_an_asset_the_project_does_not_hold_is_r
         "{refusal}"
     );
     assert!(!cell.directory().join("streams/made.graph.json").exists());
+}
+
+#[test]
+fn an_import_recorded_under_a_folder_outside_imports_is_passed_over() {
+    let root = tempfile::tempdir().unwrap();
+    let cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let escaping_project = Uuid::new_v4();
+    let mut project_file: Value = serde_json::from_slice(
+        &std::fs::read(cell.directory().join("tatolab-project.json")).unwrap(),
+    )
+    .unwrap();
+    project_file["dependencies"] = json!([
+        { "project": escaping_project, "folder": "/", "source": "/", "version": "", "copied_files": {} },
+        { "project": escaping_project, "folder": "../outside", "source": "/", "version": "", "copied_files": {} },
+    ]);
+    std::fs::write(
+        cell.directory().join("tatolab-project.json"),
+        project_file.to_string(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        streamlib_project_repository::the_folder_of_an_import(&cell.directory(), escaping_project),
+        Err(ProjectRepositoryRefusal::NoSuchImport(project)) if project == escaping_project
+    ));
 }

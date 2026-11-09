@@ -313,7 +313,13 @@ def test_the_project_source_leaves_out_the_node_code_of_its_imports_folder(
     tmp_path: Path,
 ) -> None:
     project_directory = a_plain_project(tmp_path)
-    write_files(project_directory, {"imports/gripper/nodes/gripper.py": DEPENDENCY_NODE_SOURCE})
+    write_files(
+        project_directory,
+        {
+            "imports/gripper/nodes/gripper.py": DEPENDENCY_NODE_SOURCE,
+            "nodes/imports/gripper.py": DEPENDENCY_NODE_SOURCE,
+        },
+    )
 
     project = the_source(
         list_the_node_types_and_graph_generators_of_a_project(
@@ -323,7 +329,8 @@ def test_the_project_source_leaves_out_the_node_code_of_its_imports_folder(
     )
 
     assert "imports.gripper.nodes.gripper:Gripper" not in node_types_by_type(project)
-    assert len(project["node_types"]) == 4
+    assert "nodes.imports.gripper:Gripper" in node_types_by_type(project)
+    assert len(project["node_types"]) == 5
 
 
 def test_a_syntax_error_is_reported_for_its_module_only(tmp_path: Path) -> None:

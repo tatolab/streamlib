@@ -11,23 +11,28 @@ use crate::project_file::TatolabProjectFile;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
 /// The folder holding the import of `project` as the project at `project_directory` sees it:
-/// one of its own imports first, then one nested in an import, nearest first.
+/// one of its own imports first, then one nested in an import, nearest first. An import whose
+/// recorded folder is not one folder name is passed over.
 pub fn the_folder_of_an_import(
     project_directory: &Path,
     project: Uuid,
 ) -> Result<PathBuf, ProjectRepositoryRefusal> {
     let mut projects_to_read = VecDeque::from([project_directory.to_path_buf()]);
-    let mut projects_read = BTreeSet::new();
+    let mut directories_read = BTreeSet::new();
     while let Some(importing_directory) = projects_to_read.pop_front() {
+        if !directories_read.insert(importing_directory.clone()) {
+            continue;
+        }
         let Ok(importing_project) =
             TatolabProjectFile::read_from_project_directory(&importing_directory)
         else {
             continue;
         };
-        if !projects_read.insert(importing_project.project) {
-            continue;
-        }
-        for import in &importing_project.dependencies {
+        for import in importing_project
+            .dependencies
+            .iter()
+            .filter(|import| is_one_folder_name(&import.folder))
+        {
             let import_folder = importing_directory
                 .join(PROJECT_IMPORTS_DIRECTORY)
                 .join(&import.folder);
@@ -38,6 +43,16 @@ pub fn the_folder_of_an_import(
         }
     }
     Err(ProjectRepositoryRefusal::NoSuchImport(project))
+}
+
+/// Whether `folder` names one folder inside `imports/`: one normal path component, never an
+/// absolute path, `.` or `..`.
+fn is_one_folder_name(folder: &str) -> bool {
+    let mut components = Path::new(folder).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    )
 }
 
 /// The file of the asset `asset` of the import `from`, as the project at `project_directory`

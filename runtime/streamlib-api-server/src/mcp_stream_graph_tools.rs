@@ -1129,18 +1129,34 @@ impl GraphTransactionInFlight<'_> {
             project_repository_held.as_deref_mut(),
         )?;
         if let Some(project_repository_held) = project_repository_held {
-            let project = project_repository_held.project_file().project;
+            let edited_project_directory =
+                project_repository_held.project_directory().to_path_buf();
             drop(project_repository_held);
-            self.reconcile_each_loaded_stream_holding_a_stream_fragment(project);
+            self.reconcile_each_loaded_stream_holding_a_stream_fragment(&edited_project_directory);
         }
         Ok(applied)
     }
 
-    /// Bring each loaded stream of the project `project` whose graph holds a stream fragment to
-    /// the streams its fragments reference, as their graph documents are on disk now. A stream
-    /// that refuses keeps its live graph as it was, and the refusal is logged.
-    pub(crate) fn reconcile_each_loaded_stream_holding_a_stream_fragment(&self, project: Uuid) {
-        for (stream_asset, stream_id) in self.the_stream_id_of_each_loaded_stream_asset(project) {
+    /// Bring each loaded stream whose graph holds a stream fragment, of the project at
+    /// `edited_project_directory` or of a project enclosing it as an import, to the streams its
+    /// fragments reference, as their graph documents are on disk now. A stream that refuses
+    /// keeps its live graph as it was, and the refusal is logged.
+    pub(crate) fn reconcile_each_loaded_stream_holding_a_stream_fragment(
+        &self,
+        edited_project_directory: &std::path::Path,
+    ) {
+        let loaded_streams_the_edit_can_reach = self
+            .operations_on_the_loaded_streams
+            .list_streams()
+            .into_iter()
+            .filter(|listing| listing.node_count.is_some())
+            .filter_map(|listing| {
+                let stream_location = listing.stream_location?;
+                edited_project_directory
+                    .starts_with(&stream_location.project_directory)
+                    .then_some((stream_location.stream_asset, listing.stream_id))
+            });
+        for (stream_asset, stream_id) in loaded_streams_the_edit_can_reach {
             let stream_operations = match self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(&stream_id)
@@ -1520,9 +1536,12 @@ impl GraphTransactionInFlight<'_> {
             Ok(applied) => {
                 self.project_repositories
                     .announce_applied_transaction(&project_repository, applied.clone());
+                let edited_project_directory = project_repository.project_directory().to_path_buf();
                 drop(project_repository);
                 self.forget_the_stream_of_each_stream_asset_taken_out(project, &applied)?;
-                self.reconcile_each_loaded_stream_holding_a_stream_fragment(project);
+                self.reconcile_each_loaded_stream_holding_a_stream_fragment(
+                    &edited_project_directory,
+                );
                 Ok(project_transaction_on_the_wire(applied))
             }
             Err(refusal) => {

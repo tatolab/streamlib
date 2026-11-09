@@ -24,6 +24,9 @@ use crate::mcp_project_asset_tools::ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION
 
 const PYTHON_SOURCE_FILE_SUFFIX: &str = ".py";
 
+/// The start of every path inside an import that lies in the import's own `imports/`.
+const NESTED_IMPORTS_DIRECTORY_PREFIX: &str = "imports/";
+
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
@@ -66,10 +69,24 @@ impl LocalApiMcpServerHandler {
                         for path in project_repository
                             .files_the_import_carries(import)?
                             .into_iter()
-                            .filter(|path| path.ends_with(PYTHON_SOURCE_FILE_SUFFIX))
+                            .filter(|path| {
+                                path.ends_with(PYTHON_SOURCE_FILE_SUFFIX)
+                                    && !path.starts_with(NESTED_IMPORTS_DIRECTORY_PREFIX)
+                            })
                         {
-                            let bytes = std::fs::read(import_folder.join(&path))?;
-                            files.insert(path, String::from_utf8_lossy(&bytes).into_owned());
+                            match std::fs::read(import_folder.join(&path)) {
+                                Ok(bytes) => {
+                                    files
+                                        .insert(path, String::from_utf8_lossy(&bytes).into_owned());
+                                }
+                                Err(not_read) => tracing::warn!(
+                                    import = %import.folder,
+                                    %path,
+                                    %not_read,
+                                    "an import's Python file was not read, so the listing \
+                                     leaves it out"
+                                ),
+                            }
                         }
                         import_sources.push(ImportedProjectPythonSources {
                             project: import.project.to_string(),
