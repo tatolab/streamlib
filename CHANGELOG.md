@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.41](https://github.com/tatolab/streamlib/compare/v0.68.40...v0.68.41) (2026-11-09)
+
+
+### Features
+
+* **local-api:** list a project's node types and graph generators without running its code ([3ad13b1](https://github.com/tatolab/streamlib/commit/3ad13b15cdd9fc471c24e97e2d2ebd11a05d527b)), closes [#3152](https://github.com/tatolab/streamlib/issues/3152)
+
 ## [0.68.40](https://github.com/tatolab/streamlib/compare/v0.68.39...v0.68.40) (2026-11-09)
 
 
