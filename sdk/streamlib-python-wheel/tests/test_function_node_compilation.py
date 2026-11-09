@@ -34,7 +34,7 @@ from tatolab.runtime._function_node_run_as_its_helpers_processor import (
     the_processor_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._processor_hosting import apply_configuration, construct_processor_instance
-from tatolab.stream import State, Stateful, Time, node
+from tatolab.stream import State, Stateful, Time, UnreadMessage, node
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -824,6 +824,20 @@ def test_a_body_run_as_python_answers_each_output_as_a_float_or_a_dict():
     assert letters == [4.0] and isinstance(letters[0], float)
 
 
+@node.function
+def hand_on_once_it_has_built_an_object(value: UnreadMessage) -> UnreadMessage:
+    repr(object())
+    return value
+
+
+def test_a_body_run_as_python_hands_on_unread_a_number_or_a_dict_another_node_of_its_island_gave():
+    handing_on = FunctionNodeBodyRunAsPython(run_as_python(hand_on_once_it_has_built_an_object), "h", None)
+    level = 0.25
+    record = {"label": "low"}
+    assert handing_on.evaluate([level], 0)[0] is level
+    assert handing_on.evaluate([record], 1)[0] is record
+
+
 def test_a_body_run_as_python_keeps_a_state_of_any_record_between_calls():
     remembering = FunctionNodeBodyRunAsPython(run_as_python(remember_each_call_by_a_letter), "r", None)
     assert remembering.evaluate([1.0], 0) == [1.0]
@@ -1355,3 +1369,19 @@ def test_an_exposed_config_field_no_link_drives_reads_the_nodes_config():
         data_plane, [island], {f"{__name__}:tally": tally, f"{__name__}:amplify": amplify}.__getitem__
     )
     assert the_value_read_from(data_plane, "amplified") == 2.0 * 10.0
+
+
+@node.function
+def one_without_a_frame_and_two_with_one(frame: "UnreadMessage | None" = None) -> float:
+    return 1.0 if frame is None else 2.0
+
+
+def test_an_unlinked_optional_message_input_takes_none_and_its_island_feeds_its_port():
+    import_path = f"{__name__}:one_without_a_frame_and_two_with_one"
+    island = an_island_of_one_node("level", import_path, None, "frame-counter-1")
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["level"], [])
+    feed_each_input_port_from_its_function_node_island(
+        data_plane, [island], {import_path: one_without_a_frame_and_two_with_one}.__getitem__
+    )
+    assert the_value_read_from(data_plane, "level") == 1.0

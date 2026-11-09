@@ -52,6 +52,15 @@ def the_processor_class_a_promoted_function_node_runs_as(
         if port in vars(_FunctionNodeRunAsItsHelpersProcessor)
         or port in _FunctionNodeRunAsItsHelpersProcessor.__annotations__
     )
+    how_its_values_are_carried = prepared.how_its_values_are_carried
+    if (
+        how_its_values_are_carried["inputs_carrying_an_unread_message"]
+        or how_its_values_are_carried["outputs_carrying_an_unread_message"]
+    ):
+        raise FunctionNodeDoesNotCompile(
+            f"function node `{node_id}` ({import_path}) cannot run in a helper of its own: it "
+            "hands on an `UnreadMessage`, which runs only inside the read of the node it feeds"
+        )
     if ports_named_like_a_runner_member:
         raise FunctionNodeDoesNotCompile(
             f"function node `{node_id}` ({import_path}) cannot run in a helper of its own: its "
@@ -137,6 +146,9 @@ class _FunctionNodeRunAsItsHelpersProcessor:
             config_value_indices_set_by_the_inputs_past_its_own=compiled_config_value_indices,
             initial_state_values=list(prepared.initial_state_values),
             output_count=len(prepared.output_ports),
+            outputs_that_may_hand_out_nothing=list(
+                prepared.how_its_values_are_carried["outputs_that_may_hand_out_nothing"]
+            ),
         )
 
     def configure(self, config: Any) -> None:
@@ -171,6 +183,8 @@ class _FunctionNodeRunAsItsHelpersProcessor:
             [*input_values, *self._compiled_config_values_handed_to_each_call]
         )
         for output_port, output_value in zip(prepared.output_ports, output_values):
+            if output_value is None:
+                continue
             if output_port in ports_carrying_records:
                 ctx.outputs.write(getattr(type(self), output_port), output_value)
                 continue

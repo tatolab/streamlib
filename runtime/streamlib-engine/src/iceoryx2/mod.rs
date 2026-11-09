@@ -58,7 +58,7 @@ pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 pub use function_node_island_input_port::{
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
-    FunctionNodeIslandOutputValue,
+    FunctionNodeIslandOutputValue, MessageAFunctionNodeIslandHandsOnUnread,
 };
 #[cfg(test)]
 pub(crate) use helper_process_loss_count_board::a_loss_count_board_and_its_helpers_writer_for_this_test_process;

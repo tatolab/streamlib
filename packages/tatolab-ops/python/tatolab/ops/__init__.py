@@ -1,9 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The small function nodes every stream can wire, each a `@node.function` compiled to native code.
+"""The small nodes every stream can wire.
 
-Each runs inside the read of the node it feeds, with no process of its own.
+Each is a `@node.function` compiled to native code that runs inside the read of
+the node it feeds, with no process of its own, but `ImageFile`, a class node,
+which reads a project image asset.
 """
 
 from __future__ import annotations
@@ -11,7 +13,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from tatolab.stream import State, Stateful, Time, node
+from tatolab.stream import State, Stateful, Time, UnreadMessage, node
+
+from .image_file import ImageFile, ImageFileConfig
 
 __all__ = [
     "Absolute",
@@ -24,6 +28,9 @@ __all__ = [
     "CounterCount",
     "Divide",
     "Feedback",
+    "Gate",
+    "ImageFile",
+    "ImageFileConfig",
     "Lag",
     "LagValue",
     "Lerp",
@@ -197,6 +204,12 @@ def Compare(a: float = 0.0, b: float = 0.0, tolerance: float = 0.0) -> Compariso
     """Whether `a` is less than, equal to (within `tolerance`) or greater than `b`."""
     equal = abs(a - b) <= tolerance
     return Comparison(less=not equal and a < b, equal=equal, greater=not equal and a > b)
+
+
+@node.function
+def Gate(value: UnreadMessage, open: bool = True) -> UnreadMessage | None:  # noqa: N802, A002
+    """`value` handed on unread while `open`, else nothing, of any family."""
+    return value if open else None
 
 
 @node.function

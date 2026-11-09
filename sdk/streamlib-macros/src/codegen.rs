@@ -890,6 +890,7 @@ fn port_family_declaration_tokens(
             also_takes_families: ::std::vec::Vec::new(),
             family_from_config_key: ::std::option::Option::None,
             codec_from_config_key: ::std::option::Option::None,
+            family_follows_input_port: ::std::option::Option::None,
         }
     }
 }

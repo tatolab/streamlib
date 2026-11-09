@@ -63,6 +63,7 @@ from ._node_context_protocols import ChannelsBlock as ChannelsBlock
 from ._node_context_protocols import PacketsUnit as PacketsUnit
 from ._node_context_protocols import PortPayloadBorrow as PortPayloadBorrow
 from ._node_context_protocols import PortPayloadLoan as PortPayloadLoan
+from ._node_context_protocols import UnreadMessage as UnreadMessage
 from ._node_context_protocols import (
     RuntimeContextFullAccess as RuntimeContextFullAccess,
 )
@@ -235,6 +236,7 @@ __all__ = [
     "StreamClock",
     "StreamClockReading",
     "Time",
+    "UnreadMessage",
     "clock",
     "from_config",
     "graph_generator",
