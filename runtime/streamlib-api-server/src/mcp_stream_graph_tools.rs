@@ -5,7 +5,7 @@
 //! document and the project's history or applied live to the running stream alone, its nodes
 //! by UUID, and each author's undo and redo.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,12 +21,13 @@ use streamlib_project_repository::{
     GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAssetKind, ProjectAssetOperation,
     ProjectDependencyOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
     ProjectRepository, ProjectStreamDocumentOperation, ProjectTransactionAuthor,
-    ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphDocument,
-    StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
-    StreamGraphOperation, StreamGraphOperationOnAStream, a_graph_document_as_a_fragment_run,
+    ProjectTransactionLineage, ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY,
+    STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentGroup,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
+    StreamGraphFragmentPlacement, StreamGraphGroupFields, StreamGraphOperation,
+    StreamGraphOperationOnAStream, a_graph_document_as_a_fragment_run,
     asset_references_made_references_into_the_dependency,
-    fragment_with_each_node_uuid_kept_by_its_name,
+    fragment_with_each_node_uuid_kept_by_its_name, the_refresh_of_each_fragment_holding_a_stream,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
@@ -56,11 +57,6 @@ const GROUP_COLOUR_ARGUMENT_DESCRIPTION: &str =
 pub(crate) const DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION: &str = "The project depended on, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`.";
 pub(crate) const DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION: &str = "The depended-on project's stream, by its stream asset's UUID, the `asset` its graph document holds.";
 pub(crate) const DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. A top-level fragment of that name holding the same stream is refreshed from the pin.";
-/// The `type` of a fragment node holding a stored copy of a stream: a dependency's, or one a
-/// fork made this project's.
-pub(crate) const STREAM_FRAGMENT_TYPE: &str = "tatolab.project:StreamFragment";
-/// The config key of a stream's fragment node naming the stream it holds.
-pub(crate) const STREAM_FRAGMENT_CONFIG_KEY: &str = "stream";
 const GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.";
 
 /// Whether a graph edit is kept.
@@ -1420,6 +1416,21 @@ impl GraphTransactionInFlight<'_> {
             }
         }
 
+        let mut refreshes_of_streams_not_loaded = Vec::new();
+        if let Some(project_repository) = project_repository_held.as_deref() {
+            match self.refresh_each_fragment_holding_an_edited_stream(
+                project_repository,
+                &mut streams,
+                &mut applied_live,
+            ) {
+                Ok(refreshes) => refreshes_of_streams_not_loaded = refreshes,
+                Err(refusal) => {
+                    self.reverse_what_was_applied_live(&streams, applied_live);
+                    return Err(refusal);
+                }
+            }
+        }
+
         let (transaction, commit) = match project_repository_held {
             None => (None, None),
             Some(project_repository) => {
@@ -1439,6 +1450,7 @@ impl GraphTransactionInFlight<'_> {
                                 ))
                             }),
                     )
+                    .chain(refreshes_of_streams_not_loaded)
                     .collect();
                 match project_repository.apply_project_operations(
                     author,
@@ -1469,6 +1481,161 @@ impl GraphTransactionInFlight<'_> {
             applied_live,
             &labels_of_added_nodes,
         ))
+    }
+
+    /// Refresh each top-level fragment of the project's streams that holds one of its own
+    /// streams the transaction edited, `{"stream": {"asset"}}`, from that stream as the
+    /// transaction leaves it, and in turn each fragment holding a stream such a refresh changed:
+    /// a loaded stream's live and staged beside the transaction's edits, answering one not
+    /// loaded as the project operations that refresh its graph document.
+    fn refresh_each_fragment_holding_an_edited_stream(
+        &self,
+        project_repository: &ProjectRepository,
+        streams: &mut BTreeMap<String, StreamATransactionEdits>,
+        applied_live: &mut Vec<(String, StreamGraphOperation)>,
+    ) -> Result<Vec<ProjectOperation>, String> {
+        let project = project_repository.project_file().project;
+        let mut edited_stream_assets: Vec<Uuid> = Vec::new();
+        for (stream_id, _) in applied_live.iter() {
+            let Some(stream_location) = streams
+                .get(stream_id)
+                .and_then(|stream| stream.stream_location.as_ref())
+            else {
+                continue;
+            };
+            if !edited_stream_assets.contains(&stream_location.stream_asset) {
+                edited_stream_assets.push(stream_location.stream_asset);
+            }
+        }
+        if edited_stream_assets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let loaded_stream_id_of_each_stream_asset: HashMap<Uuid, (String, StreamLocation)> = self
+            .operations_on_the_loaded_streams
+            .list_streams()
+            .into_iter()
+            .filter(|listing| listing.node_count.is_some())
+            .filter_map(|listing| {
+                let stream_location = listing.stream_location?;
+                (stream_location.project == project).then_some((
+                    stream_location.stream_asset,
+                    (listing.stream_id, stream_location),
+                ))
+            })
+            .collect();
+        let stream_assets: Vec<Uuid> = project_repository
+            .assets()
+            .map_err(|refusal| refusal.to_string())?
+            .into_iter()
+            .filter(|asset| asset.kind == ProjectAssetKind::Stream)
+            .map(|asset| asset.asset)
+            .collect();
+        let mut staged_documents_of_streams_not_loaded: BTreeMap<Uuid, StreamGraphDocument> =
+            BTreeMap::new();
+        let mut refreshes_of_streams_not_loaded = Vec::new();
+        let mut refreshed_from: BTreeSet<Uuid> = BTreeSet::new();
+        while let Some(edited_stream) = edited_stream_assets.pop() {
+            if !refreshed_from.insert(edited_stream) {
+                continue;
+            }
+            let edited_document = match streams.values().find(|stream| {
+                stream
+                    .stream_location
+                    .as_ref()
+                    .map(|location| location.stream_asset)
+                    == Some(edited_stream)
+            }) {
+                Some(stream) => stream.staged_graph.to_value(),
+                None => match staged_documents_of_streams_not_loaded.get(&edited_stream) {
+                    Some(staged_document) => staged_document.to_value(),
+                    None => project_repository
+                        .stream_graph_document(edited_stream)
+                        .map_err(|refusal| refusal.to_string())?
+                        .to_value(),
+                },
+            };
+            let held_stream = json!({ "asset": edited_stream.to_string() });
+            for &holder in stream_assets
+                .iter()
+                .filter(|holder| **holder != edited_stream)
+            {
+                let refreshed = match loaded_stream_id_of_each_stream_asset.get(&holder) {
+                    Some((stream_id, stream_location)) => {
+                        if !streams.contains_key(stream_id) {
+                            streams.insert(
+                                stream_id.clone(),
+                                StreamATransactionEdits {
+                                    stream_operations: self
+                                        .operations_on_the_loaded_streams
+                                        .runtime_operations_of_the_stream_a_call_names(stream_id)
+                                        .map_err(|refusal| refusal.to_string())?,
+                                    stream_location: Some(stream_location.clone()),
+                                    staged_graph: project_repository
+                                        .stream_graph_document(holder)
+                                        .map_err(|refusal| refusal.to_string())?,
+                                },
+                            );
+                        }
+                        let stream = streams
+                            .get_mut(stream_id)
+                            .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
+                        let refreshes = the_refresh_of_each_fragment_holding_a_stream(
+                            &stream.staged_graph,
+                            &held_stream,
+                            &edited_document,
+                        )?;
+                        let refreshed = !refreshes.is_empty();
+                        for refresh in refreshes {
+                            let applied = self
+                                .async_runtime
+                                .block_on(
+                                    stream
+                                        .stream_operations
+                                        .apply_a_stream_graph_operation_live(refresh),
+                                )
+                                .map_err(|refusal| refusal.to_string())?;
+                            stream.staged_graph.apply(&applied)?;
+                            applied_live.push((stream_id.clone(), applied));
+                        }
+                        refreshed
+                    }
+                    None => {
+                        let staged_document =
+                            match staged_documents_of_streams_not_loaded.entry(holder) {
+                                std::collections::btree_map::Entry::Occupied(staged) => {
+                                    staged.into_mut()
+                                }
+                                std::collections::btree_map::Entry::Vacant(unstaged) => unstaged
+                                    .insert(
+                                        project_repository
+                                            .stream_graph_document(holder)
+                                            .map_err(|refusal| refusal.to_string())?,
+                                    ),
+                            };
+                        let refreshes = the_refresh_of_each_fragment_holding_a_stream(
+                            staged_document,
+                            &held_stream,
+                            &edited_document,
+                        )?;
+                        let refreshed = !refreshes.is_empty();
+                        for refresh in refreshes {
+                            staged_document.apply(&refresh)?;
+                            refreshes_of_streams_not_loaded.push(ProjectOperation::StreamGraph(
+                                StreamGraphOperationOnAStream {
+                                    stream: holder,
+                                    graph_operation: refresh,
+                                },
+                            ));
+                        }
+                        refreshed
+                    }
+                };
+                if refreshed {
+                    edited_stream_assets.push(holder);
+                }
+            }
+        }
+        Ok(refreshes_of_streams_not_loaded)
     }
 
     /// The project every stream of `stream_ids` belongs to, its one writer, refused for a
@@ -2044,7 +2211,7 @@ fn graph_operation_for_the_request(
                     format!("the fragment name `{name}` names nothing: {casts_to_nothing}")
                 })?
                 .into_owned();
-            let config = json!({ STREAM_FRAGMENT_CONFIG_KEY: {
+            let config = json!({ STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: {
                 "asset": dependency_stream.to_string(),
                 "from": project.to_string(),
             }});
@@ -2056,7 +2223,7 @@ fn graph_operation_for_the_request(
                         node: StreamGraphDocumentNode {
                             id: node,
                             name,
-                            node_type: STREAM_FRAGMENT_TYPE.to_owned(),
+                            node_type: STREAM_FRAGMENT_NODE_TYPE.to_owned(),
                             config,
                             pins: Map::new(),
                             exposed_config_fields: Vec::new(),
@@ -2078,7 +2245,7 @@ fn graph_operation_for_the_request(
                     config: held_config,
                     fragment: Some(previous_fragment),
                     ..
-                }) if node_type == STREAM_FRAGMENT_TYPE && held_config == config => {
+                }) if node_type == STREAM_FRAGMENT_NODE_TYPE && held_config == config => {
                     label_the_node(label, id, node_by_label)?;
                     Ok(StreamGraphOperation::RefreshFragment {
                         node: id,
@@ -2212,7 +2379,7 @@ fn the_refresh_of_each_fragment_a_changed_module_defines(
             .stream_graph_document(stream_location.stream_asset)
             .map_err(|refusal| refusal.to_string())?;
         for fragment_node in staged_graph.fragment_nodes() {
-            if fragment_node.node_type == STREAM_FRAGMENT_TYPE {
+            if fragment_node.node_type == STREAM_FRAGMENT_NODE_TYPE {
                 continue;
             }
             let defined_in_a_changed_module = fragment_node

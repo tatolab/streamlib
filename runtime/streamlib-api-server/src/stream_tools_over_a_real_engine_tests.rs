@@ -3060,3 +3060,150 @@ async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
         "{refusal}"
     );
 }
+
+/// Project `cell` holds project `arm`'s stream as a fragment in two streams. `spare` is not
+/// loaded when the pin moves, and its graph document still holds the new revision. Once `arm`'s
+/// stream is forked, an edit to the fork refreshes the fragment of it in `main` and in `spare`
+/// as one transaction, and one undo reverses all three.
+#[tokio::test(flavor = "multi_thread")]
+async fn fragments_follow_a_pin_moved_while_their_stream_is_unloaded_and_each_edit_to_a_fork() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let first_revision = arm.commit_a_sink_named("shoulder");
+    let cell = a_project_whose_main_stream_holds_one_source();
+    cell.write_the_graph_document(the_graph_of_a_stream_named("spare"));
+    let main_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let spare_id = engine.a_stream_loaded_from_its_graph_document(&cell, "spare");
+    let arm_stream = arm.stream_asset_of("main").to_string();
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+
+    call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                "revision": first_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm is depended on");
+    for stream_id in [&main_id, &spare_id] {
+        call(
+            "use_dependency_stream",
+            json!({ "stream": stream_id, "project": arm.project,
+                    "dependency_stream": arm_stream, "name": "arm",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the arm's stream is placed");
+    }
+    engine
+        .engine
+        .unload_stream(&spare_id)
+        .expect("the spare stream unloads");
+
+    let second_revision = arm.commit_a_sink_named("elbow");
+    call(
+        "update_dependency",
+        json!({ "project_directory": cell.path(), "project": arm.project,
+                "revision": second_revision, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the pin moves");
+    for stream_name in ["main", "spare"] {
+        assert_eq!(
+            the_node_names_a_fragment_stores(&the_node_named(
+                &cell.the_graph_document_of(stream_name),
+                "arm"
+            )),
+            ["source", "shoulder", "elbow"],
+            "{stream_name}"
+        );
+    }
+
+    let forked = call(
+        "fork_asset",
+        json!({ "project_directory": cell.path(), "project": arm.project, "asset": arm_stream,
+                "path": "streams/arm.graph.json", "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the arm's stream is forked");
+    let copy = forked["asset"]["asset"].clone();
+    for stream_name in ["main", "spare"] {
+        assert_eq!(
+            the_node_named(&cell.the_graph_document_of(stream_name), "arm")["config"],
+            json!({ "stream": { "asset": copy } }),
+            "{stream_name}"
+        );
+    }
+    let fork_location = StreamLocation {
+        project_directory: cell.path().to_path_buf(),
+        project: cell.project,
+        stream_asset: Uuid::parse_str(copy.as_str().expect("the copy's UUID")).unwrap(),
+    };
+    let fork_id = fork_location.stream_id_named(TEST_PROJECT_NAME, "arm");
+    engine
+        .engine
+        .load_stream_from_graph_snapshot(
+            &GraphSnapshot::from_graph_document(cell.the_graph_document_of("arm"))
+                .expect("the fork's graph document parses"),
+            OptionsForLoadingOneStream::in_stream_environment(cell.stream_environment())
+                .with_display_name("arm")
+                .at_stream_location(fork_id.clone(), fork_location),
+        )
+        .expect("the fork loads");
+
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let edited = call(
+        "add_node",
+        json!({ "stream": fork_id, "type": sink_type.as_str(), "name": "wrist",
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the fork is edited");
+    for stream_name in ["main", "spare"] {
+        assert_eq!(
+            the_node_names_a_fragment_stores(&the_node_named(
+                &cell.the_graph_document_of(stream_name),
+                "arm"
+            )),
+            ["source", "shoulder", "elbow", "wrist"],
+            "{stream_name}"
+        );
+    }
+    assert_eq!(
+        the_node_names_a_fragment_stores(&the_node_named(
+            &engine.the_live_graph_of(&main_id),
+            "arm"
+        )),
+        ["source", "shoulder", "elbow", "wrist"]
+    );
+
+    let undone = call(
+        "undo",
+        json!({ "project_directory": cell.path(), "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the edit is undone");
+    assert_eq!(undone["undoes"], edited["transaction"], "{undone}");
+    assert!(
+        !sorted_node_names_in(&cell.the_graph_document_of("arm")).contains(&"wrist".to_owned())
+    );
+    for stream_name in ["main", "spare"] {
+        assert_eq!(
+            the_node_names_a_fragment_stores(&the_node_named(
+                &cell.the_graph_document_of(stream_name),
+                "arm"
+            )),
+            ["source", "shoulder", "elbow"],
+            "{stream_name}"
+        );
+    }
+    assert_eq!(
+        the_node_names_a_fragment_stores(&the_node_named(
+            &engine.the_live_graph_of(&main_id),
+            "arm"
+        )),
+        ["source", "shoulder", "elbow"]
+    );
+}
