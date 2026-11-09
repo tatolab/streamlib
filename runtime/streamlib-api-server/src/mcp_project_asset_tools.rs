@@ -29,7 +29,7 @@ use crate::mcp_project_change_feed::project_transactions_resource_uri;
 /// The author an asset change names when its caller's MCP client gave no name.
 const AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT: &str = "an MCP client";
 
-const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
+pub(crate) const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
     "The project, by absolute path: a folder holding `tatolab-project.json`.";
 const ASSET_ARGUMENT_DESCRIPTION: &str =
     "The asset, by the UUID `import_asset` or `list_assets` answered.";
@@ -400,7 +400,9 @@ impl LocalApiMcpServerHandler {
 impl LocalApiMcpServerHandler {
     /// Run `call` on the project at `project_directory`, its one writer held, on a blocking task;
     /// a refusal is the runtime's own words.
-    async fn a_project_repository_call_off_the_async_runtime<ProjectRepositoryCallOutcome>(
+    pub(crate) async fn a_project_repository_call_off_the_async_runtime<
+        ProjectRepositoryCallOutcome,
+    >(
         &self,
         tool_name: &'static str,
         project_directory: PathBuf,

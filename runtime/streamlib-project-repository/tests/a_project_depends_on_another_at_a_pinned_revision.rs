@@ -360,3 +360,76 @@ fn a_forked_stream_references_the_dependencys_own_assets_into_the_dependency() {
         json!({ "lut": { "asset": lut, "from": arm_project } })
     );
 }
+
+fn another_person() -> ProjectTransactionAuthor {
+    ProjectTransactionAuthor {
+        kind: ProjectTransactionAuthorKind::Person,
+        name: "sam".to_owned(),
+    }
+}
+
+#[test]
+fn undo_of_an_add_is_refused_once_another_author_has_moved_the_pin() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let first_revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let arm_project = arm.repository.project_file().project;
+    cell.repository
+        .add_dependency(&a_person(), &arm.source(), &first_revision)
+        .unwrap();
+    let second_revision = arm.add_a_node_named("elbow");
+    cell.repository
+        .update_dependency(&another_person(), arm_project, &second_revision)
+        .unwrap();
+
+    let reversal = cell.repository.undo_by(&a_person()).unwrap();
+    let refusal = cell
+        .repository
+        .apply_project_operations(&a_person(), reversal.operations, reversal.lineage)
+        .unwrap_err();
+
+    assert!(
+        matches!(refusal, ProjectRepositoryRefusal::DependencyPinnedElsewhere { ref pinned, .. } if *pinned == second_revision),
+        "{refusal}"
+    );
+    assert_eq!(
+        cell.repository.dependency(arm_project).unwrap().revision,
+        second_revision
+    );
+}
+
+#[test]
+fn a_project_directory_named_by_a_relative_path_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let mut arm = ProjectWithOneStream::created_in(root.path(), "arm");
+    let revision = arm.add_a_node_named("shoulder");
+    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
+    let relative_source = pathdiff_from_the_working_directory(arm.repository.project_directory());
+
+    let refusal = cell
+        .repository
+        .add_dependency(&a_person(), &relative_source, &revision)
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            refusal,
+            ProjectRepositoryRefusal::DependencySourceNotAnAbsolutePath { .. }
+        ),
+        "{refusal}"
+    );
+    assert!(cell.repository.project_file().dependencies.is_empty());
+}
+
+/// `directory` spelled relative to this process's working directory, through `..` as needed.
+fn pathdiff_from_the_working_directory(directory: &std::path::Path) -> String {
+    let working_directory = std::env::current_dir().unwrap();
+    let ups = working_directory.components().count() - 1;
+    let mut relative = std::path::PathBuf::new();
+    for _ in 0..ups {
+        relative.push("..");
+    }
+    relative.push(directory.strip_prefix("/").unwrap());
+    relative.display().to_string()
+}

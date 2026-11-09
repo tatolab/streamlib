@@ -1193,6 +1193,9 @@ impl GraphTransactionInFlight<'_> {
                         StreamGraphOperationToolArgument::AddNode { label, .. }
                         | StreamGraphOperationToolArgument::ImportGraphGenerator {
                             label, ..
+                        }
+                        | StreamGraphOperationToolArgument::UseDependencyStream {
+                            label, ..
                         } => label.clone(),
                         _ => None,
                     };
@@ -1865,6 +1868,11 @@ fn graph_operation_for_the_request(
             let mut fragment_run = a_graph_document_as_a_fragment_run(&graph_document)?;
             asset_references_made_references_into_the_dependency(&mut fragment_run, project);
             let name = name.unwrap_or(stream_name);
+            let name = streamlib::sdk::graph::cast_exposed_name_to_url_safe(&name)
+                .map_err(|casts_to_nothing| {
+                    format!("the fragment name `{name}` names nothing: {casts_to_nothing}")
+                })?
+                .into_owned();
             let config = json!({ STREAM_FRAGMENT_CONFIG_KEY: {
                 "asset": dependency_stream.to_string(),
                 "from": project.to_string(),
@@ -2033,6 +2041,9 @@ fn the_refresh_of_each_fragment_a_changed_module_defines(
             .stream_graph_document(stream_location.stream_asset)
             .map_err(|refusal| refusal.to_string())?;
         for fragment_node in staged_graph.fragment_nodes() {
+            if fragment_node.node_type == STREAM_FRAGMENT_TYPE {
+                continue;
+            }
             let defined_in_a_changed_module = fragment_node
                 .graph_generators_a_refresh_runs()
                 .iter()

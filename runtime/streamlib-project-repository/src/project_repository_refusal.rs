@@ -87,6 +87,11 @@ pub enum ProjectRepositoryRefusal {
         expected: String,
     },
     #[error(
+        "the dependency source {dependency_source} is a relative path; a project directory is \
+         named by its absolute path"
+    )]
+    DependencySourceNotAnAbsolutePath { dependency_source: String },
+    #[error(
         "{dependency_source} holds no project at that revision: it has no tatolab-project.json"
     )]
     DependencySourceHoldsNoProject { dependency_source: String },

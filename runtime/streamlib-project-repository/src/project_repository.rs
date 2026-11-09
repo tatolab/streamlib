@@ -506,6 +506,7 @@ impl ProjectRepository {
         revision: &str,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        refuse_a_project_directory_source_named_by_a_relative_path(source)?;
         let dependencies_directory = self.project_directory.join(PROJECT_DEPENDENCIES_DIRECTORY);
         let fetching_directory =
             dependencies_directory.join(format!(".fetching-{}", Uuid::new_v4()));
@@ -648,7 +649,8 @@ impl ProjectRepository {
             if graph_document
                 .get(STREAM_DOCUMENT_ASSET_KEY)
                 .and_then(Value::as_str)
-                == Some(stream.to_string().as_str())
+                .and_then(|asset| Uuid::parse_str(asset).ok())
+                == Some(stream)
             {
                 return Ok((ProjectRelativeAssetPath::parse(&path)?, graph_document));
             }
@@ -916,6 +918,7 @@ impl ProjectRepository {
                 document,
             } => {
                 refuse_a_stream_document_path_without_its_suffix(path)?;
+                self.refuse_a_path_through_a_symbolic_link(path)?;
                 if let Some(holder) = staged_assets.values().find(|asset| asset.path == *path) {
                     return Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset {
                         path: path.to_string(),
@@ -1551,6 +1554,22 @@ fn value_references_the_asset(value: &Value, asset_text: &str) -> bool {
     }
 }
 
+/// Refuse a `source` naming a project directory by a path relative to this process's working
+/// directory, which a later update would resolve somewhere else.
+fn refuse_a_project_directory_source_named_by_a_relative_path(
+    source: &str,
+) -> Result<(), ProjectRepositoryRefusal> {
+    let source_path = Path::new(source);
+    if !source_path.is_absolute() && source_path.join(PROJECT_FILE_NAME).is_file() {
+        return Err(
+            ProjectRepositoryRefusal::DependencySourceNotAnAbsolutePath {
+                dependency_source: source.to_owned(),
+            },
+        );
+    }
+    Ok(())
+}
+
 /// The remote `source` names: a project directory's own history, or a Git remote's URL as
 /// written.
 fn the_remote_a_source_names(source: &str) -> ProjectHistoryRemote {
@@ -1610,15 +1629,23 @@ fn apply_operation_to_dependencies(
                 .sort_by_key(|dependency| dependency.project);
         }
         ProjectDependencyOperation::RemoveDependency { dependency } => {
-            let before = project_file.dependencies.len();
+            let held = project_file
+                .dependencies
+                .iter()
+                .find(|held| held.project == dependency.project)
+                .ok_or(ProjectRepositoryRefusal::NoSuchDependency(
+                    dependency.project,
+                ))?;
+            if held.revision != dependency.revision {
+                return Err(ProjectRepositoryRefusal::DependencyPinnedElsewhere {
+                    project: dependency.project,
+                    pinned: held.revision.clone(),
+                    expected: dependency.revision.clone(),
+                });
+            }
             project_file
                 .dependencies
                 .retain(|held| held.project != dependency.project);
-            if project_file.dependencies.len() == before {
-                return Err(ProjectRepositoryRefusal::NoSuchDependency(
-                    dependency.project,
-                ));
-            }
         }
         ProjectDependencyOperation::MoveDependencyPin { project, from, to } => {
             let held = project_file

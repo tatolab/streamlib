@@ -109,14 +109,20 @@ impl ProjectHistoryRepository {
     }
 
     /// Fetch every branch and tag of `remote` into this history, each replacing the one of its
-    /// name.
+    /// name, and remove each branch and tag `remote` no longer holds; fetched commits are kept.
     pub fn fetch_every_branch_and_tag_from(
         &self,
         remote: &ProjectHistoryRemote,
     ) -> Result<(), ProjectRepositoryRefusal> {
         with_the_bearer_token_on_this_thread(remote.bearer_token.as_deref(), || {
             let mut anonymous_remote = self.repository.remote_anonymous(&remote.url)?;
-            anonymous_remote.fetch(&[EVERY_BRANCH_REFSPEC, EVERY_TAG_REFSPEC], None, None)
+            let mut fetch_options = git2::FetchOptions::new();
+            fetch_options.prune(git2::FetchPrune::On);
+            anonymous_remote.fetch(
+                &[EVERY_BRANCH_REFSPEC, EVERY_TAG_REFSPEC],
+                Some(&mut fetch_options),
+                None,
+            )
         })?;
         tracing::info!(remote = %remote.url, "fetched a dependency's history");
         Ok(())
@@ -405,6 +411,47 @@ mod tests {
         );
         assert_eq!(commits[0].author_name, "builder");
         assert_eq!(history.files_at_head().unwrap(), tracked_files);
+    }
+
+    #[test]
+    fn a_fetch_removes_each_branch_the_source_deleted_and_keeps_its_commits() {
+        let source_project = tempfile::tempdir().unwrap();
+        let source = ProjectHistoryRepository::create_for_project(source_project.path()).unwrap();
+        let mut tracked_files = BTreeMap::new();
+        tracked_files.insert("tatolab-project.json".to_owned(), b"{}\n".to_vec());
+        let commit = source
+            .commit_tracked_files(&tracked_files, &agent(), "first")
+            .unwrap();
+        let source_repository = Repository::open(source.history_directory()).unwrap();
+        source_repository
+            .branch(
+                "feature",
+                &source_repository
+                    .find_commit(Oid::from_str(&commit).unwrap())
+                    .unwrap(),
+                false,
+            )
+            .unwrap();
+        let fetched_into = tempfile::tempdir().unwrap();
+        let fetched =
+            ProjectHistoryRepository::open_or_create_at(&fetched_into.path().join("history.git"))
+                .unwrap();
+        let remote = ProjectHistoryRemote {
+            url: source.history_directory().display().to_string(),
+            bearer_token: None,
+        };
+        fetched.fetch_every_branch_and_tag_from(&remote).unwrap();
+        assert_eq!(fetched.commit_a_revision_names("feature").unwrap(), commit);
+
+        source_repository
+            .find_branch("feature", git2::BranchType::Local)
+            .unwrap()
+            .delete()
+            .unwrap();
+        fetched.fetch_every_branch_and_tag_from(&remote).unwrap();
+
+        assert!(fetched.commit_a_revision_names("feature").is_err());
+        assert_eq!(fetched.commit_a_revision_names(&commit).unwrap(), commit);
     }
 
     #[test]
