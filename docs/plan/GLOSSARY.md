@@ -27,9 +27,10 @@ Once loaded it persists until stopped or removed. _Avoid_: "app", "pipeline", "d
 "workflow", "graph" for the unit; "attached stream", "kept stream", "detach" (every loaded
 stream persists).
 
-**Project** _(user)_: a directory with `pyproject.toml` and one venv whose `stream.py` defines
-one or more streams; `tatolab new` and `create_project` make one, its scaffold holding one
-stream. Loading a project loads every stream in it, each its own unit.
+**Project** _(user)_: a self-contained directory holding `tatolab-project.json`, its streams' graph
+documents, its assets, its node code, its `pyproject.toml` and its imports, so a copied or zipped
+folder opens to the same state anywhere; `tatolab new` and `create_project` make one, its
+scaffold holding one stream. Loading a project loads every stream in it, each its own unit.
 _Avoid_: "stream project" (a project holds many streams), "app".
 
 **Stream action** _(crosses)_: one queued load or unload of a project's streams — a run, a
@@ -245,6 +246,10 @@ description", "snapshot", "manifest", "pipeline file".
 
 **Project** _(crosses)_: a versioned repository of assets and node code with its own history,
 which the runtime writes. _Avoid_: "app", "workspace" for one project.
+
+**Import** _(crosses)_: another project used by this one, copied once, whole, into
+`imports/<folder>/` and read there in place; an update replaces the folder whole. Tato Studio
+may call it a module. _Avoid_: "linked dependency", "fork", "fetch" for an import.
 
 **Asset** _(crosses)_: one file a project tracks by UUID — a stream's graph document, media, an
 image, USD, an FMU — referenced by UUID, never by path. _Avoid_: "resource", "file" when the UUID

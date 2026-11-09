@@ -28,24 +28,24 @@ follow. Rationale: `docs/decisions/project-and-assets.md`.
    is a transaction with an author and an inverse, applied whole or refused whole over the local
    API and MCP, and the unit of undo and history.
 4. Each project has its own history, kept by a Git engine the runtime carries so nobody needs Git
-   installed, in a form Cloudflare Artifacts accepts as a remote, so branches, merges and a hub
-   that syncs without a runtime build on it later.
-5. Another project's asset is used as a linked dependency pinned to a revision, updated when the
-   person chooses and copied only when they fork it; Python stays the language of nodes, and a
+   installed, as the project's local transaction log, so branches, merges and a hub build on it
+   later.
+5. Another project is used as an import, copied once, whole, into the project
+   (self-contained-project-imports); Python stays the language of nodes, and a
    `@graph_generator` function builds graph, and its output is stored as a frozen fragment.
 
 **A project after this change** (names per decision 5):
 
 ```text
 robot-cell/
-  tatolab-project.json                  # project UUID, name, dependencies with pinned revisions
+  tatolab-project.json                  # project UUID, name, its imports
   streams/arm-control.graph.json        # a stream asset: nodes by UUID, links, fragments
-  media/intro.mp4.asset.json            # a media asset's sidecar: UUID, kind, content hash
-  models/arm.usd.asset.json
+  media/intro.mp4  media/intro.mp4.asset.json   # the bytes, and the sidecar: UUID, kind, hash
+  models/arm.usd  models/arm.usd.asset.json
+  imports/<module>/                     # another project, copied in whole
   nodes/inverse_kinematics.py           # node code, plain files
   pyproject.toml  .python-version  .venv/
   .tatolab/history.git                  # this project's history, never the person's own .git
-  .tatolab/content/<sha256>             # large binary content, addressed by hash
 ```
 
 **Scale gate — this skill plus an ADR.** It changes the Python API's public contract, the local
@@ -79,21 +79,20 @@ API's addressing, the processor model's load path, and adds the project as a sto
 ## ADDED
 
 - **The project file.** `tatolab-project.json` holds the project's UUID, its name and its
-  dependencies, each with a pinned revision. The runtime writes it; a load reads it.
+  imports. The runtime writes it; a load reads it.
 - **Assets.** Every asset has a UUID, a kind and a path in the project. Kinds in the first slice:
   `stream` (a graph document), `media` (video, audio, image), `scene` (USD, glTF), `data` (an FMU,
   a LUT, model weights, a font). A stream asset carries its UUID inside its document; every other
-  asset has a sidecar `<file>.asset.json` holding its UUID, kind, content hash, size and import
-  settings, so each asset is one file in history and a move or rename keeps its UUID.
-- **Content.** An asset's bytes live in `.tatolab/content/`, named by their SHA-256, and only the
-  sidecar enters history, as Git LFS keeps a pointer. Node code (`nodes/*.py`, Slang) is plain
-  files in history, named by import path as today.
-- **Content never rides a transaction.** An import first copies the bytes into the content store
-  (from a path on the machine, or from an upload a client streams to the store), and the
-  transaction carries only the asset's UUID, kind and content hash, as Unreal and Unity keep
-  content apart from the operations that reference it.
+  asset has a sidecar `<file>.asset.json` holding its UUID, kind, content hash, size and import settings, so each asset is one file in history and a move or rename keeps its UUID.
+- **Content.** An asset's bytes are the one file at its path, which a node reads; history records
+  its sidecar alone, as Git LFS records a pointer. Node code (`nodes/*.py`, Slang) is plain files in history, named by
+  import path as today.
+- **Content never rides a transaction.** An import first copies the bytes to the asset's path
+  (from a path on the machine, or from an upload a client streams to `.tatolab/uploads/`), and the
+  transaction carries only the asset's UUID and kind, as Unreal and Unity keep content apart from
+  the operations that reference it.
 - **The asset verbs**, each a transaction: `import_asset {source, kind?, into}`, `source` a path on
-  the machine or a finished upload's content hash (answers the new UUID), `list_assets`, `describe_asset`, `rename_asset`, `move_asset`, `delete_asset` (refused
+  the machine or a finished upload (answers the new UUID), `list_assets`, `describe_asset`, `rename_asset`, `move_asset`, `delete_asset` (refused
   while a reference names it, listing them) and `set_asset_settings`. `graph`'s reference edges
   extend to assets: a config value `{"asset": "<uuid>"}` is a reference edge to an asset, checked at
   load as a node reference is. A node opens its asset's content through the runtime by UUID.
@@ -120,20 +119,12 @@ API's addressing, the processor model's load path, and adds the project as a sto
   transaction as a new one; `redo` reapplies it. Undo reverses only its own author's edits.
 - **History.** Each project's history is a Git repository at `.tatolab/history.git`, written by a
   Git engine the runtime unit carries, never the person's own Git or `.git`. Every committed
-  transaction is one commit on the current branch, its author the transaction's. The first slice
-  keeps one branch, `main`; stock `git clone` of the history must read it, so an Artifacts remote
-  can later take a push unchanged. Its operations follow Artifacts' programmatic model — create,
-  fork, import, branch, tag, read a file or a commit by path — so a local project and a hosted
-  one are driven the same way. A project works fully offline with no account; adding a remote is
-  one call and never required.
-- **Linked dependencies.** `add_dependency {source, revision}` pins another project — a local
-  path, an Artifacts remote or a package that ships a project — at a commit or tag; its history is
-  fetched into `.tatolab/dependencies/<project uuid>/`. Its assets are used by reference,
-  `{"asset": "<uuid>", "from": "<project uuid>"}`, and are read-only here except the inputs and
-  promoted config a stream offers. `update_dependency {project, revision}` moves the pin as a
-  transaction; the studio shows when a newer revision exists. `fork_asset` copies one asset into
-  this project under a new UUID, recording the asset it came from, and rewrites this project's
-  references to it.
+  transaction is one commit on `main`, its author the transaction's. No remote carries it and
+  nothing pushes, fetches or clones it; a project works fully offline with no account.
+- **Imports.** Another project is used by copying it once, whole, into `imports/<folder>/`, and its
+  assets are used by reference, `{"asset": "<uuid>", "from": "<project uuid>"}`, read-only here
+  except the inputs and promoted config a stream offers; the verbs are
+  self-contained-project-imports'.
 - **Fragments.** `import_graph_generator {stream, generator, config}` runs a `@graph_generator` function
   by import path in the project's interpreter and stores its output as a fragment: a read-only
   container with its own node UUIDs, whose Graph Input and Output nodes are its ports and whose
@@ -187,28 +178,27 @@ API's addressing, the processor model's load path, and adds the project as a sto
 
 ## Decisions
 
-**Decided 1 — one file per asset (owner, 2026-11-08).** History, merges and partial fetches work
-per file, so two people editing different streams never touch one file, and a teammate fetches
-only the assets they need. Unreal moved to one file per actor for the same reason.
+**Decided 1 — one file per asset (owner, 2026-11-08).** History and merges work per file, so two
+people editing different streams never touch one file. Unreal moved to one file per actor for the same reason.
 
 **Decided 2 — UUIDs generated by the runtime at creation (owner, 2026-11-08).** A node's or an
 asset's UUID is made when it is placed or imported and follows it for life; names are labels.
 
-**Decided 3 — linked by default, fork to own (owner, 2026-11-08).** Another project's stream or
-asset is used pinned to a revision and updated when the person chooses; a fork makes it theirs.
+**Decided 3 — copied once, opened to edit (owner, 2026-11-09).** Another project is copied into
+this one once and referenced there; editing it means opening it as its own project
+(self-contained-project-imports).
 
-**Decided 4 — history the runtime carries, one per project, Artifacts-compatible (owner,
-2026-11-08).** No dependency on an installed Git; a project's history follows Artifacts' concepts
-(repos, branches, tags, forks, imports) and can be pushed to it as a remote.
+**Decided 4 — history the runtime carries, one per project (owner, 2026-11-08 and 2026-11-09).**
+No dependency on an installed Git; history is the project's local transaction log, which no remote
+carries.
 
 **Decided 5 — the file names (owner, 2026-11-08).** `tatolab-project.json` for the project,
 `<name>.graph.json` for a stream, `<file>.asset.json` for every other asset's sidecar, and
-`.tatolab/` for history, content and dependencies.
+`imports/` for imports and `.tatolab/` for history and caches.
 
-**Decided 6 — the Git engine is libgit2, through `git2` (owner, 2026-11-08).** It fetches and
-pushes over smart HTTP, including the v1 `receive-pack` Artifacts takes, and its GPLv2 linking
-exception lets it link into a BUSL binary. It sits behind one seam, so `gix` can replace it once
-gitoxide pushes. Ticket 1 proves its push against an Artifacts remote.
+**Decided 6 — the Git engine is libgit2, through `git2` (owner, 2026-11-08).** It
+is the store engine only, and its GPLv2 linking exception lets it link into a BUSL binary. It
+sits behind one seam, so `gix` can replace it.
 
 **Decided 7 — the graph document is the runtime's database (owner, 2026-11-08).** People and
 agents write node and generator code; the graph changes only through operations the runtime
@@ -220,8 +210,8 @@ database refuses a damaged file, and never mints one in memory.
 agents, the studio and, later, remote collaborators reconcile their edits; it is no Git repository
 for the person and never touches their own `.git` or any tool they version with. Each commit
 records the whole project: every file outside a hidden folder, `node_modules`, `__pycache__` and a
-Python virtual environment, an asset whose bytes the content store holds as its sidecar alone, and
-no symbolic link.
+Python virtual environment, a media, scene or data asset as its
+sidecar alone, and no symbolic link; `imports/` is recorded on the same terms.
 
 **Decided 9 — pin values are saved like links (owner, 2026-11-08).** A value typed on an unlinked
 input is part of the document; delivering it to the running node is lightweight-node-kinds'
@@ -238,7 +228,7 @@ deleting an asset in an editor removes it. A generator's traceback returns with 
 
 **Deferred, on the same transactions and history:** the cloud hub (one Durable Object per project,
 PartyKit-style, ordering transactions with no runtime), branches per person and merge rules, roles,
-releases and variants, pushing content to cloud storage beside an Artifacts remote, presets and
+releases and variants, presets and
 "keep current values", the live layer for running programs, unlocking a fragment, a CRDT.
 
 ## Tickets (as few tracer bullets as the change needs)
@@ -247,9 +237,8 @@ releases and variants, pushing content to cloud storage beside an Artifacts remo
 keys and the record there.
 
 1. **#3256 — A project is a repository of assets.** The project file, history in `.tatolab/history.git`
-   through the carried Git engine with a commit per transaction, sidecars with UUIDs, the content
-   store, the asset verbs over the local API and MCP, and the change feed. Proof includes stock
-   `git clone` of the history.
+   through the carried Git engine with a commit per transaction, sidecars with UUIDs, the asset
+   verbs over the local API and MCP, and the change feed.
 2. **#3257 — A stream is a graph asset.** The graph document with runtime-generated node UUIDs, every load
    reading stream assets, the scaffold writing a project, the stream id from UUIDs, `graph`
    rendering `id` as a spec key. Carries the `stream.py` REMOVED bullets. Waits on 1.
@@ -260,8 +249,8 @@ keys and the record there.
    decorator replacing `@stream`, the fragment
    in the document and in `graph`, UUIDs kept by name across a re-run, `dev` refreshing fragments.
    Carries the compile-entry REMOVED bullets. Waits on 2.
-5. **#3260 — Linked dependencies.** `add_dependency` from a local path or an Artifacts remote, read-only
-   use of its assets, `update_dependency` and `fork_asset`. Waits on 2.
+5. **#3260 — Imports.** `add_dependency`, read-only use of an import's assets and
+   `update_dependency`, as self-contained-project-imports' tickets build them. Waits on 2.
 6. **#3152 — A project's node types and generators, listed without running code** (rewritten):
    each `@node.process` class, function and shader node and `@graph_generator` in a project and its
    dependencies, read from source, over the local API and MCP. Waits on 1.
@@ -269,6 +258,6 @@ keys and the record there.
 ## Notes (not in scope)
 
 - Converted consumers under `examples/` and `packages/` that ship a `stream.py` get backlog at the
-  consumer once ticket 2 lands; a package afterwards ships a project as package data.
+  consumer once ticket 2 lands; a module afterwards is a project another adds as an import.
 - Tato Studio (tatolab-app) removes its `stream.py` failed-record handling, added in its #156, in
   the app change that follows ticket 2, which changes how a stream gets its id.
