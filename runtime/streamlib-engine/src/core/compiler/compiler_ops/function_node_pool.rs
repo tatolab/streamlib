@@ -21,7 +21,7 @@ use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef,
     LinkCarriedThroughTheFunctionNodePoolComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
-    OutputLinkPortRef, PortInfo,
+    OutputLinkPortRef, PortInfo, the_family_a_link_out_of_an_output_carries,
 };
 use crate::core::processors::ProcessorSpec;
 
@@ -216,27 +216,38 @@ fn carry_one_link_through_the_pool(
     pool_id: &ProcessorUniqueId,
     link_id: &LinkUniqueId,
 ) -> Result<(LinkUniqueId, LinkUniqueId)> {
-    let (source, destination, family) = {
+    let (source, destination) = {
         let link = graph
             .traversal()
             .e(link_id)
             .first()
             .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
-        let source = link.source().clone();
-        let destination = link.to_port().clone();
-        let family = graph
-            .traversal()
-            .v(source.processor_id())
-            .first()
-            .and_then(|node| {
-                node.ports
-                    .outputs
-                    .iter()
-                    .find(|port| port.name == source.port_name())
-                    .map(|port| port.family.clone())
-            })
-            .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Channels));
-        (source, destination, family)
+        (link.source().clone(), link.to_port().clone())
+    };
+    let hands_a_message_on_unread = graph
+        .traversal()
+        .v(source.processor_id())
+        .first()
+        .and_then(|node| {
+            node.ports
+                .outputs
+                .iter()
+                .find(|port| port.name == source.port_name())
+        })
+        .is_some_and(|port| port.family.family_follows_input_port.is_some());
+    let family = the_family_a_link_out_of_an_output_carries(
+        graph,
+        source.processor_id(),
+        source.port_name(),
+    )
+    .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Channels));
+    let carry_family = if hands_a_message_on_unread {
+        serde_json::json!({
+            "family": "message",
+            "message_family": family.family.wire_name(),
+        })
+    } else {
+        serde_json::json!({ "family": family_name(family.family) })
     };
     let pool = graph
         .traversal_mut()
@@ -269,11 +280,15 @@ fn carry_one_link_through_the_pool(
         .clone()
         .unwrap_or_else(|| serde_json::json!({ "carries": [] }));
     if let Some(carries) = config.get_mut("carries").and_then(JsonValue::as_array_mut) {
-        carries.push(serde_json::json!({
+        let mut carry = serde_json::json!({
             "input_port": pool_input_port,
             "output_port": pool_output_port,
-            "family": family_name(family.family),
-        }));
+        });
+        if let (Some(carry), Some(carry_family)) = (carry.as_object_mut(), carry_family.as_object())
+        {
+            carry.extend(carry_family.clone());
+        }
+        carries.push(carry);
     }
     pool.set_config(config);
 
@@ -347,12 +362,13 @@ fn family_name(family: PortFamily) -> &'static str {
 mod tests {
     use super::*;
     use crate::core::compiler::compiler_ops::function_node_island::tests::{
-        a_function_node_type, a_graph_resolving_these_function_node_types,
+        a_class_node_feeding, a_function_node_type, a_graph_resolving_these_function_node_types,
         a_graph_resolving_three_function_node_types, a_helper_reader_before_its_setup, add_a_node,
         link,
     };
     use crate::core::compiler::compiler_ops::function_node_island::{
         HowALinkIsWired, how_a_link_is_wired,
+        wire_a_link_from_a_function_node_island_into_its_reader,
     };
     use crate::core::processors::HowANodeOfADescribedTypeRuns;
     use crate::core::test_support::MockInputOnlyProcessor;
@@ -573,6 +589,118 @@ mod tests {
             "a compiled island runs inside any read, a native half's included"
         );
         assert!(links_to_add.contains(&compiled_into_the_reader));
+    }
+
+    /// `test_ops:gate`, whose `result` hands on the message at `value` unread.
+    fn a_gate_type() -> ProcessorDescriptor {
+        let mut gate = a_function_node_type("test_ops:gate", &["value", "open"], &[]);
+        let mut follows_its_value = PortFamilyDeclaration::of_family(PortFamily::Image);
+        follows_its_value.family_follows_input_port = Some("value".to_string());
+        gate = gate.with_output(PortDescriptor::new("result", "", true, follows_its_value));
+        gate
+    }
+
+    #[test]
+    fn a_class_node_read_through_a_gate_by_the_app_process_is_read_at_the_pool_and_handed_on() {
+        let graph = a_graph_resolving_these_function_node_types([a_gate_type()]);
+        graph
+            .node_types_this_stream_resolves()
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                the_function_node_pool_descriptor(None).unwrap(),
+                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|node| {
+                    Err(Error::Configuration(format!(
+                        "`{}` builds no processor in this test",
+                        node.id
+                    )))
+                })),
+            )
+            .unwrap();
+        let mut graph = graph;
+        let class_node = a_class_node_feeding(&mut graph);
+        let gate = add_a_node(&mut graph, "test_ops:gate", JsonValue::Null);
+        let reader = a_reader_in_the_app_process(&mut graph);
+        let into_the_gate = link(&mut graph, (&class_node, "out1"), (&gate, "value"));
+        let gate_into_the_reader = link(&mut graph, (&gate, "result"), (&reader, "in1"));
+        let mut processors_to_add = vec![class_node.clone(), gate, reader];
+        let mut links_to_add = vec![into_the_gate.clone(), gate_into_the_reader.clone()];
+
+        carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+            &mut graph,
+            &mut processors_to_add,
+            &mut links_to_add,
+        )
+        .unwrap();
+
+        let pool = the_function_node_pool_of(&graph).expect("the stream has a pool");
+        let class_node_family = graph
+            .traversal()
+            .v(&class_node)
+            .first()
+            .unwrap()
+            .ports
+            .outputs
+            .iter()
+            .find(|port| port.name == "out1")
+            .unwrap()
+            .family
+            .family;
+        let pool_node = graph.traversal().v(&pool).first().unwrap();
+        assert_eq!(
+            pool_node.config.as_ref().unwrap()["carries"][0],
+            serde_json::json!({
+                "input_port": "island_0",
+                "output_port": "island_0_output",
+                "family": "message",
+                "message_family": class_node_family.wire_name(),
+            })
+        );
+        assert_eq!(
+            pool_node.ports.outputs[0].family.family, class_node_family,
+            "the pool hands the message on in the family it arrived in"
+        );
+        let into_the_pool = the_links_a_link_is_wired_as(&graph, &gate_into_the_reader)
+            .into_iter()
+            .find(|carried| {
+                graph
+                    .traversal()
+                    .e(carried)
+                    .first()
+                    .unwrap()
+                    .to_port()
+                    .processor_id()
+                    == &pool
+            })
+            .unwrap();
+        graph
+            .traversal_mut()
+            .v(&pool)
+            .first_mut()
+            .unwrap()
+            .insert_component_without_rendering_it(
+            OutOfProcessLinkWiringComponent(std::sync::Arc::new(
+                crate::core::processors::OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                    ProcessExecution::Continuous { interval_ms: 10 },
+                ),
+            )),
+        );
+
+        wire_a_link_from_a_function_node_island_into_its_reader(
+            &mut graph,
+            &into_the_pool,
+            &crate::iceoryx2::Iceoryx2Node::for_this_test_process(),
+        )
+        .unwrap();
+
+        let read_at = graph
+            .traversal()
+            .e(&into_the_gate)
+            .first()
+            .unwrap()
+            .get::<crate::core::graph::LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+            .and_then(|read_through| read_through.the_read_for_the_island_link(&into_the_pool))
+            .map(|read| read.reader_input_port.clone())
+            .expect("the pool reads the class node's channel for the island it carries");
+        assert_eq!(read_at.processor_id(), &pool);
     }
 
     #[test]

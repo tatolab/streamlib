@@ -185,8 +185,9 @@ The order is: the families, then variables, then the gateway and track nodes.
 - **Literal pins.** An unlinked input takes the value set on its pin, else its default
   (§Inputs and config).
 - **Reading a class node.** A function node reads a class node's output through its reader: the
-  reader's helper subscribes to the class node's channel at a hidden input port, and the island
-  keeps the newest message on that input. See DECIDED 11.
+  reader's helper, or the pool for an app-process reader, subscribes to the class node's channel
+  at a hidden input port for each input port the island feeds, and the island keeps the newest
+  message on that input. See DECIDED 11.
 - **Nothing.** A function returning `T | None` hands out nothing on `None`: the reader's read
   gives `None`, and that port does not wake it. See DECIDED 12.
 - **A control value on a wire.** An island edge carrying one value is Channels with an
@@ -439,9 +440,10 @@ Each was settled by the owner on the date it names.
 - **DECIDED 11 — Reading a class node's output (owner, 2026-11-08).** The reader's helper
   subscribes to the class node's channel, and the island keeps the newest message on each input.
   A new message re-evaluates the island and wakes a reactive reader. Losses count on the
-  reader's board. An island that reads a class node feeds one reader, and a reader with no
-  helper of its own (an app-process built-in, the pool) and a promoted function node are refused
-  by name for now.
+  reader's board. Each input port an island feeds reads the channel through its own
+  subscription, at its own hidden input port of its reader, so one island may feed several
+  readers. The function node pool reads it the same way for an island it carries, and hands a
+  message on unread exactly as it arrived. A promoted function node reads it in its own helper.
 - **DECIDED 12 — Handing out nothing (owner, 2026-11-08).** A function returns `T | None`, and
   `None` means nothing this evaluation: the reader's read gives `None` and that port does not
   wake it. A compiled evaluate entry gets a present flag per output that may hand out nothing,

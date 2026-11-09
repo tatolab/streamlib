@@ -576,6 +576,25 @@ class CountsEachTickRecordsSource:
         ctx.outputs.write(self.counts_to_downstream, {"count": self.count})
 
 
+@node.process(execution="continuous", interval_ms=10)
+class CountsEachTickAsALevelSource:
+    """Writes the count every tick as the control value of one `level` channel, counting from 1."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    level_to_downstream = Output(Channels, names=("level",), dtype="f64")
+
+    def process(self, ctx) -> None:
+        self.count += 1
+        ctx.outputs.write_channels_block(
+            "level_to_downstream",
+            numpy.array([[float(self.count)]], dtype=numpy.float64),
+            start_sample=self.count - 1,
+            sample_rate=0,
+        )
+
+
 #: How many reads a gated sink makes into each batch it reports.
 GATED_READS_PER_REPORTED_BATCH = 50
 

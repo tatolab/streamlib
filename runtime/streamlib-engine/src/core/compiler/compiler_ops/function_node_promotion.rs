@@ -9,15 +9,17 @@
 use std::collections::{BTreeSet, HashSet};
 
 use super::function_node_island::{
-    is_a_function_node, runs_inside_the_read_of_each_node_it_feeds,
-    the_report_of_how_its_helpers_ran_a_function_node, the_state_fields_of_a_function_node,
+    runs_inside_the_read_of_each_node_it_feeds, the_report_of_how_its_helpers_ran_a_function_node,
+    the_state_fields_of_a_function_node,
 };
+use super::open_iceoryx2_service_op::close_iceoryx2_service;
 use crate::core::ProcessorUniqueId;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     FunctionNodePromotedToItsOwnProcessComponent, FunctionNodePromotionOutOfItsReadersIslands,
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
+    LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
     LinkUniqueId, OutOfProcessLinkWiringComponent, ProcessorMetrics,
 };
 
@@ -255,27 +257,6 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
                 .join(", ")
         )));
     }
-    let class_nodes_feeding_a_promoted_node: BTreeSet<String> = graph
-        .traversal()
-        .e(())
-        .iter()
-        .filter(|link| promoted.contains(link.to_port().processor_id()))
-        .map(|link| link.source().processor_id())
-        .filter(|source| !is_a_function_node(graph, source))
-        .map(|class_node| the_name_in_the_graph_of(graph, class_node))
-        .collect();
-    if !class_nodes_feeding_a_promoted_node.is_empty() {
-        return Err(Error::InvalidGraph(format!(
-            "function node `{crashed_function_node_name}` is not promoted out of \
-             `{reader_name}`'s islands: the nodes it would move read {}, and a promoted \
-             function node reads only other function nodes in this release",
-            class_nodes_feeding_a_promoted_node
-                .iter()
-                .map(|class_node| format!("`{class_node}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
     let reader_link_wiring = graph
         .traversal()
         .v(reader)
@@ -322,6 +303,13 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
     for (link_id, feeds_the_reader) in &links_touching_a_promoted_node {
         if *feeds_the_reader {
             reader_link_wiring.forget_a_function_node_island(link_id.as_str());
+        }
+        let read_through_its_islands_reader =
+            graph.traversal().e(link_id).first().is_some_and(|link| {
+                link.has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+            });
+        if read_through_its_islands_reader {
+            close_iceoryx2_service(graph, link_id)?;
         }
         if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
             link.insert(LinkStateComponent(LinkState::Pending));
@@ -548,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn a_function_node_reading_a_class_node_is_refused_promotion_leaving_its_island_and_links() {
+    fn a_promoted_function_node_reading_a_class_node_reads_its_channel_in_its_own_helper() {
         let mut graph = a_graph_resolving_three_function_node_types();
         let (remap, reader, into_the_island, into_the_reader) =
             a_class_node_feeding_remap_into_a_helper_reader(&mut graph);
@@ -558,37 +546,43 @@ mod tests {
             &crate::iceoryx2::Iceoryx2Node::for_this_test_process(),
         )
         .unwrap();
-        let islands_before = reader_setup_command_ports(&graph, &reader)["islands"].clone();
-        let link_states_before = [
-            the_link_state_of(&graph, &into_the_island),
-            the_link_state_of(&graph, &into_the_reader),
-        ];
+        assert!(
+            graph
+                .traversal()
+                .e(&into_the_island)
+                .first()
+                .unwrap()
+                .has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>()
+        );
 
-        let refusal = plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
+        let planned = plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
             &mut graph,
             &remap,
             &reader,
             "function node `remap` crashed its helper process during its call.",
             &NOTHING_REMOVED,
         )
-        .expect_err("a promoted function node reads only other function nodes")
-        .to_string();
+        .expect("a function node reading a class node is promoted");
 
+        assert!(!runs_inside_the_read_of_each_node_it_feeds(&graph, &remap));
+        assert!(planned.links_to_add.contains(&into_the_island));
         assert!(
-            refusal.contains("a promoted function node reads only other function nodes"),
-            "{refusal}"
+            !graph
+                .traversal()
+                .e(&into_the_island)
+                .first()
+                .unwrap()
+                .has::<LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent>(),
+            "the read its old reader held is closed"
         );
-        assert!(runs_inside_the_read_of_each_node_it_feeds(&graph, &remap));
         assert_eq!(
-            reader_setup_command_ports(&graph, &reader)["islands"],
-            islands_before
+            the_link_state_of(&graph, &into_the_island),
+            Some(LinkState::Pending)
         );
         assert_eq!(
-            [
-                the_link_state_of(&graph, &into_the_island),
-                the_link_state_of(&graph, &into_the_reader),
-            ],
-            link_states_before
+            how_a_link_is_wired(&graph, &into_the_island).unwrap(),
+            HowALinkIsWired::ThroughAChannel,
+            "the class node's channel reaches the promoted node's own helper"
         );
     }
 
@@ -721,7 +715,7 @@ mod tests {
     }
 
     #[test]
-    fn a_link_into_a_promoted_function_node_from_a_node_that_is_not_one_is_refused() {
+    fn a_link_into_a_promoted_function_node_from_a_node_that_is_not_one_is_a_channel() {
         let OneIslandIntoOneReader {
             mut graph,
             remap,
@@ -745,12 +739,9 @@ mod tests {
 
         let into_the_promoted_node = link(&mut graph, (&process_node, "out1"), (&remap, "x"));
 
-        let refusal = how_a_link_is_wired(&graph, &into_the_promoted_node)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            refusal.contains("which is not a function node"),
-            "{refusal}"
+        assert_eq!(
+            how_a_link_is_wired(&graph, &into_the_promoted_node).unwrap(),
+            HowALinkIsWired::ThroughAChannel
         );
     }
 

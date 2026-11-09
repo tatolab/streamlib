@@ -171,6 +171,34 @@ impl std::fmt::Debug for MessageAFunctionNodeIslandHolds {
     }
 }
 
+impl MessageAFunctionNodeIslandHolds {
+    /// Holds `message`, claiming the pooled GPU frame it names, if any, through
+    /// `claim_the_pooled_gpu_frame_a_message_names`.
+    fn hold_a_message_read_off_its_channel(
+        message: &MessageReadFromInputPort,
+        claim_the_pooled_gpu_frame_a_message_names: &ClaimOfThePooledGpuFrameAMessageNames,
+        input_port_it_was_read_at: &str,
+    ) -> Self {
+        let claim_of_its_pooled_gpu_frame = the_pooled_gpu_frame_a_message_names(
+            &message.payload_descriptor,
+        )
+        .and_then(|pooled_gpu_frame| {
+            claim_the_pooled_gpu_frame_a_message_names(pooled_gpu_frame).unwrap_or_else(|refusal| {
+                tracing::warn!(
+                    input_port = %input_port_it_was_read_at,
+                    "the pooled GPU frame a message names could not be claimed, so \
+                     its producer may reuse it while the message is held: {refusal}"
+                );
+                None
+            })
+        });
+        Self {
+            message: MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(message),
+            _claim_of_its_pooled_gpu_frame: claim_of_its_pooled_gpu_frame,
+        }
+    }
+}
+
 /// The pooled GPU frame a message names: an Image frame's slot, or a pooled
 /// frame's; `None` for a message whose payload is its bytes.
 fn the_pooled_gpu_frame_a_message_names(
@@ -512,33 +540,12 @@ impl FunctionNodeIslandEvaluation {
                         Some(message),
                         HowAnInputReadsALinkFromOutsideItsIsland::MessageHandedOnUnread,
                     ) => {
-                        let claim_of_its_pooled_gpu_frame =
-                            the_pooled_gpu_frame_a_message_names(&message.payload_descriptor)
-                                .and_then(|pooled_gpu_frame| {
-                                    (self.claim_the_pooled_gpu_frame_a_message_names)(
-                                        pooled_gpu_frame,
-                                    )
-                                    .unwrap_or_else(
-                                        |refusal| {
-                                            tracing::warn!(
-                                                function_node = %function_node.node_id,
-                                                reader_input_port = %reader_input_port,
-                                                "the pooled GPU frame a message names could not be \
-                                                 claimed, so its producer may reuse it while the \
-                                                 island holds it: {refusal}"
-                                            );
-                                            None
-                                        },
-                                    )
-                                });
                         *value_read_last = FunctionNodeValue::MessageHandedOnUnread(Arc::new(
-                            MessageAFunctionNodeIslandHolds {
-                                message:
-                                    MessageAFunctionNodeIslandHandsOnUnread::read_off_its_channel(
-                                        &message,
-                                    ),
-                                _claim_of_its_pooled_gpu_frame: claim_of_its_pooled_gpu_frame,
-                            },
+                            MessageAFunctionNodeIslandHolds::hold_a_message_read_off_its_channel(
+                                &message,
+                                &self.claim_the_pooled_gpu_frame_a_message_names,
+                                reader_input_port,
+                            ),
                         ));
                     }
                     (None, HowAnInputReadsALinkFromOutsideItsIsland::MessageHandedOnUnread) => {
@@ -1323,6 +1330,8 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         initial_state_values,
         output_count,
         outputs_that_may_hand_out_nothing = Vec::new(),
+        inputs_carrying_an_unread_message = Vec::new(),
+        outputs_carrying_an_unread_message = Vec::new(),
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -1335,6 +1344,8 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         initial_state_values: Vec<f64>,
         output_count: usize,
         outputs_that_may_hand_out_nothing: Vec<usize>,
+        inputs_carrying_an_unread_message: Vec<usize>,
+        outputs_carrying_an_unread_message: Vec<usize>,
     ) -> PyResult<Self> {
         let breadcrumb_number =
             BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
@@ -1362,6 +1373,8 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
             output_count,
             &HowAFunctionNodeCarriesValuesBeyondNumbers {
                 outputs_that_may_hand_out_nothing,
+                inputs_carrying_an_unread_message,
+                outputs_carrying_an_unread_message,
                 ..HowAFunctionNodeCarriesValuesBeyondNumbers::default()
             },
         )
@@ -1383,9 +1396,9 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
     }
 
     /// Call the node with `input_values` at the stream's time now, answering
-    /// its outputs, a `float` for a number or bool, a `dict` as given and
-    /// `None` for one that hands out nothing; refused when it refuses,
-    /// keeping the state it had.
+    /// its outputs, a `float` for a number or bool, a `dict` as given, the
+    /// `UnreadMessage` it hands on, and `None` for one that hands out nothing;
+    /// refused when it refuses, keeping the state it had.
     fn evaluate<'py>(
         &self,
         python: Python<'py>,
@@ -1534,6 +1547,42 @@ pub(crate) fn stop_feeding_an_input_port_from_a_function_node_island(
             )
         })?;
     Ok(input_mailboxes.stop_feeding_an_input_port_from_a_function_node_island(input_port))
+}
+
+/// The message `input_port` holds for this read, handed back unread: an
+/// island's output at the port, or the newest message its link carried;
+/// `None` when it holds none.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, input_port))]
+pub(crate) fn read_the_message_at_an_input_port_unread(
+    python: Python<'_>,
+    link_data_access: &PythonProcessorLinkDataAccess,
+    input_port: &str,
+) -> PyResult<Option<UnreadMessageAFunctionNodeHandsOn>> {
+    Ok(link_data_access
+        .read_the_message_at_an_input_port_as_it_arrived(python, input_port)?
+        .map(|message| UnreadMessageAFunctionNodeHandsOn {
+            message: Arc::new(
+                MessageAFunctionNodeIslandHolds::hold_a_message_read_off_its_channel(
+                    &message,
+                    &link_data_access.claim_of_the_pooled_gpu_frames_its_islands_hold(),
+                    input_port,
+                ),
+            ),
+        }))
+}
+
+/// Write `message` on `output_port` exactly as it arrived, its descriptor,
+/// stamp and group boundary unchanged.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access, output_port, message))]
+pub(crate) fn hand_an_unread_message_on(
+    python: Python<'_>,
+    link_data_access: &PythonProcessorLinkDataAccess,
+    output_port: &str,
+    message: &UnreadMessageAFunctionNodeHandsOn,
+) -> PyResult<()> {
+    link_data_access.hand_a_message_on_unread(python, output_port, &message.message.message)
 }
 
 #[cfg(test)]

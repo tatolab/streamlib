@@ -34,6 +34,7 @@ __all__ = [
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "feed_an_input_port_from_a_function_node_island",
+    "hand_an_unread_message_on",
     "limited_access_view_of_runtime_context_for_helper_process",
     "note_execution_mode_from_parent_on_runtime_context",
     "note_pause_state_from_parent_on_runtime_context",
@@ -41,6 +42,7 @@ __all__ = [
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
     "read_each_unlinked_input_port_as_its_pin_value",
+    "read_the_message_at_an_input_port_unread",
     "run_the_scheduling_loop_of_this_helper",
     "stop_feeding_an_input_port_from_a_function_node_island",
 ]
@@ -67,13 +69,17 @@ class FunctionNodeEvaluatedAsItsHelpersProcessor:
         initial_state_values: list[float],
         output_count: int,
         outputs_that_may_hand_out_nothing: list[int] = ...,
+        inputs_carrying_an_unread_message: list[int] = ...,
+        outputs_carrying_an_unread_message: list[int] = ...,
     ) -> FunctionNodeEvaluatedAsItsHelpersProcessor:
         """`called_through` is a compiled evaluate entry's address, or the object that runs the body as Python.
 
         Of a compiled node's `input_count` inputs, the last set the config values these indices name.
         """
-    def evaluate(self, input_values: list[float | dict[str, Any]]) -> list[float | dict[str, Any] | None]:
-        """Call the node with `input_values` at the stream's time now, answering its outputs, a `float`, a `dict` or `None` for one that hands out nothing."""
+    def evaluate(
+        self, input_values: list[float | dict[str, Any] | _stream_protocols.UnreadMessage]
+    ) -> list[float | dict[str, Any] | _stream_protocols.UnreadMessage | None]:
+        """Call the node with `input_values` at the stream's time now, answering its outputs, a `float`, a `dict`, the `UnreadMessage` it hands on, or `None` for one that hands out nothing."""
 
 def feed_an_input_port_from_a_function_node_island(
     *,
@@ -116,6 +122,21 @@ def stop_feeding_an_input_port_from_a_function_node_island(
     input_port: str,
 ) -> bool:
     """Stop feeding `input_port` from the island feeding it; whether one did."""
+
+def read_the_message_at_an_input_port_unread(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    input_port: str,
+) -> _stream_protocols.UnreadMessage | None:
+    """The message `input_port` holds for this read, handed back unread; `None` when it holds none."""
+
+def hand_an_unread_message_on(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    output_port: str,
+    message: _stream_protocols.UnreadMessage,
+) -> None:
+    """Write `message` on `output_port` exactly as it arrived, its descriptor, stamp and group boundary unchanged."""
 
 def read_each_unlinked_input_port_as_its_pin_value(
     *,

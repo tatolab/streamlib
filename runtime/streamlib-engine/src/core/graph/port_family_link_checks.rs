@@ -87,6 +87,21 @@ pub(crate) fn the_outputs_a_link_carries_on<'graph>(
     carried_on
 }
 
+/// The family a link out of output `port_name` of `node_id` carries: the
+/// output's own, or, for one whose family follows an input, that of the first
+/// output it follows upstream; `None` while that is not settled.
+pub(crate) fn the_family_a_link_out_of_an_output_carries(
+    graph: &Graph,
+    node_id: &ProcessorUniqueId,
+    port_name: &str,
+) -> Option<PortFamilyDeclaration> {
+    let node = graph.traversal().v(node_id).first()?;
+    the_outputs_a_link_carries_on(graph, node, port_name)
+        .into_iter()
+        .map(|(_, _, declaration)| declaration.clone())
+        .next()
+}
+
 /// Each input what arrives at `input_port_name` of `node` is carried on to by
 /// the outputs that follow it, downstream through every output that follows
 /// an input in turn, with the following output it leaves through.

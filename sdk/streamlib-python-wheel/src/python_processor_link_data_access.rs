@@ -40,9 +40,10 @@ use streamlib::sdk::iceoryx2::{
     GpuPoolSlotFrameDescriptorBody, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node, ImageFrameDescriptorBody,
     ImageFrameH273Colour, InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName,
-    InputMailboxesInner, InputPortMessagePayload, MessageGroupBoundary, MessageReadFromInputPort,
-    OutputWriterInner, PacketsUnitDescriptorBody, ReadMode, ResolvedAudioWindowContract,
-    StreamClockBoardPublishListener, array_frame_attribute_table_of, array_frame_cpu_data_offsets,
+    InputMailboxesInner, InputPortMessagePayload, MessageAFunctionNodeIslandHandsOnUnread,
+    MessageGroupBoundary, MessageReadFromInputPort, OutputWriterInner, PacketsUnitDescriptorBody,
+    ReadMode, ResolvedAudioWindowContract, StreamClockBoardPublishListener,
+    array_frame_attribute_table_of, array_frame_cpu_data_offsets,
     input_port_borrow_quota as resolve_input_port_borrow_quota,
 };
 use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
@@ -2025,6 +2026,65 @@ impl PythonProcessorLinkDataAccess {
                 )
             })
             .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
+    }
+
+    /// The message `port_name` holds for this read, as it arrived; `None` for
+    /// none, or for a declared input port no link has reached yet.
+    pub(crate) fn read_the_message_at_an_input_port_as_it_arrived(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+    ) -> PyResult<Option<MessageReadFromInputPort>> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
+            return Ok(None);
+        };
+        python
+            .detach(|| input_mailboxes.read_raw(port_name))
+            .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
+    }
+
+    /// Write `message` on `port_name` exactly as it arrived: its payload, its
+    /// descriptor, its stamp and its group boundary. A message past the
+    /// channel's ceiling is dropped with a warning, as any write's is.
+    pub(crate) fn hand_a_message_on_unread(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        message: &MessageAFunctionNodeIslandHandsOnUnread,
+    ) -> PyResult<()> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        let Some(output_writer) = self.output_writer_reaching(port_name)? else {
+            return Ok(());
+        };
+        match python.detach(|| {
+            output_writer.write_bytes_described_by(
+                port_name,
+                &message.payload_bytes,
+                message.timestamp_ns,
+                message.group_boundary,
+                message.payload_descriptor,
+            )
+        }) {
+            Ok(()) => Ok(()),
+            Err(Error::PayloadExceedsChannelCeiling {
+                channel,
+                payload_bytes,
+                largest_admitted_frame_bytes,
+                tier,
+                refused_bags_on_the_output_port: refused_bags,
+                ..
+            }) => {
+                tracing::warn!(
+                    "output port {port_name:?} refused a {payload_bytes}-byte message past the \
+                     {largest_admitted_frame_bytes} bytes channel {channel:?} admits ({tier} \
+                     tier); the message was dropped, and the port has refused {refused_bags} so \
+                     far"
+                );
+                Ok(())
+            }
+            Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
+        }
     }
 
     /// [`Self::write_to_output_port`], the message's header carrying the

@@ -1434,7 +1434,7 @@ class HelperProcessLifecycle:
             configuration = command.get("config")
             if self._processor_class is FunctionNodePool:
                 self._processor_class = the_processor_class_the_function_node_pool_runs_as(
-                    configuration or {}
+                    configuration or {}, self._link_data_access
                 )
                 configuration = None
             port_wiring = command.get("ports") or {}
