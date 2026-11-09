@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tatolab-ops"
-version = "0.68.34"
+version = "0.68.41"
 description = "The small function nodes every Tatolab stream can wire: math, shaping, logic, gating, values, noise and time, compiled to native code."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -92,6 +92,11 @@
           "path": "packages/tatolab-moq/pyproject.toml"
         },
         {
+          "type": "toml",
+          "path": "packages/tatolab-ops/pyproject.toml",
+          "jsonpath": "$.project.version"
+        },
+        {
           "type": "generic",
           "path": "packages/tatolab-ops/pyproject.toml"
         },

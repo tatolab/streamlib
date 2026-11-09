@@ -650,14 +650,15 @@ jobs:
 
       # A scaffolded stream compiles and type-checks with no runtime installed,
       # in what a user's `uv sync` gives it: `tatolab-stream`, the test-pattern
-      # module and numpy.
+      # and ops modules, and numpy.
       - name: Scaffolded stream compiles and type-checks (Python 3.12)
         run: |
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv venv --python 3.12 "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install \
             "$RUNNER_TEMP"/tatolab-stream-dist/*.whl \
-            "$GITHUB_WORKSPACE/packages/tatolab-testpattern" 'numpy>=2.1'
+            "$GITHUB_WORKSPACE/packages/tatolab-testpattern" \
+            "$GITHUB_WORKSPACE/packages/tatolab-ops" 'numpy>=2.1'
           cd "$RUNNER_TEMP/scaffold"
           "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
           import importlib.util
