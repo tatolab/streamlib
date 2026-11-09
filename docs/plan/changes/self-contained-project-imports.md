@@ -17,8 +17,9 @@ A pivot of project-and-assets' dependency, content and history clauses. The proj
 graph document, UUIDs, transactions, undo and redo, one local history per project — stays.
 
 **The direction, in five sentences:**
-1. A project is self-contained: every file a load reads sits inside its directory, so copying or
-   zipping the folder carries everything, and the same folder opens to the same state anywhere.
+1. A project is self-contained: every file a load reads sits inside its directory, save the
+   runtime's own first-party modules, so copying or zipping the folder carries everything, and the
+   same folder opens to the same state under the same runtime anywhere.
 2. Adding a module copies that project once, whole, into `imports/<module>/`; an update replaces
    the folder whole, a removal deletes it, and nothing is ever copied out of it or moved inside it.
 3. Every reference to a module's stream, asset or node code resolves into its import folder at
@@ -145,9 +146,8 @@ folder or a downloaded archive, through the one `add_dependency`.
 **Decided 4 — imports and asset bytes are in history.** A project contains everything, so its
 history does too.
 
-**Decided 5 — one way in.** `add_dependency` is the one door for a module, and first-party
-modules such as `tatolab-ops` come through it like any other; `.venv` is a cache rebuilt from
-the lock.
+**Decided 5 — one way in.** `add_dependency` is the one door for a module copied into a project;
+`.venv` is a cache rebuilt from the lock.
 
 **Decided 6 — generator output stays stored.** Whether a project needs a build step that walks it
 and regenerates derived outputs, as Unreal's compile does, is open for later.
@@ -164,12 +164,13 @@ since its copy answers which files were edited and asks the caller to confirm th
 **Decided 9 — no transition.** The content store was a rewrite pre-1.0: after ticket 2 a node
 reads the visible file, and nothing carries an older project forward.
 
-**Decided 10 — first-party modules ride the runtime.** The runtime unit carries its first-party
-modules, `tatolab-ops` among them, as project folders, as it carries samples; a new project's
-scaffold copies `tatolab-ops` in through `add_dependency`, so each runtime release gives new
-projects its version, and an existing project keeps its copy until `update_dependency`, which
-`list_dependencies` `check_for_newer` shows when the runtime carries a newer one. It replaces the
-PyPI requirement PR #3392 added, as ComfyUI ships its core nodes and Unreal its engine plugins.
+**Decided 10 — first-party modules ride the runtime, never copied in.** The runtime unit carries
+its first-party modules, `tatolab-ops` among them, in an imports folder of its own, as ComfyUI
+carries its core nodes and Unreal its engine plugins. A reference to one resolves there, never
+into the project, so each runtime release gives every project its version; it is the one
+exception to copying in, because we make them and guarantee them. The project file records the
+runtime version that created it, as a `.uproject` records its engine, and a load under another
+version says so in the project's log. It replaces the PyPI requirement PR #3392 added.
 
 ## Assumptions to correct if wrong
 
