@@ -762,3 +762,46 @@ fn an_import_recorded_under_a_folder_outside_imports_is_passed_over() {
         Err(ProjectRepositoryRefusal::NoSuchImport(project)) if project == escaping_project
     ));
 }
+
+#[test]
+fn finder_metadata_is_never_copied_nor_answered_as_an_edit() {
+    let mut imports = CellImportingArm::new();
+    std::fs::write(imports.arm.directory().join("streams/.DS_Store"), b"finder").unwrap();
+    imports.import_the_arm();
+    let arm = imports.arm.project();
+    let import_folder = imports.cell.directory().join("imports/robot-arm");
+    assert!(!import_folder.join("streams/.DS_Store").exists());
+
+    std::fs::write(import_folder.join(".DS_Store"), b"finder").unwrap();
+    let import = imports.cell.repository.import(arm).unwrap();
+    assert!(
+        imports
+            .cell
+            .repository
+            .files_edited_in_the_import(&import)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_zipped_module_holding_pyvenv_cfg_at_its_root_is_still_copied() {
+    let mut imports = CellImportingArm::new();
+    std::fs::write(imports.arm.directory().join("pyvenv.cfg"), b"home = /usr").unwrap();
+    let archive = imports.root.path().join("robot-arm.zip");
+    zip_the_folder(&imports.arm.directory(), &archive, Some("robot-arm-main"));
+
+    imports
+        .cell
+        .repository
+        .add_dependency(&a_person(), &archive.display().to_string(), None)
+        .unwrap();
+
+    assert!(
+        imports
+            .cell
+            .directory()
+            .join("imports/robot-arm/streams/main.graph.json")
+            .is_file()
+    );
+}

@@ -21,6 +21,9 @@ pub(crate) const PROJECT_IMPORT_STAGING_DIRECTORY: &str = ".tatolab/staged-impor
 /// The file that makes a folder a Python virtual environment.
 const PYVENV_CONFIG_FILE_NAME: &str = "pyvenv.cfg";
 
+/// Finder writes this file into any folder a person opens on macOS.
+const FINDER_FOLDER_METADATA_FILE_NAME: &str = ".DS_Store";
+
 /// A project copied, whole, into the importing project's staging folder.
 #[derive(Clone, Debug)]
 pub(crate) struct StagedProjectImportCopy {
@@ -130,7 +133,7 @@ pub(crate) fn files_an_import_carries(
                 {
                     directories_to_read.push((entry.path(), relative));
                 }
-            } else if file_type.is_file() {
+            } else if file_type.is_file() && is_a_file_an_import_carries(&relative) {
                 found.push(relative);
             }
         }
@@ -147,6 +150,7 @@ pub(crate) fn files_edited_since_the_copy(
     let every_path: BTreeSet<&String> = copied_files.keys().chain(edited.keys()).collect();
     every_path
         .into_iter()
+        .filter(|path| is_a_file_an_import_carries(path))
         .filter(|path| copied_files.get(*path) != edited.get(*path))
         .cloned()
         .collect()
@@ -197,6 +201,10 @@ pub(crate) fn the_import_folder_in(project_directory: &Path, folder: &str) -> Pa
     project_directory
         .join(PROJECT_IMPORTS_DIRECTORY)
         .join(folder)
+}
+
+fn is_a_file_an_import_carries(relative_path: &str) -> bool {
+    relative_path.rsplit('/').next() != Some(FINDER_FOLDER_METADATA_FILE_NAME)
 }
 
 fn is_a_folder_an_import_carries(name: &str) -> bool {
@@ -251,6 +259,7 @@ fn extract_the_project_archive(
                 .is_some_and(|name| name == PYVENV_CONFIG_FILE_NAME)
         })
         .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .filter(|environment| *environment != root)
         .collect();
     std::fs::create_dir_all(staging_directory)?;
     for (index, entry_path) in entry_paths.iter().enumerate() {
@@ -276,7 +285,9 @@ fn extract_the_project_archive(
         let in_a_virtual_environment = virtual_environments
             .iter()
             .any(|environment| entry_path.starts_with(environment));
-        if in_a_folder_no_import_carries || in_a_virtual_environment {
+        let is_finder_metadata =
+            !is_a_file_an_import_carries(&inside_the_project.to_string_lossy());
+        if in_a_folder_no_import_carries || in_a_virtual_environment || is_finder_metadata {
             continue;
         }
         let destination = staging_directory.join(inside_the_project);
