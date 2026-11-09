@@ -54,10 +54,14 @@ const SCAN_ROOTS: &[&str] = &[
 ];
 
 /// Files whose *source text* spells a banned pattern without reading a clock —
-/// this gate's own constants and fixtures. Not allowlist entries: the
-/// permitted-surface list stays exactly the ones the plan names, and nothing
-/// here is licensed to read a wall clock.
-const SCAN_EXEMPT_FILES: &[&str] = &["xtask/src/check_clock_usage.rs"];
+/// this gate's own constants and fixtures, and the never-called bodies the
+/// `@node.function` side-effect check is tested against refusing. Not allowlist
+/// entries: the permitted-surface list stays exactly the ones the plan names, and
+/// nothing here is licensed to read a wall clock.
+const SCAN_EXEMPT_FILES: &[&str] = &[
+    "xtask/src/check_clock_usage.rs",
+    "sdk/tatolab-stream/tests/test_function_node_side_effect_check.py",
+];
 
 /// The surfaces the plan permits a wall-clock read on. Adding another is a plan
 /// change, so it is a variant here before it is a line in the allowlist.

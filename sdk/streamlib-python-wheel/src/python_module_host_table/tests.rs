@@ -278,6 +278,73 @@ fn lending_an_undeclared_port_or_one_already_lent_is_refused_by_name() {
     });
 }
 
+unsafe extern "C" fn answers_forty_two(
+    _input_values: *const f64,
+    _config_values: *const f64,
+    _state_values: *mut f64,
+    output_values: *mut f64,
+    _now_ns: i64,
+) -> i32 {
+    unsafe {
+        *output_values = 42.0;
+    }
+    tatolab_module_sdk::module_host_table_abi::MODULE_HOST_TABLE_STATUS_OK
+}
+
+#[test]
+fn a_native_thread_reads_an_input_a_compiled_island_feeds_while_python_holds_the_gil() {
+    Python::initialize();
+    Python::attach(|python| {
+        let (_source, destination) = one_wired_link(python, "lend_compiled_island");
+        destination.declare_ports(vec!["answer".to_string()], Vec::new());
+        let evaluate_entry: tatolab_module_sdk::module_host_table_abi::ModuleHostTableFunctionNodeEvaluateEntry =
+            answers_forty_two;
+        let called_through = (evaluate_entry as *const () as usize)
+            .into_pyobject(python)
+            .unwrap()
+            .into_any()
+            .unbind();
+        crate::python_function_node_island::feed_an_input_port_from_a_function_node_island(
+            &destination,
+            "answer",
+            vec![(
+                "answers".to_string(),
+                0,
+                called_through,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                1,
+                Vec::new(),
+            )],
+            (0, 0),
+            vec![Default::default()],
+        )
+        .unwrap();
+        let (context, _) =
+            full_access_context_recording_escalates(python, destination, "reads_the_answer");
+        note_execution_mode_from_parent_on_runtime_context(python, &context, "manual").unwrap();
+        let module_host =
+            module_host_of(&open_module_host_table(&context, &[], &["answer"]).unwrap());
+
+        // This thread holds the GIL throughout, so a read that needed it
+        // would block until the timeout below.
+        let (payload_sender, payload_receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let input_port = module_host.open_input_port("answer").unwrap();
+            let message = input_port
+                .read()
+                .unwrap()
+                .expect("an island answers every read");
+            payload_sender.send(message.payload().to_vec()).unwrap();
+        });
+        let payload = payload_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the native read evaluated the island without waiting on the GIL");
+        assert_eq!(payload, 42.0f64.to_le_bytes().to_vec());
+    });
+}
+
 #[test]
 fn an_input_an_island_running_a_node_as_python_feeds_is_refused_naming_the_node() {
     Python::initialize();

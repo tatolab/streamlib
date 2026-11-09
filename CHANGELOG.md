@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.39](https://github.com/tatolab/streamlib/compare/v0.68.38...v0.68.39) (2026-11-09)
+
+
+### Bug Fixes
+
+* **runtime:** keep a test build's iceoryx2 socket paths short whatever the machine root ([01630b4](https://github.com/tatolab/streamlib/commit/01630b442f006b7d550c212d0f2e7ae60caaa3d9))
+* **runtime:** keep a test build's iceoryx2 socket paths short whatever the machine root ([3d77e12](https://github.com/tatolab/streamlib/commit/3d77e12992f89bed145ae0e9cc46a931e4d57309)), closes [#3340](https://github.com/tatolab/streamlib/issues/3340)
+
 ## [0.68.38](https://github.com/tatolab/streamlib/compare/v0.68.37...v0.68.38) (2026-11-08)
 
 

@@ -145,7 +145,6 @@ from tatolab.stream._function_node_declaration import (
     FunctionNode,
 )
 from tatolab.stream._node_declaration import (
-    NODE_DECLARATION_CATEGORY_STAMP,
     NODE_DECLARATION_DECLARED_STAMP,
     NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_DESCRIPTION_STAMP,
@@ -171,8 +170,11 @@ from tatolab.runtime._engine import (
     run_the_scheduling_loop_of_this_helper,
 )
 from tatolab.runtime._function_node_compilation import (
+    FunctionNodeDoesNotCompile,
     FunctionNodeIslandsFedToTheirPorts,
+    FunctionNodeRunAsPythonInItsReader,
     feed_each_input_port_from_its_function_node_island,
+    prepare_function_node_to_evaluate,
     the_value_a_config_field_takes,
 )
 from tatolab.runtime._function_node_pool import (
@@ -863,7 +865,6 @@ DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
     ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
-    ("category", NODE_DECLARATION_CATEGORY_STAMP),
 )
 
 
@@ -877,7 +878,15 @@ DESCRIBED_FUNCTION_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
     ("function_signature", NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP),
     ("state_fields", NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP),
-    ("category", NODE_DECLARATION_CATEGORY_STAMP),
+)
+
+
+#: Each key of a described node type, process or function, filled from a stamp an older
+#: `tatolab-stream` does not write, and left out when the node carries none: the engine reads an
+#: absent key as undeclared. Spelled here, not imported, because the `tatolab-stream` in a
+#: project's venv may predate the stamp, and its attribute name is the wire contract both sides hold.
+DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE = (
+    ("category", "__tatolab_node_category__"),
 )
 
 
@@ -961,6 +970,22 @@ def _describe_the_processor_class_its_imported_module_defines(
                 f"`{node_declaration_stamp}`, which `{the_decorator_that_stamps_them}` sets; a "
                 f"{what_it_names} stamped by hand is not a node"
             ) from None
+    for (
+        described_node_type_key,
+        node_declaration_stamp,
+    ) in DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE:
+        if hasattr(resolved, node_declaration_stamp):
+            described_node_type[described_node_type_key] = getattr(
+                resolved, node_declaration_stamp
+            )
+    if described_node_type.get("language") == "python":
+        try:
+            prepared = prepare_function_node_to_evaluate(resolved, import_path)
+        except FunctionNodeDoesNotCompile as refused:
+            raise ProcessorClassNotDescribable(str(refused)) from None
+        described_node_type["runs_as_python"] = isinstance(
+            prepared, FunctionNodeRunAsPythonInItsReader
+        )
     try:
         json.dumps(described_node_type, allow_nan=False)
     except (TypeError, ValueError) as not_json:
@@ -1446,6 +1471,7 @@ class HelperProcessLifecycle:
                         (entry["breadcrumb_number"], entry["resumes_from_f64_bits"])
                         for entry in loss_count_board.get("function_node_states", [])
                     ],
+                    loss_count_board.get("function_node_frame_interval_ns"),
                 )
             stream_clock = command.get("stream_clock") or {}
             stream_clock_board_service_name = stream_clock.get("board_service_name")

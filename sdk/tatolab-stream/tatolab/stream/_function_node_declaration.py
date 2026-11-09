@@ -24,6 +24,7 @@ import typing
 from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
 
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
+from ._function_node_side_effect_check import refuse_a_function_node_body_with_side_effects
 from ._node_config_schema import (
     derive_config_class_json_schema,
     json_schema_for_a_node_declaring_no_config,
@@ -107,6 +108,7 @@ def declare_function_node(
     """
     _refuse_what_is_not_a_plain_module_level_function(function)
     signature_reading = _FunctionNodeSignatureReading(function)
+    refuse_a_function_node_body_with_side_effects(function)
     function_node = FunctionNode(function)
     config_class = signature_reading.config_class
     stamps: "dict[str, Any]" = {

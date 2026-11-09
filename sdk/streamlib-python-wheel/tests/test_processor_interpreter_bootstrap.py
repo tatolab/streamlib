@@ -31,6 +31,7 @@ import tatolab.runtime
 from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 from tatolab.stream._node_config_schema import json_schema_for_a_node_declaring_no_config
+from tatolab.stream._node_declaration import NODE_DECLARATION_CATEGORY_STAMP
 
 #: The directory holding the `tatolab/runtime/` this process imported.
 LEND_DIRECTORY = Path(tatolab.runtime.__file__).resolve().parent.parent.parent
@@ -228,6 +229,29 @@ def test_a_node_paced_by_real_time_is_described_as_one(project_directory: Path):
     assert described.returncode == 0, described.stderr
     (live_capture,) = described_document(described)["described_node_types"]
     assert live_capture["paced_by_real_time"] is True
+
+
+def test_the_bootstrap_spells_each_stamp_an_older_tatolab_stream_lacks_as_tatolab_stream_does():
+    assert dict(
+        processor_interpreter_bootstrap.DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE
+    ) == {"category": NODE_DECLARATION_CATEGORY_STAMP}
+
+
+def test_a_node_its_tatolab_stream_stamped_no_category_is_described_without_one(
+    tmp_path: Path,
+):
+    write_project_module(
+        tmp_path,
+        "described_nodes",
+        DESCRIBED_NODES_SOURCE + f"\ndelattr(Ticker, {NODE_DECLARATION_CATEGORY_STAMP!r})\n",
+    )
+
+    described = describe(tmp_path, "described_nodes:Ticker")
+
+    assert described.returncode == 0, described.stderr
+    (ticker,) = described_document(described)["described_node_types"]
+    assert "category" not in ticker
+    assert ticker["execution"] == {"mode": "continuous", "interval_ms": 20}
 
 
 def test_a_module_that_will_not_import_is_refused_carrying_the_import_error(

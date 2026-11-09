@@ -288,6 +288,7 @@ class NodeLinkDataAccess(Protocol):
         service_name: str,
         output_port_names: list[str],
         function_node_states: list[tuple[int, list[int] | None]] = ...,
+        function_node_frame_interval_ns: int | None = None,
     ) -> None:
         """Open the loss-count board the parent created for this spawn.
 
@@ -298,8 +299,11 @@ class NodeLinkDataAccess(Protocol):
         board's output-port section in key order. `function_node_states` names
         each stateful function node's entry by breadcrumb number, beside the
         state it resumes from as f64 bit patterns, or `None` for its state
-        record's defaults; each call's new state is written there. Raises
-        `RuntimeError` for a second board.
+        record's defaults; each call's new state is written there. With
+        `function_node_frame_interval_ns`, each function-node call is timed
+        against that interval, and the first node to overrun it three calls
+        running is named on the board for its parent. Raises `RuntimeError`
+        for a second board.
         """
         ...
 

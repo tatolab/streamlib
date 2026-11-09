@@ -25,6 +25,7 @@ const DESCRIBED_DESCRIPTION_KEY: &str = "description";
 const DESCRIBED_CATEGORY_KEY: &str = "category";
 const DESCRIBED_KIND_KEY: &str = "kind";
 const DESCRIBED_LANGUAGE_KEY: &str = "language";
+const DESCRIBED_RUNS_AS_PYTHON_KEY: &str = "runs_as_python";
 const DESCRIBED_EXECUTION_KEY: &str = "execution";
 const DESCRIBED_SCHEDULING_PRIORITY_KEY: &str = "scheduling_priority";
 const DESCRIBED_PACED_BY_REAL_TIME_KEY: &str = "paced_by_real_time";
@@ -100,6 +101,11 @@ impl PythonProcessorDeclaration {
                     descriptor.node_kind = function_kind;
                     descriptor.function_node_state_fields =
                         read_function_node_state_fields(described_node_type)?;
+                    descriptor.function_node_runs_as_python =
+                        read_whether_a_function_node_runs_as_python(
+                            described_node_type,
+                            function_kind,
+                        )?;
                     HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
                 }
                 NodeKind::Shader => {
@@ -149,6 +155,24 @@ fn read_category(
             json_kind_name(other)
         )),
     }
+}
+
+/// Whether a described Python function node's body does not compile, as the
+/// describe found by compiling it; a Rust function node is native code.
+fn read_whether_a_function_node_runs_as_python(
+    described_node_type: &serde_json::Value,
+    function_kind: NodeKind,
+) -> std::result::Result<bool, String> {
+    if function_kind
+        != (NodeKind::Function {
+            language: FunctionNodeLanguage::Python,
+        })
+    {
+        return Ok(false);
+    }
+    described_field(described_node_type, DESCRIBED_RUNS_AS_PYTHON_KEY)?
+        .as_bool()
+        .ok_or_else(|| format!("{DESCRIBED_RUNS_AS_PYTHON_KEY} must be a bool"))
 }
 
 /// The fields of a described function node's state record, refused past what
@@ -773,6 +797,7 @@ mod tests {
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("python");
         described["state_fields"] = serde_json::json!([]);
+        described["runs_as_python"] = serde_json::json!(false);
         for process_only_field in ["execution", "scheduling_priority", "paced_by_real_time"] {
             described
                 .as_object_mut()
@@ -793,12 +818,35 @@ mod tests {
     }
 
     #[test]
+    fn a_described_python_function_node_says_whether_its_body_runs_as_python() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("function");
+        described["language"] = serde_json::json!("python");
+        described["state_fields"] = serde_json::json!([]);
+        described["runs_as_python"] = serde_json::json!(true);
+        assert!(
+            read(&described)
+                .expect("reads")
+                .descriptor
+                .function_node_runs_as_python
+        );
+        described["runs_as_python"] = serde_json::json!("sometimes");
+        assert!(refusal_of(&described).contains("runs_as_python"));
+        described
+            .as_object_mut()
+            .expect("a described node type is an object")
+            .remove("runs_as_python");
+        assert!(refusal_of(&described).contains("runs_as_python"));
+    }
+
+    #[test]
     fn a_described_function_nodes_state_fields_read_into_its_descriptor_up_to_what_an_entry_holds()
     {
         let mut described = described_node_type_with_input_ports(serde_json::json!([]));
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("python");
         described["state_fields"] = serde_json::json!(["phase", "cycles"]);
+        described["runs_as_python"] = serde_json::json!(false);
         assert_eq!(
             read(&described)
                 .expect("reads")

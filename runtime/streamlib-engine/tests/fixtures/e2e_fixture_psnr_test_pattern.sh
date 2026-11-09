@@ -164,39 +164,44 @@ echo "[test-pattern-color] Relay:             $FIXTURE_RELAY_URL"
 # subscribes to its broadcast.
 SENDER_PROJECT_DIR="$OUTPUT_DIR/codec-roundtrip-sender"
 RECEIVER_PROJECT_DIR="$OUTPUT_DIR/codec-roundtrip-receiver"
-write_a_one_stream_fixture_project "$SENDER_PROJECT_DIR" "$SCRIPT_DIR/codec_roundtrip_stream.py" \
-    test_pattern_through_the_encoder_sent_to_the_relay codec_roundtrip_sender \
-    "$FIXTURE_VENV_DIRECTORY"
-write_a_one_stream_fixture_project "$RECEIVER_PROJECT_DIR" "$SCRIPT_DIR/codec_roundtrip_stream.py" \
-    the_senders_encoded_track_through_the_decoder codec_roundtrip_receiver \
-    "$FIXTURE_VENV_DIRECTORY"
-SENDER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$SENDER_PROJECT_DIR" codec_roundtrip_sender)"
-RECEIVER_STREAM_ID="$(stream_id_of_the_fixture_project_stream "$RECEIVER_PROJECT_DIR" codec_roundtrip_receiver)"
+# A graph generator takes no argv, so the codec and the relay reach each one
+# in the environment its graph is built in.
+write_the_codec_roundtrip_project() {
+    local project_directory="$1" graph_function="$2" stream_name="$3"
+    if ! STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
+            STREAMLIB_FIXTURE_RELAY_URL="$FIXTURE_RELAY_URL" \
+            write_a_one_stream_fixture_project "$project_directory" \
+                "$SCRIPT_DIR/codec_roundtrip_stream.py" "$graph_function" "$stream_name" \
+                "$FIXTURE_VENV_DIRECTORY"; then
+        echo "[test-pattern-color] FAIL: the graph of $stream_name could not be built" >&2
+        exit 1
+    fi
+}
+write_the_codec_roundtrip_project "$SENDER_PROJECT_DIR" \
+    test_pattern_through_the_encoder_sent_to_the_relay codec_roundtrip_sender
+write_the_codec_roundtrip_project "$RECEIVER_PROJECT_DIR" \
+    the_senders_encoded_track_through_the_decoder codec_roundtrip_receiver
 
-# A stream takes no argv, so the codec and the relay travel in the runtime's
-# environment, which each stream's compile and its processor interpreters
-# inherit.
 export RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}"
-if ! STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
-        STREAMLIB_FIXTURE_RELAY_URL="$FIXTURE_RELAY_URL" \
-        start_the_fixture_runtime "$LOG_FILE" "$OUTPUT_DIR/runtime_state"; then
+if ! start_the_fixture_runtime "$LOG_FILE" "$OUTPUT_DIR/runtime_state"; then
     echo "[test-pattern-color] FAIL: the fixture could not start its runtime" >&2
     exit 1
 fi
 
 run_the_fixture_project() {
-    local project_directory="$1" stream_id="$2" run_log_file="$3"
-    if ! start_the_fixture_project "$project_directory" "$stream_id" "$run_log_file"; then
-        echo "[test-pattern-color] FAIL: the stream $stream_id never ran — it never answered over" \
-            "the local API socket with every node Running" >&2
+    local project_directory="$1" run_log_file="$2"
+    if ! start_the_fixture_project "$project_directory" "$run_log_file"; then
+        echo "[test-pattern-color] FAIL: the stream of $project_directory never ran — it never" \
+            "answered over the local API socket with every node Running" >&2
         tail -30 "$run_log_file" >&2
         tail -30 "$LOG_FILE" >&2
         exit 1
     fi
-    echo "[test-pattern-color] Running:           $stream_id"
+    echo "[test-pattern-color] Running:           $FIXTURE_PROJECT_STREAM_ID"
 }
-run_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_STREAM_ID" "$SENDER_RUN_LOG_FILE"
-run_the_fixture_project "$RECEIVER_PROJECT_DIR" "$RECEIVER_STREAM_ID" "$RECEIVER_RUN_LOG_FILE"
+run_the_fixture_project "$SENDER_PROJECT_DIR" "$SENDER_RUN_LOG_FILE"
+run_the_fixture_project "$RECEIVER_PROJECT_DIR" "$RECEIVER_RUN_LOG_FILE"
+RECEIVER_STREAM_ID="$FIXTURE_PROJECT_STREAM_ID"
 
 echo "[test-pattern-color] Reading:           $SENDER_ENCODED_TRACK of $SENDER_BROADCAST"
 

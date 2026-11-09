@@ -609,6 +609,18 @@ jobs:
             "$RUNNER_TEMP/lend-check-venv/bin/python" -m pytest -v \
             tests_against_the_runtime_unit_lend/
 
+      # A runtime at least as new as a stream's `tatolab-stream` runs it: the lent
+      # bootstrap describes a project's nodes with the newest release on PyPI.
+      - name: The lend describes nodes with the released tatolab-stream
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/released-sdk-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/released-sdk-venv" uv pip install --refresh-package tatolab-stream \
+            tatolab-stream pytest
+          cd sdk/streamlib-python-wheel
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            "$RUNNER_TEMP/released-sdk-venv/bin/python" -m pytest -v \
+            tests_against_the_runtime_unit_lend/test_lent_bootstrap_describes_with_the_installed_tatolab_stream.py
+
       - name: Unpack the runtime unit under a test root
         run: |
           rm -rf target/tatolab-runtime

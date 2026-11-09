@@ -16,8 +16,10 @@ from helper_placement_processors import (
     CrashesItsHelper,
     DiesAbruptlyProbe,
     HoldsItsConfiguredLevelCountingItsCalls,
+    HangsAfterItsFirstCalls,
     LabelsTheLevel,
     LevelScaledByItsGain,
+    LendsTheLabelToItsNativeHalf,
     ForksAWorkerThatOutlivesItProbe,
     ReportsEachBatchOfFunctionNodeValuesItReadSink,
     ReportsEachBatchOfGatedCountsItReadSink,
@@ -25,6 +27,7 @@ from helper_placement_processors import (
     ReportsEachBatchOfPinValuesItReadSink,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessRecordsSink,
+    ReportsTheCountRecordsItReadSink,
     ReportsTheCountItReadAndDiesOnceAFreshCountReachesTwenty,
     ReportsTheCountsItReadInOrderSink,
     ReportsTheFunctionNodeValuesItReadSink,
@@ -33,6 +36,7 @@ from helper_placement_processors import (
     ReportsTheRawMessagePayloadItReadSink,
     ReportsTheRecordsItReadSink,
     ReportsUpstreamProcessSink,
+    SleepsPastThePoolsFrameInterval,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
     SpinsForever,
@@ -187,6 +191,47 @@ def level_scaled_by_its_gain_into_python_sink(stream_builder: StreamBuilder) -> 
 def python_sink_reading_the_pin_value_of_its_unlinked_input(stream_builder: StreamBuilder) -> None:
     """A Python class whose one input is linked to nothing, so it reads its pin value."""
     stream_builder.add(ReportsEachBatchOfPinValuesItReadSink, name="sink")
+
+
+@graph_generator
+def function_node_run_as_python_into_a_class_lending_it_to_native_code(
+    stream_builder: StreamBuilder,
+) -> None:
+    """A function node that runs as Python, read by a manual class whose native half reads it."""
+    labeller = stream_builder.add(LabelsTheLevel, name="labeller")
+    lender = stream_builder.add(LendsTheLabelToItsNativeHalf, name="lender")
+    stream_builder.connect(labeller.output("result"), lender.input("label"))
+
+
+@graph_generator
+def function_node_slower_than_the_pools_frame_interval_read_by_a_native_converter(
+    stream_builder: StreamBuilder,
+) -> None:
+    """A function node whose every call outlasts the pool's frame interval, read by a native `ChannelsToRecords` into a Python class."""
+    sleeper = stream_builder.add(SleepsPastThePoolsFrameInterval, name="sleeper")
+    converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["level"]}, name="converter"
+    )
+    sink = stream_builder.add(ReportsTheLevelRecordsItReadSink, name="sink")
+    stream_builder.connect(sleeper.output("result"), converter.input("channels"))
+    stream_builder.connect(converter.output("records"), sink.input("level_records"))
+
+
+@graph_generator
+def pooled_counter_beside_a_pooled_node_that_hangs(stream_builder: StreamBuilder) -> None:
+    """A stateful counter and a node that hangs after its first calls, each read by a native `ChannelsToRecords`, so both run in the pool."""
+    counter = stream_builder.add(CountsItsOwnCalls, name="counter")
+    count_converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["count"]}, name="count-converter"
+    )
+    sink = stream_builder.add(ReportsTheCountRecordsItReadSink, name="sink")
+    hanger = stream_builder.add(HangsAfterItsFirstCalls, name="hanger")
+    hanger_converter = stream_builder.add(
+        ChannelsToRecords, config={"channel_names": ["level"]}, name="hanger-converter"
+    )
+    stream_builder.connect(counter.output("result"), count_converter.input("channels"))
+    stream_builder.connect(count_converter.output("records"), sink.input("count_records"))
+    stream_builder.connect(hanger.output("result"), hanger_converter.input("channels"))
 
 
 @graph_generator

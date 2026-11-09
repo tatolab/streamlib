@@ -20,7 +20,19 @@ use crate::directory_at_an_explicit_mode::{
 const STREAMLIB_FOLDER_INSIDE_XDG_RUNTIME_DIR: &str = "streamlib";
 
 /// The shared temporary directory the per-user fallback folder is created in.
-const SHARED_TEMPORARY_DIRECTORY_FOR_THE_FALLBACK: &str = "/tmp";
+pub(crate) const SHARED_TEMPORARY_DIRECTORY_FOR_THE_FALLBACK: &str = "/tmp";
+
+/// The folder the iceoryx2 domain keeps inside the runtime directory.
+const ICEORYX2_DOMAIN_FOLDER_INSIDE_THE_RUNTIME_DIRECTORY: &str = "iox2";
+
+/// The most bytes an iceoryx2 domain root and its prefix may take together.
+///
+/// iceoryx2 names its Unix sockets `<root>/<prefix><entity file name>`, and a
+/// socket path must fit `sun_path` (108 bytes on Linux, 104 on macOS) with room
+/// for the longest name iceoryx2 appends. Past this the first listener fails late
+/// as an opaque `ResourceCreationFailed`.
+pub const ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES: usize =
+    if cfg!(target_os = "macos") { 58 } else { 63 };
 
 /// What a surface-sharing socket's file name starts with, before the runtime id.
 const SURFACE_SHARE_SOCKET_FILE_NAME_PREFIX: &str = "surface-share-";
@@ -53,12 +65,24 @@ pub enum StreamlibRuntimeDirectoryRefusal {
     #[cfg(feature = "machine-directories-under-a-test-root")]
     #[error(transparent)]
     TestMachineRoot(#[from] crate::machine_directories_test_root::TestMachineRootRefusal),
+    /// The short link standing in for a test build's iceoryx2 domain root could not be made.
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    #[error(
+        "the link {link} that keeps the iceoryx2 domain root {directory_it_names} inside the \
+         socket-path budget could not be made: {what_is_wrong}"
+    )]
+    Iceoryx2DomainRootLinkRefused {
+        link: PathBuf,
+        directory_it_names: PathBuf,
+        what_is_wrong: String,
+    },
 }
 
 /// The one directory a runtime keeps its live files in, resolved for the runtime or for a reader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamlibRuntimeDirectory {
     path: PathBuf,
+    iceoryx2_domain_root: PathBuf,
 }
 
 impl StreamlibRuntimeDirectory {
@@ -66,9 +90,11 @@ impl StreamlibRuntimeDirectory {
     pub fn resolve() -> Result<Self, StreamlibRuntimeDirectoryRefusal> {
         #[cfg(feature = "machine-directories-under-a-test-root")]
         {
-            let path =
-                crate::machine_directories_test_root::TestMachineRoot::from_the_environment()?
-                    .runtime_directory();
+            use crate::machine_directories_test_root::{
+                Iceoryx2DomainRootOfATestMachineRoot, TestMachineRoot,
+            };
+            let test_machine_root = TestMachineRoot::from_the_environment()?;
+            let path = test_machine_root.runtime_directory();
             create_directory_and_its_missing_parents_at_mode(&path, OWNER_ONLY_DIRECTORY_MODE)
                 .map_err(
                     |source| StreamlibRuntimeDirectoryRefusal::CouldNotBeCreated {
@@ -76,7 +102,26 @@ impl StreamlibRuntimeDirectory {
                         source,
                     },
                 )?;
-            Ok(StreamlibRuntimeDirectory { path })
+            let iceoryx2_domain_root = match test_machine_root
+                .iceoryx2_domain_root(current_process_uid())
+            {
+                Iceoryx2DomainRootOfATestMachineRoot::InsideTheRuntimeDirectory(root) => root,
+                Iceoryx2DomainRootOfATestMachineRoot::ShortLinkInTheSharedTemporaryDirectory {
+                    link,
+                    directory_it_names,
+                } => {
+                    crate::machine_directories_test_root::link_the_short_iceoryx2_domain_root_to_its_directory(
+                            &link,
+                            &directory_it_names,
+                            current_process_uid(),
+                        )?;
+                    link
+                }
+            };
+            Ok(StreamlibRuntimeDirectory {
+                path,
+                iceoryx2_domain_root,
+            })
         }
         #[cfg(not(feature = "machine-directories-under-a-test-root"))]
         resolve_streamlib_runtime_directory_for_the_runtime(
@@ -93,10 +138,22 @@ impl StreamlibRuntimeDirectory {
     {
         #[cfg(feature = "machine-directories-under-a-test-root")]
         {
+            use crate::machine_directories_test_root::{
+                Iceoryx2DomainRootOfATestMachineRoot, TestMachineRoot,
+            };
+            let test_machine_root = TestMachineRoot::from_the_environment()?;
+            let iceoryx2_domain_root = match test_machine_root
+                .iceoryx2_domain_root(current_process_uid())
+            {
+                Iceoryx2DomainRootOfATestMachineRoot::InsideTheRuntimeDirectory(root) => root,
+                Iceoryx2DomainRootOfATestMachineRoot::ShortLinkInTheSharedTemporaryDirectory {
+                    link,
+                    ..
+                } => link,
+            };
             Ok(StreamlibRuntimeDirectory {
-                path: crate::machine_directories_test_root::TestMachineRoot::from_the_environment(
-                )?
-                .runtime_directory(),
+                path: test_machine_root.runtime_directory(),
+                iceoryx2_domain_root,
             })
         }
         #[cfg(not(feature = "machine-directories-under-a-test-root"))]
@@ -115,7 +172,15 @@ impl StreamlibRuntimeDirectory {
 
     /// The root every engine-owned iceoryx2 node in this runtime is configured with.
     pub fn iceoryx2_domain_root(&self) -> PathBuf {
-        self.path.join("iox2")
+        self.iceoryx2_domain_root.clone()
+    }
+
+    fn with_its_iceoryx2_domain_inside(path: PathBuf) -> Self {
+        let iceoryx2_domain_root = iceoryx2_domain_folder_inside(&path);
+        StreamlibRuntimeDirectory {
+            path,
+            iceoryx2_domain_root,
+        }
     }
 
     /// The Unix socket the runtime with `runtime_id` serves its surface-sharing service on.
@@ -160,6 +225,20 @@ pub fn current_process_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+/// The file prefix every engine-owned iceoryx2 node of this OS user shares.
+pub fn engine_owned_iceoryx2_prefix_for_this_user() -> String {
+    engine_owned_iceoryx2_prefix_for_uid(current_process_uid())
+}
+
+pub(crate) fn engine_owned_iceoryx2_prefix_for_uid(uid: u32) -> String {
+    format!("sl{uid}_")
+}
+
+/// The iceoryx2 domain folder `runtime_directory` keeps, wherever the directory sits.
+pub(crate) fn iceoryx2_domain_folder_inside(runtime_directory: &Path) -> PathBuf {
+    runtime_directory.join(ICEORYX2_DOMAIN_FOLDER_INSIDE_THE_RUNTIME_DIRECTORY)
+}
+
 /// `$XDG_RUNTIME_DIR/streamlib`, when the platform honours that variable and it is set and non-empty.
 fn the_streamlib_folder_inside_xdg_runtime_dir(
     xdg_runtime_dir: Option<OsString>,
@@ -192,7 +271,9 @@ fn resolve_streamlib_runtime_directory_for_the_runtime(
                     source,
                 },
             )?;
-        return Ok(StreamlibRuntimeDirectory { path });
+        return Ok(StreamlibRuntimeDirectory::with_its_iceoryx2_domain_inside(
+            path,
+        ));
     }
 
     let path = the_per_user_fallback_in(shared_temporary_directory, uid);
@@ -206,7 +287,9 @@ fn resolve_streamlib_runtime_directory_for_the_runtime(
         }
     }
     refuse_a_fallback_directory_this_uid_cannot_trust(&path, uid)?;
-    Ok(StreamlibRuntimeDirectory { path })
+    Ok(StreamlibRuntimeDirectory::with_its_iceoryx2_domain_inside(
+        path,
+    ))
 }
 
 /// The reader's resolver with its inputs named. A reader creates nothing: the
@@ -221,7 +304,9 @@ fn resolve_streamlib_runtime_directory_for_a_reader_without_creating(
     if let Some(path) =
         the_streamlib_folder_inside_xdg_runtime_dir(xdg_runtime_dir, platform_is_linux)
     {
-        return Ok(StreamlibRuntimeDirectory { path });
+        return Ok(StreamlibRuntimeDirectory::with_its_iceoryx2_domain_inside(
+            path,
+        ));
     }
 
     let path = the_per_user_fallback_in(shared_temporary_directory, uid);
@@ -232,7 +317,9 @@ fn resolve_streamlib_runtime_directory_for_a_reader_without_creating(
     if !nothing_stands_at_the_fallback {
         refuse_a_fallback_directory_this_uid_cannot_trust(&path, uid)?;
     }
-    Ok(StreamlibRuntimeDirectory { path })
+    Ok(StreamlibRuntimeDirectory::with_its_iceoryx2_domain_inside(
+        path,
+    ))
 }
 
 /// The fallback lives in a directory every user can write, so it is trusted only
@@ -610,9 +697,9 @@ mod tests {
 
     #[test]
     fn every_live_file_the_runtime_keeps_sits_inside_the_one_directory() {
-        let directory = StreamlibRuntimeDirectory {
-            path: PathBuf::from("/tmp/streamlib-1000"),
-        };
+        let directory = StreamlibRuntimeDirectory::with_its_iceoryx2_domain_inside(PathBuf::from(
+            "/tmp/streamlib-1000",
+        ));
 
         assert_eq!(
             directory.iceoryx2_domain_root(),
@@ -631,9 +718,9 @@ mod tests {
     #[test]
     fn the_surface_share_sockets_of_every_runtime_are_listed_and_nothing_else() {
         let temporary_directory = tempfile::tempdir().unwrap();
-        let directory = StreamlibRuntimeDirectory {
-            path: temporary_directory.path().to_path_buf(),
-        };
+        let directory = StreamlibRuntimeDirectory::with_its_iceoryx2_domain_inside(
+            temporary_directory.path().to_path_buf(),
+        );
         for file_name in [
             "surface-share-Rone.sock",
             "surface-share-Rtwo.sock",

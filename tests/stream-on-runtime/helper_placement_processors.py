@@ -611,3 +611,70 @@ class ReportsEachBatchOfGatedCountsItReadSink:
             )
             self.counts_in_this_batch = []
             self.reads_in_this_batch = 0
+
+
+@node.process(execution="manual")
+class LendsTheLabelToItsNativeHalf:
+    """Lends `label` to native code at setup, as a module's native half does,
+    and reports whether the lend was taken."""
+
+    label = Input(Records, delivery="newest")
+
+    def setup(self, ctx) -> None:
+        try:
+            ctx.open_module_host_table(input_ports=["label"])
+        except ValueError as refused:
+            report("LABEL_LEND", {"pid": os.getpid(), "refused": str(refused)})
+            return
+        report("LABEL_LEND", {"pid": os.getpid(), "refused": None})
+
+
+#: How long each call of `SleepsPastThePoolsFrameInterval` sleeps, past the pool's 10 ms interval.
+SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS = 0.02
+
+
+@node.function
+def SleepsPastThePoolsFrameInterval(level: float = 0.5) -> float:  # noqa: N802
+    """Gives `level` after a sleep longer than the pool's frame interval: a body that sleeps, which runs as Python."""
+    time.sleep(SLEEP_OF_EACH_CALL_PAST_THE_POOLS_FRAME_INTERVAL_SECONDS)
+    return level
+
+
+#: How many calls `HangsAfterItsFirstCalls` returns from in each process before one never returns.
+CALLS_RETURNED_BEFORE_A_CALL_HANGS = 100
+
+_calls_of_hangs_after_its_first_calls_in_this_process = 0
+
+
+@node.function
+def HangsAfterItsFirstCalls(level: float = 0.25) -> float:  # noqa: N802
+    """Gives `level` for its first calls in a process, then never returns: a body counting in a module global, which runs as Python."""
+    global _calls_of_hangs_after_its_first_calls_in_this_process
+    _calls_of_hangs_after_its_first_calls_in_this_process += 1
+    while _calls_of_hangs_after_its_first_calls_in_this_process > CALLS_RETURNED_BEFORE_A_CALL_HANGS:
+        time.sleep(1.0)
+    return level
+
+
+#: How many count records a sink reads between reports.
+COUNT_RECORDS_READ_BETWEEN_REPORTS = 25
+
+
+@node.process(execution="continuous", interval_ms=10)
+class ReportsTheCountRecordsItReadSink:
+    """Reads the records a native converter makes of a pooled counter, and
+    reports each `COUNT_RECORDS_READ_BETWEEN_REPORTS` counts it read."""
+
+    def __init__(self) -> None:
+        self.counts_since_the_last_report: "list[float]" = []
+
+    count_records = Input(Records, delivery="newest")
+
+    def process(self, ctx) -> None:
+        record = ctx.inputs.read(self.count_records)
+        if record is None:
+            return
+        self.counts_since_the_last_report.append(record["count"])
+        if len(self.counts_since_the_last_report) == COUNT_RECORDS_READ_BETWEEN_REPORTS:
+            report("COUNT_RECORDS_READ", {"pid": os.getpid(), "counts": self.counts_since_the_last_report})
+            self.counts_since_the_last_report = []
