@@ -30,6 +30,7 @@ from ._exposed_name_cast import (
 )
 from ._function_node_declaration import FunctionNode, declare_function_node
 from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
+from ._shader_node_declaration import ShaderNode, declare_shader_node
 from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
     derive_config_class_json_schema,
@@ -343,6 +344,41 @@ class NodeDeclarationDecorator:
             return apply_to_function
         return apply_to_function(node_function)
 
+    def shader(
+        self, shader_source: str, *, description: str = "", category: str = ""
+    ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], ShaderNode[_FunctionNodeParameters, _FunctionNodeReturn]]":
+        """Mark a function as a shader node: a Slang function from Images and values to an Image.
+
+        `shader_source` is the node's body, a Slang function named for the node
+        returning the `float4` pixel it computes; the decorated function's
+        signature declares the ports and its body is `...`. Each `ImageFrame`
+        parameter arrives in Slang as an `ImageInput`, whose `pixel` is the
+        input at this pixel and whose `sample(uv)` reads it at any position,
+        bilinear; each `float` arrives as a value, a push constant. The return
+        is one `ImageFrame`, the output `result`, at the extent of the first
+        `ImageFrame` input. The runtime compiles and runs it on the GPU with no
+        Python process, and takes RGBA Images only.
+        """
+
+        def apply_to_function(
+            function_under_decoration: "Callable[..., Any]",
+        ) -> "ShaderNode[..., Any]":
+            return declare_shader_node(
+                function_under_decoration,
+                shader_source=shader_source,
+                description=description,
+                category=category,
+                declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
+            )
+
+        if not isinstance(shader_source, str):
+            raise TypeError(
+                "@node.shader takes the node's Slang source as its one argument, "
+                '`@node.shader("""float4 tint(ImageInput image, float amount) { ... }""")`, '
+                f"got {shader_source!r}."
+            )
+        return apply_to_function
+
     def rust_function(self, native_declaration: "Mapping[str, Any]") -> "RustFunctionNode":
         """Declare a function node a module wrote in Rust with `#[function_node]`.
 
@@ -435,7 +471,7 @@ class NodeDeclarationDecorator:
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports."""
+"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports, `@node.shader` for a Slang function over Images."""
 
 
 def _declare_node(

@@ -8,6 +8,7 @@
 //! `tatolab/stream/_node_declaration.py` stamps, carried verbatim by the
 //! bootstrap's `--describe`; the two move together.
 
+use super::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, FunctionNodeLanguage, NodeKind, PortDescriptor,
@@ -33,6 +34,8 @@ const DESCRIBED_CONFIG_SCHEMA_KEY: &str = "config_schema";
 const DESCRIBED_INPUT_PORTS_KEY: &str = "input_ports";
 const DESCRIBED_OUTPUT_PORTS_KEY: &str = "output_ports";
 const DESCRIBED_STATE_FIELDS_KEY: &str = "state_fields";
+const DESCRIBED_SHADER_SOURCE_KEY: &str = "shader_source";
+const DESCRIBED_SHADER_SIGNATURE_KEY: &str = "shader_signature";
 
 /// Everything the engine needs to register one Python node type and run its
 /// nodes.
@@ -44,13 +47,16 @@ pub struct PythonProcessorDeclaration {
 }
 
 /// How a node of a described Python type runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HowAPythonNodeOfTheTypeRuns {
     /// A `@node.process` class, in its own processor interpreter, driven on
     /// the execution it declared.
     InItsOwnProcessorInterpreter(ExecutionConfig),
     /// A `@node.function`, inside the read of each node it feeds.
     InsideTheReadOfEachNodeItFeeds,
+    /// A `@node.shader`, its Slang function compiled and run on the GPU in
+    /// this process, with no Python process.
+    OnItsNativeShaderEvaluator(ShaderNodeProgram),
 }
 
 impl PythonProcessorDeclaration {
@@ -109,10 +115,13 @@ impl PythonProcessorDeclaration {
                     HowAPythonNodeOfTheTypeRuns::InsideTheReadOfEachNodeItFeeds
                 }
                 NodeKind::Shader => {
-                    return Err(format!(
-                        "{DESCRIBED_KIND_KEY} is \"shader\", which a processor interpreter never \
-                     describes: a shader is Slang the engine compiles"
-                    ));
+                    descriptor.node_kind = NodeKind::Shader;
+                    HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(
+                        ShaderNodeProgram::read_from_described_shader(
+                            described_field(described_node_type, DESCRIBED_SHADER_SOURCE_KEY)?,
+                            described_field(described_node_type, DESCRIBED_SHADER_SIGNATURE_KEY)?,
+                        )?,
+                    )
                 }
             };
 
@@ -225,7 +234,7 @@ fn read_described_node_kind(
         "shader" => Ok(NodeKind::Shader),
         other => Err(format!(
             "{DESCRIBED_KIND_KEY} is {other:?}, which names no node kind: a class is \
-             `@node.process` and a function `@node.function`"
+             `@node.process`, a function `@node.function` and a Slang function `@node.shader`"
         )),
     }
 }
@@ -889,14 +898,43 @@ mod tests {
     }
 
     #[test]
+    fn a_described_shader_reads_as_a_shader_node_on_its_native_evaluator() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["kind"] = serde_json::json!("shader");
+        described["shader_source"] = serde_json::json!(
+            "float4 tint(ImageInput image, float amount) { return image.pixel * amount; }"
+        );
+        described["shader_signature"] = serde_json::json!({
+            "function_name": "tint",
+            "inputs": [
+                {"port": "image", "value_type": "image_frame"},
+                {"port": "amount", "value_type": "float"},
+            ],
+            "output_port": "result",
+        });
+        let shader = read(&described).expect("reads");
+        assert_eq!(shader.descriptor.node_kind, NodeKind::Shader);
+        let HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(program) =
+            shader.how_a_python_node_of_the_type_runs
+        else {
+            panic!("a shader runs on its native evaluator");
+        };
+        assert_eq!(program.function_name, "tint");
+        assert_eq!(program.output_port, "result");
+
+        described
+            .as_object_mut()
+            .expect("an object")
+            .remove("shader_source");
+        assert!(refusal_of(&described).contains("shader_source"));
+    }
+
+    #[test]
     fn a_kind_a_processor_interpreter_never_describes_is_refused_naming_it() {
         let mut described = described_node_type_with_input_ports(serde_json::json!([]));
         described["kind"] = serde_json::json!("function");
         described["language"] = serde_json::json!("cobol");
         assert!(refusal_of(&described).contains("\"cobol\""));
-
-        described["kind"] = serde_json::json!("shader");
-        assert!(refusal_of(&described).contains("Slang"));
 
         described["kind"] = serde_json::json!("sorcery");
         assert!(refusal_of(&described).contains("\"sorcery\""));
