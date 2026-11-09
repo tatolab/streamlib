@@ -170,7 +170,8 @@ carries its core nodes and Unreal its engine plugins. A reference to one resolve
 into the project, so each runtime release gives every project its version; it is the one
 exception to copying in, because we make them and guarantee them. The project file records the
 runtime version that created it, as a `.uproject` records its engine, and a load under another
-version says so in the project's log. It replaces the PyPI requirement PR #3392 added.
+version says so in the project's log and never refuses or holds it: the version is a record,
+not a lock. It replaces the PyPI requirement PR #3392 added.
 
 ## Assumptions to correct if wrong
 
