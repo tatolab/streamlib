@@ -14,10 +14,11 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 pub const PYPROJECT_FILE_NAME: &str = "pyproject.toml";
 
 /// `pyproject_text` with each import holding a `pyproject.toml` named as a requirement of the
-/// project and as a uv path source into its folder, and every source into `imports/` that no
+/// project, unless one already names it, and as a uv path source into its folder, and every source into `imports/` that no
 /// import holds now taken out with its requirement. Each source is written
 /// `{ path = "imports/<folder>", package = false }`: uv installs the module's requirements and
-/// never builds the module, so no import's code reaches the project's shared import path.
+/// never builds the module, so no import's code reaches the project's shared import path. A
+/// manifest with no `[project]` table, which uv syncs no requirements of, is left as it is.
 pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
     pyproject_text: &str,
     project_directory: &Path,
@@ -32,6 +33,9 @@ pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
                     why: not_toml.to_string(),
                 }
             })?;
+    if !pyproject.contains_table("project") {
+        return Ok(pyproject_text.to_owned());
+    }
     let mut source_path_of_each_requirement = BTreeMap::new();
     for import in imports {
         let import_folder = project_directory
@@ -98,14 +102,21 @@ pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
         requirement
             .as_str()
             .map(|requirement| {
-                let name = normalized_distribution_name(the_name_a_requirement_names(requirement));
-                !names_taken_out.contains(&name)
-                    && !source_path_of_each_requirement.contains_key(&name)
+                !names_taken_out.contains(&normalized_distribution_name(
+                    the_name_a_requirement_names(requirement),
+                ))
             })
             .unwrap_or(true)
     });
+    let names_already_required: Vec<String> = requirements
+        .iter()
+        .filter_map(|requirement| requirement.as_str())
+        .map(|requirement| normalized_distribution_name(the_name_a_requirement_names(requirement)))
+        .collect();
     for name in source_path_of_each_requirement.keys() {
-        requirements.push(name.as_str());
+        if !names_already_required.contains(name) {
+            requirements.push(name.as_str());
+        }
     }
     Ok(pyproject.to_string())
 }
@@ -381,7 +392,37 @@ mod tests {
         );
         assert_eq!(
             pyproject["project"]["dependencies"],
-            toml::Value::try_from(["robot-arm"]).unwrap()
+            toml::Value::try_from(["Robot_Arm"]).unwrap()
         );
+    }
+
+    #[test]
+    fn a_requirement_already_naming_an_import_is_kept_as_written() {
+        let project = tempfile::tempdir().unwrap();
+        let arm = an_import_named(project.path(), "robot-arm", "robot-arm");
+        let pyproject = "[project]\nname = \"cell\"\ndependencies = [\"robot-arm[vision]>=2\"]\n";
+
+        let written =
+            pyproject_with_each_import_as_a_uv_path_source(pyproject, project.path(), &[arm])
+                .unwrap();
+
+        let pyproject: toml::Value = toml::from_str(&written).unwrap();
+        assert_eq!(
+            pyproject["project"]["dependencies"],
+            toml::Value::try_from(["robot-arm[vision]>=2"]).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_manifest_with_no_project_table_is_left_as_it_is() {
+        let project = tempfile::tempdir().unwrap();
+        let arm = an_import_named(project.path(), "robot-arm", "robot-arm");
+        let pyproject = "[dependency-groups]\ndev = [\"pytest\"]\n";
+
+        let written =
+            pyproject_with_each_import_as_a_uv_path_source(pyproject, project.path(), &[arm])
+                .unwrap();
+
+        assert_eq!(written, pyproject);
     }
 }
