@@ -360,8 +360,15 @@ fn dev_follows_on_after_a_refused_load_and_queues_another_load_for_each_save() {
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        ["run_project", "run_project", "run_project"],
-        "each save queues a load over the connection; nothing stops a stream"
+        [
+            "run_project",
+            "refresh_fragments",
+            "run_project",
+            "refresh_fragments",
+            "run_project"
+        ],
+        "each save of a `.py` file refreshes the fragments it defines, then queues a load over \
+         the connection; nothing stops a stream"
     );
     assert_eq!(
         stub_local_api_server
@@ -371,6 +378,85 @@ fn dev_follows_on_after_a_refused_load_and_queues_another_load_for_each_save() {
         "every load rides the one connection"
     );
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "run_project");
+}
+
+/// A save of a `.py` file asks the runtime to refresh the fragments whose generator it defines,
+/// naming the file, before the load it owes; a save of a graph document only queues the load.
+#[test]
+fn a_saved_python_file_refreshes_the_fragments_it_defines_before_the_load() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let stub_local_api_server =
+        isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+            tool_answers_by_name: HashMap::from([
+                (
+                    "run_project".to_owned(),
+                    vec![
+                        queued_answer("Rabc-1", &scratch_project.canonical_path()),
+                        queued_answer("Rabc-2", &scratch_project.canonical_path()),
+                        queued_answer("Rabc-3", &scratch_project.canonical_path()),
+                    ],
+                ),
+                (
+                    "refresh_fragments".to_owned(),
+                    vec![StubToolAnswer::tool_result(
+                        &json!({
+                            "mode": "commit",
+                            "operations": [{ "operation": "refresh_fragment" }],
+                            "added_nodes": [],
+                            "connected_links": [],
+                        })
+                        .to_string(),
+                    )],
+                ),
+            ]),
+            stream_log_records: Some(StubStreamLogRecords {
+                records: Vec::new(),
+                page_size: 1,
+                first_written_by_a_run: true,
+            }),
+            ..StubLocalApiScript::default()
+        });
+    let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-1",
+        &scratch_project.canonical_path(),
+    ));
+
+    scratch_project.save_stream_py("# a generator edited, longer than the first version\n");
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab dev: refreshed 1 fragment(s) whose graph generator changed",
+    );
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-2",
+        &scratch_project.canonical_path(),
+    ));
+    let streams_directory = scratch_project.canonical_path().join("streams");
+    std::fs::create_dir_all(&streams_directory).unwrap();
+    std::fs::write(streams_directory.join("main.graph.json"), "{}").unwrap();
+    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+        "Rabc-3",
+        &scratch_project.canonical_path(),
+    ));
+
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("refresh_fragments"),
+        [json!({
+            "project_directory": scratch_project.canonical_path(),
+            "changed_files": [scratch_project.canonical_path().join("stream.py")],
+        })],
+        "only the save of a `.py` file asks for a refresh"
+    );
+    assert_eq!(
+        tool_calls_besides_logs(&stub_local_api_server),
+        [
+            "run_project",
+            "refresh_fragments",
+            "run_project",
+            "run_project"
+        ]
+    );
+    drop(running_tatolab);
 }
 
 /// A page `dev` cannot read leaves the streams running unfollowed, never replaying the project's

@@ -421,6 +421,24 @@ struct SetExposedConfigFieldsToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
+struct RefreshFragmentsToolArguments {
+    #[schemars(
+        description = "The project, by absolute path: a folder holding `tatolab-project.json`."
+    )]
+    project_directory: PathBuf,
+    #[schemars(
+        description = "The project's Python files that changed, each by its path relative to the project directory or absolute inside it, e.g. `generators/looks.py`; each names the module it is imported as."
+    )]
+    changed_files: Vec<PathBuf>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct UndoOrRedoToolArguments {
     #[schemars(
         description = "The project, by absolute path: a folder holding `tatolab-project.json`."
@@ -695,6 +713,57 @@ impl LocalApiMcpServerHandler {
             &peer,
         )
         .await
+    }
+
+    #[tool(
+        description = "Refresh, as one transaction, every fragment of the project's loaded streams whose graph generator, or a generator nested in it, is defined in a module one of `changed_files` holds: each is run again with the promoted settings its fragment keeps, as `import_graph_generator` refreshes it, each node keeping its UUID by name. Answers as `transact` does; with no such fragment, it answers no operation and records no transaction. A generator that raises refuses the whole refresh with its traceback, nothing changed."
+    )]
+    async fn refresh_fragments(
+        &self,
+        peer: Peer<RoleServer>,
+        Parameters(RefreshFragmentsToolArguments {
+            project_directory,
+            changed_files,
+            mode,
+            author,
+        }): Parameters<RefreshFragmentsToolArguments>,
+    ) -> ToolCallAnswer {
+        if !project_directory.is_absolute() {
+            return Err(format!(
+                "refresh_fragments failed: `project_directory` must be an absolute path; got `{}`",
+                project_directory.display()
+            ));
+        }
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let refreshes = tokio::task::spawn_blocking(move || {
+            the_refresh_of_each_fragment_a_changed_module_defines(
+                operations_on_the_loaded_streams.as_ref(),
+                &project_repositories,
+                &project_directory,
+                &changed_files,
+            )
+        })
+        .await
+        .map_err(|join_failure| {
+            format!("refresh_fragments failed: the refresh did not finish: {join_failure}")
+        })?
+        .map_err(|refusal| format!("refresh_fragments failed: {refusal}"))?;
+        if refreshes.is_empty() {
+            return serialized_tool_result(
+                "refresh_fragments",
+                &GraphTransactionToolResult {
+                    mode: mode.unwrap_or_default().on_the_wire().to_owned(),
+                    transaction: None,
+                    commit: None,
+                    operations: Vec::new(),
+                    added_nodes: Vec::new(),
+                    connected_links: Vec::new(),
+                },
+            );
+        }
+        self.one_graph_transaction("refresh_fragments", refreshes, mode, author, &peer)
+            .await
     }
 
     #[tool(
@@ -1473,6 +1542,95 @@ fn graph_operation_for_the_request(
     }
 }
 
+/// The module a project's Python file at `changed_file` is imported as: its path from the
+/// project directory, `/` read as `.`, a package's `__init__.py` as the package; `None` for a
+/// file that is no `.py` or lies outside the project.
+fn the_module_a_project_file_is_imported_as(
+    project_directory: &std::path::Path,
+    changed_file: &std::path::Path,
+) -> Option<String> {
+    let relative_file = if changed_file.is_absolute() {
+        changed_file.strip_prefix(project_directory).ok()?
+    } else {
+        changed_file
+    };
+    if relative_file.extension()? != "py" {
+        return None;
+    }
+    let mut module_parts: Vec<String> = relative_file
+        .with_extension("")
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(part) => part.to_str().map(str::to_owned),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    if module_parts.last().is_some_and(|last| last == "__init__") {
+        module_parts.pop();
+    }
+    (!module_parts.is_empty()).then(|| module_parts.join("."))
+}
+
+/// An `import_graph_generator` for each top-level fragment of each loaded stream of the project
+/// at `project_directory` whose generator, or one nested in it, a module of `changed_files`
+/// defines, run with the promoted settings the fragment keeps.
+fn the_refresh_of_each_fragment_a_changed_module_defines(
+    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
+    project_repositories: &ProjectRepositoriesOpenInThisRuntime,
+    project_directory: &std::path::Path,
+    changed_files: &[PathBuf],
+) -> Result<Vec<StreamGraphOperationToolArgument>, String> {
+    let changed_modules: std::collections::HashSet<String> = changed_files
+        .iter()
+        .filter_map(|changed_file| {
+            the_module_a_project_file_is_imported_as(project_directory, changed_file)
+        })
+        .collect();
+    if changed_modules.is_empty() {
+        return Ok(Vec::new());
+    }
+    let project_repository = project_repositories
+        .the_project_repository_at(project_directory)
+        .map_err(|refusal| refusal.to_string())?;
+    let project_repository = project_repository.lock();
+    let project = project_repository.project_file().project;
+    let mut refreshes = Vec::new();
+    for listing in operations_on_the_loaded_streams.list_streams() {
+        let Some(stream_location) = listing.stream_location.filter(|stream_location| {
+            stream_location.project == project && listing.node_count.is_some()
+        }) else {
+            continue;
+        };
+        let staged_graph = project_repository
+            .stream_graph_document(stream_location.stream_asset)
+            .map_err(|refusal| refusal.to_string())?;
+        for fragment_node in staged_graph.fragment_nodes() {
+            let defined_in_a_changed_module = fragment_node
+                .graph_generators_a_refresh_runs()
+                .iter()
+                .any(|generator| {
+                    generator
+                        .split_once(':')
+                        .is_some_and(|(module, _)| changed_modules.contains(module))
+                });
+            if !defined_in_a_changed_module {
+                continue;
+            }
+            refreshes.push(StreamGraphOperationToolArgument::ImportGraphGenerator {
+                stream: listing.stream_id.clone(),
+                generator: fragment_node.node_type,
+                name: Some(fragment_node.name),
+                config: match fragment_node.config {
+                    Value::Object(promoted_settings) => Some(promoted_settings),
+                    _ => None,
+                },
+                label: None,
+            });
+        }
+    }
+    Ok(refreshes)
+}
+
 /// The fragment node one graph generator run places, as the run entry prints it: its nodes
 /// and links by name.
 #[derive(Deserialize)]
@@ -1529,4 +1687,34 @@ fn how_the_graph_reads_the_link(
     };
     let text_at = |key: &str| rendered_link[key].as_str().map(str::to_owned);
     (text_at("state"), text_at("error_reason"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::the_module_a_project_file_is_imported_as;
+
+    #[test]
+    fn a_project_file_is_imported_as_its_dotted_path_and_a_package_as_its_folder() {
+        let project_directory = Path::new("/rig");
+        for (changed_file, module) in [
+            ("generators/looks.py", Some("generators.looks")),
+            ("/rig/generators/looks.py", Some("generators.looks")),
+            ("generators/__init__.py", Some("generators")),
+            ("stream.py", Some("stream")),
+            ("streams/main.graph.json", None),
+            ("/elsewhere/looks.py", None),
+        ] {
+            assert_eq!(
+                the_module_a_project_file_is_imported_as(
+                    project_directory,
+                    Path::new(changed_file)
+                )
+                .as_deref(),
+                module,
+                "{changed_file}"
+            );
+        }
+    }
 }

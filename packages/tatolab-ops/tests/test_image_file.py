@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`ImageFile` decodes a PNG or a JPEG asset to RGBA, refuses anything else by name, declares one Image output, and publishes on start and on each config change."""
+"""`ImageFile` decodes a PNG or a JPEG asset to RGBA, refuses anything else by name, declares one Image output, publishes on start and on each config change, and resends to a reader that connects later."""
 
 from __future__ import annotations
 
@@ -132,11 +132,18 @@ class _TextureRingStandIn:
 
 
 class _OutputsStandIn:
+    """Output ports whose readers the last write missed are set by the test."""
+
     def __init__(self) -> None:
         self.written: "list[tuple[Any, Any]]" = []
+        self.a_reader_the_last_write_missed = False
 
     def write(self, port: Any, frame: Any) -> None:
         self.written.append((port, frame))
+        self.a_reader_the_last_write_missed = False
+
+    def has_a_reader_the_last_write_missed(self, port: Any) -> bool:
+        return self.a_reader_the_last_write_missed
 
 
 class _ContextReadingAssetsFrom:
@@ -181,3 +188,37 @@ def test_image_file_publishes_its_asset_once_and_again_after_a_config_change(
     assert len(context.outputs.written) == 2
     assert tuple(texture_ring.slots[1].pixels[0, 0]) == (10, 20, 30, 255)
     assert frames_of_texture == texture_ring.slots
+
+
+def test_image_file_resends_its_last_picture_to_a_reader_that_connects_later(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        ImageFrameToWrite, "of_texture", staticmethod(lambda slot, colour: slot)
+    )
+    context = _ContextReadingAssetsFrom({"first": an_image_file_of(tmp_path, "PNG", "RGBA")})
+    image_file = ImageFile(ImageFileConfig(asset="first"))
+    texture_ring = _TextureRingStandIn()
+    setattr(image_file, "_output_texture_ring", texture_ring)
+
+    image_file.process(context)
+    image_file.process(context)
+    assert len(context.outputs.written) == 1, "no reader joined, so nothing is resent"
+
+    context.outputs.a_reader_the_last_write_missed = True
+    image_file.process(context)
+    assert len(context.outputs.written) == 2
+    assert context.outputs.written[1] == context.outputs.written[0], "the same picture again"
+    assert len(texture_ring.slots) == 1, "a resend decodes and uploads nothing"
+
+    image_file.process(context)
+    assert len(context.outputs.written) == 2
+
+
+def test_image_file_resends_nothing_before_its_first_publish_succeeds():
+    image_file = ImageFile(ImageFileConfig(asset="0f0e"))
+    context = _AssetContentPathThatFails()
+    with pytest.raises(RuntimeError, match="not readable yet"):
+        image_file.process(context)
+    image_file.process(context)
+    assert context.asset_content_path_calls == 2, "the publish stays pending; no resend is tried"

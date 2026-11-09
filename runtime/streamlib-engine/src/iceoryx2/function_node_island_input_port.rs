@@ -68,6 +68,19 @@ pub struct FunctionNodeIslandOutputForOneRead {
     pub evaluated_at_ns: i64,
 }
 
+impl FunctionNodeIslandOutputForOneRead {
+    /// Whether a read may take this output, evaluated earlier, in place of
+    /// evaluating the island again: a message handed on unread stands until a
+    /// read takes it, since evaluating again would drop it, and any other
+    /// output stands only while no newer message waits at a reader input port.
+    fn still_stands_for_the_next_read(&self, a_message_waits_at_a_reader_input_port: bool) -> bool {
+        matches!(
+            self.value,
+            FunctionNodeIslandOutputValue::MessageHandedOnUnread(_)
+        ) || !a_message_waits_at_a_reader_input_port
+    }
+}
+
 /// The island upstream of one input port, evaluated by the process that reads
 /// the port each time it reads it.
 pub trait FunctionNodeIslandEvaluatedAtEachRead: Send + Sync {
@@ -85,6 +98,10 @@ pub trait FunctionNodeIslandEvaluatedAtEachRead: Send + Sync {
     /// The state each stateful node of the island last returned, by its
     /// breadcrumb number, which an island replacing this one resumes from.
     fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)>;
+
+    /// The reader's input ports the island's links from outside it arrive at,
+    /// which it reads at each evaluation; empty when it reads none.
+    fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String];
 }
 
 /// The pin value an input port reads while nothing is linked into it: the
@@ -124,12 +141,21 @@ impl FunctionNodeIslandEvaluatedAtEachRead for PinValueReadByAnUnlinkedInputPort
     fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
         Vec::new()
     }
+
+    fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
+        &[]
+    }
 }
 
-/// One input port an island feeds, and how many reads it has answered.
+/// One input port an island feeds, how many reads it has answered, and the
+/// output a readiness judgement evaluated that no read has taken yet.
 pub(crate) struct InputPortFedByAFunctionNodeIsland {
     island: Arc<dyn FunctionNodeIslandEvaluatedAtEachRead>,
     reads_answered: AtomicU64,
+    /// Held for the next read, so judging readiness neither steps a stateful
+    /// node a second time nor drops a message the island hands on unread.
+    output_evaluated_by_a_readiness_judgement:
+        parking_lot::Mutex<Option<FunctionNodeIslandOutputForOneRead>>,
 }
 
 impl InputPortFedByAFunctionNodeIsland {
@@ -137,6 +163,7 @@ impl InputPortFedByAFunctionNodeIsland {
         Self {
             island,
             reads_answered: AtomicU64::new(0),
+            output_evaluated_by_a_readiness_judgement: parking_lot::Mutex::new(None),
         }
     }
 
@@ -154,6 +181,7 @@ impl InputPortFedByAFunctionNodeIsland {
                     .reads_answered
                     .load(Ordering::Relaxed),
             ),
+            output_evaluated_by_a_readiness_judgement: parking_lot::Mutex::new(None),
         }
     }
 
@@ -171,12 +199,81 @@ impl InputPortFedByAFunctionNodeIsland {
             .the_state_each_stateful_function_node_last_returned()
     }
 
-    /// The island's output for this read, or `None` when it hands out nothing.
-    /// A control value is carried as a Channels block of one f64 sample on one
-    /// channel, at rate 0, which states no regular rate; a `dict` as a Records
-    /// message; a message handed on unread as it arrived.
-    pub(crate) fn read_the_island_output(&self) -> Result<Option<MessageReadFromInputPort>> {
-        let output = self.island.evaluate_the_island_output_for_this_read()?;
+    /// The reader's input ports the island's links from outside it arrive at.
+    pub(crate) fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
+        self.island
+            .the_reader_input_ports_its_links_from_outside_it_arrive_at()
+    }
+
+    /// Whether a read now would hand out a message, the island evaluated at
+    /// most once for the judgement and the read that follows it.
+    /// `a_message_waits_at_a_reader_input_port` says whether a message arrived
+    /// that the island has not yet read.
+    pub(crate) fn a_read_would_return_something(
+        &self,
+        a_message_waits_at_a_reader_input_port: bool,
+    ) -> Result<bool> {
+        let mut output_evaluated_by_a_readiness_judgement =
+            self.output_evaluated_by_a_readiness_judgement.lock();
+        let judged_output = match output_evaluated_by_a_readiness_judgement.take() {
+            Some(judged_output)
+                if judged_output
+                    .still_stands_for_the_next_read(a_message_waits_at_a_reader_input_port) =>
+            {
+                judged_output
+            }
+            _ => self.island.evaluate_the_island_output_for_this_read()?,
+        };
+        let a_read_would_return_something =
+            !matches!(judged_output.value, FunctionNodeIslandOutputValue::Nothing);
+        *output_evaluated_by_a_readiness_judgement = Some(judged_output);
+        Ok(a_read_would_return_something)
+    }
+
+    /// Whether the port should wake a reactive reader: a message that arrived
+    /// at a reader input port wakes it only when the island would hand
+    /// something out for it, and a message the island hands on unread keeps
+    /// waking it until a read takes it, as a message queued at a port does.
+    pub(crate) fn wakes_its_reader(
+        &self,
+        a_message_waits_at_a_reader_input_port: bool,
+    ) -> Result<bool> {
+        if a_message_waits_at_a_reader_input_port {
+            return self.a_read_would_return_something(true);
+        }
+        Ok(self
+            .output_evaluated_by_a_readiness_judgement
+            .lock()
+            .as_ref()
+            .is_some_and(|judged_output| {
+                matches!(
+                    judged_output.value,
+                    FunctionNodeIslandOutputValue::MessageHandedOnUnread(_)
+                )
+            }))
+    }
+
+    /// The island's output for this read, or `None` when it hands out nothing:
+    /// the output a readiness judgement evaluated while it still stands, or
+    /// else the island evaluated now. A control value is carried as a Channels
+    /// block of one f64 sample on one channel, at rate 0, which states no
+    /// regular rate; a `dict` as a Records message; a message handed on unread
+    /// as it arrived.
+    pub(crate) fn read_the_island_output(
+        &self,
+        a_message_waits_at_a_reader_input_port: bool,
+    ) -> Result<Option<MessageReadFromInputPort>> {
+        let judged_output = self
+            .output_evaluated_by_a_readiness_judgement
+            .lock()
+            .take()
+            .filter(|judged_output| {
+                judged_output.still_stands_for_the_next_read(a_message_waits_at_a_reader_input_port)
+            });
+        let output = match judged_output {
+            Some(judged_output) => judged_output,
+            None => self.island.evaluate_the_island_output_for_this_read()?,
+        };
         let (payload_bytes, payload_descriptor) = match output.value {
             FunctionNodeIslandOutputValue::Nothing => return Ok(None),
             FunctionNodeIslandOutputValue::MessageHandedOnUnread(message) => {
@@ -239,6 +336,10 @@ mod tests {
         fn the_state_each_stateful_function_node_last_returned(&self) -> Vec<(u32, Vec<f64>)> {
             Vec::new()
         }
+
+        fn the_reader_input_ports_its_links_from_outside_it_arrive_at(&self) -> &[String] {
+            &[]
+        }
     }
 
     #[test]
@@ -246,7 +347,7 @@ mod tests {
         let port = InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(
             IslandAnsweringOneValue(FunctionNodeIslandOutputValue::ControlValue(0.25)),
         ));
-        let message = port.read_the_island_output().unwrap().unwrap();
+        let message = port.read_the_island_output(false).unwrap().unwrap();
         assert_eq!(message.payload.bytes(), 0.25f64.to_le_bytes());
         assert_eq!(message.timestamp_ns, 42);
         let block =
@@ -259,7 +360,7 @@ mod tests {
         assert_eq!(
             ChannelsBlockDescriptorBody::from_descriptor_body(
                 &port
-                    .read_the_island_output()
+                    .read_the_island_output(false)
                     .unwrap()
                     .unwrap()
                     .payload_descriptor
@@ -277,7 +378,7 @@ mod tests {
             InputPortFedByAFunctionNodeIsland::evaluated_by(Arc::new(IslandAnsweringOneValue(
                 FunctionNodeIslandOutputValue::RecordsMessage(records_message_payload.clone()),
             )));
-        let message = port.read_the_island_output().unwrap().unwrap();
+        let message = port.read_the_island_output(false).unwrap().unwrap();
         assert_eq!(message.payload.bytes(), records_message_payload);
         assert_eq!(message.timestamp_ns, 42);
         assert_eq!(

@@ -121,6 +121,11 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
         }
         _ => None,
     };
+    if let Some(gpu_exchange_client) = &helper_process_exchange_client {
+        link_data_access
+            .get()
+            .note_the_gpu_exchange_client_of_this_helper(Arc::clone(gpu_exchange_client));
+    }
     // Built before the reader, which carries it: a typed read offers this
     // very capability to whatever it constructs.
     let gpu_limited_access_context = Py::new(

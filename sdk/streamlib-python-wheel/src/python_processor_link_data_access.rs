@@ -24,6 +24,8 @@ use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyBytes, PyDict, PyMapping, PyTuple, PyType};
+
+use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use streamlib::sdk::color::h273_color_vui::{
     H273_UNSPECIFIED, H273ColorVui, color_info_axis_names_of_h273_color_vui,
     h273_color_vui_from_color_info_axis_names,
@@ -96,6 +98,10 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool,
     values_last_read_off_links_into_its_function_node_islands:
         crate::python_function_node_island::ValuesLastReadOffLinksFromOutsideIslands,
+    /// The client this helper claims pooled GPU frames through, once its
+    /// runtime context opened one; the islands it feeds claim through it the
+    /// frames the messages they hold name.
+    gpu_exchange_client_of_this_helper: Arc<OnceLock<Arc<HelperProcessGpuExchangeClient>>>,
 }
 
 /// The data plane a module host table reaches a helper's lent ports through.
@@ -122,6 +128,7 @@ impl PythonProcessorLinkDataAccess {
             output_ports_lent_to_native_code: parking_lot::Mutex::new(HashSet::new()),
             runtime_drives_process_from_inputs: std::sync::atomic::AtomicBool::new(false),
             values_last_read_off_links_into_its_function_node_islands: Arc::default(),
+            gpu_exchange_client_of_this_helper: Arc::new(OnceLock::new()),
         }
     }
 
@@ -131,6 +138,39 @@ impl PythonProcessorLinkDataAccess {
         &self,
     ) -> crate::python_function_node_island::ValuesLastReadOffLinksFromOutsideIslands {
         Arc::clone(&self.values_last_read_off_links_into_its_function_node_islands)
+    }
+
+    /// Hand the islands this helper feeds the client its runtime context
+    /// opened, which they claim the pooled GPU frames they hold through.
+    pub(crate) fn note_the_gpu_exchange_client_of_this_helper(
+        &self,
+        gpu_exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    ) {
+        let _ = self
+            .gpu_exchange_client_of_this_helper
+            .set(gpu_exchange_client);
+    }
+
+    /// Claims the pooled GPU frame a message an island holds names, through
+    /// this helper's GPU exchange client; nothing is claimed before one opened.
+    pub(crate) fn claim_of_the_pooled_gpu_frames_its_islands_hold(
+        &self,
+    ) -> crate::python_function_node_island::ClaimOfThePooledGpuFrameAMessageNames {
+        let gpu_exchange_client_of_this_helper =
+            Arc::clone(&self.gpu_exchange_client_of_this_helper);
+        Box::new(move |pooled_gpu_frame| {
+            let Some(gpu_exchange_client) = gpu_exchange_client_of_this_helper.get() else {
+                return Ok(None);
+            };
+            Ok(gpu_exchange_client
+                .note_and_claim_the_pooled_gpu_frame_a_read_carries_refusing_by_message(
+                    pooled_gpu_frame,
+                )?
+                .map(|claim| {
+                    Box::new(claim)
+                        as crate::python_function_node_island::PooledGpuFrameClaimAnIslandHolds
+                }))
+        })
     }
 
     /// This helper's input mailboxes; `None` before a link wired one.
@@ -622,6 +662,22 @@ impl PythonProcessorLinkDataAccess {
             .iter()
             .map(|inbound_link_name| inbound_link_name.as_str().to_string())
             .collect())
+    }
+
+    /// Whether a reader now connected to `port_name` connected after its last
+    /// write; a declared port no link has reached has no reader.
+    pub(crate) fn output_port_has_a_reader_the_last_write_missed(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+    ) -> PyResult<bool> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
+        Ok(match self.output_writer_reaching(port_name)? {
+            Some(output_writer) => {
+                python.detach(|| output_writer.has_a_reader_the_last_write_missed(port_name))
+            }
+            None => false,
+        })
     }
 }
 
@@ -1250,6 +1306,7 @@ impl PythonProcessorLinkDataAccess {
                     let publisher = channel.create_publisher(expected_payload_bytes)?;
                     output_writer.set_channel_publisher(
                         port_name,
+                        &channel,
                         publisher,
                         ChannelEgressConfig {
                             service_name: channel_service_name.to_string(),

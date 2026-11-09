@@ -139,7 +139,9 @@ enum TatolabVerb {
         long_about = "`run`, then the project's log followed — each record under the project's \
                       folder name — plus a watch on the project's .py files, graph documents, \
                       tatolab-project.json and pyproject.toml: each settled save queues another \
-                      load, which replaces each stream. A save whose stream fails to load \
+                      load, which replaces each stream; a saved .py file first refreshes \
+                      every fragment whose graph generator its module defines. A save whose \
+                      stream fails to load \
                       records it failed, with why in the log, until a save that loads. Ctrl-C ends dev and leaves the streams loaded. When the runtime \
                       goes away, dev says so, waits for it, and follows the log again as the \
                       restarted runtime re-loads the project from its records."
