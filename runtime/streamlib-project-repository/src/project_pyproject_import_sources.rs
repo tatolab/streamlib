@@ -14,11 +14,12 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 pub const PYPROJECT_FILE_NAME: &str = "pyproject.toml";
 
 /// `pyproject_text` with each import holding a `pyproject.toml` named as a requirement of the
-/// project, unless one already names it, and as a uv path source into its folder, and every source into `imports/` that no
-/// import holds now taken out with its requirement. Each source is written
-/// `{ path = "imports/<folder>", package = false }`: uv installs the module's requirements and
-/// never builds the module, so no import's code reaches the project's shared import path. A
-/// manifest with no `[project]` table, which uv syncs no requirements of, is left as it is.
+/// project, unless one already names it, and as a uv path source into its folder, and every
+/// source into `imports/` that no import holds now taken out with its requirement. Each source
+/// is written `{ path = "imports/<folder>", package = false }`: uv installs the module's
+/// requirements and never builds the module, so no import's code reaches the project's shared
+/// import path. A manifest with no `[project]` table has no requirements to name an import in,
+/// so it is left as it is.
 pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
     pyproject_text: &str,
     project_directory: &Path,
