@@ -25,7 +25,7 @@ use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{Config, GeneratedProcessor, ManualProcessor, ProcessorSpec};
-use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
+use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner};
 use streamlib::sdk::{App, THE_STREAM_ID_AN_APP_LOADS};
 
 // =============================================================================
