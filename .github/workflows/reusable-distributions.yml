@@ -34,7 +34,7 @@ name: Distributions
 # which is how a release whose distributions were never built or uploaded is
 # published by hand. A partially failed upload is recovered by re-running the
 # original run's failed job. A dry run builds and
-# checks every distribution, writes the index pages for this run's wheels, and
+# checks every core distribution, writes the index pages for this run's wheels, and
 # uploads nothing.
 on:
   workflow_call:
@@ -45,7 +45,7 @@ on:
         required: false
         default: ""
       dry_run:
-        description: "Build and check every distribution without uploading"
+        description: "Build and check every core distribution without uploading"
         type: boolean
         required: false
         default: true
@@ -56,7 +56,7 @@ on:
         type: string
         required: false
       dry_run:
-        description: "Build and check every distribution without uploading"
+        description: "Build and check every core distribution without uploading"
         type: boolean
         required: false
         default: true

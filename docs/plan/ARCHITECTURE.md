@@ -3771,8 +3771,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
-  first-party extensions (`tatolab-webrtc` today) carry one version, every piece at every
-  release, whether or not it changed. The runtime, `tatolab-stream` and the core modules the
+  first-party extensions (`tatolab-webrtc` today) carry one version: whatever a release
+  publishes carries that release's version, whether or not it changed. The runtime, `tatolab-stream` and the core modules the
   runtime unit carries publish first, and a module that fails to build never withholds them
   (owner, 2026-11-10). An extension still depends
   on `tatolab-stream` by a minimum version, as a third party's package does, and an extension
