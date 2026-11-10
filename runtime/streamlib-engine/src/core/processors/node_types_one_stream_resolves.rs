@@ -10,6 +10,7 @@ use crate::core::ProcessorDescriptor;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_function_node_pool_type,
 };
+use crate::core::compiler::compiler_ops::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{NodeKind, ProcessorClassImportPath};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
@@ -39,6 +40,13 @@ pub(crate) enum HowANodeOfADescribedTypeRuns {
     /// constructor builds the processor of its own helper.
     InsideTheReadOfEachNodeItFeeds {
         processor_once_promoted_to_its_own_process: DynamicProcessorConstructorFn,
+    },
+    /// On the native evaluator of its shader node island: the constructor
+    /// builds the evaluator of the island a node hosts, running each member's
+    /// program.
+    OnTheNativeShaderEvaluatorOfItsIsland {
+        shader_node_program: ShaderNodeProgram,
+        evaluator_of_the_island_it_hosts: DynamicProcessorConstructorFn,
     },
 }
 
@@ -153,6 +161,23 @@ impl NodeTypesOneStreamResolves {
         })
     }
 
+    /// The program of shader node type `node_type`; `None` for any other type.
+    pub(crate) fn shader_node_program_of(
+        &self,
+        node_type: &ProcessorClassImportPath,
+    ) -> Option<ShaderNodeProgram> {
+        self.project_the_type_this_streams_interpreter_described(node_type, |described| {
+            match &described.how_its_nodes_run {
+                HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
+                    shader_node_program,
+                    ..
+                } => Some(shader_node_program.clone()),
+                _ => None,
+            }
+        })
+        .flatten()
+    }
+
     /// The input and output ports `node_type` declares, native first.
     pub fn port_info(
         &self,
@@ -228,9 +253,11 @@ impl NodeTypesOneStreamResolves {
             return PROCESSOR_REGISTRY.create(node);
         };
         let constructor = match &described.how_its_nodes_run {
-            HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(constructor) => {
-                constructor
-            }
+            HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(constructor)
+            | HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
+                evaluator_of_the_island_it_hosts: constructor,
+                ..
+            } => constructor,
             HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
                 processor_once_promoted_to_its_own_process,
             } if node.has::<FunctionNodePromotedToItsOwnProcessComponent>() => {

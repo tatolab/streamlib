@@ -115,3 +115,13 @@ class ShadedFramePixelReadingSink:
             }
 
         _report("ShadedFramePixelReadingSink", read_the_shaded_pixels)
+
+
+@node.process
+class FrameDiscardingSink:
+    """Reads each frame it is handed and keeps none: a second reader of the Image feeding it."""
+
+    discarded = Input(Image, delivery="newest")
+
+    def process(self, ctx) -> None:
+        ctx.inputs.read(self.discarded)

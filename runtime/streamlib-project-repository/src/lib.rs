@@ -13,7 +13,6 @@ mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_import_copy;
 mod project_import_folders;
-#[cfg(feature = "history")]
 mod project_pyproject_import_sources;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
@@ -43,6 +42,10 @@ pub use project_history_repository::{
     ProjectHistoryCommit, ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
+pub use project_pyproject_import_sources::{
+    FirstPartyModuleDeclaredByAProject, PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY,
+    pyproject_with_each_first_party_module_as_a_uv_path_source,
+};
 #[cfg(feature = "history")]
 pub use project_repositories_open_in_this_runtime::{
     ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,

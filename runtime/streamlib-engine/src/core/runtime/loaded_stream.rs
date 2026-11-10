@@ -604,7 +604,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<GpuContext> {
         let pipeline_cache_directory = self
             .project_directory()
-            .join(".streamlib")
+            .join(".tatolab")
             .join("cache")
             .join("pipeline-cache");
 

@@ -52,12 +52,12 @@ class StartReturns:
 '''
 
 START_RAISING_STREAM_SOURCE = '''\
-from tatolab.stream import StreamBuilder, stream
+from tatolab.stream import StreamBuilder, graph_generator
 
 from processors.start_raising import StartRaises, StartReturns
 
 
-@stream
+@graph_generator
 def main(stream_builder: StreamBuilder) -> None:
     stream_builder.add(StartRaises, name="start-raises")
     stream_builder.add(StartReturns, name="start-returns")

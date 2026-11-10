@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -110,7 +111,9 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    project_directory = make_tatolab_project(directory_name="bright-lens")
+    project_directory = make_tatolab_project(
+        directory_name="bright-lens", runs_in_the_suite_venv=False
+    )
     resolved_project_directory = project_directory.resolve()
     tatolabd = start_tatolabd(extra_environment={"PATH": path_without_any_uv()})
 
@@ -161,7 +164,7 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
 
     queued_stop = local_api.call_tool("stop_project", {"project_directory": str(project_directory)})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
-    (project_directory / ".venv").unlink()
+    shutil.rmtree(project_directory / ".venv")
     point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory)
     queued_start = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])

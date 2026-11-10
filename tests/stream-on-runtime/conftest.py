@@ -38,7 +38,7 @@ Fixtures, each documented where it is defined:
 - `start_tatolabd` — start this test's `tatolabd`; returns a `TatolabdUnderTest`.
 - `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it with `tatolab run`.
 - `run_stream_on_tatolabd_with_no_vulkan_driver` — the GPU-free run: loaded and failed at the GPU, or failed or refused before it.
-- `make_tatolab_project` — a project directory whose `.venv` is the suite venv.
+- `make_tatolab_project` — a project directory whose `.venv` is the suite venv, or one the runtime makes.
 - `run_tatolab` / `start_tatolab` — any `tatolab` command to completion, or started.
 - `run_tatolab_observation_verb` — a `tatolab` verb against this test's runtime, to completion.
 - `held_node_module` — a node module in a project of its own whose describe parks the load.
@@ -52,8 +52,8 @@ every loaded stream is unloaded and `tatolabd` exits.
 `TatolabRunOrDevOnTheRuntime.await_loaded()` follows the load it queued with
 `describe_stream_action` until it ends, and answers the stream it loaded —
 `tatolabd.await_the_latest_stream_loaded()` for the latest one, returning its
-id — and `stop_the_stream()` runs `tatolab stop <id>`, the one way a test ends
-that stream short of the machine shutdown; a Ctrl-C to `dev` ends the following
+id — and `stop_the_stream()` runs `tatolab stop --dir <dir>` on its project, the one
+way a test ends that stream short of the machine shutdown; a Ctrl-C to `dev` ends the following
 and leaves the stream loaded. The local API serves every stream the runtime holds, so the client's
 waits on one stream's graph name it: `await_every_node_running(stream=...)`.
 """
@@ -358,6 +358,7 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         refusal_line_prefix: str,
         verb: str,
         working_directory: Path,
+        project_dir_argument: str,
         tatolab_commands: "TatolabCommandsOfThisTest",
     ) -> None:
         super().__init__(
@@ -367,6 +368,7 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         )
         self.verb = verb
         self.working_directory = working_directory
+        self.project_dir_argument = project_dir_argument
         self._tatolab_commands = tatolab_commands
         self._ended_actions: "dict[str, dict[str, Any]]" = {}
 
@@ -477,16 +479,17 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         return failed_stream[1] if failed_stream is not None else None
 
     def stop_the_stream(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> int:
-        """Run `tatolab stop <id>` on the stream this load started, to its exit, and follow
-        the stop it queued to its end; return its exit status. The stream is unloaded and
-        recorded stopped."""
-        stream_id = self.await_loaded(timeout=timeout)["stream_id"]
+        """Run `tatolab stop --dir <dir>` on the project this load ran, once its stream is
+        loaded, to its exit, and follow the stop it queued to its end; return its exit status.
+        Every stream of the project is unloaded and recorded stopped."""
+        self.await_loaded(timeout=timeout)
         stop = self._tatolab_commands.start_tatolab(
-            "stop", stream_id, working_directory=self.working_directory
+            "stop", "--dir", self.project_dir_argument, working_directory=self.working_directory
         )
         exit_status = stop.await_exit(timeout=timeout)
         assert exit_status == 0, (
-            f"`tatolab stop {stream_id}` exited {exit_status}; standard error:\n"
+            f"`tatolab stop --dir {self.project_dir_argument}` exited {exit_status}; "
+            f"standard error:\n"
             f"{stop.recent_stderr()}"
         )
         queued_stop = QUEUED_STREAM_ACTION_LINE_PATTERN.search(stop.stdout_text)
@@ -659,6 +662,7 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
                 TatolabRunOrDevOnTheRuntime,
                 verb=verb,
                 working_directory=tatolab_run.working_directory,
+                project_dir_argument=tatolab_run.dir_argument,
                 tatolab_commands=self._tatolab_commands,
             ),
         )
@@ -927,17 +931,31 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
 def make_tatolab_project(tmp_path: Path) -> "Callable[..., Path]":
     """Make a `tatolab` project directory whose `.venv` symlinks the suite venv.
 
-    `make_tatolab_project(files={relative_path: text}, directory_name="app") -> Path`:
-    each file is written under the project, and `.venv` points at the suite
-    venv's root, so the project's Python nodes run in `<project>/.venv/bin/python`,
-    holding `tatolab-stream` and nothing of the runtime. A `stream.py` among the files
-    is compiled in the suite venv to the project's graph documents.
+    `make_tatolab_project(files={relative_path: text}, directory_name="app",
+    runs_in_the_suite_venv=True) -> Path`: each file is written under the project, and
+    `.venv` points at the suite venv's root, so the project's Python nodes run in
+    `<project>/.venv/bin/python`, holding `tatolab-stream` and nothing of the runtime. A
+    `stream.py` among the files is compiled in the suite venv to the project's graph
+    documents. With `runs_in_the_suite_venv=False` the project gets no `.venv`, and the
+    runtime makes one of its own from the `pyproject.toml` the project holds or is
+    given: the runtime syncs a venv to its project's `pyproject.toml`, so a project
+    holding one never links the suite venv.
     """
 
-    def make(files: "dict[str, str] | None" = None, directory_name: str = "app") -> Path:
+    def make(
+        files: "dict[str, str] | None" = None,
+        directory_name: str = "app",
+        runs_in_the_suite_venv: bool = True,
+    ) -> Path:
+        if runs_in_the_suite_venv and "pyproject.toml" in (files or {}):
+            raise ValueError(
+                "a project given its own pyproject.toml would have the runtime sync "
+                "the suite venv to it; make it with runs_in_the_suite_venv=False"
+            )
         project_directory = tmp_path / directory_name
         project_directory.mkdir(parents=True)
-        (project_directory / ".venv").symlink_to(SUITE_VENV_PREFIX, target_is_directory=True)
+        if runs_in_the_suite_venv:
+            (project_directory / ".venv").symlink_to(SUITE_VENV_PREFIX, target_is_directory=True)
         for relative_path, text in (files or {}).items():
             project_file = project_directory / relative_path
             project_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1009,15 +1027,18 @@ def make_scaffolded_tatolab_project(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
 ) -> "Callable[..., Path]":
-    """`tatolab new` into a project whose `.venv` is the suite venv, on a running `tatolabd`.
+    """`tatolab new` into an empty project directory, on a running `tatolabd`.
 
     `make_scaffolded_tatolab_project(tatolabd, directory_name="app") -> Path`:
-    the runtime writes the scaffold beside the `.venv` and loads its stream;
+    the runtime writes the scaffold, makes the project's own `.venv` from the
+    scaffold's `pyproject.toml` as it does for a user, and loads its stream;
     returns once that action is `done`.
     """
 
     def make(tatolabd: TatolabdUnderTest, directory_name: str = "app") -> Path:
-        app_directory = make_tatolab_project(directory_name=directory_name)
+        app_directory = make_tatolab_project(
+            directory_name=directory_name, runs_in_the_suite_venv=False
+        )
         created = run_tatolab("new", app_directory, working_directory=app_directory.parent)
         assert created.returncode == 0, created.stdout + created.stderr
         action = created.stdout.split(" ", 1)[0]
