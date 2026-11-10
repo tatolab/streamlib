@@ -26,21 +26,24 @@ use streamlib_project_repository::{
     GROUP_COLOUR_ARGUMENT_DESCRIPTION, GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION,
     GROUP_TITLE_ARGUMENT_DESCRIPTION, IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
-    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, ProjectAction, ProjectActionIdempotencyKey,
-    ProjectOperation, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionLineage,
-    ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
-    StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
+    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
+    NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
+    NOTE_TEXT_ARGUMENT_DESCRIPTION, ProjectAction, ProjectActionIdempotencyKey, ProjectOperation,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
+    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphAction,
+    StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
-    StreamGraphFragmentPlacement, StreamGraphGroupFields, StreamGraphOperation,
-    StreamGraphOperationOnAStream, fragment_with_each_node_uuid_kept_by_its_name,
+    StreamGraphDocumentNote, StreamGraphFragmentPlacement, StreamGraphGroupFields,
+    StreamGraphNodeStudioFields, StreamGraphNoteFields, StreamGraphOperation,
+    StreamGraphOperationOnAStream, StudioCanvasPair, fragment_with_each_node_uuid_kept_by_its_name,
     graph_document_holds_a_stream_fragment, the_fragment_a_stream_fragment_places,
     the_stream_document_of_an_import,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
-    GraphTransactionConnectedLink, GraphTransactionToolResult, ProjectActionRefusalOnTheWire,
-    RefusedGraphLinkOnTheWire,
+    GraphTransactionAddedNote, GraphTransactionConnectedLink, GraphTransactionToolResult,
+    ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
 };
 use uuid::Uuid;
 
@@ -123,7 +126,10 @@ fn what_a_graph_action_names(action: &StreamGraphAction) -> WhatAGraphOperationN
         StreamGraphAction::UnlockGeneratorFragment { fragment, .. } => names_a_node(fragment),
         StreamGraphAction::AddGroup { .. }
         | StreamGraphAction::SetGroupFields { .. }
-        | StreamGraphAction::RemoveGroup { .. } => WhatAGraphOperationNames::default(),
+        | StreamGraphAction::RemoveGroup { .. }
+        | StreamGraphAction::AddNote { .. }
+        | StreamGraphAction::SetNoteFields { .. }
+        | StreamGraphAction::RemoveNote { .. } => WhatAGraphOperationNames::default(),
     }
 }
 
@@ -132,7 +138,7 @@ fn what_a_graph_action_names(action: &StreamGraphAction) -> WhatAGraphOperationN
 #[serde(deny_unknown_fields)]
 struct TransactToolArguments {
     #[schemars(
-        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group` or `use_dependency_stream` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_generator_fragment` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
     operations: Vec<StreamGraphAction>,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -166,9 +172,7 @@ struct AddNodeToolArguments {
     pins: Option<Map<String, Value>>,
     #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
     exposed_config_fields: Option<Vec<String>>,
-    #[schemars(
-        description = "What the studio draws the node with: canvas position, group, comment, colour."
-    )]
+    #[schemars(description = NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION)]
     studio: Option<Map<String, Value>>,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     mode: Option<GraphEditMode>,
@@ -288,9 +292,7 @@ struct SetStudioFieldsToolArguments {
     stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
-    #[schemars(
-        description = "What the studio draws the node with: canvas position, group, comment, colour. It replaces the old fields whole."
-    )]
+    #[schemars(description = NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION)]
     studio: Map<String, Value>,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     mode: Option<GraphEditMode>,
@@ -338,6 +340,70 @@ struct SetGroupFieldsToolArguments {
     description: Option<String>,
     #[schemars(description = "The group's new colour; kept when omitted, cleared by `\"\"`.")]
     colour: Option<String>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct AddNoteToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Uuid,
+    #[schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION)]
+    text: String,
+    #[schemars(description = NOTE_POSITION_ARGUMENT_DESCRIPTION, with = "[f64; 2]")]
+    position: StudioCanvasPair,
+    #[schemars(description = NOTE_SIZE_ARGUMENT_DESCRIPTION, with = "[f64; 2]")]
+    size: StudioCanvasPair,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct SetNoteFieldsToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Uuid,
+    #[schemars(description = NOTE_ARGUMENT_DESCRIPTION)]
+    note: String,
+    #[schemars(description = "What the note says; kept when omitted.")]
+    text: Option<String>,
+    #[schemars(
+        description = "Where the note's top-left corner sits, `[x, y]`; kept when omitted.",
+        with = "Option<[f64; 2]>"
+    )]
+    position: Option<StudioCanvasPair>,
+    #[schemars(
+        description = "The note's `[width, height]`; kept when omitted.",
+        with = "Option<[f64; 2]>"
+    )]
+    size: Option<StudioCanvasPair>,
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    mode: Option<GraphEditMode>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RemoveNoteToolArguments {
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Uuid,
+    #[schemars(description = NOTE_ARGUMENT_DESCRIPTION)]
+    note: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     mode: Option<GraphEditMode>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
@@ -756,7 +822,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Replace what the studio draws a node with — canvas position, group, comment, colour — as one transaction."
+        description = "Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole. The fields are held to the studio contract: a key of the wrong shape, or any key outside it, is refused by name. It changes nothing that runs."
     )]
     async fn set_studio_fields(
         &self,
@@ -946,6 +1012,100 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
+        description = "Place a canvas note on a loaded stream's graph, as one transaction: text at a position and size Tato Studio draws it at, beside the nodes rather than on one. It changes nothing that runs. Answers as `transact` does, the new note's UUID under `added_notes`."
+    )]
+    async fn add_note(
+        &self,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(AddNoteToolArguments {
+            stream,
+            text,
+            position,
+            size,
+            mode,
+            author,
+            idempotency_key,
+        }): Parameters<AddNoteToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphAction::AddNote {
+            stream,
+            text,
+            position,
+            size,
+        };
+        self.one_graph_transaction(
+            "add_note",
+            vec![operation],
+            mode,
+            author,
+            idempotency_key,
+            &tool_call_request_context,
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Set a canvas note's text, position or size, as one transaction; a field omitted is kept."
+    )]
+    async fn set_note_fields(
+        &self,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(SetNoteFieldsToolArguments {
+            stream,
+            note,
+            text,
+            position,
+            size,
+            mode,
+            author,
+            idempotency_key,
+        }): Parameters<SetNoteFieldsToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphAction::SetNoteFields {
+            stream,
+            note,
+            text,
+            position,
+            size,
+        };
+        self.one_graph_transaction(
+            "set_note_fields",
+            vec![operation],
+            mode,
+            author,
+            idempotency_key,
+            &tool_call_request_context,
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Take a canvas note off a loaded stream's graph, as one transaction. Undo puts it back as it was."
+    )]
+    async fn remove_note(
+        &self,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(RemoveNoteToolArguments {
+            stream,
+            note,
+            mode,
+            author,
+            idempotency_key,
+        }): Parameters<RemoveNoteToolArguments>,
+    ) -> ToolCallAnswer {
+        let operation = StreamGraphAction::RemoveNote { stream, note };
+        self.one_graph_transaction(
+            "remove_note",
+            vec![operation],
+            mode,
+            author,
+            idempotency_key,
+            &tool_call_request_context,
+        )
+        .await
+    }
+
+    #[tool(
         description = "Take out a labelled group, as one transaction: its nodes stay, ungrouped. Undo brings the group back with every node that belonged to it."
     )]
     async fn remove_group(
@@ -1017,6 +1177,7 @@ impl LocalApiMcpServerHandler {
                     added_nodes: Vec::new(),
                     connected_links: Vec::new(),
                     added_groups: Vec::new(),
+                    added_notes: Vec::new(),
                 },
             );
         }
@@ -1971,6 +2132,7 @@ impl GraphTransactionInFlight<'_> {
     ) -> GraphTransactionToolResult {
         let mut added_nodes = Vec::new();
         let mut added_groups = Vec::new();
+        let mut added_notes = Vec::new();
         let mut connected_links = Vec::new();
         let mut graph_render_of_each_stream: HashMap<String, Option<Value>> = HashMap::new();
         let mut operations = Vec::with_capacity(applied_live.len());
@@ -1993,6 +2155,12 @@ impl GraphTransactionInFlight<'_> {
                             label: labels_of_added_nodes.get(&fragment).cloned(),
                         });
                     }
+                }
+                StreamGraphOperation::AddNote { note } => {
+                    added_notes.push(GraphTransactionAddedNote {
+                        stream: stream_id.clone(),
+                        note: note.id.to_string(),
+                    });
                 }
                 StreamGraphOperation::AddGroup { group, .. } => {
                     added_groups.push(GraphTransactionAddedGroup {
@@ -2049,6 +2217,7 @@ impl GraphTransactionInFlight<'_> {
             added_nodes,
             connected_links,
             added_groups,
+            added_notes,
         }
     }
 }
@@ -2146,7 +2315,7 @@ fn graph_operation_for_the_request(
                             config: placed.config,
                             pins: Map::new(),
                             exposed_config_fields: Vec::new(),
-                            studio: Map::new(),
+                            studio: Default::default(),
                             fragment: Some(Box::new(fragment)),
                         },
                         links: Vec::new(),
@@ -2209,7 +2378,11 @@ fn graph_operation_for_the_request(
                     config: Value::Object(config.unwrap_or_default()),
                     pins: pins.unwrap_or_default(),
                     exposed_config_fields: exposed_config_fields.unwrap_or_default(),
-                    studio: studio.unwrap_or_default(),
+                    studio: studio
+                        .map(StreamGraphNodeStudioFields::from_a_callers_studio)
+                        .transpose()?
+                        .map(Box::new)
+                        .unwrap_or_default(),
                     fragment: None,
                 },
                 links: Vec::new(),
@@ -2262,7 +2435,7 @@ fn graph_operation_for_the_request(
             Ok(StreamGraphOperation::SetStudioFields {
                 node,
                 from: staged_graph.node(node)?.studio,
-                to: studio,
+                to: Box::new(StreamGraphNodeStudioFields::from_a_callers_studio(studio)?),
             })
         }
         StreamGraphAction::SetExposedConfigFields {
@@ -2374,12 +2547,49 @@ fn graph_operation_for_the_request(
                     config,
                     pins: Map::new(),
                     exposed_config_fields: Vec::new(),
-                    studio: Map::new(),
+                    studio: Default::default(),
                     fragment: Some(Box::new(fragment)),
                 },
                 links: Vec::new(),
             })
         }
+        StreamGraphAction::AddNote {
+            text,
+            position,
+            size,
+            ..
+        } => Ok(StreamGraphOperation::AddNote {
+            note: StreamGraphDocumentNote {
+                id: Uuid::new_v4(),
+                fields: StreamGraphNoteFields {
+                    text,
+                    position,
+                    size,
+                },
+            },
+        }),
+        StreamGraphAction::SetNoteFields {
+            note,
+            text,
+            position,
+            size,
+            ..
+        } => {
+            let from = staged_graph.note(the_note_named(&note)?)?;
+            let to = StreamGraphNoteFields {
+                text: text.unwrap_or_else(|| from.fields.text.clone()),
+                position: position.unwrap_or_else(|| from.fields.position.clone()),
+                size: size.unwrap_or_else(|| from.fields.size.clone()),
+            };
+            Ok(StreamGraphOperation::SetNoteFields {
+                note: from.id,
+                from: from.fields,
+                to,
+            })
+        }
+        StreamGraphAction::RemoveNote { note, .. } => Ok(StreamGraphOperation::RemoveNote {
+            note: staged_graph.note(the_note_named(&note)?)?,
+        }),
         StreamGraphAction::RemoveGroup { group, .. } => {
             let group = staged_graph.group(the_group_named(&group)?)?;
             Ok(StreamGraphOperation::RemoveGroup {
@@ -2468,6 +2678,11 @@ fn the_fragment_an_imported_stream_places(
     let fragment =
         the_fragment_a_stream_fragment_places(project_directory, fragment_node, held_stream)?;
     Ok((fragment, stream_name))
+}
+
+fn the_note_named(note: &str) -> Result<Uuid, String> {
+    Uuid::parse_str(note)
+        .map_err(|_| format!("`{note}` is no note's UUID; `graph` lists each note's under `notes`"))
 }
 
 fn the_group_named(group: &str) -> Result<Uuid, String> {

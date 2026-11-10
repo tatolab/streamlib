@@ -250,6 +250,7 @@ impl Graph {
             references: Vec::new(),
             machine,
             groups: Vec::new(),
+            studio: None,
         }
     }
 }

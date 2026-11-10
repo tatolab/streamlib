@@ -57,6 +57,10 @@ pub struct GraphResponse {
     /// Every labelled group of the stream's own level: a spec key, read by nothing that runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LabelledNodeGroup>,
+    /// What Tato Studio draws beside the nodes, its canvas notes, under the studio contract: a
+    /// spec key, read by nothing that runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub studio: Option<serde_json::Value>,
 }
 
 /// A labelled group of one level's nodes, which a node joins by naming its `id` as its
@@ -1536,7 +1540,8 @@ mod graph_response_top_level_key_rendering_tests {
                 "machine",
                 "nodes",
                 "references",
-                "stream"
+                "stream",
+                "studio"
             ]
         );
     }
