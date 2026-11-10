@@ -29,6 +29,8 @@
   stays loaded, its processors hold their state, and its graph edits compile on resume. Pause is
   live state and is not recorded, so a runtime restart re-loads the project running (session,
   2026-11-09: pause is not recorded because the plan records only what a restart must restore).
+  A `tatolab dev` reload of a paused project loads it paused, and it stays paused until it is
+  resumed (owner, 2026-11-10).
 - `list_streams` lists a paused stream as `paused`.
 
 ## MODIFIED
@@ -37,6 +39,8 @@
   `stop_project` and `remove_project`. The project is the unit a person starts and stops.
 - §Media I/O, access nobody asked for: re-asking is a `stop_project` then a `run_project`.
 - §Control plane: the server instructions name the project verbs.
+- §Control plane, the CLI: `tatolab stop` stops the working directory's project, and
+  `tatolab start` runs it as `run_project` does (owner, 2026-11-10).
 
 ## REMOVED
 

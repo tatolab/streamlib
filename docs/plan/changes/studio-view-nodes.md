@@ -40,7 +40,9 @@ This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folde
   declared input and one output per declared output, each of its declared family. A view that is
   missing or does not open fails the node by name, the way an unregistered `type` is refused.
 - **Panel reads.** A panel reads a `StudioView` node's inputs through `open_viewer` on the port
-  linked into it, and an Image stays zero-copy.
+  linked into it, and an Image stays zero-copy. The runtime gives one viewer per port per
+  connection, so Tato Studio's main process holds that one viewer and fans it out to every panel
+  showing the port, and the runtime does not change for it (owner, 2026-11-10).
 - **Panel writes.** `write_studio_view_output {stream, node, port, value}` hands a value to the
   node, an Image written from a panel taking at most one GPU copy into the node's own frame. The
   node owns its outputs' values and publishes each new one on that port, and a
