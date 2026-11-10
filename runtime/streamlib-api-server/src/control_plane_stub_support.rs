@@ -466,6 +466,13 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> ::std::result::Result<(), String> {
                 Ok(())
             }
+            fn record_first_party_package_moves_in(
+                &self,
+                _history: ::std::sync::Arc<
+                    dyn ::streamlib::sdk::runtime::ProjectHistoryRecordingFirstPartyPackageMoves,
+                >,
+            ) {
+            }
         }
     };
 }

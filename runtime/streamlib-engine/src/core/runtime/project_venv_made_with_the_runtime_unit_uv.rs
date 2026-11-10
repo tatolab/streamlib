@@ -631,7 +631,7 @@ fn project_venv_sync_command(runtime_unit_uv: &Path, project_directory: &Path) -
 
 /// `runtime_unit_uv` started in `project_directory` without the variables
 /// that would point it at another Python or another venv.
-fn project_venv_uv_command(runtime_unit_uv: &Path, project_directory: &Path) -> Command {
+pub(crate) fn project_venv_uv_command(runtime_unit_uv: &Path, project_directory: &Path) -> Command {
     let mut command = a_command_detached_from_the_terminal_in(runtime_unit_uv, project_directory);
     command.stderr(Stdio::piped());
     remove_every_python_variable_named_in(

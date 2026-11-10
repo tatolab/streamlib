@@ -567,6 +567,15 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn record_first_party_package_moves_in(
+        &self,
+        history: Arc<dyn streamlib::sdk::runtime::ProjectHistoryRecordingFirstPartyPackageMoves>,
+    ) {
+        OperationsOnTheStreamsLoadedInThisRuntime::record_first_party_package_moves_in(
+            self.engine.as_ref(),
+            history,
+        )
+    }
 }
 
 /// The one stream a finished stream action took in.

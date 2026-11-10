@@ -146,6 +146,12 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         &self,
         project_directory: &Path,
     ) -> std::result::Result<(), String>;
+
+    /// [`Runner::record_first_party_package_moves_in`].
+    fn record_first_party_package_moves_in(
+        &self,
+        history: Arc<dyn super::ProjectHistoryRecordingFirstPartyPackageMoves>,
+    );
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
@@ -300,5 +306,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         project_directory: &Path,
     ) -> std::result::Result<(), String> {
         Runner::lock_the_python_requirements_of_the_project_in(self, project_directory)
+    }
+
+    fn record_first_party_package_moves_in(
+        &self,
+        history: Arc<dyn super::ProjectHistoryRecordingFirstPartyPackageMoves>,
+    ) {
+        Runner::record_first_party_package_moves_in(self, history)
     }
 }
