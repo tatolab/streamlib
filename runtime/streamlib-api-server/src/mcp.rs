@@ -178,6 +178,13 @@ impl LocalApiMcpServerHandler {
                 },
             )),
         );
+        operations_on_the_loaded_streams.record_first_party_package_moves_in(Arc::new(
+            crate::first_party_package_moves_recorded_in_the_open_projects::FirstPartyPackageMovesRecordedInTheOpenProjects {
+                project_repositories_open_in_this_runtime: Arc::downgrade(
+                    &project_repositories_open_in_this_runtime,
+                ),
+            },
+        ));
         Self {
             operations_on_the_loaded_streams,
             local_api_stopping_token,

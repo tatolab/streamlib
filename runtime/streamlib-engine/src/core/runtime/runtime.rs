@@ -119,6 +119,10 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// What the host commits a created project's files with, as its history's first commit.
     pub(crate) created_project_first_commit: OnceLock<CreatedProjectFirstCommit>,
+    /// The project history the host records each move of a project's first-party packages
+    /// in, `None` until the host hands one.
+    pub(crate) project_history_recording_first_party_package_moves:
+        Mutex<Option<Arc<dyn super::ProjectHistoryRecordingFirstPartyPackageMoves>>>,
     /// The native services the host offered every node, such as the browser host.
     pub(crate) shared_native_services:
         Arc<crate::core::shared_native_services::SharedNativeServicesOfTheEngine>,
@@ -625,6 +629,7 @@ impl Runner {
                     "the runtime unit's uv",
                 ),
                 created_project_first_commit: OnceLock::new(),
+                project_history_recording_first_party_package_moves: Mutex::new(None),
                 shared_native_services:
                     crate::core::shared_native_services::SharedNativeServicesOfTheEngine::in_directory(
                         runtime_directory.shared_native_services_directory(),
@@ -815,6 +820,18 @@ impl Runner {
                         .to_string(),
                 )
             })
+    }
+
+    /// Record each move of a project's first-party packages to this runtime's version in
+    /// `history`, in place of the one handed before.
+    pub fn record_first_party_package_moves_in(
+        &self,
+        history: Arc<dyn super::ProjectHistoryRecordingFirstPartyPackageMoves>,
+    ) {
+        *self
+            .engine_resources_shared_by_every_stream
+            .project_history_recording_first_party_package_moves
+            .lock() = Some(history);
     }
 
     /// Commit the project the scaffold wrote into `project_directory` as its history's first

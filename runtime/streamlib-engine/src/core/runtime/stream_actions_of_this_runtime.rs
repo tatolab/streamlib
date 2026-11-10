@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use super::new_project_name_drawing::draw_new_project_directory_under_the_streams_root;
 use super::new_project_scaffold::{NewProjectScaffold, write_the_new_project_scaffold_into};
+use super::project_first_party_packages_moved_to_the_runtime_version::move_the_projects_first_party_packages_to_the_runtime_version;
 use super::project_folder_moved_to_the_trash::move_the_project_folder_to_the_trash;
 use super::project_stream_action_queue::{
     StreamAction, StreamActionCancelOutcome, StreamActionKind, StreamActionProgress,
@@ -2402,11 +2403,27 @@ impl Runner {
         project_directory: &Path,
         is_interrupted: &dyn Fn() -> bool,
     ) -> std::result::Result<(), ProjectVenvNotMade> {
+        let runtime_unit_uv = self
+            .engine_resources_shared_by_every_stream
+            .runtime_unit_uv_executable
+            .get();
+        if let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) {
+            let history = self
+                .engine_resources_shared_by_every_stream
+                .project_history_recording_first_party_package_moves
+                .lock()
+                .clone();
+            move_the_projects_first_party_packages_to_the_runtime_version(
+                project_directory,
+                runtime_unit_uv,
+                env!("CARGO_PKG_VERSION"),
+                history.as_deref(),
+                is_interrupted,
+            )?;
+        }
         make_the_projects_venv_current_with_the_runtime_unit_uv(
             project_directory,
-            self.engine_resources_shared_by_every_stream
-                .runtime_unit_uv_executable
-                .get(),
+            runtime_unit_uv,
             &self.first_party_module_folders_this_runtime_carries(),
             is_interrupted,
         )

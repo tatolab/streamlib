@@ -4,6 +4,7 @@
 mod axum_router_served_until_stopped;
 #[cfg(test)]
 mod control_plane_stub_support;
+mod first_party_package_moves_recorded_in_the_open_projects;
 mod handlers;
 mod local_api_served_for_an_engine;
 mod local_api_socket;
