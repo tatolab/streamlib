@@ -96,6 +96,11 @@ on-disk transaction format.
   (owner, 2026-11-09). Renaming a project rewrites, in the same transaction, the `view_type` of
   every `StudioView` node naming a view the project brings, so one undo restores both
   (owner, 2026-11-10).
+  `import_project {source, project_directory}` is a verb, not a transaction: it unpacks the
+  `.zip` of a project, as `add_dependency` reads one, into a `project_directory` that does not
+  exist yet, under a new project UUID, so the same zip imported twice is two projects whose
+  streams never share an id, and commits it as the first commit of a history of its own; it
+  runs nothing (session, 2026-11-10).
 - **Subgraph actions.** `collapse_selection_into_subgraph {nodes, name}` moves the named nodes and
   the links between them into a new subgraph node, rewiring the links that crossed into
   `GraphInput` and `GraphOutput` nodes. `unlock_generator_fragment {fragment}` replaces a

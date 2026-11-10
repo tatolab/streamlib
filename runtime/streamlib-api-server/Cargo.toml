@@ -36,10 +36,10 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.41" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.42" }
 # The runtime directory the local API's socket is bound in, and the wire names and tool result
 # shapes it serves.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.41" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.42" }
 # The projects the asset tools open, each with its one writer.
 streamlib-project-repository = { path = "../streamlib-project-repository" }
 uuid = "1.11"
@@ -79,3 +79,5 @@ toml.workspace = true
 # The request-trace level test drives a request under a real `EnvFilter` and
 # captures what reached the subscriber.
 tracing-subscriber.workspace = true
+# The project archive tests zip a project to import it.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }

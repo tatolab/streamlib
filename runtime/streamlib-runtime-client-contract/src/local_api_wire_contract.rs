@@ -206,6 +206,19 @@ pub struct CreateProjectToolResult {
     pub project_directory: PathBuf,
 }
 
+/// The `import_project` tool's result: the project it unpacked from a `.zip` of one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportProjectToolResult {
+    /// The new project's directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The new project's UUID, its own and never the zipped project's.
+    pub project: String,
+    /// The project's name, as the zip's `tatolab-project.json` named it.
+    pub name: String,
+    /// The first commit of the new project's history, which records every file it unpacked.
+    pub commit: String,
+}
+
 /// What a stream action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -15,6 +15,12 @@ pub enum ProjectRepositoryRefusal {
     },
     #[error("{project_directory} already holds a project")]
     AlreadyAProject { project_directory: PathBuf },
+    #[error("{project_directory} already exists, so no project was unpacked there")]
+    ProjectDirectoryAlreadyExists { project_directory: PathBuf },
+    #[error(
+        "{import_source} is a folder: a project folder opens where it is, and only a `.zip` of one is unpacked as a new project"
+    )]
+    ProjectArchiveIsAFolder { import_source: String },
     #[error("the project in {project_directory} already has a first commit")]
     ProjectAlreadyCommitted { project_directory: PathBuf },
     #[error("the project directory {0} is not an absolute path")]

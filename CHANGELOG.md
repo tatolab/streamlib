@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.42](https://github.com/tatolab/streamlib/compare/v0.68.41...v0.68.42) (2026-11-10)
+
+
+### Features
+
+* a project's run log in .tatolab/logs ([ae39b68](https://github.com/tatolab/streamlib/commit/ae39b6811f5425131cac7c2ccecd60fa8c102cf5))
+
 ## [0.68.41](https://github.com/tatolab/streamlib/compare/v0.68.40...v0.68.41) (2026-11-09)
 
 

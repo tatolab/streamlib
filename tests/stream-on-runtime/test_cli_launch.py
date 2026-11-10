@@ -917,6 +917,14 @@ STREAM_PY_WITH_TWO_STREAMS = (
 )
 
 
+#: TOML the runtime reads to declare its first-party modules, whose `requires-python` uv refuses
+#: as it syncs.
+PYPROJECT_THE_RUNTIME_READS_AND_UV_REFUSES = (
+    '[project]\nname = "unsyncable"\nversion = "0"\n'
+    'requires-python = "this is not a version specifier"\n'
+)
+
+
 def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by_project(
     tmp_path: Path,
     make_tatolab_project: "Callable[..., Path]",
@@ -930,7 +938,9 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
 
     unsyncable_directory = tmp_path / "unsyncable"
     unsyncable_directory.mkdir()
-    (unsyncable_directory / "pyproject.toml").write_text("this is [not toml\n", encoding="utf-8")
+    (unsyncable_directory / "pyproject.toml").write_text(
+        PYPROJECT_THE_RUNTIME_READS_AND_UV_REFUSES, encoding="utf-8"
+    )
     (unsyncable_directory / "stream.py").write_text(STREAM_WITH_ONE_TEST_PATTERN_SOURCE, encoding="utf-8")
     write_the_graph_documents_the_stream_py_compiles_to(unsyncable_directory)
     unsynced_run = client.call_tool(
