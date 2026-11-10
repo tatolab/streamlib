@@ -113,7 +113,7 @@ NO_RUNTIME_REFUSAL_PREFIX = "no runtime is running on this machine: nothing answ
 NO_RUNTIME_REFUSAL_REMEDY = "Start one by opening Tato Studio, or by running `tatolabd` in a terminal."
 
 STREAM_RECORD_FILE_MODE = 0o600
-STREAM_RECORD_SCHEMA_VERSION = 6
+STREAM_RECORD_SCHEMA_VERSION = 7
 
 #: `tatolabd`'s line once it serves, naming the re-load it queued for each project.
 RELOADS_QUEUED_AT_THE_START_LOG_LINE_PATTERN = re.compile(
@@ -581,7 +581,6 @@ def write_the_record_run_leaves(
         "schema_version": STREAM_RECORD_SCHEMA_VERSION,
         "stream_id": stream_id_of_the_stream_in(project_directory, stream_name),
         "location": location_of_the_pattern_project(project_directory.resolve(), stream_name),
-        "display_name": stream_name,
         "interpreter": str(project_directory / ".venv" / "bin" / "python"),
         "stopped": stopped,
         "failed_because": None,
