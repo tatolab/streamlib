@@ -24,9 +24,11 @@ imports the class by the `module:ClassName` the graph document names.
 
 ## Run it
 
-With this machine's runtime running (`tatolabd`, which Tato Studio starts):
+With this machine's runtime running (`tatolabd`, which Tato Studio starts), from the root of
+this repository:
 
 ```bash
+cd examples/test-pattern-halftone-lens
 tatolab dev
 ```
 
