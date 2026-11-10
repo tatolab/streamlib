@@ -61,7 +61,8 @@ on-disk transaction format.
   version. It also gains `idempotency_key`, a string the caller mints. A second action carrying a
   key the project's history already holds answers the first transaction instead of applying
   again. A client mints one key per user gesture, so a slider drag that commits on release is one
-  key and one transaction (owner, 2026-11-09).
+  key and one transaction (owner, 2026-11-09). The key is optional: an action sent without one applies, and a
+  retry of it can apply twice (owner, 2026-11-10).
 - **Structured refusals.** A refused action answers a typed refusal: the action, the field or link
   it refused, and the runtime's own words. A client shows it beside what caused it and never
   rewrites it (owner, 2026-11-09). A project's change feed carries each refused action beside the
