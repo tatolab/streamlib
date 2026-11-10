@@ -277,7 +277,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; create-project — SHIPPED
-  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #PRNUM]
+  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #3439]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
