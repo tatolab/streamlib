@@ -6,7 +6,7 @@
 Every Python processor runs in its own child process, which reaches the class by
 importing it. Identity is what the registry, the control plane and the helper
 spawn all agree on, so one that varied with how the user named their stream to
-`tatolab run` would be three processors wearing one name.
+`tatolab start` would be three processors wearing one name.
 
 Every arm is observed at the load, which is where identity is derived — before
 the engine would initialize a GPU context. Each runs on a `tatolabd` that
@@ -99,7 +99,7 @@ def run_the_stream_entry(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
     files: "dict[str, str]",
 ) -> StreamRunWithNoVulkanDriverOutcome:
-    """`tatolab run` a project holding `files`, on a `tatolabd` that reaches no Vulkan driver."""
+    """`tatolab start` a project holding `files`, on a `tatolabd` that reaches no Vulkan driver."""
     project_directory = make_tatolab_project(files)
     return run_stream_on_tatolabd_with_no_vulkan_driver(
         TatolabRunOfAProject(working_directory=project_directory)

@@ -72,9 +72,9 @@ impl std::fmt::Display for LoadedStreamHolding {
     }
 }
 
-/// The project [`Runner::run_project`] queues a load of.
+/// The project [`Runner::start_project`] or [`Runner::reload_project`] queues a load of.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunProjectRequest {
+pub struct ProjectStartOrReloadRequest {
     /// The project whose every stream asset is loaded, by absolute path.
     pub project_directory: PathBuf,
 }
@@ -373,13 +373,13 @@ pub enum StreamListingState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the
     /// runtime's next start.
     Running,
-    /// Stopped with its project, and left unloaded until `run_project`.
+    /// Stopped with its project, and left unloaded until `start_project`.
     Stopped,
     /// Loaded with its project paused: its processors hold their state and process nothing
     /// until `resume_project`.
     Paused,
     /// It kept crashing the runtime or could not re-load at its start, and is
-    /// skipped at the start until a `run_project` retries it; or it was
+    /// skipped at the start until a `start_project` or `reload_project` retries it; or it was
     /// recorded by an earlier runtime, and is never loaded.
     Failed,
     /// A stream action queued or running loads it.
@@ -802,7 +802,7 @@ impl Runner {
         })
     }
 
-    /// Whether the last `run_project` load or stop under way on the project in
+    /// Whether the last load or stop under way on the project in
     /// `project_directory` is the load, so every stream of it runs once those actions have run.
     fn is_a_run_the_last_action_queued_on_the_project(&self, project_directory: &Path) -> bool {
         self.stream_actions
@@ -820,7 +820,7 @@ impl Runner {
     /// Queue a stop of the whole project in `project_directory` on its queue, and answer the
     /// action: it unloads every loaded stream of the project and records each recorded one
     /// stopped, so the runtime leaves the project stopped across its restarts until a
-    /// `run_project`. Each record running once the actions queued before run carries the stop
+    /// `start_project`. Each record running once the actions queued before run carries the stop
     /// as a pending mark until the action records it stopped, so a crash finishes it at the
     /// next start. Refused — with nothing queued — for a directory not named by its absolute
     /// path, a project whose removal is queued, and a project none of whose streams runs once
@@ -1029,7 +1029,7 @@ impl Runner {
     /// behind an action on its queue, and answer the streams paused: each processor holds its
     /// state and processes nothing, and a graph change made meanwhile compiles on
     /// [`Self::resume_project`]. The project stays paused until that resume, a `stop_project`
-    /// or a `remove_project`: a stream a `run_project` starts meanwhile, `tatolab dev`'s re-load
+    /// or a `remove_project`: a stream a `reload_project` starts meanwhile, `tatolab dev`'s re-load
     /// on a save among them, starts paused. Live state, never recorded, so a restart of the
     /// runtime re-loads the project running. Pausing a paused project pauses nothing more.
     /// Refused for a directory not named by its absolute path, and for a project none of whose
@@ -1563,7 +1563,7 @@ impl Runner {
             if let Some(failed_because) = &record.failed_because {
                 tracing::warn!(
                     "the stream `{}` is failed, so it is not re-loaded: {failed_because}; \
-                     `tatolab run` retries it",
+                     `tatolab reload` retries it",
                     record.stream_id
                 );
                 continue;
@@ -1730,7 +1730,7 @@ impl Runner {
             if let Some(failed_because) = record.failed_because {
                 tracing::warn!(
                     "the stream `{stream_id}` is failed, so it is not re-loaded: \
-                     {failed_because}; `tatolab run` retries it"
+                     {failed_because}; `tatolab reload` retries it"
                 );
                 reloads.push(StreamReloadAtTheStart::SkippedAsFailed {
                     stream_id,
@@ -1804,7 +1804,7 @@ impl Runner {
                     }) {
                         Ok(_) => tracing::error!(
                             "the stream `{stream_id}` did not re-load, and is failed: \
-                             {reload_refusal}; `tatolab run` retries it"
+                             {reload_refusal}; `tatolab reload` retries it"
                         ),
                         Err(not_written) => tracing::error!(
                             "the stream `{stream_id}` did not re-load: {reload_refusal}; and it \
@@ -1887,7 +1887,7 @@ impl Runner {
             if let Some(failed_because) = &record.failed_because {
                 tracing::error!(
                     "the stream `{}` is failed: {failed_because}; it is not re-loaded until \
-                     `tatolab run` retries it",
+                     `tatolab reload` retries it",
                     record.stream_id
                 );
                 streams_failed.push(record.stream_id);
@@ -2392,23 +2392,77 @@ impl Runner {
 }
 
 impl Runner {
-    /// Queue a load of every stream asset of the project in `request`'s directory on the
-    /// project's stream action queue, answering the action's id at once;
-    /// [`Runner::describe_stream_action`] follows it. The load reads each stream asset's graph
-    /// document, makes the project's `.venv`, unbounded, and loads or fails each stream under
-    /// the id its project and stream asset give it, and refuses nothing: a directory that does
-    /// not exist or holds no `tatolab-project.json`, and an id another stream holds, fail the
-    /// action. Refused only for a directory not named by its absolute path.
-    pub fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
-        let RunProjectRequest { project_directory } = request;
-        if !project_directory.is_absolute() {
-            return Err(Error::Configuration(format!(
-                "`project_directory` must be an absolute path; got `{}`",
+    /// Queue the start of the project in `request`'s directory on its stream action queue,
+    /// answering the action's id at once: [`Self::queue_the_load_of_the_project`]'s load, which
+    /// runs a stopped project again and retries its failed streams. Refused, with nothing
+    /// queued, for a directory not named by its absolute path and for a project that runs once
+    /// its queued actions run — a paused one naming [`Self::resume_project`], a running one
+    /// naming [`Self::reload_project`].
+    pub fn start_project(
+        &self,
+        request: ProjectStartOrReloadRequest,
+    ) -> Result<StreamActionQueued> {
+        let project_directory =
+            the_absolute_project_directory_resolved(&request.project_directory)?;
+        if self.the_project_runs_once_its_queued_actions_run(&project_directory) {
+            return Err(Error::Runtime(
+                if self.is_the_project_paused(&project_directory) {
+                    format!(
+                        "the project in {} is paused, so there is none to start; `resume_project` \
+                     resumes it",
+                        project_directory.display()
+                    )
+                } else {
+                    format!(
+                        "the project in {} already runs, so there is none to start; \
+                     `reload_project` re-reads it from disk",
+                        project_directory.display()
+                    )
+                },
+            ));
+        }
+        Ok(self.queue_the_load_of_the_project(project_directory))
+    }
+
+    /// Queue the reload of the project in `request`'s directory on its stream action queue,
+    /// answering the action's id at once: [`Self::queue_the_load_of_the_project`]'s load, which
+    /// re-reads every stream asset's graph document and replaces each stream under its id,
+    /// keeping the project running or paused as it is, and retries its failed streams.
+    /// Refused, with nothing queued, for a directory not named by its absolute path and for a
+    /// project that is stopped or was never started, naming [`Self::start_project`].
+    pub fn reload_project(
+        &self,
+        request: ProjectStartOrReloadRequest,
+    ) -> Result<StreamActionQueued> {
+        let project_directory =
+            the_absolute_project_directory_resolved(&request.project_directory)?;
+        if !self.the_project_runs_once_its_queued_actions_run(&project_directory)
+            && !self.a_record_of_the_project_is_failed_and_not_stopped(&project_directory)
+        {
+            let why_none_runs = if self
+                .ids_of_every_record_of_the_project(&project_directory)
+                .is_empty()
+            {
+                "was never started"
+            } else {
+                "is stopped"
+            };
+            return Err(Error::Runtime(format!(
+                "the project in {} {why_none_runs}, so there is none to reload; \
+                 `start_project` starts it",
                 project_directory.display()
             )));
         }
-        let project_directory =
-            std::fs::canonicalize(&project_directory).unwrap_or(project_directory);
+        Ok(self.queue_the_load_of_the_project(project_directory))
+    }
+
+    /// Queue a load of every stream asset of the project in `project_directory`, absolute and
+    /// resolved, on its stream action queue, answering the action's id at once;
+    /// [`Runner::describe_stream_action`] follows it. The load reads each stream asset's graph
+    /// document, makes the project's `.venv`, unbounded, and loads or fails each stream under
+    /// the id its project and stream asset give it: a directory that does not exist or holds no
+    /// `tatolab-project.json`, and an id another stream holds, fail the action.
+    fn queue_the_load_of_the_project(&self, project_directory: PathBuf) -> StreamActionQueued {
         let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
         let action_id = queue_of_each_project.next_action_id(
             self.engine_resources_shared_by_every_stream
@@ -2424,13 +2478,77 @@ impl Runner {
             streams: Vec::new(),
             failed_because: None,
         };
-        Ok(queue_of_each_project.queue_the_stream_action(
+        queue_of_each_project.queue_the_stream_action(
             action,
             Box::new(move |runner: &Runner| {
                 runner.load_the_project_for_its_stream_action(&action_id, project_directory, None);
             }),
             &self.tokio_handle(),
-        ))
+        )
+    }
+
+    /// Whether the project in `project_directory` runs once the loads and stops queued on it
+    /// have run: the last of them is a load, or, with none queued, a stream of it is loaded or
+    /// recorded running.
+    fn the_project_runs_once_its_queued_actions_run(&self, project_directory: &Path) -> bool {
+        let the_last_load_or_stop_queued = self
+            .stream_actions
+            .stream_action_queue_of_each_project
+            .actions_under_way()
+            .iter()
+            .rev()
+            .find(|action| {
+                the_same_directory(&action.project_directory, project_directory)
+                    && matches!(action.kind, StreamActionKind::Load | StreamActionKind::Stop)
+            })
+            .map(|action| action.kind);
+        match the_last_load_or_stop_queued {
+            Some(kind) => kind == StreamActionKind::Load,
+            None => {
+                !self
+                    .loaded_streams_of_the_project(project_directory)
+                    .is_empty()
+                    || self
+                        .current_records_of_the_project(project_directory)
+                        .iter()
+                        .any(|record| record.listing_state() == StreamListingState::Running)
+            }
+        }
+    }
+
+    /// Whether a record of the project in `project_directory` is failed and not stopped, so a
+    /// reload retries it.
+    fn a_record_of_the_project_is_failed_and_not_stopped(&self, project_directory: &Path) -> bool {
+        self.current_records_of_the_project(project_directory)
+            .iter()
+            .any(|record| {
+                record.is_failed() && !record.is_stopped_once_its_pending_stream_actions_run()
+            })
+    }
+
+    /// Every record of the project in `project_directory` that reads.
+    fn current_records_of_the_project(&self, project_directory: &Path) -> Vec<StreamRecord> {
+        self.ids_of_every_record_of_the_project(project_directory)
+            .iter()
+            .filter_map(|stream_id| {
+                self.current_stream_record_of_the_id(stream_id)
+                    .ok()
+                    .flatten()
+            })
+            .collect()
+    }
+
+    /// Whether the project in `project_directory` is paused, or a loaded stream of it is.
+    fn is_the_project_paused(&self, project_directory: &Path) -> bool {
+        self.stream_actions
+            .directories_of_the_paused_projects
+            .lock()
+            .iter()
+            .any(|paused| the_same_directory(paused, project_directory))
+            || self
+                .loaded_streams_of_the_project(project_directory)
+                .iter()
+                .any(|stream| is_paused(stream.status()))
     }
 
     /// Create a project from the scaffold `tatolab new` writes and queue its
@@ -2438,7 +2556,7 @@ impl Runner {
     /// at once. The directory is `request`'s, created when missing, or one
     /// drawn under `$HOME/streams`. The action writes the scaffold — the project file, one
     /// stream asset's graph document and its node modules — has the host commit it as the first
-    /// commit of the project's history, then runs [`Runner::run_project`]'s load, the stream
+    /// commit of the project's history, then runs [`Runner::start_project`]'s load, the stream
     /// shown under the folder's name; a directory already holding a file the
     /// scaffold writes fails the action with nothing written. Refused for a
     /// relative directory, one that cannot be created, and a draw that finds
@@ -6160,8 +6278,8 @@ mod tests {
         the_stream_action_once(runner, action_id, |action| action.state.is_finished())
     }
 
-    fn run_project_request_of(project_directory: &Path) -> RunProjectRequest {
-        RunProjectRequest {
+    fn project_start_or_reload_request_of(project_directory: &Path) -> ProjectStartOrReloadRequest {
+        ProjectStartOrReloadRequest {
             project_directory: project_directory.to_path_buf(),
         }
     }
@@ -6301,7 +6419,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_run_project_answers_its_action_at_once_and_the_action_walks_to_done_with_its_streams() {
+    fn a_start_project_answers_its_action_at_once_and_the_action_walks_to_done_with_its_streams() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -6311,7 +6429,7 @@ mod tests {
         let project_directory = std::fs::canonicalize(project.path()).unwrap();
 
         let queued = runner
-            .run_project(run_project_request_of(project.path()))
+            .start_project(project_start_or_reload_request_of(project.path()))
             .expect("a run of a project is queued");
 
         assert_eq!(queued.project_directory, project_directory);
@@ -6438,16 +6556,20 @@ mod tests {
         let beside_it = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("preview"));
 
         let first = runner
-            .run_project(run_project_request_of(waiting_on_its_venv.path()))
+            .start_project(project_start_or_reload_request_of(
+                waiting_on_its_venv.path(),
+            ))
             .unwrap();
         let second = runner
-            .run_project(run_project_request_of(waiting_on_its_venv.path()))
+            .reload_project(project_start_or_reload_request_of(
+                waiting_on_its_venv.path(),
+            ))
             .unwrap();
         the_stream_action_once(&runner, &first.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
         });
         let other_project = runner
-            .run_project(run_project_request_of(beside_it.path()))
+            .start_project(project_start_or_reload_request_of(beside_it.path()))
             .unwrap();
         let other_project_done = the_stream_action_once_finished(&runner, &other_project.action_id);
 
@@ -6518,7 +6640,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_run_project_of_a_folder_that_is_no_project_fails_its_action_saying_why() {
+    fn a_start_project_of_a_folder_that_is_no_project_fails_its_action_saying_why() {
         let runner = a_runner_recording_its_streams_in(None);
         let no_project = a_temporary_directory_at_owner_only_mode().unwrap();
 
@@ -6530,7 +6652,7 @@ mod tests {
             ),
         ] {
             let queued = runner
-                .run_project(run_project_request_of(&project_directory))
+                .start_project(project_start_or_reload_request_of(&project_directory))
                 .expect("a load refuses nothing at the call");
             let failed = the_stream_action_once_finished(&runner, &queued.action_id);
 
@@ -6539,8 +6661,12 @@ mod tests {
             assert!(failed_because.contains(why), "{failed_because}");
         }
         assert!(
-            refusal_of(runner.run_project(run_project_request_of(Path::new("relative/desk"))))
-                .contains("`project_directory` must be an absolute path"),
+            refusal_of(
+                runner.start_project(project_start_or_reload_request_of(Path::new(
+                    "relative/desk"
+                )))
+            )
+            .contains("`project_directory` must be an absolute path"),
         );
         assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
@@ -6553,7 +6679,7 @@ mod tests {
         let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
 
         let queued = runner
-            .run_project(run_project_request_of(project.path()))
+            .start_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         let done = the_stream_action_once_finished(&runner, &queued.action_id);
 
@@ -6600,7 +6726,7 @@ mod tests {
         let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
         stub_uv.handed_to(&runner);
         let run_ahead_of_them = runner
-            .run_project(run_project_request_of(project.path()))
+            .reload_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         the_stream_action_once(&runner, &run_ahead_of_them.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
@@ -6608,7 +6734,7 @@ mod tests {
 
         let stop = runner.stop_project(project.path()).unwrap();
         let run_after_the_stop = runner
-            .run_project(run_project_request_of(project.path()))
+            .start_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
 
         assert_eq!(
@@ -6656,7 +6782,7 @@ mod tests {
         let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
         stub_uv.handed_to(&runner);
         let run_ahead_of_them = runner
-            .run_project(run_project_request_of(project.path()))
+            .reload_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         the_stream_action_once(&runner, &run_ahead_of_them.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
@@ -6664,7 +6790,7 @@ mod tests {
 
         let first_stop = runner.stop_project(project.path()).unwrap();
         let run_between_the_stops = runner
-            .run_project(run_project_request_of(project.path()))
+            .start_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         let last_stop = runner.stop_project(project.path()).unwrap();
 
@@ -6717,7 +6843,7 @@ mod tests {
         let (stub_uv, _gate_never_released) = a_uv_making_the_venv_once_released(&project);
         stub_uv.handed_to(&runner);
         let load = runner
-            .run_project(run_project_request_of(project.path()))
+            .reload_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         the_stream_action_once(&runner, &load.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
@@ -6864,7 +6990,7 @@ mod tests {
         let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
         stub_uv.handed_to(&runner);
         let run_ahead_of_it = runner
-            .run_project(run_project_request_of(project.path()))
+            .reload_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         the_stream_action_once(&runner, &run_ahead_of_it.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
@@ -6976,7 +7102,7 @@ mod tests {
         let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
         stub_uv.handed_to(&runner);
         let load = runner
-            .run_project(run_project_request_of(project.path()))
+            .start_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         the_stream_action_once(&runner, &load.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
@@ -7017,7 +7143,7 @@ mod tests {
         let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
         stub_uv.handed_to(&runner);
         let run_ahead_of_it = runner
-            .run_project(run_project_request_of(project.path()))
+            .reload_project(project_start_or_reload_request_of(project.path()))
             .unwrap();
         the_stream_action_once(&runner, &run_ahead_of_it.action_id, |action| {
             action.step == Some(StreamActionStep::MakingTheVenv)
@@ -7094,6 +7220,64 @@ mod tests {
         assert!(pause_refusal.contains("none to pause"), "{pause_refusal}");
         let resume_refusal = refusal_of(runner.resume_project(idle.path()));
         assert!(resume_refusal.contains("is not paused"), "{resume_refusal}");
+    }
+
+    #[test]
+    #[serial]
+    fn a_start_or_reload_of_a_project_already_in_that_state_is_refused_naming_the_verb_that_fits() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let never_started = ProjectWithGraphDocuments::with_no_venv();
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera"),
+        );
+
+        for relative_refusal in [
+            refusal_of(
+                runner.start_project(project_start_or_reload_request_of(Path::new("relative"))),
+            ),
+            refusal_of(
+                runner.reload_project(project_start_or_reload_request_of(Path::new("relative"))),
+            ),
+        ] {
+            assert!(relative_refusal.contains("absolute"), "{relative_refusal}");
+        }
+        let refusal = refusal_of(
+            runner.reload_project(project_start_or_reload_request_of(never_started.path())),
+        );
+        assert!(
+            refusal.contains("was never started") && refusal.contains("`start_project`"),
+            "{refusal}"
+        );
+        let refusal =
+            refusal_of(runner.start_project(project_start_or_reload_request_of(project.path())));
+        assert!(
+            refusal.contains("already runs") && refusal.contains("`reload_project`"),
+            "{refusal}"
+        );
+
+        runner.pause_project(project.path()).unwrap();
+        let refusal =
+            refusal_of(runner.start_project(project_start_or_reload_request_of(project.path())));
+        assert!(
+            refusal.contains("is paused") && refusal.contains("`resume_project`"),
+            "{refusal}"
+        );
+
+        let stop = runner.stop_project(project.path()).unwrap();
+        let refusal =
+            refusal_of(runner.reload_project(project_start_or_reload_request_of(project.path())));
+        assert!(
+            refusal.contains("is stopped") && refusal.contains("`start_project`"),
+            "{refusal}"
+        );
+        the_stream_action_once_finished(&runner, &stop.action_id);
+        let refusal =
+            refusal_of(runner.reload_project(project_start_or_reload_request_of(project.path())));
+        assert!(refusal.contains("is stopped"), "{refusal}");
     }
 
     #[test]

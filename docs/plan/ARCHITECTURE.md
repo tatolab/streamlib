@@ -128,8 +128,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never detaches. At start it takes the machine lock, opens the state directory, resolves the
   machine name (§Networking) and re-loads every recorded stream neither stopped nor failed; one
   that cannot re-load is recorded `failed`, never deleted. `tatolab` is a native CLI beside
-  it, linking no engine, and every stream verb is a local-API call. `run` sends
-  `run_project {project_directory}`, which queues a stream action and answers its action id;
+  it, linking no engine, and every stream verb is a local-API call. `start` sends
+  `start_project {project_directory}` and `reload` sends `reload_project`, each of which queues a stream action and answers its action id;
   in the background the runtime makes `<project>/.venv` with the uv it carries whenever
   `.venv/bin/python` does not run, runs `tatolab.stream`'s compile entry in it with the project
   as the import root (every `@stream`'s graph as JSON on stdout, a failed compile's traceback in
@@ -176,7 +176,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test doubles of their Protocols; never a GPU, never the runtime. The runtime suite is Rust —
   the engine crates, `tatolabd` and `tatolab` — fed graph data and native built-ins only, with
   no Python node. The integration suite (`tests/stream-on-runtime/`) runs both on purpose: it
-  starts `tatolabd`, loads each fixture stream with `tatolab run` (the runtime compiling it in
+  starts `tatolabd`, loads each fixture stream with `tatolab start` (the runtime compiling it in
   the suite project's venv) and drives it over the local API — processor
   interpreters, the lend, describe, escalate ops, pixel and device exchange, the CLI end to
   end. The division is structural, not a lint: each CI job installs only what its suite may
@@ -229,20 +229,20 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   via the docs without forcing it via the install". [runtime-hosting — SHIPPED #2711, #2721,
   #2722; amended by runtime-lives-with-tato-studio: the app starting and stopping its child
   runtime, no installer-registered service]
-- **DECIDED** — How a stream is loaded and kept. `tatolab run <stream>` loads it, and the
+- **DECIDED** — How a stream is loaded and kept. `tatolab start` loads it, and the
   runtime records the graph its function compiled to at that load, the project's venv path and
   the exposures in its state directory, and re-loads that recorded graph on every start, a
   crash's restart included. There are no restart policies: a recorded stream always comes back
   unless stopped or failed. `tatolab stop` unloads every stream of a project and remembers each
-  as stopped, across restarts too; `tatolab run` runs a stopped project again; `tatolab rm`
+  as stopped, across restarts too; `tatolab start` starts a stopped project again; `tatolab rm`
   forgets every stream of a project, the only verb that loses one (owner, 2026-10-02,
   2026-10-30 and 2026-11-09).
   Live edits are never recorded, so
-  the function wins on the next start, and picking up a changed source is another `run`; a
+  the function wins on the next start, and picking up a changed source is a `reload`; a
   stream implicated in the runtime's last two crashes in a row — a clean stop of the runtime or
   a manual restart is no crash and resets the count — or one that cannot re-load at start (a
   venv that cannot be made, a type that will not describe) is `failed`, shown with its reason
-  and skipped at start until `tatolab run` retries it; a first load whose code fails is
+  and skipped at start until `tatolab reload` retries it; a first load whose code fails is
   recorded `failed` too, and a venv whose interpreter does not run is made again rather than
   failing a re-load (owner, 2026-10-02 and 2026-10-29). `tatolab streams` lists all three —
   running, stopped, failed. Where no installer put a runtime, `tatolabd` runs in a terminal or
@@ -257,9 +257,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2965; create-project — SHIPPED #2975, #2982;
   queued-stream-actions — SHIPPED #2999; amended by project-and-assets: the document is the recorded graph, committed edits are kept, and the record holds no graph]
-- **DECIDED** — The stream actions, as built. `run_project` records the project's streams and
-  loads them, whichever connection carries the call, and the streams outlive that connection.
-  `run_project`, `create_project` (the entry below), `stop_project` and
+- **DECIDED** — The stream actions, as built. `start_project` and `reload_project` record the
+  project's streams and load them, whichever connection carries the call, and the streams
+  outlive that connection. `start_project`, `reload_project`, `create_project` (the entry
+  below), `stop_project` and
   `remove_project` queue a stream action and answer its action id; `describe_stream_action`
   reads one and `cancel_stream_action` ends one. `logs {project_directory, stream?, action?,
   after}` pages a project's log, `after` a record position. The tools: `list_project_streams` (a
@@ -307,16 +308,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: the display name in the address — a rename would cut off every reader of the
   stream's ports (owner, 2026-10-27).
 - **DECIDED** — Every loaded stream persists. A stream loaded into the runtime — by
-  Tato Studio, `tatolab run` or an agent's `run_project` — is recorded before it starts and
-  re-loaded at every start unless stopped or failed; there is no attached stream, `run_project`
+  Tato Studio, `tatolab start` or an agent's `start_project` — is recorded before it starts and
+  re-loaded at every start unless stopped or failed; there is no attached stream, `start_project`
   takes no `keep`,
-  `tatolab run` has no `-d`, and a closing `/mcp/stdio` connection unloads nothing. A stream is
+  `tatolab start` has no `-d`, and a closing `/mcp/stdio` connection unloads nothing. A stream is
   running, stopped or failed — the two-crashes-in-a-row and cannot-re-load rules apply to every
   stream — and only `stop` / `stop_project` and `rm` / `remove_project` end one, each the whole
   project. A load of a
   location already loaded or recorded replaces that stream under the same id, keeping its
   display name and the owner's exposure rulings; a load whose code fails records the stream
-  `failed` and never re-loads the previous version. `tatolab run` queues the load and returns,
+  `failed` and never re-loads the previous version. `tatolab start` and `tatolab reload` queue
+  the load and return,
   printing its action id and how to follow it (`tatolab logs -f`); it exits 0 once the stream
   action is queued and 1 naming the reason when the call is refused. `tatolab logs -f` follows
   the project's log and `tatolab dev` follows it and re-loads on save; Ctrl-C ends the
@@ -358,21 +360,21 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams load as the packs OPEN decides. [one-runtime-per-machine; stream-graph — SHIPPED
   #2618; authoring-names — SHIPPED #2682; stream-identity-and-persistence — SHIPPED #2962;
   create-project — SHIPPED #2995; queued-stream-actions — SHIPPED #3004, #3009; amended by project-and-assets: a stream is a graph asset of the project; a `@graph_generator` function builds graph, stored as a fragment]
-- **DECIDED** — Loading a project loads every stream in it. Every load — `tatolab run`,
-  `tatolab dev`, `run_project`, Tato Studio's Add, and create — loads every `@stream` in the
+- **DECIDED** — Loading a project loads every stream in it. Every load — `tatolab start`,
+  `tatolab reload`, `tatolab dev`, `start_project`, `reload_project`, Tato Studio's Add, and create — loads every `@stream` in the
   project's `stream.py`, each as its own stream: its own location, stream id, display name,
   record and failure, and `rename` acts on one; the project runs and stops as a whole
-  (`stop_project`, `run_project`). The project compiles once,
+  (`start_project`, `stop_project`). The project compiles once,
   and a stream whose part of the compile fails is recorded `failed` (the entry below). A
   re-load of the project replaces each of its streams in place, and a recorded stream of the
   project whose function `stream.py` no longer defines is unloaded and recorded `failed`,
   naming the missing function, never forgotten. `dev` follows the project's log and queues a
-  load on every save. The local-API tool `list_project_streams {project_directory}` answers
+  reload on every save. The local-API tool `list_project_streams {project_directory}` answers
   from the project's last compile with each `@stream` in the project as `module:function`, its
   docstring, and its stream id and state when loaded; `describe_stream_action` lists every
   stream a load touched. Owner, 2026-10-28 and 2026-10-30. [create-project — SHIPPED #2995;
   queued-stream-actions — SHIPPED #2998, #3004, #3009; amended by project-and-assets: every stream asset loads as its own stream and `list_assets` lists them without running code]
-- **DECIDED** — A load is never refused. Every load — `run`, `dev`, `run_project`,
+- **DECIDED** — A load is never refused. Every load — `start`, `reload`, `dev`, `start_project`, `reload_project`,
   `create_project`, Tato Studio's Add, and the runtime's re-load at start — is a
   queued stream action (the entry below) that takes the project in. A stream whose venv,
   compile, describe or start fails is recorded `failed`, with the reason in `list_streams` and
@@ -408,23 +410,38 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: a log per stream, or per load of a stream, or found through a stream's record — a
   stream is a programmatic concept a project defines any number of; the project is a real
   location on disk and the storage unit for its log (owner, 2026-10-30).
-- **DECIDED** — Every load and unload is a queued stream action. `run_project`,
+- **DECIDED** — Every load and unload is a queued stream action. `start_project`, `reload_project`,
   `create_project`, `stop_project`, `remove_project` and the runtime's re-load at start each queue
   one **stream action** and answer at once with its **action id**. The runtime makes the venv,
   compiles, describes, loads, starts, stops and unloads in the background, and no call waits for
-  what its action does. `tatolab run`, `new`, `stop` and `rm` exit 0 once the action
+  what its action does. `tatolab start`, `reload`, `new`, `stop` and `rm` exit 0 once the action
   is queued. A call answers an error only for a malformed request — a missing argument, a
-  directory that is not absolute — and the CLI only for that or a runtime it cannot reach.
-  - **Loads take a project.** `tatolab run`, `tatolab dev` and `run_project {project_directory}`
+  directory that is not absolute, or a project already in the state the verb asks for (the
+  entry below) — and the CLI only for that or a runtime it cannot reach.
+  - **Loads take a project.** `tatolab start`, `tatolab reload`, `tatolab dev`, `start_project
+    {project_directory}` and `reload_project {project_directory}`
     load every `@stream` in the project's `stream.py` and take no stream function, no display
     name and no other entry file; the project runs and stops as a whole afterwards, and one
     stream is renamed by its own `rename`.
   - **`stop` stops the whole project.** `tatolab stop [--dir]` and `stop_project
     {project_directory}` unload every loaded stream of the project and record each recorded
-    one `stopped`, so the runtime leaves the project stopped across its restarts; `run` /
-    `run_project` runs it again and retries its failed streams; `tatolab start [--dir]` is the
-    same run as `tatolab run` (owner, 2026-11-10). No tool stops or starts one stream (owner,
-    2026-11-09).
+    one `stopped`, so the runtime leaves the project stopped across its restarts; `start` /
+    `start_project` starts it again and retries its failed streams. No tool stops or starts one
+    stream (owner, 2026-11-09).
+  - **`start` starts, `reload` re-reads, each refusing the wrong state.** The project verbs are
+    Docker's container verbs: `start`, `stop`, `pause`, `resume`, and `reload` for a re-read
+    from disk. `tatolab start [--dir]` / `start_project` queue the load of a project that does
+    not run — never started, or stopped — and retry its failed streams. `tatolab reload
+    [--dir]` / `reload_project` queue a re-read of a project that runs: every graph document is
+    read again, each stream is replaced under its id, a paused project stays paused, and failed
+    streams are retried. A verb refuses a project already in the state it asks for and names the
+    verb that fits: `start` of a running project names `reload_project`, of a paused one
+    `resume_project`; `reload` of a stopped or never-started one names `start_project`;
+    `resume` and `pause` of a stopped one are refused. Whether a project runs counts the loads
+    and stops already queued for it. `tatolab dev` starts the project, reloads it when the
+    runtime refuses the start, and reloads it on every save (owner, 2026-11-10).
+    Rejected: one `run_project` that starts a stopped project and re-reads a running one — an
+    agent cannot tell from the call what it will do (owner, 2026-11-10).
   - **`pause` pauses the whole project, at once.** `tatolab pause [--dir]` and `pause_project
     {project_directory}` pause every loaded stream of the project without queuing behind its
     actions: each processor holds its state and processes nothing, and `list_streams` shows
@@ -469,14 +486,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
     that compile could not import `stream.py`. With a load queued or under way and no compile
     yet, it answers `preparing` and no streams; a project never loaded answers that it is not
     loaded.
-  - **The CLI.** `tatolab run` prints the action id and how to follow it (`tatolab logs -f`).
-    `tatolab dev` follows the project's log and queues a load on every save.
+  - **The CLI.** `tatolab start` and `tatolab reload` print the action id and how to follow it
+    (`tatolab logs -f`). `tatolab dev` follows the project's log and queues a reload on every
+    save.
 
   Owner, 2026-10-30. [queued-stream-actions — SHIPPED #2998, #2999, #3004, #3006, #3009; amended by gateway-nodes: `expose_port` goes, leaving `rename_stream` the one attribute; amended by project-and-assets: loads read stream assets, and a stream leaves through `delete_asset`]
   Rejected: making the venv inside the call that answers the load, bounded, with the client's
   timeouts raised to fit — an asynchronous side effect never sits inside a call that promises
   its final answer (owner, 2026-10-30).
-  Rejected: `tatolab run` following its load until it settles and exiting by the outcome —
+  Rejected: `tatolab start` following its load until it settles and exiting by the outcome —
   there is no synchronous mode; a verb acknowledges the request and the logs tell the rest
   (owner, 2026-10-30).
   Rejected: a newer load replacing a queued one — a workflow never replaces a job, it only
@@ -768,7 +786,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [portable-gpu-interop — SHIPPED #2404]
 - **DECIDED** — The cross-floor check reads a Python processor's source and its
   `pyproject.toml` for what binds it to one floor and names the file, line and portable
-  spelling of each. It runs inside `tatolab dev` and `tatolab run` as a warning that
+  spelling of each. It runs inside `tatolab dev`, `tatolab start` and `tatolab reload` as a warning that
   never blocks a start, gates in CI the stream package's and the runtime's own Python and
   the scaffold's output, and
   runs over `examples/` when a change ships; it is no CLI verb of its own. It reads
@@ -2590,7 +2608,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   so logging in never puts a prompt up out of nowhere. `list_streams` names each such device
   on the loaded stream, as `capture_devices_whose_access_was_never_asked_for`, so a client
   shows the stream waiting for that access and offers to allow it — a `stop_project` then
-  `run_project` of its project, which asks. Owner, 2026-10-31. The engine is
+  `start_project` of its project, which asks. Owner, 2026-10-31. The engine is
   not the permission subject — the application that launched it is, found by walking up the
   process tree — so a refusal names that responsible application and the Camera or Microphone
   setting to change, and never says "Python". A microphone's AUHAL unit is bound only after
@@ -3920,7 +3938,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   from the same repository, carrying the Linux runtime unit in `resources/tatolab-runtime`
   and starting it the same way, with the same windows and tray. The bundle carries the
   runtime unit's pinned uv, and the app neither scaffolds nor syncs a project: it creates and
-  loads through `create_project` and `run_project`. Beyond its live stream list, graph and
+  loads through `create_project` and `start_project`. Beyond its live stream list, graph and
   logs, the app's stream actions and the rest of its GUI are the app step's. Owner,
   2026-10-02, 2026-10-11, 2026-10-24, 2026-10-28, 2026-10-31 and 2026-11-05.
   [runtime-hosting — SHIPPED #2721; machine-lock-without-administrator — SHIPPED #2929;
@@ -3943,7 +3961,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   The served MCP tool set is exactly the observation verbs `graph`, `logs` and
   `describe_runtime` (the runtime's version, build id, monotonic uptime and its own log's
   folder), the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
-  `disconnect` — the twelve stream actions — `run_project`, `create_project`,
+  `disconnect` — the thirteen stream actions — `start_project`, `reload_project`, `create_project`,
   `describe_stream_action`, `cancel_stream_action`, `list_project_streams`, `stop_project`,
   `pause_project`, `resume_project`, `remove_project`, `rename_stream`, `list_streams` and `expose_port`
   (§Product) — and the four relay verbs —

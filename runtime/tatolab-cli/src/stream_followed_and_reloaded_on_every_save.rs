@@ -1,11 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab dev`: a load of the project queued on the machine's runtime over a `/mcp/stdio`
-//! connection of this process's own, the project's log followed by cursor from where it ended
+//! `tatolab dev`: a start of the project queued on the machine's runtime over a `/mcp/stdio`
+//! connection of this process's own — a reload when the runtime refuses the start because the
+//! project already runs or is paused — the project's log followed by cursor from where it ended
 //! when `dev` started — each record under the project's folder name, across every load and
-//! restart, since the log is the project's — and another load queued for every settled save,
-//! which replaces each stream, or records it failed with its traceback in the log. A save of a
+//! restart, since the log is the project's — and a reload queued for every settled save, which
+//! replaces each stream and keeps a paused project paused, or records it failed with its traceback
+//! in the log; the runtime refuses the reload of a stopped project. A save of a
 //! `.py` file first refreshes every fragment whose graph generator that module defines. Ctrl-C ends
 //! the following and leaves the streams loaded. When the runtime goes away, `dev` waits for it
 //! and follows the log again while the restarted runtime re-loads the project from its records;
@@ -16,7 +18,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use streamlib_runtime_client_contract::local_api_wire_contract::RunProjectToolResult;
+use streamlib_runtime_client_contract::local_api_wire_contract::StartOrReloadProjectToolResult;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::TatolabCommandFailure;
@@ -83,8 +85,9 @@ enum DevSessionStep {
     Exit(Result<u8, TatolabCommandFailure>),
 }
 
-/// `tatolab dev [--dir DIR]`: queue a load of the project, follow its log, and queue another for
-/// every settled save, until a stop signal ends the following.
+/// `tatolab dev [--dir DIR]`: queue a start of the project, or its reload when it already runs,
+/// follow its log, and queue a reload for every settled save, until a stop signal ends the
+/// following.
 pub(crate) fn follow_the_project_log_and_load_the_project_on_every_save(
     caller_working_directory: &Path,
     requested_project_directory: Option<&Path>,
@@ -122,6 +125,7 @@ pub(crate) fn follow_the_project_log_and_load_the_project_on_every_save(
             dev_session_events,
             dev_session_events_open: true,
             loads_owed: 1,
+            the_runtime_answered_a_load_of_this_session: false,
             python_files_changed_before_the_owed_load: BTreeSet::new(),
             project_source_watch_hold,
             runtime_log_directory: RuntimeLogDirectoryAsDescribed::NotDescribed,
@@ -142,6 +146,8 @@ struct DevSession {
     dev_session_events_open: bool,
     /// Loads still to queue: the first, then one per settled save, never coalesced.
     loads_owed: usize,
+    /// Whether the runtime answered one of the session's loads, after which each is a reload.
+    the_runtime_answered_a_load_of_this_session: bool,
     /// The `.py` files saved since the last fragment refresh, refreshed before the next load.
     python_files_changed_before_the_owed_load: BTreeSet<PathBuf>,
     /// Quiets the watch while a refresh writes the project's graph documents.
@@ -390,14 +396,8 @@ impl DevSession {
         {
             return after_the_refresh;
         }
-        let run_project_outcome = match self
-            .finish_unless_stopped(connected_client.call_tool(
-                StreamActionTool::RunProject.tool_name(),
-                self.project_load_request.run_project_tool_arguments(),
-            ))
-            .await
-        {
-            FinishedUnlessStopped::Finished(run_project_outcome) => run_project_outcome,
+        let start_or_reload_outcome = match self.queue_a_start_or_reload(connected_client).await {
+            FinishedUnlessStopped::Finished(start_or_reload_outcome) => start_or_reload_outcome,
             FinishedUnlessStopped::StopSignalDelivered => {
                 self.note(
                     "stopped before the runtime answered the load; `tatolab streams` lists what \
@@ -406,35 +406,93 @@ impl DevSession {
                 return DevSessionStep::Exit(Ok(0));
             }
         };
-        if let Err(run_project_failure) = &run_project_outcome
+        let (start_or_reload_tool, start_or_reload_outcome) = start_or_reload_outcome;
+        if let Err(start_or_reload_failure) = &start_or_reload_outcome
             && let Some(after_the_runtime_went_away) =
-                self.after_the_runtime_went_away(run_project_failure)
+                self.after_the_runtime_went_away(start_or_reload_failure)
         {
             return after_the_runtime_went_away;
         }
         self.loads_owed = self.loads_owed.saturating_sub(1);
-        match run_project_outcome.and_then(|run_project_result_text| {
-            tool_result_from::<RunProjectToolResult>(
-                StreamActionTool::RunProject.tool_name(),
-                &run_project_result_text,
+        self.the_runtime_answered_a_load_of_this_session = true;
+        match start_or_reload_outcome.and_then(|start_or_reload_result_text| {
+            tool_result_from::<StartOrReloadProjectToolResult>(
+                start_or_reload_tool.tool_name(),
+                &start_or_reload_result_text,
             )
             .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
         }) {
-            Ok(run_project_result) => self.note(
+            Ok(start_or_reload_result) => self.note(
                 rendered_queued_stream_action_line(
-                    &run_project_result.action,
+                    &start_or_reload_result.action,
                     "load",
-                    &run_project_result.project_directory.display().to_string(),
+                    &start_or_reload_result
+                        .project_directory
+                        .display()
+                        .to_string(),
                 )
                 .trim_end(),
             ),
-            Err(run_project_failure) => {
+            Err(start_or_reload_failure) => {
                 self.note(&format!(
-                    "{run_project_failure}; save again to queue another load"
+                    "{start_or_reload_failure}; save again to queue another load"
                 ));
             }
         }
         DevSessionStep::FollowTheProjectLog
+    }
+
+    /// The session's load and the tool that answered it: `reload_project` once the runtime
+    /// answered one of the session's loads; before that `start_project`, then `reload_project`
+    /// when the runtime refuses the start, as it does a project that already runs or is paused.
+    async fn queue_a_start_or_reload(
+        &mut self,
+        connected_client: &LocalApiMcpToolClient,
+    ) -> FinishedUnlessStopped<(
+        StreamActionTool,
+        Result<String, LocalApiMcpToolClientFailure>,
+    )> {
+        if !self.the_runtime_answered_a_load_of_this_session {
+            match self
+                .finish_unless_stopped(
+                    connected_client.call_tool(
+                        StreamActionTool::StartProject.tool_name(),
+                        self.project_load_request
+                            .start_or_reload_project_tool_arguments(),
+                    ),
+                )
+                .await
+            {
+                FinishedUnlessStopped::Finished(Err(start_failure))
+                    if !the_runtime_is_gone(&start_failure) => {}
+                FinishedUnlessStopped::Finished(start_outcome) => {
+                    return FinishedUnlessStopped::Finished((
+                        StreamActionTool::StartProject,
+                        start_outcome,
+                    ));
+                }
+                FinishedUnlessStopped::StopSignalDelivered => {
+                    return FinishedUnlessStopped::StopSignalDelivered;
+                }
+            }
+        }
+        match self
+            .finish_unless_stopped(
+                connected_client.call_tool(
+                    StreamActionTool::ReloadProject.tool_name(),
+                    self.project_load_request
+                        .start_or_reload_project_tool_arguments(),
+                ),
+            )
+            .await
+        {
+            FinishedUnlessStopped::Finished(reload_outcome) => {
+                FinishedUnlessStopped::Finished((StreamActionTool::ReloadProject, reload_outcome))
+            }
+            FinishedUnlessStopped::StopSignalDelivered => {
+                FinishedUnlessStopped::StopSignalDelivered
+            }
+        }
     }
 
     /// Where the session goes after `failure` reached it: when the runtime is gone, a note naming

@@ -46,7 +46,7 @@ pub struct StreamRecord {
     /// Whether the owner stopped the stream, so a restart leaves it unloaded.
     pub stopped: bool,
     /// Why the stream is failed, so the runtime's start skips it until
-    /// a `run_project` retries it; `None` when it is not failed.
+    /// a `start_project` or `reload_project` retries it; `None` when it is not failed.
     pub failed_because: Option<String>,
     /// How many of the runtime's crashes in a row, the last included, the
     /// stream was implicated in.
@@ -258,11 +258,11 @@ impl StreamRecordOfAnEarlierRuntime {
         let run_it_again = match &self.project_directory {
             Some(project_directory) => {
                 format!(
-                    "run it again with `tatolab run` in {}",
+                    "run it again with `tatolab start` in {}",
                     project_directory.display()
                 )
             }
-            None => "run it again with `tatolab run` in its project".to_string(),
+            None => "run it again with `tatolab start` in its project".to_string(),
         };
         format!(
             "an earlier runtime recorded it, under record schema {}, and this runtime does not \
@@ -1016,7 +1016,7 @@ mod tests {
             "{failed_because}"
         );
         assert!(
-            failed_because.contains("run it again with `tatolab run` in /home/someone/hello"),
+            failed_because.contains("run it again with `tatolab start` in /home/someone/hello"),
             "{failed_because}"
         );
         assert!(records.remove("main").unwrap());

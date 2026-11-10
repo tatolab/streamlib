@@ -197,7 +197,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_a_ru
     .unwrap();
     let started = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
-        "run_project",
+        "reload_project",
         serde_json::json!({"project_directory": machine_root.project_directory()}),
     )
     .json();
@@ -205,7 +205,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_every_other_comes_back_and_a_ru
         &machine_root.local_api_socket_path(),
         started["action"]
             .as_str()
-            .expect("`run_project` answers its action"),
+            .expect("`reload_project` answers its action"),
     );
     let listed_after_the_retry = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
