@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::schemars::JsonSchema;
-use rmcp::{Peer, RoleServer, tool, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use streamlib_project_repository::{
     AppliedProjectTransaction, ProjectImport, ProjectRepositoriesOpenInThisRuntime,
@@ -119,7 +120,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn add_dependency(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(AddDependencyToolArguments {
             project_directory,
             source,
@@ -127,7 +128,7 @@ impl LocalApiMcpServerHandler {
             author,
         }): Parameters<AddDependencyToolArguments>,
     ) -> ToolCallAnswer {
-        let author = the_author_of_a_change(author, &peer);
+        let author = the_author_of_a_change(author, &tool_call_request_context);
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
         let answered = tokio::task::spawn_blocking(move || {
             let project_repository =
@@ -158,7 +159,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn update_dependency(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(UpdateDependencyToolArguments {
             project_directory,
             project,
@@ -167,7 +168,7 @@ impl LocalApiMcpServerHandler {
             author,
         }): Parameters<UpdateDependencyToolArguments>,
     ) -> ToolCallAnswer {
-        let author = the_author_of_a_change(author, &peer);
+        let author = the_author_of_a_change(author, &tool_call_request_context);
         let project = the_import_named(&project)
             .map_err(|refusal| format!("update_dependency failed: {refusal}"))?;
         let overwrite_edited_files = overwrite_edited_files.unwrap_or(false);
@@ -285,14 +286,14 @@ impl LocalApiMcpServerHandler {
     )]
     async fn remove_dependency(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RemoveDependencyToolArguments {
             project_directory,
             project,
             author,
         }): Parameters<RemoveDependencyToolArguments>,
     ) -> ToolCallAnswer {
-        let author = the_author_of_a_change(author, &peer);
+        let author = the_author_of_a_change(author, &tool_call_request_context);
         let project = the_import_named(&project)
             .map_err(|refusal| format!("remove_dependency failed: {refusal}"))?;
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
@@ -327,7 +328,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn use_dependency_stream(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(UseDependencyStreamToolArguments {
             stream,
             project,
@@ -348,7 +349,7 @@ impl LocalApiMcpServerHandler {
             vec![operation],
             Some(GraphEditMode::Commit),
             author,
-            &peer,
+            &tool_call_request_context,
         )
         .await
     }
