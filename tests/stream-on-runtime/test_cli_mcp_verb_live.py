@@ -88,6 +88,7 @@ CONTROL_TOOL_NAMES = {
     "use_dependency_stream",
     "list_project_node_types",
     "list_project_views",
+    "write_studio_view_output",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"

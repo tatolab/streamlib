@@ -295,6 +295,7 @@ impl LoadedStreamInThisRuntime {
             processor_interpreter_launch_record: Arc::new(
                 ProcessorInterpreterLaunchRecordOfOneStream::new(
                     loaded_stream_identity.clone(),
+                    Arc::from(project_directory.as_path()),
                     stream_environment,
                     Arc::clone(&node_types_this_stream_resolves),
                     LoadedStreamAHelperProcessBelongsTo {

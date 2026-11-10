@@ -565,7 +565,8 @@ same way, and `list_assets`, `describe_asset`, `import_asset`, `move_asset`, `re
 `start_project` starts it again, `pause_project` and `resume_project`, which pause and resume a
 whole project at once, `remove_project`, `set_stream_clock_scale` and
 `list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
-machine, naming the node by the `id` `graph` lists. Every tool
+machine, naming the node by the `id` `graph` lists, and `write_studio_view_output` to hand a
+node of one of the project's Tato Studio views a value it publishes on an output. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as

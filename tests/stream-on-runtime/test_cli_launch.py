@@ -994,8 +994,8 @@ def test_a_run_takes_in_every_graph_document_and_forgets_a_stream_whose_document
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """`start` loads every graph document of the project, each its own stream: two
-    run, and one that does not load is failed saying why; a run once a document is
-    gone unloads and forgets its stream."""
+    run, and one that does not load is failed saying why; a reload once a document
+    is gone unloads and forgets its stream."""
     app_directory = make_tatolab_project({"stream.py": STREAM_PY_WITH_TWO_STREAMS})
     write_a_graph_document(app_directory, "broken", '{"nodes": "not a list"}')
     tatolabd = start_tatolabd()
@@ -1022,8 +1022,8 @@ def test_a_run_takes_in_every_graph_document_and_forgets_a_stream_whose_document
     assert "`streams/broken.graph.json` does not load" in failed_stream[1], failed_stream[1]
 
     graph_document_path_of(app_directory, "preview").unlink()
-    rerun = load_the_projects_stream(tatolabd, app_directory)
-    assert rerun.action_once_ended(timeout=NODE_READY_TIMEOUT_SECONDS)["state"] == "done"
+    reload = load_the_projects_stream(tatolabd, app_directory, verb="reload")
+    assert reload.action_once_ended(timeout=NODE_READY_TIMEOUT_SECONDS)["state"] == "done"
 
     states = {
         listed["stream"]: listed["state"]

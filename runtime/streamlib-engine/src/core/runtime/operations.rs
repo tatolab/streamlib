@@ -108,6 +108,16 @@ pub trait RuntimeOperations: Send + Sync {
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
 
+    /// Hand `value` to the view node whose UUID, as `graph` lists it under `id`, is `node_id`,
+    /// which publishes it on its output `port_name` as that port's family carries it. Live data:
+    /// nothing is recorded, and the last value written is what a reader keeps.
+    fn write_a_value_onto_an_output_of_a_view_node(
+        &self,
+        node_id: String,
+        port_name: String,
+        value: serde_json::Value,
+    ) -> BoxFuture<'_, Result<()>>;
+
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)
     // =========================================================================

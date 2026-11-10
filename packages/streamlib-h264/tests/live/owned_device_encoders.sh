@@ -27,7 +27,7 @@
 # `pyproject.toml` and a `stream.py` defining one `@stream` per encoder over
 # `owned_device_encoder_streams.py` — whose `.venv` is this package's own
 # (`tatolab-stream` and a current `maturin develop` of this wheel), and queues
-# its load with `tatolab run --dir` on a `tatolabd` this script starts and stops
+# its load with `tatolab start --dir` on a `tatolabd` this script starts and stops
 # itself through the engine fixtures' `fixture_runtime_unit.sh`, so it refuses
 # to run while another runtime holds the machine. The relay each stream's
 # gateway dials is the fixture relay, which this script starts and stops too;
@@ -160,8 +160,8 @@ TOML
     done
 } > "$PROJECT_DIR/stream.py"
 
-"$TATOLAB_EXECUTABLE" run --dir "$PROJECT_DIR" > "$OUTPUT_DIR/run.log" 2>&1 \
-    || { cat "$OUTPUT_DIR/run.log" >&2; fail "tatolab run refused the project"; }
+"$TATOLAB_EXECUTABLE" start --dir "$PROJECT_DIR" > "$OUTPUT_DIR/run.log" 2>&1 \
+    || { cat "$OUTPUT_DIR/run.log" >&2; fail "tatolab start refused the project"; }
 
 # The stream id `owned_device_encoder_<n>` of the project loads under,
 # `<folder>-<function>-<hash>`: the folder and function names cast as the

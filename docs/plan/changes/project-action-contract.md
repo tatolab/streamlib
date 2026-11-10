@@ -93,8 +93,8 @@ on-disk transaction format.
   `tatolab-project.json`. `duplicate_project {project_directory, into}` and
   `delete_project {project_directory}` are verbs, not transactions, because they act on the
   project and its history whole. Delete stops the project first, and #3406 builds both
-  (owner, 2026-11-09). Renaming a project rewrites, in the same transaction, the `view_type` of
-  every `StudioView` node naming a view the project brings, so one undo restores both
+  (owner, 2026-11-09). Renaming a project rewrites, in the same transaction, the `type` of
+  every node of a view type the project brings, so one undo restores both
   (owner, 2026-11-10).
   `import_project {source, project_directory}` is a verb, not a transaction: it unpacks the
   `.zip` of a project, as `add_dependency` reads one, into a `project_directory` that does not

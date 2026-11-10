@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.68.47](https://github.com/tatolab/streamlib/compare/v0.68.46...v0.68.47) (2026-11-10)
+
+
+### Features
+
+* each view a project brings is a node type; write_studio_view_output ([2dd68df](https://github.com/tatolab/streamlib/commit/2dd68df1992c8e694c0cd373a44f12c079ec35c9))
+
+## [0.68.46](https://github.com/tatolab/streamlib/compare/v0.68.45...v0.68.46) (2026-11-10)
+
+
+### Bug Fixes
+
+* **tests:** load test projects with `tatolab start`, which replaced `tatolab run` ([501b55a](https://github.com/tatolab/streamlib/commit/501b55a043cf9ff40d2423f26cbf89b9b4e45eb1))
+* **tests:** load test projects with tatolab start, which replaced tatolab run ([9772e60](https://github.com/tatolab/streamlib/commit/9772e60c5bd09beb9744dc4c368c22782b01650f))
+
+## [0.68.45](https://github.com/tatolab/streamlib/compare/v0.68.44...v0.68.45) (2026-11-10)
+
+
+### Bug Fixes
+
+* **ci:** give the runtime's project sync this run's tatolab-testpattern too ([a9cbfe9](https://github.com/tatolab/streamlib/commit/a9cbfe9685fb992223113ed976cff8297dc070cc))
+* **ci:** give the runtime's project sync this run's tatolab-testpattern too ([4936cf8](https://github.com/tatolab/streamlib/commit/4936cf81646552cdc1d78d4d797148671a68bfc2))
+
 ## [0.68.44](https://github.com/tatolab/streamlib/compare/v0.68.43...v0.68.44) (2026-11-10)
 
 

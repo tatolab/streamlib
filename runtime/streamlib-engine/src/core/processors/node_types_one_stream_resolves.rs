@@ -18,13 +18,17 @@ use crate::core::graph::{
     FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents, PortInfo, ProcessorNode,
 };
 use crate::core::processors::processor_instance_factory::refuse_port_names_not_cast_or_declared_twice;
+use crate::core::processors::project_view_node::{
+    ProjectViewNodeProcessor, the_node_type_of_a_project_view,
+};
 use crate::core::processors::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance,
 };
 
-/// A node type described in one stream's processor interpreter: what it
-/// declares, and how a node of it runs.
-struct NodeTypeDescribedInAStreamsProcessorInterpreter {
+/// A node type one stream resolves beyond the natively compiled ones — described in its
+/// processor interpreter, or a view its project brings: what it declares, and how a node of it
+/// runs.
+struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
     descriptor: ProcessorDescriptor,
     input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
     how_its_nodes_run: HowANodeOfADescribedTypeRuns,
@@ -66,7 +70,7 @@ pub struct InstalledModuleOfANodeType {
 /// declared execution, each `None` when the stream had not described it.
 struct DescribedNodeTypeAsItStood {
     node_type: ProcessorClassImportPath,
-    described: Option<Arc<NodeTypeDescribedInAStreamsProcessorInterpreter>>,
+    described: Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>>,
     execution: Option<ProcessExecution>,
 }
 
@@ -78,12 +82,17 @@ pub(crate) struct DescribedNodeTypesAsTheyStoodBeforeARefusedChange {
 }
 
 /// The node types one loaded stream resolves: every natively compiled type in
-/// [`PROCESSOR_REGISTRY`], then the types described in the stream's own
-/// processor interpreter.
+/// [`PROCESSOR_REGISTRY`], then each view its project and their imports bring, then the types
+/// described in the stream's own processor interpreter.
 #[derive(Default)]
 pub struct NodeTypesOneStreamResolves {
+    view_types_this_streams_project_brings: RwLock<
+        HashMap<ProcessorClassImportPath, Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>>,
+    >,
+    why_no_node_takes_each_view_this_streams_project_brings_that_is_no_type:
+        RwLock<HashMap<ProcessorClassImportPath, String>>,
     described_in_this_streams_processor_interpreter: RwLock<
-        HashMap<ProcessorClassImportPath, Arc<NodeTypeDescribedInAStreamsProcessorInterpreter>>,
+        HashMap<ProcessorClassImportPath, Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>>,
     >,
     installed_module_declaring_each_described_type:
         RwLock<HashMap<ProcessorClassImportPath, InstalledModuleOfANodeType>>,
@@ -112,6 +121,117 @@ impl NodeTypesOneStreamResolves {
             .contains_key(node_type)
     }
 
+    /// Resolve each view in `views`, as its project and their imports bring them, as a node type
+    /// of this stream named by its view type, in place of the views it resolved before; a view
+    /// that does not open, or that no node takes, is no type, and why is kept for a refusal.
+    pub(crate) fn replace_the_view_types_this_streams_project_brings(
+        &self,
+        views: &[streamlib_project_repository::ProjectViewFolderRead],
+    ) {
+        let mut view_types = HashMap::new();
+        let mut why_no_node_takes_each_view = HashMap::new();
+        for view in views {
+            let Ok(node_type) = ProcessorClassImportPath::new(view.view_type.clone()) else {
+                continue;
+            };
+            if view_types.contains_key(&node_type) {
+                continue;
+            }
+            let descriptor = match the_node_type_of_a_project_view(view) {
+                Ok(descriptor) => descriptor,
+                Err(why) => {
+                    why_no_node_takes_each_view.entry(node_type).or_insert(why);
+                    continue;
+                }
+            };
+            if self.is_a_natively_compiled_node_type(&node_type) {
+                tracing::warn!(
+                    view_type = node_type.as_str(),
+                    "the view is no node type: a natively compiled node type has its name"
+                );
+                continue;
+            }
+            if let Err(refusal) = refuse_port_names_not_cast_or_declared_twice(&descriptor) {
+                why_no_node_takes_each_view.insert(
+                    node_type,
+                    format!(
+                        "the view `{}` declares a port no node takes: {refusal}",
+                        view.view_type
+                    ),
+                );
+                continue;
+            }
+            why_no_node_takes_each_view.remove(&node_type);
+            let input_and_output_port_info = (
+                descriptor.inputs.iter().map(PortInfo::from).collect(),
+                descriptor.outputs.iter().map(PortInfo::from).collect(),
+            );
+            let descriptor_for_constructor = descriptor.clone();
+            view_types.insert(
+                node_type,
+                Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
+                    descriptor,
+                    input_and_output_port_info,
+                    how_its_nodes_run:
+                        HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(
+                            move |node| {
+                                Ok(Box::new(ProjectViewNodeProcessor::for_the_node(
+                                    node,
+                                    descriptor_for_constructor.clone(),
+                                ))
+                                    as Box<
+                                        dyn crate::core::processors::DynGeneratedProcessor + Send,
+                                    >)
+                            },
+                        )),
+                }),
+            );
+        }
+        *self.view_types_this_streams_project_brings.write() = view_types;
+        *self
+            .why_no_node_takes_each_view_this_streams_project_brings_that_is_no_type
+            .write() = why_no_node_takes_each_view;
+    }
+
+    /// Whether `node_type` is a view this stream's project or one of its imports brings.
+    pub fn is_a_view_type_of_this_streams_project(
+        &self,
+        node_type: &ProcessorClassImportPath,
+    ) -> bool {
+        self.view_types_this_streams_project_brings
+            .read()
+            .contains_key(node_type)
+    }
+
+    /// Why no node takes `node_type` when it names a view this stream's project brings that is
+    /// no node type: it does not open, or no node takes it.
+    pub fn why_no_node_takes_the_view(
+        &self,
+        node_type: &ProcessorClassImportPath,
+    ) -> Option<String> {
+        self.why_no_node_takes_each_view_this_streams_project_brings_that_is_no_type
+            .read()
+            .get(node_type)
+            .cloned()
+    }
+
+    /// The descriptor of each view type this stream's project brings, in view-type order.
+    pub fn descriptors_of_the_view_types_this_streams_project_brings(
+        &self,
+    ) -> Vec<ProcessorDescriptor> {
+        let mut descriptors: Vec<ProcessorDescriptor> = self
+            .view_types_this_streams_project_brings
+            .read()
+            .values()
+            .map(|view_type| view_type.descriptor.clone())
+            .collect();
+        descriptors.sort_by(|left, right| {
+            left.processor_class_import_path
+                .cmp(&right.processor_class_import_path)
+        });
+        descriptors
+    }
+
     /// Register a type this stream's processor interpreter described,
     /// replacing what an earlier describe into this stream left. A natively
     /// compiled type of the same path is refused: it is never replaced.
@@ -137,7 +257,7 @@ impl NodeTypesOneStreamResolves {
             .write()
             .insert(
                 node_type.clone(),
-                Arc::new(NodeTypeDescribedInAStreamsProcessorInterpreter {
+                Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
                     descriptor,
                     input_and_output_port_info,
                     how_its_nodes_run,
@@ -217,17 +337,33 @@ impl NodeTypesOneStreamResolves {
             })
     }
 
-    /// `project` of `node_type` as this stream's processor interpreter
-    /// described it, `None` when it described no such type.
+    /// `project` of `node_type` as this stream resolves it beyond the native types, `None` when
+    /// it resolves no such type.
     fn project_the_type_this_streams_interpreter_described<T>(
         &self,
         node_type: &ProcessorClassImportPath,
-        project: impl FnOnce(&NodeTypeDescribedInAStreamsProcessorInterpreter) -> T,
+        project: impl FnOnce(&NodeTypeOneStreamResolvesBeyondTheNativeOnes) -> T,
     ) -> Option<T> {
-        self.described_in_this_streams_processor_interpreter
+        self.the_type_this_stream_resolves_beyond_the_native_ones(node_type)
+            .map(|resolved| project(&resolved))
+    }
+
+    /// `node_type` as this stream resolves it beyond the native types: a view its project
+    /// brings, else a type its interpreter described.
+    fn the_type_this_stream_resolves_beyond_the_native_ones(
+        &self,
+        node_type: &ProcessorClassImportPath,
+    ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
+        self.view_types_this_streams_project_brings
             .read()
             .get(node_type)
-            .map(|described| project(described))
+            .cloned()
+            .or_else(|| {
+                self.described_in_this_streams_processor_interpreter
+                    .read()
+                    .get(node_type)
+                    .cloned()
+            })
     }
 
     /// Refuse a node this stream cannot add before anything is added: a
@@ -248,8 +384,9 @@ impl NodeTypesOneStreamResolves {
         if PROCESSOR_REGISTRY.can_create(&node.processor_type) {
             return PROCESSOR_REGISTRY.create(node);
         }
-        let described = self.described_in_this_streams_processor_interpreter.read();
-        let Some(described) = described.get(&node.processor_type) else {
+        let Some(described) =
+            self.the_type_this_stream_resolves_beyond_the_native_ones(&node.processor_type)
+        else {
             return PROCESSOR_REGISTRY.create(node);
         };
         let constructor = match &described.how_its_nodes_run {
@@ -416,10 +553,11 @@ impl NodeTypesOneStreamResolves {
         }
     }
 
-    /// The native types, then the types described in this stream's processor
-    /// interpreter — the stream's node catalog.
+    /// The native types, then the views this stream's project brings, then the types described
+    /// in this stream's processor interpreter — the stream's node catalog.
     pub fn node_catalog(&self) -> Vec<ProcessorDescriptor> {
         let mut catalog = PROCESSOR_REGISTRY.list_registered();
+        catalog.extend(self.descriptors_of_the_view_types_this_streams_project_brings());
         catalog.extend(self.descriptors_described_in_this_streams_processor_interpreter());
         catalog
     }

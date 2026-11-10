@@ -447,7 +447,7 @@ jobs:
   # The runtime unit — `tatolabd`, `tatolab`, and the lend a processor
   # interpreter borrows `tatolab.runtime` from — and every suite that runs on
   # it: the wheel's own, the integration suite (one `tatolabd` per test, each
-  # fixture stream loaded with `tatolab run` and driven over its local API, on
+  # fixture stream loaded with `tatolab start` and driven over its local API, on
   # the lavapipe the unit carries) and a scaffolded stream; `main` and the
   # merge queue only.
   integration-test-linux:
@@ -645,13 +645,16 @@ jobs:
         run: uv sync --frozen
 
       # The runtime syncs each scaffolded project's venv, which requires this
-      # checkout's `tatolab-stream`; once `main`'s version is ahead of PyPI's,
-      # only this run's build has it.
+      # checkout's `tatolab-stream` and `tatolab-testpattern`; once `main`'s
+      # version is ahead of PyPI's, only this run's builds have them.
       - name: Integration suite (all but rig-only)
         working-directory: tests/stream-on-runtime
         env:
-          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist
-        run: .venv/bin/pytest -v -m "not rig_only_capability"
+          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist,${{ runner.temp }}/tatolab-testpattern-dist
+        run: |
+          mkdir -p "$RUNNER_TEMP/tatolab-testpattern-dist"
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-testpattern-dist" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
+          .venv/bin/pytest -v -m "not rig_only_capability"
 
       # A scaffolded stream compiles and type-checks with no runtime installed,
       # in what a user's `.venv` holds: `tatolab-stream`, the test-pattern
@@ -667,14 +670,16 @@ jobs:
             "$GITHUB_WORKSPACE/packages/tatolab-ops" 'numpy>=2.1'
           cd "$RUNNER_TEMP/scaffold"
           "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
+          import importlib
           import importlib.util
+          import json
           import sys
 
-          import stream
-          from tatolab.stream import compile_stream_to_graph
-
           assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
-          graph = compile_stream_to_graph(stream.main)
+          graph = json.load(open("streams/main.graph.json"))
+          for node in graph["nodes"]:
+              module_name, class_name = node["type"].split(":")
+              getattr(importlib.import_module(module_name), class_name)
           runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
           assert runtime_modules_loaded == [], runtime_modules_loaded
           print([node["type"] for node in graph["nodes"]])
@@ -1122,12 +1127,14 @@ jobs:
           .venv/bin/pytest tests -q
 
       # The runtime syncs each scaffolded project's venv, which requires this
-      # checkout's `tatolab-stream`; once `main`'s version is ahead of PyPI's,
-      # only this run's build has it.
+      # checkout's `tatolab-stream` and `tatolab-testpattern`; once `main`'s
+      # version is ahead of PyPI's, only this run's builds have them.
       - name: Integration suite (GPU-free half)
         env:
-          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist
+          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist,${{ runner.temp }}/tatolab-testpattern-dist
         run: |
+          mkdir -p "$RUNNER_TEMP/tatolab-testpattern-dist"
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-testpattern-dist" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
           rm -rf target/tatolab-runtime
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
