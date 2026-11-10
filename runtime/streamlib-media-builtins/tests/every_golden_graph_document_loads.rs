@@ -9,11 +9,12 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use sha2::{Digest, Sha256};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::runtime::{OptionsForLoadingOneStream, Runner};
+use streamlib::sdk::runtime::Runner;
 use streamlib_media_builtins::register_media_builtin_processor_types;
 
 /// Each golden graph document's SHA-256, pinned as it was added.
@@ -132,8 +133,10 @@ fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
             .expect("a runtime constructs")
             .load_stream_from_graph_snapshot(
                 &built_ins_only,
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("golden-document"),
+                options_loading_a_stream_of_the_test_project_at(
+                    project_directory.path(),
+                    "golden-document",
+                ),
             )
             .unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
         let graph_render = loaded_stream.to_json().expect("the loaded stream renders");
