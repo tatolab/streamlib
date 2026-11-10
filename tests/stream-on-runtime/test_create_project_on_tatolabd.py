@@ -147,7 +147,7 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
         NODE_MODULE_THAT_RAISES_AS_IT_IMPORTS, encoding="utf-8"
     )
     write_a_graph_document(project_directory, "broken", SECOND_STREAM_WHOSE_NODE_MODULE_RAISES)
-    queued_run = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
+    queued_run = local_api.call_tool("reload_project", {"project_directory": str(project_directory)})
     run_once_ended = local_api.stream_action_once_ended(queued_run["action"])
 
     assert run_once_ended["state"] == "done", run_once_ended
@@ -166,7 +166,7 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
     shutil.rmtree(project_directory / ".venv")
     point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory)
-    queued_start = local_api.call_tool("run_project", {"project_directory": str(project_directory)})
+    queued_start = local_api.call_tool("start_project", {"project_directory": str(project_directory)})
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 
     assert start_once_ended["state"] == "done", start_once_ended

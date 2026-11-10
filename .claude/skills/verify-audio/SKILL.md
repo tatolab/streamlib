@@ -119,7 +119,7 @@ STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 \
 ```
 
 **The through-engine fixture runs on the runtime unit and compiles in the fixture venv.** The
-stream runs with `target/tatolab-runtime/bin/tatolab run` (or the unit `STREAMLIB_RUNTIME_UNIT_DIRECTORY`
+stream runs with `target/tatolab-runtime/bin/tatolab start` (or the unit `STREAMLIB_RUNTIME_UNIT_DIRECTORY`
 names), compiled in `runtime/streamlib-engine/tests/fixtures/.venv`, which holds `tatolab-stream`
 and numpy and never the runtime; the fixture makes that venv with uv the first time
 (`fixture_runtime_unit.sh`). The rig-only fixture runs no engine and needs only an interpreter
@@ -154,7 +154,7 @@ Things only the owner can do, asked for once, before the first run that needs th
 
 **The through-engine fixture measures the stream it loaded, and no other.** It starts its own
 `tatolabd` — refusing, naming the holder, while another runtime holds the machine — loads the
-loopback stream as a project of its own with `tatolab run --dir`, and passes that stream's id to
+loopback stream as a project of its own with `tatolab start --dir`, and passes that stream's id to
 every verb, so no other stream can answer in its place. A runtime that exits before it serves its
 local API fails at `the fixture could not start its runtime`; a stream that never runs fails at
 `the loopback stream never ran — it never answered over the local API socket with every node

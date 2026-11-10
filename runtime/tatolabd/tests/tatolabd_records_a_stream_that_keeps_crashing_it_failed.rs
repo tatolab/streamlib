@@ -4,7 +4,7 @@
 //! A recorded stream that keeps crashing `tatolabd` is recorded failed, GPU-free:
 //! the crash-on-demand test node crashes the runtime while its stream loads,
 //! twice, and the next start lists the stream failed with its reason and
-//! skips it; a `run_project` of its project retries it past its crash, to the
+//! skips it; a `reload_project` of its project retries it past its crash, to the
 //! GPU the runtime is left without, which fails it for that reason instead. Built with
 //! `--features machine-directories-under-a-test-root`, which registers the
 //! node.
@@ -100,7 +100,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_a_run
     .unwrap();
     let retried = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
-        "run_project",
+        "reload_project",
         serde_json::json!({"project_directory": machine_root.project_directory()}),
     )
     .json();
@@ -108,7 +108,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_a_run
         &machine_root.local_api_socket_path(),
         retried["action"]
             .as_str()
-            .expect("`run_project` answers its action"),
+            .expect("`reload_project` answers its action"),
     );
     runtime.interrupt_and_expect_a_clean_exit();
 

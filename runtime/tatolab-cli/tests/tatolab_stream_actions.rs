@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab run`, `start`, `stop`, `pause`, `resume`, `rm`, `rename`, `streams` and `clock` run as a user runs
+//! `tatolab start`, `reload`, `stop`, `pause`, `resume`, `rm`, `rename`, `streams` and `clock` run as a user runs
 //! them, against a stub local API at an isolated machine's fixed socket: the tool each calls, the
 //! arguments it sends, the one line or table it prints, and how a refusal reads. A verb naming one
 //! stream resolves its argument through `list_streams` — by id, by a display name one stream
@@ -19,7 +19,8 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    StubToolCallTransport, rename_stream_tool_result_text, run_project_tool_result_text,
+    StubToolCallTransport, rename_stream_tool_result_text,
+    start_or_reload_project_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -101,13 +102,15 @@ fn printed_by_a_successful(
 }
 
 #[test]
-fn run_and_start_queue_a_load_of_the_project_print_the_action_and_how_to_follow_it_and_return() {
-    for verb in ["run", "start"] {
+fn start_and_reload_queue_a_load_of_the_project_print_the_action_and_how_to_follow_it_and_return() {
+    for (verb, start_or_reload_tool_name) in
+        [("start", "start_project"), ("reload", "reload_project")]
+    {
         let project_directory = tempfile::tempdir().unwrap();
         let canonical_project_directory = project_directory.path().canonicalize().unwrap();
         let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-            "run_project",
-            StubToolAnswer::tool_result(&run_project_tool_result_text(
+            start_or_reload_tool_name,
+            StubToolAnswer::tool_result(&start_or_reload_project_tool_result_text(
                 "Rabc-1",
                 &canonical_project_directory,
             )),
@@ -128,7 +131,7 @@ fn run_and_start_queue_a_load_of_the_project_print_the_action_and_how_to_follow_
         assert_eq!(
             stub_local_api_server.recorded_tool_calls(),
             [RecordedToolCall {
-                tool_name: "run_project".to_owned(),
+                tool_name: start_or_reload_tool_name.to_owned(),
                 tool_arguments: json!({"project_directory": canonical_project_directory}),
                 tool_call_transport: StubToolCallTransport::StreamableHttpPost,
             }]
@@ -142,10 +145,10 @@ fn run_and_start_queue_a_load_of_the_project_print_the_action_and_how_to_follow_
 }
 
 #[test]
-fn run_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag() {
+fn start_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, stub_local_api_server) =
-        a_runtime_answering("run_project", StubToolAnswer::tool_failure("unreached"));
+        a_runtime_answering("start_project", StubToolAnswer::tool_failure("unreached"));
 
     for refused_arguments in [
         &["stream.py:main"][..],
@@ -155,7 +158,7 @@ fn run_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag()
         &["-d"],
         &["--detach"],
     ] {
-        let mut tatolab_arguments = vec!["run"];
+        let mut tatolab_arguments = vec!["start"];
         tatolab_arguments.extend_from_slice(refused_arguments);
         tatolab_arguments.extend(["--dir", project_directory.path().to_str().unwrap()]);
         let refused = isolated_machine_directories.run_tatolab(&tatolab_arguments);
@@ -174,12 +177,12 @@ fn run_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag()
 fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "run_project",
+        "start_project",
         StubToolAnswer::tool_failure("`project_directory` must be absolute"),
     );
 
     let refused = isolated_machine_directories.run_tatolab(&[
-        "run",
+        "start",
         "--dir",
         project_directory.path().to_str().unwrap(),
     ]);
@@ -187,18 +190,18 @@ fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         standard_error_text(&refused),
-        "error: run_project failed: `project_directory` must be absolute\n"
+        "error: start_project failed: `project_directory` must be absolute\n"
     );
     assert_eq!(standard_output_text(&refused), "");
 }
 
 #[test]
-fn run_of_a_dir_that_is_not_a_directory_is_refused_before_any_call() {
+fn start_of_a_dir_that_is_not_a_directory_is_refused_before_any_call() {
     let (isolated_machine_directories, stub_local_api_server) =
-        a_runtime_answering("run_project", StubToolAnswer::tool_failure("unreached"));
+        a_runtime_answering("start_project", StubToolAnswer::tool_failure("unreached"));
 
     let refused =
-        isolated_machine_directories.run_tatolab(&["run", "--dir", "/nonexistent-project"]);
+        isolated_machine_directories.run_tatolab(&["start", "--dir", "/nonexistent-project"]);
 
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
