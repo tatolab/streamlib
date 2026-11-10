@@ -27,11 +27,13 @@ test-support = ["streamlib-engine/test-support"]
 machine-directories-under-a-test-root = ["streamlib-engine/machine-directories-under-a-test-root"]
 
 [dependencies]
-streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.68.49" }
+streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.68.50" }
 # `App` sugar takes `impl Serialize` configs and encodes them to the JSON the
 # runtime carries.
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The app tests load their stream from a project on disk.
+streamlib-engine = { path = "../../runtime/streamlib-engine", features = ["test-support"] }
 tempfile = { workspace = true }

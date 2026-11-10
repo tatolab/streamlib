@@ -184,8 +184,8 @@ impl LocalApiMcpServerHandler {
             .ok_or_else(|| {
                 McpError::invalid_params(
                     format!(
-                        "stream `{stream_id_as_the_graph_reports_it}` belongs to no project, so \
-                         no graph edit can name it by its stream asset"
+                        "stream `{stream_id_as_the_graph_reports_it}` is not loaded, so no graph \
+                         edit can name it by its stream asset"
                     ),
                     None,
                 )

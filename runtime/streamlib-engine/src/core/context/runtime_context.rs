@@ -743,6 +743,7 @@ mod _assert_capability_views_are_not_clone {
 
 #[cfg(test)]
 mod one_off_acquisition_counting_tests {
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
     use std::sync::Arc;
 
     use super::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -750,7 +751,7 @@ mod one_off_acquisition_counting_tests {
     use crate::core::context::IsolationTier;
     use crate::core::graph::ProcessorUniqueId;
     use crate::core::rhi::TensorStorageBufferLayout;
-    use crate::core::runtime::{OptionsForLoadingOneStream, Runner};
+    use crate::core::runtime::Runner;
 
     /// Run `body` against a started empty stream's shared context, skipping
     /// only where there is no GPU device.
@@ -762,10 +763,10 @@ mod one_off_acquisition_counting_tests {
         let project_directory = tempfile::tempdir().expect("a project directory");
         let runner = Runner::new().expect("a runner boots without a graph");
         let stream = runner
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("main"),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory.path(),
+                "main",
+            ))
             .expect("an empty stream loads");
         stream.start().expect("the stream starts");
         body(

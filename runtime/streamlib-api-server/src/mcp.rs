@@ -1849,10 +1849,7 @@ pub(crate) mod tests {
         let runtime = streamlib::sdk::runtime::Runner::new().unwrap();
         let stream = runtime
             .load_an_empty_stream(
-                streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
-                    project_directory.path(),
-                )
-                .at_stream_location(
+                streamlib::sdk::runtime::OptionsForLoadingOneStream::at_stream_location(
                     "main".to_owned(),
                     StreamLocation {
                         project_directory: project_directory.path().to_path_buf(),

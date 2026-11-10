@@ -17,14 +17,13 @@
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
-use streamlib::sdk::runtime::{
-    LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, RuntimeStatus,
-};
+use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeStatus};
 use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
@@ -66,10 +65,10 @@ fn a_running_stream_with_a_processor_that_ignores_shutdown(
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = runner
-        .load_an_empty_stream(
-            OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                .with_stream_id("main"),
-        )
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
         .expect("an empty stream loads");
     let processor_id = stream
         .add_processor(
