@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from conftest import TatolabdUnderTest
-from runtime_unit_under_test import REPOSITORY_ROOT
+from runtime_unit_under_test import REPOSITORY_ROOT, SUITE_VENV_INTERPRETER
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -42,26 +42,27 @@ SCAFFOLDED_FILE_PATHS = {
     "pyproject.toml",
     ".python-version",
     ".gitignore",
+    # The lockfile the runtime's sync of the project venv writes on the load.
+    "uv.lock",
 }
 
 def scaffold_with_tatolab_new(
     make_scaffolded_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ) -> Path:
-    """`tatolab new` into a project whose `.venv` is the suite venv; returns the project."""
+    """`tatolab new` into an empty project, whose `.venv` the runtime makes; returns the project."""
     return make_scaffolded_tatolab_project(start_tatolabd(), directory_name="demo")
 
 
 def files_written_into(app_directory: Path) -> "dict[str, str]":
     """Every file under the project but its `.venv`, the bytecode its load
-    compiled and what the runtime keeps in `.streamlib` and `.tatolab`, by its path in
-    the project."""
+    compiled and what the runtime keeps in `.tatolab`, by its path in the project."""
     written_files: "dict[str, str]" = {}
     for directory, subdirectory_names, file_names in os.walk(app_directory):
         subdirectory_names[:] = [
             name
             for name in subdirectory_names
-            if name not in (".venv", "__pycache__", ".streamlib", ".tatolab")
+            if name not in (".venv", "__pycache__", ".tatolab")
         ]
         for file_name in file_names:
             path = Path(directory) / file_name
@@ -89,7 +90,7 @@ def test_every_scaffolded_python_file_passes_ruff(
         assert "noqa" not in contents, f"the scaffolded {path_in_project} suppresses a lint"
         finished = subprocess.run(
             [
-                str(app_directory / ".venv" / "bin" / "python"),
+                str(SUITE_VENV_INTERPRETER),
                 "-m",
                 "ruff",
                 *ruff_arguments,

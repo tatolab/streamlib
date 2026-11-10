@@ -162,8 +162,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   function as `module:function`), its display name, the interpreter, `stopped` or `failed` and
   why, its crash count, the owner's exposure rulings and the pending mark of a queued stop,
   remove or start — and, under `logs/`, the runtime's own log, which belongs to no project. A
-  project's log and its streams' pipeline cache stay under the project's `.streamlib/`. Owner,
-  2026-10-02 and 2026-10-24.
+  project's log and its streams' pipeline cache stay under the project's `.tatolab/`. Owner,
+  2026-10-02, 2026-10-24 and 2026-11-09.
   [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator — SHIPPED #2929;
   stream-identity-and-persistence — SHIPPED #2960, #2962]
   Rejected: a lock file on macOS — root-owned behind a first-launch administrator prompt, or
@@ -392,7 +392,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   does not run. It removes a `.venv` whose interpreter does not run first, and never touches
   one whose interpreter runs. A failed sync records the stream `failed` in uv's own words.
   A project has one log, and the project is its only key: its segments under
-  `<project>/.streamlib/logs/` hold every record the project's stream actions and streams
+  `<project>/.tatolab/logs/` hold every record the project's stream actions and streams
   write, whether or not any stream of it is loaded or recorded. A record carries the action's
   id in `action`, and the stream id in `stream` when a stream wrote it; these are attributes of
   a record, never where it is kept. The venv's making and the compile write records with no
@@ -4032,7 +4032,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
   with nothing set, and `tatolab` resolves it through `streamlib-runtime-client-contract`, the
   code the runtime resolves it with. What a runtime *keeps* sits elsewhere: a project's log
-  and caches under its `.streamlib/`, and the stream records and the runtime's own
+  and caches under its `.tatolab/`, and the stream records and the runtime's own
   log in the state directory (§Product). There is no registry to discover a runtime by: one
   runtime per machine serves one socket at a fixed path. Owner, 2026-09-14.
   [control-plane-one-surface; local-transport-hardening — SHIPPED #2261; local-api — SHIPPED

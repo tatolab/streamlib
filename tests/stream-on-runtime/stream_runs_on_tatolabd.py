@@ -92,11 +92,19 @@ STREAM_ID_HASH_HEX_DIGITS = 6
 #: harness and whatever it skips on.
 MODULE_NAME_PREFIXES_A_STREAM_FUNCTION_IS_NOT_RUN_FROM = ("test_", "conftest")
 
-#: The suite directory's entries a project written here links none of: its own venv, what
-#: Python and pytest write beside the modules, and what makes the project a project.
+#: What the runtime syncs a project's `.venv` from. A project written here runs in the suite
+#: venv as it is, so it holds none of them: their path sources are relative to the suite
+#: directory, and a sync from a project anywhere else would not resolve them.
+SUITE_FILES_THE_SUITE_VENV_IS_SYNCED_FROM = frozenset(
+    {"pyproject.toml", "uv.lock", ".python-version"}
+)
+
+#: The suite directory's entries a project written here links none of: its own venv and what
+#: it is synced from, what Python and pytest write beside the modules, and what makes the
+#: project a project.
 SUITE_DIRECTORY_ENTRIES_A_WRITTEN_PROJECT_LINKS_NONE_OF = frozenset(
     {".venv", "__pycache__", ".pytest_cache", PROJECT_FILE_NAME, GRAPH_DOCUMENTS_DIRECTORY_NAME}
-)
+) | SUITE_FILES_THE_SUITE_VENV_IS_SYNCED_FROM
 
 
 @dataclass(frozen=True)

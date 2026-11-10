@@ -397,8 +397,8 @@ mod tests {
                 runtime_version = env!("CARGO_PKG_VERSION")
             )),
             "a new project floors tatolab-stream and tatolab-testpattern at the version of \
-             the runtime that created it, and never names tatolab-ops, which the runtime \
-             installs into its .venv"
+             the runtime that created it; tatolab-ops is declared by the runtime when it makes \
+             the project's .venv, through a link to the copy it carries"
         );
         assert!(rendered_pyproject_toml.contains("name = \"probe-app\""));
         let rendered_pyproject: toml::Table = toml::from_str(rendered_pyproject_toml).unwrap();

@@ -1,12 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#[cfg(feature = "history")]
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
+#[cfg(feature = "history")]
 use crate::project_asset::PROJECT_IMPORTS_DIRECTORY;
+#[cfg(feature = "history")]
 use crate::project_file::ProjectImport;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
@@ -20,6 +23,7 @@ pub const PYPROJECT_FILE_NAME: &str = "pyproject.toml";
 /// requirements and never builds the module, so no import's code reaches the project's shared
 /// import path. A manifest with no `[project]` table has no requirements to name an import in,
 /// so it is left as it is.
+#[cfg(feature = "history")]
 pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
     pyproject_text: &str,
     project_directory: &Path,
@@ -122,8 +126,131 @@ pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
     Ok(pyproject.to_string())
 }
 
+/// Where a project links each first-party module the runtime carries, relative to the project.
+pub const PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY: &str = ".tatolab/first-party-imports";
+
+/// A first-party module the runtime carries, as a project declares it: the distribution its
+/// `pyproject.toml` names and the folder its link has under
+/// [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FirstPartyModuleDeclaredByAProject {
+    /// The distribution name the module's own `pyproject.toml` declares.
+    pub distribution_name: String,
+    /// The name of the module's link inside [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`].
+    pub link_folder_name: String,
+}
+
+/// `pyproject_text` with each of `first_party_modules` named as a requirement and as a uv path
+/// source through its link, `{ path = ".tatolab/first-party-imports/<folder>" }`, which uv
+/// builds and installs so `uv sync` keeps the module and its requirements. A requirement or a
+/// source the manifest already holds for one is kept as written, and every source into the
+/// links folder that no module of `first_party_modules` holds now is taken out with its
+/// requirement. A manifest with no `[project]` table is left as it is.
+pub fn pyproject_with_each_first_party_module_as_a_uv_path_source(
+    pyproject_text: &str,
+    project_directory: &Path,
+    first_party_modules: &[FirstPartyModuleDeclaredByAProject],
+) -> Result<String, ProjectRepositoryRefusal> {
+    let mut pyproject: DocumentMut =
+        pyproject_text
+            .parse()
+            .map_err(|not_toml: toml_edit::TomlError| {
+                ProjectRepositoryRefusal::PyprojectUnreadable {
+                    path: project_directory.join(PYPROJECT_FILE_NAME),
+                    why: not_toml.to_string(),
+                }
+            })?;
+    if !pyproject.contains_table("project") {
+        return Ok(pyproject_text.to_owned());
+    }
+    let declared_names: Vec<String> = first_party_modules
+        .iter()
+        .map(|module| normalized_distribution_name(&module.distribution_name))
+        .collect();
+
+    let uv_sources = the_table_at(
+        &mut pyproject,
+        &["tool", "uv", "sources"],
+        project_directory,
+    )?;
+    let requirements_no_module_holds: Vec<String> = uv_sources
+        .iter()
+        .filter(|(name, source)| {
+            is_a_source_into_the_first_party_module_links_folder(source)
+                && !declared_names.contains(&normalized_distribution_name(name))
+        })
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    for name in &requirements_no_module_holds {
+        uv_sources.remove(name);
+    }
+    let names_with_a_source: Vec<String> = uv_sources
+        .iter()
+        .map(|(name, _)| normalized_distribution_name(name))
+        .collect();
+    for module in first_party_modules {
+        if names_with_a_source.contains(&normalized_distribution_name(&module.distribution_name)) {
+            continue;
+        }
+        let mut source = InlineTable::new();
+        source.insert(
+            "path",
+            Value::from(format!(
+                "{PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY}/{}",
+                module.link_folder_name
+            )),
+        );
+        uv_sources.insert(
+            &module.distribution_name,
+            Item::Value(Value::InlineTable(source)),
+        );
+    }
+    if uv_sources.is_empty() {
+        remove_the_empty_tables_down_to(&mut pyproject, &["tool", "uv", "sources"]);
+    }
+
+    let requirements = the_project_requirements(&mut pyproject, project_directory)?;
+    let names_taken_out: Vec<String> = requirements_no_module_holds
+        .iter()
+        .map(|name| normalized_distribution_name(name))
+        .collect();
+    requirements.retain(|requirement| {
+        requirement
+            .as_str()
+            .map(|requirement| {
+                !names_taken_out.contains(&normalized_distribution_name(
+                    the_name_a_requirement_names(requirement),
+                ))
+            })
+            .unwrap_or(true)
+    });
+    let names_already_required: Vec<String> = requirements
+        .iter()
+        .filter_map(|requirement| requirement.as_str())
+        .map(|requirement| normalized_distribution_name(the_name_a_requirement_names(requirement)))
+        .collect();
+    for module in first_party_modules {
+        if !names_already_required
+            .contains(&normalized_distribution_name(&module.distribution_name))
+        {
+            requirements.push(module.distribution_name.as_str());
+        }
+    }
+    Ok(pyproject.to_string())
+}
+
+fn is_a_source_into_the_first_party_module_links_folder(source: &Item) -> bool {
+    source
+        .get("path")
+        .and_then(Item::as_str)
+        .is_some_and(|path| {
+            path.starts_with(&format!("{PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY}/"))
+        })
+}
+
 /// The distribution name `folder`'s own `pyproject.toml` declares, normalized; `None` when the
 /// folder holds no `pyproject.toml` or it names no `[project].name`.
+#[cfg(feature = "history")]
 fn the_distribution_name_the_folder_declares(
     folder: &Path,
 ) -> Result<Option<String>, ProjectRepositoryRefusal> {
@@ -146,6 +273,7 @@ fn the_distribution_name_the_folder_declares(
         .map(normalized_distribution_name))
 }
 
+#[cfg(feature = "history")]
 fn is_a_source_into_the_imports_folder(source: &Item) -> bool {
     source
         .get("path")
@@ -247,7 +375,7 @@ fn normalized_distribution_name(name: &str) -> String {
     normalized
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "history"))]
 mod tests {
     use super::*;
 
@@ -425,5 +553,100 @@ mod tests {
                 .unwrap();
 
         assert_eq!(written, pyproject);
+    }
+
+    fn tatolab_ops_as_a_first_party_module() -> FirstPartyModuleDeclaredByAProject {
+        FirstPartyModuleDeclaredByAProject {
+            distribution_name: "tatolab-ops".to_owned(),
+            link_folder_name: "tatolab-ops".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_first_party_module_becomes_a_requirement_and_a_built_path_source_through_its_link() {
+        let project = tempfile::tempdir().unwrap();
+
+        let written = pyproject_with_each_first_party_module_as_a_uv_path_source(
+            SCAFFOLDED_PYPROJECT,
+            project.path(),
+            &[tatolab_ops_as_a_first_party_module()],
+        )
+        .unwrap();
+
+        let pyproject: toml::Value = toml::from_str(&written).unwrap();
+        assert_eq!(
+            pyproject["project"]["dependencies"],
+            toml::Value::try_from(["tatolab-stream>=0.68", "numpy>=2.1", "tatolab-ops"]).unwrap()
+        );
+        assert_eq!(
+            pyproject["tool"]["uv"]["sources"]["tatolab-ops"],
+            toml::from_str::<toml::Value>("path = \".tatolab/first-party-imports/tatolab-ops\"")
+                .unwrap()
+        );
+        assert_eq!(
+            pyproject_with_each_first_party_module_as_a_uv_path_source(
+                &written,
+                project.path(),
+                &[tatolab_ops_as_a_first_party_module()],
+            )
+            .unwrap(),
+            written,
+            "a project that declares it already is left as it is"
+        );
+    }
+
+    #[test]
+    fn a_source_the_project_holds_for_a_first_party_module_is_kept_as_written() {
+        let project = tempfile::tempdir().unwrap();
+        let pyproject = "[project]\nname = \"suite\"\ndependencies = [\"tatolab-ops\"]\n\n\
+            [tool.uv.sources]\ntatolab-ops = { path = \"../../packages/tatolab-ops\" }\n";
+
+        let written = pyproject_with_each_first_party_module_as_a_uv_path_source(
+            pyproject,
+            project.path(),
+            &[tatolab_ops_as_a_first_party_module()],
+        )
+        .unwrap();
+
+        assert_eq!(written, pyproject);
+    }
+
+    #[test]
+    fn a_first_party_module_the_runtime_no_longer_carries_is_taken_out_and_imports_are_left() {
+        let project = tempfile::tempdir().unwrap();
+        let arm = an_import_named(project.path(), "robot-arm", "robot-arm");
+        let with_the_arm = pyproject_with_each_import_as_a_uv_path_source(
+            SCAFFOLDED_PYPROJECT,
+            project.path(),
+            &[arm],
+        )
+        .unwrap();
+        let with_both = pyproject_with_each_first_party_module_as_a_uv_path_source(
+            &with_the_arm,
+            project.path(),
+            &[tatolab_ops_as_a_first_party_module()],
+        )
+        .unwrap();
+
+        let without_ops = pyproject_with_each_first_party_module_as_a_uv_path_source(
+            &with_both,
+            project.path(),
+            &[],
+        )
+        .unwrap();
+
+        let pyproject: toml::Value = toml::from_str(&without_ops).unwrap();
+        assert_eq!(
+            pyproject["project"]["dependencies"],
+            toml::Value::try_from(["tatolab-stream>=0.68", "numpy>=2.1", "robot-arm"]).unwrap()
+        );
+        assert_eq!(
+            pyproject["tool"]["uv"]["sources"]
+                .as_table()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            ["robot-arm"]
+        );
     }
 }

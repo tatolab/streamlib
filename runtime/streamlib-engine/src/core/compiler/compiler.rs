@@ -36,6 +36,9 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::{
     hand_each_helper_the_config_fields_its_node_exposes_as_inputs,
     hand_each_helper_the_pin_values_its_input_ports_read,
 };
+use crate::core::compiler::compiler_ops::shader_node_island::{
+    place_each_shader_node_island_on_its_host, refuse_a_live_edit_of_a_shader_node_island,
+};
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
@@ -241,6 +244,16 @@ impl Compiler {
             &plan.links_to_remove,
             &plan.config_updates,
         )?;
+        refuse_a_live_edit_of_a_shader_node_island(
+            &graph_arc.read(),
+            &plan.processors_to_add,
+            &plan.processors_to_remove,
+            &[
+                plan.links_to_add.as_slice(),
+                plan.links_to_remove.as_slice(),
+            ]
+            .concat(),
+        )?;
         place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
             &mut graph_arc.write(),
             &plan.processors_to_add,
@@ -322,10 +335,17 @@ impl Compiler {
         let mut barrier_handles: Vec<(ProcessorUniqueId, ProcessorReadyBarrierHandle)> = vec![];
         let function_nodes_run_inside_their_readers =
             the_function_nodes_among(&graph_arc.read(), &plan.processors_to_add);
+        let shader_nodes_fused_into_another = place_each_shader_node_island_on_its_host(
+            &mut graph_arc.write(),
+            &plan.processors_to_add,
+        )?;
         let processors_to_build: Vec<ProcessorUniqueId> = plan
             .processors_to_add
             .iter()
-            .filter(|proc_id| !function_nodes_run_inside_their_readers.contains(*proc_id))
+            .filter(|proc_id| {
+                !function_nodes_run_inside_their_readers.contains(*proc_id)
+                    && !shader_nodes_fused_into_another.contains(*proc_id)
+            })
             .cloned()
             .collect();
 
@@ -409,10 +429,14 @@ impl Compiler {
         hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph_arc.read())?;
 
         // A function node has no thread whose setup would settle its state: it
-        // runs once it is wired into the read of each node it feeds.
+        // runs once it is wired into the read of each node it feeds. A shader
+        // node fused into another's island runs once that node does.
         {
             let graph = graph_arc.read();
-            for function_node_id in &function_nodes_run_inside_their_readers {
+            for function_node_id in function_nodes_run_inside_their_readers
+                .iter()
+                .chain(&shader_nodes_fused_into_another)
+            {
                 if let Some(state) = graph
                     .traversal()
                     .v(function_node_id)
@@ -536,6 +560,26 @@ fn wire_every_link_a_plan_adds(
                     iceoryx2_node,
                 )?;
             }
+            HowALinkIsWired::AsACallInsideAShaderNodeIsland => {
+                let mut graph = graph_arc.write();
+                if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+                    link.insert(LinkStateComponent(LinkState::Wired));
+                }
+            }
+            HowALinkIsWired::ThroughAChannelIntoTheHostOfItsShaderNodeIsland(host_input_port) => {
+                tracing::info!(
+                    "[{}] Opening service {} into {}",
+                    CompilePhase::Wire,
+                    link_id,
+                    host_input_port
+                );
+                super::compiler_ops::open_iceoryx2_service_into_the_host_of_a_shader_node_island(
+                    &mut graph_arc.write(),
+                    link_id,
+                    &host_input_port,
+                    iceoryx2_node,
+                )?;
+            }
         }
 
         the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
@@ -582,7 +626,19 @@ pub(super) fn unwire_and_remove_a_link(
             Ok(HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead) => {
                 unwire_a_link_from_a_function_node_island_into_its_reader(&mut graph, link_id)
             }
-            Ok(HowALinkIsWired::AsACallInsideAFunctionNodeIsland) => Ok(()),
+            Ok(
+                HowALinkIsWired::AsACallInsideAFunctionNodeIsland
+                | HowALinkIsWired::AsACallInsideAShaderNodeIsland,
+            ) => Ok(()),
+            Ok(HowALinkIsWired::ThroughAChannelIntoTheHostOfItsShaderNodeIsland(
+                host_input_port,
+            )) => {
+                super::compiler_ops::close_iceoryx2_service_into_the_host_of_a_shader_node_island(
+                    &mut graph,
+                    link_id,
+                    &host_input_port,
+                )
+            }
             Ok(HowALinkIsWired::ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland) => {
                 let read_through_a_reader = graph.traversal().e(link_id).first().is_some_and(
                     |link| {

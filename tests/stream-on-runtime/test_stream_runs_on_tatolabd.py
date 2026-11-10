@@ -4,8 +4,8 @@
 """How the harness turns what a test hands it into the project `tatolab run` loads.
 
 Needs no runtime: these check the project the harness would hand `tatolab run` — its
-project file and the graph documents it writes — and the interpreter of a hand-written
-graph's project, run directly.
+project file, the graph documents it writes and the venv it links — and the interpreter of
+a hand-written graph's project, run directly.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from runtime_unit_under_test import (
 )
 from stream_runs_on_tatolabd import (
     PROJECT_FILE_NAME,
+    SUITE_FILES_THE_SUITE_VENV_IS_SYNCED_FROM,
     StreamFunctionNotRunnableFromTheSuiteProject,
     TatolabRunOfAProject,
     graph_document_path_of,
@@ -74,6 +76,48 @@ def test_a_suite_stream_function_runs_as_a_one_stream_project_holding_its_graph_
     ) == stream_id_named(
         "project", "named_pattern_into_a_named_sink", project_file["project"], stream_asset
     )
+
+
+def test_a_written_project_holds_nothing_the_runtime_would_sync_the_suite_venv_from(
+    tmp_path: Path,
+):
+    """The runtime syncs a project's `.venv` again from its own `pyproject.toml`, `uv.lock`
+    and `.python-version`; the suite's, read from a project under the test's tmp directory,
+    name path sources that are not there."""
+    one_stream_project = tmp_path / "one-stream"
+    write_a_one_stream_project_of_a_suite_stream_function(
+        one_stream_project, named_pattern_into_a_named_sink
+    )
+    hand_written_project = write_a_hand_written_graph_project(
+        tmp_path / "hand-written", '{"nodes": []}'
+    ).tatolab_run.working_directory
+
+    for suite_file in SUITE_FILES_THE_SUITE_VENV_IS_SYNCED_FROM:
+        assert (STREAM_ON_RUNTIME_SUITE_DIRECTORY / suite_file).is_file(), suite_file
+        assert not (one_stream_project / suite_file).exists(), suite_file
+        assert not (hand_written_project / suite_file).exists(), suite_file
+
+
+def test_a_made_project_given_its_own_pyproject_is_refused_the_suite_venv(
+    make_tatolab_project: "Callable[..., Path]",
+):
+    """The runtime syncs a project's `.venv` to the project's own `pyproject.toml`; one
+    linked to the suite venv would strip the suite's packages for every later test."""
+    with pytest.raises(ValueError, match="runs_in_the_suite_venv=False"):
+        make_tatolab_project({"pyproject.toml": '[project]\nname = "own"\nversion = "0"\n'})
+
+
+def test_a_made_project_not_run_in_the_suite_venv_holds_no_venv_for_the_runtime_to_make(
+    make_tatolab_project: "Callable[..., Path]",
+):
+    project_directory = make_tatolab_project(
+        {"pyproject.toml": '[project]\nname = "own"\nversion = "0"\n'},
+        runs_in_the_suite_venv=False,
+    )
+
+    assert not (project_directory / ".venv").exists()
+    assert not (project_directory / ".venv").is_symlink()
+    assert (project_directory / "pyproject.toml").is_file()
 
 
 def test_the_stream_id_oracle_is_the_project_name_the_stream_name_and_six_hex_of_the_two_uuids():

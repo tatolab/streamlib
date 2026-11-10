@@ -33,9 +33,12 @@ use super::open_iceoryx2_service_op::{
     close_a_read_of_a_link_by_the_reader_of_a_function_node_island,
     open_a_read_of_a_link_by_the_reader_of_a_function_node_island,
 };
+use super::shader_node_island::{
+    is_a_call_inside_a_shader_node_island, where_a_link_into_a_fused_shader_node_is_read,
+};
 
 /// How the compiler wires one link, by the kinds of its two ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HowALinkIsWired {
     /// Through an iceoryx2 channel: neither end runs inside a reader's read.
     ThroughAChannel,
@@ -47,6 +50,12 @@ pub(crate) enum HowALinkIsWired {
     /// island, at an input port of the reader's own opened for the link: a
     /// link from a node outside any island into a function node.
     ThroughAChannelReadByTheReaderOfItsFunctionNodeIsland,
+    /// As a call between two shader nodes of one island, inside one kernel
+    /// or between two kernels of one submission.
+    AsACallInsideAShaderNodeIsland,
+    /// Through an iceoryx2 channel into this input port of the node
+    /// evaluating the shader node island the link's reader is fused into.
+    ThroughAChannelIntoTheHostOfItsShaderNodeIsland(InputLinkPortRef),
 }
 
 /// The input port of the reader `island_link_id` carries its island to that
@@ -107,6 +116,14 @@ pub(crate) fn how_a_link_is_wired(
     link_id: &LinkUniqueId,
 ) -> Result<HowALinkIsWired> {
     let link = link_in(graph, link_id)?;
+    if is_a_call_inside_a_shader_node_island(graph, link) {
+        return Ok(HowALinkIsWired::AsACallInsideAShaderNodeIsland);
+    }
+    if let Some(host_input_port) = where_a_link_into_a_fused_shader_node_is_read(graph, link) {
+        return Ok(
+            HowALinkIsWired::ThroughAChannelIntoTheHostOfItsShaderNodeIsland(host_input_port),
+        );
+    }
     Ok(
         match (
             runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()),

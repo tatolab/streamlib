@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Where the records a project's streams and stream actions emit go: the
-//! project's one JSONL log, `<project>/.streamlib/logs/project.jsonl`, each
+//! project's one JSONL log, `<project>/.tatolab/logs/project.jsonl`, each
 //! record stamped with its runtime's id, the stream that emitted it and the
 //! stream action it belongs to.
 //!
@@ -107,7 +107,7 @@ impl std::fmt::Debug for ProjectLogRoute {
 
 impl ProjectLogRoute {
     /// The route of the project in `project_directory`, symlinks resolved,
-    /// its JSONL file `<project>/.streamlib/logs/project.jsonl` appended to;
+    /// its JSONL file `<project>/.tatolab/logs/project.jsonl` appended to;
     /// the one already open in this process when there is one.
     ///
     /// Opened through the logging pathway the calling thread's dispatcher

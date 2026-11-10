@@ -67,9 +67,11 @@ def _refuse_unless_imported_from(
 
 
 def _the_import_folder_a_loaded_module_came_from(top_level_module: str) -> Optional[str]:
-    module = sys.modules[top_level_module]
-    locations = list(getattr(module, "__path__", None) or [])
-    module_file = getattr(module, "__file__", None)
+    # Read from the module's own namespace: `getattr` would reach a PEP 562 module
+    # `__getattr__`, which may raise for any name it does not hold.
+    module_namespace = vars(sys.modules[top_level_module])
+    locations = list(module_namespace.get("__path__") or [])
+    module_file = module_namespace.get("__file__")
     if module_file:
         locations.append(os.path.dirname(module_file))
     locations_on_disk = [os.path.realpath(location) for location in locations]

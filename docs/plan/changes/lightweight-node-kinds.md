@@ -472,8 +472,8 @@ Each was settled by the owner on the date it names.
 Assumed unless overruled:
 - A function's single output is named `result`; plain parameters are pins by default; a node's
   palette category defaults to its module's name, overridden by `category=`.
-- `tatolab-ops` is installed in every stream's environment with the runtime, so every helper can
-  load it.
+- `tatolab-ops` is declared in every project's `pyproject.toml` through a link to the runtime's
+  copy and installed in every stream's environment, so every helper can load it.
 - The shader template is the `ImageInput` shape above.
 - A material graph is a later change that asks `slang-shader-compiler` for a fragment target and
   adds a renderer node; nothing here precludes it.
