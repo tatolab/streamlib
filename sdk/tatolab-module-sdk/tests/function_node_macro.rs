@@ -16,8 +16,10 @@ use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
 };
 
-/// `x` scaled by `gain`, then moved by `offset`.
-#[function_node]
+const SCALE_AND_OFFSET_DESCRIPTION: &str = "`x` scaled by `gain`, then moved by `offset`.";
+
+/// The doc comment, which is never the node's description.
+#[function_node(description = SCALE_AND_OFFSET_DESCRIPTION)]
 fn scale_and_offset(x: f64, #[pin_default(2.0)] gain: f64, #[pin_default(0.5)] offset: f64) -> f64 {
     x * gain + offset
 }
@@ -642,4 +644,23 @@ fn a_gates_declaration_reaches_python_with_its_value_types_and_what_may_be_none(
                 .unwrap()
         );
     });
+}
+
+#[test]
+fn a_doc_comment_is_never_a_function_nodes_description() {
+    assert_eq!(gate_function_node_declaration().description, "");
+}
+
+/// A doc comment beside the declared description.
+#[function_node(description = "One over `x`, *or nothing* at zero.")]
+fn described_reciprocal(x: f64) -> Option<f64> {
+    (x != 0.0).then(|| 1.0 / x)
+}
+
+#[test]
+fn a_literal_description_is_declared_exactly_as_written() {
+    assert_eq!(
+        described_reciprocal_function_node_declaration().description,
+        "One over `x`, *or nothing* at zero."
+    );
 }

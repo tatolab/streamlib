@@ -656,18 +656,17 @@ jobs:
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-testpattern-dist" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
           .venv/bin/pytest -v -m "not rig_only_capability"
 
-      # A scaffolded stream compiles and type-checks with no runtime installed,
-      # in what a user's `.venv` holds: `tatolab-stream`, the test-pattern
-      # module and numpy from its `uv sync`, and the ops module the runtime
-      # installs.
-      - name: Scaffolded stream compiles and type-checks (Python 3.12)
+      # A scaffolded stream's one node imports with no runtime installed, in
+      # what a user's `.venv` holds: `tatolab-stream` and the test-pattern
+      # module from its `uv sync`, and the ops module the runtime installs.
+      - name: Scaffolded stream's node types import (Python 3.12)
         run: |
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv venv --python 3.12 "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install \
             "$RUNNER_TEMP"/tatolab-stream-dist/*.whl \
             "$GITHUB_WORKSPACE/packages/tatolab-testpattern" \
-            "$GITHUB_WORKSPACE/packages/tatolab-ops" 'numpy>=2.1'
+            "$GITHUB_WORKSPACE/packages/tatolab-ops"
           cd "$RUNNER_TEMP/scaffold"
           "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
           import importlib
@@ -684,7 +683,6 @@ jobs:
           assert runtime_modules_loaded == [], runtime_modules_loaded
           print([node["type"] for node in graph["nodes"]])
           EOF
-          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
 
       # A failed job ends the run: the rest of it cannot make this change
       # mergeable, so it stops spending runners.

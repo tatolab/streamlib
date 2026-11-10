@@ -6365,9 +6365,6 @@ mod tests {
         for scaffolded_file in [
             PROJECT_FILE_NAME,
             "streams/main.graph.json",
-            "nodes/__init__.py",
-            "nodes/halftone_lens_effect.py",
-            "nodes/brightness_meter.py",
             "pyproject.toml",
             ".python-version",
             ".gitignore",

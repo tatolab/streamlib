@@ -60,9 +60,6 @@ SECOND_STREAM_WHOSE_NODE_MODULE_RAISES = {
 FILES_A_NEW_PROJECT_STARTS_WITH = (
     "tatolab-project.json",
     "streams/main.graph.json",
-    "nodes/__init__.py",
-    "nodes/halftone_lens_effect.py",
-    "nodes/brightness_meter.py",
     "pyproject.toml",
     ".python-version",
     ".gitignore",

@@ -22,17 +22,12 @@ const PIN_DEFAULT_ATTRIBUTE: &str = "pin_default";
 /// `node.rust_function(...)`.
 #[proc_macro_attribute]
 pub fn function_node(attribute: TokenStream, item: TokenStream) -> TokenStream {
-    if !attribute.is_empty() {
-        return syn::Error::new(
-            TokenStream2::from(attribute).span(),
-            "#[function_node] takes no arguments: the node's name is its function's, in \
-             UpperCamelCase, and its description its doc comment",
-        )
-        .to_compile_error()
-        .into();
-    }
+    let description = match function_node_description(TokenStream2::from(attribute)) {
+        Ok(description) => description,
+        Err(refusal) => return refusal.to_compile_error().into(),
+    };
     let function = parse_macro_input!(item as ItemFn);
-    match expand_function_node(function) {
+    match expand_function_node(function, description) {
         Ok(expanded) => expanded.into(),
         Err(refusal) => refusal.to_compile_error().into(),
     }
@@ -63,10 +58,47 @@ struct FunctionNodeInputPinDeclared {
     pin_default: Option<Expr>,
 }
 
-fn expand_function_node(mut function: ItemFn) -> syn::Result<TokenStream2> {
+/// The `&'static str` `#[function_node(description = …)]` declares, a string
+/// literal or the path of a `const`; `""` where none is declared. The node's
+/// name is its function's, in UpperCamelCase, and its doc comment is never
+/// its description.
+fn function_node_description(attribute: TokenStream2) -> syn::Result<TokenStream2> {
+    if attribute.is_empty() {
+        return Ok(quote! { "" });
+    }
+    let refusal = |span: proc_macro2::Span| {
+        syn::Error::new(
+            span,
+            "#[function_node] takes only `description = \"…\"` or `description = SOME_CONST`; \
+             the node's name is its function's, in UpperCamelCase",
+        )
+    };
+    let declared: syn::MetaNameValue =
+        syn::parse2(attribute.clone()).map_err(|_| refusal(attribute.span()))?;
+    if !declared.path.is_ident("description") {
+        return Err(refusal(declared.path.span()));
+    }
+    match &declared.value {
+        Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(literal),
+            ..
+        }) => Ok(quote! { #literal }),
+        Expr::Path(constant) => Ok(quote! {
+            {
+                const DECLARED_DESCRIPTION: &str = #constant;
+                DECLARED_DESCRIPTION
+            }
+        }),
+        other => Err(refusal(other.span())),
+    }
+}
+
+fn expand_function_node(
+    mut function: ItemFn,
+    description: TokenStream2,
+) -> syn::Result<TokenStream2> {
     refuse_a_signature_that_is_not_a_plain_function(&function)?;
     let function_name = function.sig.ident.clone();
-    let description = doc_comment_of(&function.attrs);
 
     let mut parameter_roles: Vec<FunctionNodeParameterRole> = Vec::new();
     let mut input_pins: Vec<FunctionNodeInputPinDeclared> = Vec::new();
@@ -473,26 +505,6 @@ fn take_the_pin_default(attributes: &mut Vec<Attribute>) -> syn::Result<Option<E
     }
     *attributes = kept_attributes;
     Ok(pin_default)
-}
-
-fn doc_comment_of(attributes: &[Attribute]) -> String {
-    attributes
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("doc"))
-        .filter_map(|attribute| match &attribute.meta {
-            syn::Meta::NameValue(name_value) => match &name_value.value {
-                Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(line),
-                    ..
-                }) => Some(line.value().trim().to_owned()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_owned()
 }
 
 fn upper_camel_case(snake_case_name: &str) -> String {

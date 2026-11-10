@@ -9,6 +9,7 @@ mod thread_priority;
 
 pub mod audio_window_contract;
 pub mod config_schema_document;
+pub mod description_lint;
 pub mod descriptors;
 pub mod error;
 pub mod exposed_name_cast;
@@ -30,7 +31,9 @@ pub use audio_window_contract::{
     AudioWindowContract, AudioWindowContractDeclaredValues,
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
-pub use config_schema_document::ProcessorConfigJsonSchema;
+pub use config_schema_document::{
+    ProcessorConfigJsonSchema, ProcessorConfigKeyDescribedBy, ProcessorConfigKeyDescription,
+};
 pub use error::{SchemaError, SchemaResult};
 pub use exposed_name_cast::{
     EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,

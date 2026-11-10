@@ -24,6 +24,7 @@ import typing
 from collections.abc import Mapping
 from typing import Any, Callable, NoReturn, Optional, ParamSpec, TypeVar, overload
 
+from ._description import refuse_a_description_that_is_not_a_string
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
@@ -326,7 +327,9 @@ class NodeDeclarationDecorator:
         Channels, `dict` is Records, and a read type is its family. `config`
         names the node's one config dataclass. A parameter typed `Time` is
         handed the stream time of the read; one typed `State[Record]` the state
-        the last call returned in its `Stateful[Output, Record]`. The decorated
+        the last call returned in its `Stateful[Output, Record]`. A port is
+        described on its annotation, `Annotated[float, Description("…")]`, and the
+        function's docstring is never the node's description. The decorated
         function is still called as itself.
         """
 
@@ -431,8 +434,9 @@ class NodeDeclarationDecorator:
 
         Decorating registers nothing: it stamps the declaration on the class, and
         the class reaches the node catalog when a stream that uses it loads.
-        `description` falls back to the class's docstring when it is not given,
-        and `category`, the palette category, to the class's module.
+        `description` is the node type's description, CommonMark with no raw HTML,
+        and the class's docstring never stands in for it. `category`, the palette
+        category, defaults to the class's module.
 
         `paced_by_real_time=True` declares a node that paces itself on real time,
         as a live device does. It loads in a stream on any clock: what it writes
@@ -501,7 +505,9 @@ def _declare_node(
     setattr(
         node_class,
         NODE_DECLARATION_DESCRIPTION_STAMP,
-        description or inspect.getdoc(node_class) or "",
+        refuse_a_description_that_is_not_a_string(
+            description, f"@node.process on {node_class.__name__}"
+        ),
     )
     setattr(node_class, NODE_DECLARATION_CATEGORY_STAMP, category or node_class.__module__)
     setattr(
