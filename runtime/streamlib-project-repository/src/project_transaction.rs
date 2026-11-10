@@ -128,6 +128,11 @@ pub enum ProjectAssetAction {
         asset: Uuid,
         import_settings: Map<String, Value>,
     },
+    /// Put new bytes at an asset's path, the asset keeping its UUID.
+    ReplaceAsset {
+        asset: Uuid,
+        source: ProjectAssetImportSource,
+    },
     /// Write a new stream asset's graph document at `path`, holding no node, shown as
     /// `display_name`.
     CreateStream { path: String, display_name: String },
@@ -161,6 +166,23 @@ pub enum ProjectAssetOperation {
         from: Map<String, Value>,
         to: Map<String, Value>,
     },
+    /// The asset's bytes at `path` were replaced: its sidecar records `to` where it recorded
+    /// `from`.
+    ReplaceAssetContent {
+        asset: Uuid,
+        path: ProjectRelativeAssetPath,
+        from: ProjectAssetContent,
+        to: ProjectAssetContent,
+    },
+}
+
+/// The bytes an asset's sidecar records: their SHA-256, lowercase hex, and their length.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectAssetContent {
+    /// The SHA-256 of the bytes, lowercase hex.
+    pub content_sha256: String,
+    /// The length of the bytes.
+    pub content_byte_len: u64,
 }
 
 impl ProjectAssetOperation {
@@ -189,6 +211,17 @@ impl ProjectAssetOperation {
                 from: to.clone(),
                 to: from.clone(),
             },
+            Self::ReplaceAssetContent {
+                asset,
+                path,
+                from,
+                to,
+            } => Self::ReplaceAssetContent {
+                asset: *asset,
+                path: path.clone(),
+                from: to.clone(),
+                to: from.clone(),
+            },
         }
     }
 
@@ -200,6 +233,7 @@ impl ProjectAssetOperation {
             Self::DeleteAsset { asset } => format!("delete_asset {}", asset.path),
             Self::RelocateAsset { from, to, .. } => format!("relocate_asset {from} -> {to}"),
             Self::SetAssetSettings { asset, .. } => format!("set_asset_settings {asset}"),
+            Self::ReplaceAssetContent { path, .. } => format!("replace_asset {path}"),
         }
     }
 }

@@ -559,8 +559,8 @@ and the folder of its own log — to observe; `add_node`, `connect`, `disconnect
 that does not run, and `reload_project`, which queues a re-read from disk of one that does,
 each answering at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
-same way, and `list_assets`, `describe_asset`, `import_asset`, `move_asset`, `rename_asset` and
-`delete_asset` over the project's assets, and `create_stream`, `delete_stream` and
+same way, and `list_assets`, `describe_asset`, `import_asset`, `relocate_asset`, `replace_asset`,
+`set_asset_settings` and `delete_asset` over the project's assets, and `create_stream`, `delete_stream` and
 `set_stream_display_name` over its streams; `stop_project`, which stops a whole project until
 `start_project` starts it again, `pause_project` and `resume_project`, which pause and resume a
 whole project at once, `remove_project`, `set_stream_clock_scale` and

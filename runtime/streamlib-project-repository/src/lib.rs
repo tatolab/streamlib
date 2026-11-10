@@ -65,10 +65,10 @@ pub use project_stream_document::{
 pub use project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
-    ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
-    ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphOperationOnAStream,
+    ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles,
+    ProjectImportOperation, ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
+    ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
 pub use project_views::{
     PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,

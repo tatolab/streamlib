@@ -607,3 +607,48 @@ async fn an_authorless_edit_over_mcp_and_mcp_stdio_is_recorded_under_the_request
         );
     }
 }
+
+/// `replace_asset` puts new bytes at an asset's path under the same UUID, and its undo puts
+/// the earlier bytes and sidecar back.
+#[tokio::test]
+async fn a_replaced_asset_keeps_its_uuid_and_its_undo_restores_the_earlier_take() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let take_one = served.a_file_outside_the_project("take-one.mp4", b"take one");
+    let imported = served
+        .answered(
+            "import_asset",
+            json!({ "source": take_one, "asset_path": "media/intro.mp4" }),
+        )
+        .await;
+    let asset = imported["asset"]["asset"].as_str().unwrap().to_owned();
+    let take_two = served.a_file_outside_the_project("take-two.mp4", b"take two, longer");
+
+    let replaced = served
+        .answered(
+            "replace_asset",
+            json!({ "asset": asset, "source": take_two }),
+        )
+        .await;
+
+    assert_eq!(replaced["asset"]["asset"], asset.as_str());
+    assert_eq!(replaced["asset"]["path"], "media/intro.mp4");
+    assert_eq!(replaced["asset"]["content_byte_len"], 16);
+    assert_ne!(
+        replaced["asset"]["content_sha256"],
+        imported["asset"]["content_sha256"]
+    );
+    let file = served.project_directory().join("media/intro.mp4");
+    assert_eq!(std::fs::read(&file).unwrap(), b"take two, longer");
+    assert_eq!(
+        served.history_subjects_newest_first()[0],
+        "replace_asset media/intro.mp4"
+    );
+
+    served.answered("undo", json!({})).await;
+
+    let described = served
+        .answered("describe_asset", json!({ "asset": asset }))
+        .await;
+    assert_eq!(described["asset"], imported["asset"]);
+    assert_eq!(std::fs::read(&file).unwrap(), b"take one");
+}

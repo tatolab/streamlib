@@ -199,6 +199,24 @@ struct SetAssetSettingsToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
+struct ReplaceAssetToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    asset: String,
+    #[schemars(
+        description = "Where the new bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of an upload in the project's `.tatolab/uploads/`."
+    )]
+    source: String,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct CreateStreamToolArguments {
     #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
@@ -425,6 +443,34 @@ impl LocalApiMcpServerHandler {
         )
         .await
     }
+    #[tool(
+        description = "Put new bytes at an asset's path as one transaction: the asset keeps its UUID, path, kind and settings, so every node referencing it reads the new bytes at its next load, and its sidecar records their SHA-256 and size. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there. The bytes replaced are kept as an upload under their SHA-256, so an undo puts them back with the earlier sidecar; history records the sidecar alone. A file replaced outside the runtime is not supported. Answers the asset as it now is, with the `transaction` and `commit`; bytes the sidecar already records apply nothing and are refused as an empty transaction. Refused for a stream asset, whose graph document graph edits change."
+    )]
+    async fn replace_asset(
+        &self,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(ReplaceAssetToolArguments {
+            project_directory,
+            asset,
+            source,
+            author,
+            idempotency_key,
+        }): Parameters<ReplaceAssetToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "replace_asset",
+            project_directory,
+            the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
+            ProjectAssetAction::ReplaceAsset {
+                asset: the_asset_a_call_names("replace_asset", &asset)?,
+                source: ProjectAssetImportSource::try_from(source)
+                    .map_err(|refusal| format!("replace_asset failed: {refusal}"))?,
+            },
+        )
+        .await
+    }
+
     #[tool(
         description = "Create a stream in the project as one transaction: a new stream asset, its graph document written at `path` holding no nodes, its UUID, which the runtime makes, and its `display_name`. While the project runs, the new stream is loaded on the project's queue and the answer carries that load's `action`, which `describe_stream_action` follows. Answers the stream asset as `asset`, with the `transaction` and `commit`; an undo takes the document out and unloads the stream. Refused for a path another file holds or outside the project, and a blank `display_name`."
     )]
