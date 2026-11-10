@@ -32,7 +32,7 @@ jobs:
       # `cmake` and `ninja-build` build aws-lc-sys's C. Explicit rather than
       # leaning on the runner image having either, whose contents move.
       - name: Install system dependencies
-        timeout-minutes: 12
+        timeout-minutes: 15
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
           packages: >-

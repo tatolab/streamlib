@@ -789,6 +789,33 @@ mod tests {
         }
     }
 
+    impl BoundedRetryScriptHarness {
+        /// A `.deb` cache directory beside the fixtures, holding the given
+        /// file names, which the script only ever passes to the apt fixture.
+        fn deb_cache_directory_holding(&self, deb_file_names: &[&str]) -> PathBuf {
+            let deb_cache_directory = self._temp.path().join("deb-cache");
+            fs::create_dir_all(&deb_cache_directory).unwrap();
+            for deb_file_name in deb_file_names {
+                fs::write(deb_cache_directory.join(deb_file_name), "").unwrap();
+            }
+            deb_cache_directory
+        }
+
+        fn run_with_deb_cache_directory(
+            &self,
+            deb_cache_directory: &Path,
+        ) -> BoundedRetryScriptRun {
+            self.run_with_environment(&[
+                ("STREAMLIB_APT_PRIVILEGE_PREFIX", "".as_ref()),
+                ("STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS", "5".as_ref()),
+                (
+                    "STREAMLIB_APT_DEB_CACHE_DIRECTORY",
+                    deb_cache_directory.as_os_str(),
+                ),
+            ])
+        }
+    }
+
     struct BoundedRetryScriptRun {
         succeeded: bool,
         invocation_log: String,
@@ -829,6 +856,12 @@ mod tests {
     const FAIL_THE_INSTALL_OUTRIGHT: &str = "\
         if [ \"$1\" = update ]; then exit 0; fi\n\
         exit 100\n";
+
+    /// Refuses the offline install, as apt does when the cached `.debs` no
+    /// longer cover what the image needs, and succeeds on the network.
+    const REFUSE_THE_INSTALL_WITHOUT_THE_NETWORK: &str = "\
+        case \" $* \" in *' Acquire::http::Proxy=http://127.0.0.1:9 '*) exit 100 ;; esac\n\
+        exit 0\n";
 
     fn apt_fixture(body: &str) -> String {
         format!("#!/usr/bin/env bash\n{LOG_THE_WHOLE_INVOCATION}\n{body}")
@@ -1038,6 +1071,79 @@ mod tests {
             count_of(log, "install"),
             0,
             "a failed update must not be followed by an install; log:\n{log}"
+        );
+    }
+
+    #[test]
+    fn cached_debs_that_install_offline_never_reach_a_mirror() {
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture("exit 0\n"));
+        let deb_cache_directory =
+            harness.deb_cache_directory_holding(&["protobuf-compiler_3.21_amd64.deb"]);
+        let run = harness.run_with_deb_cache_directory(&deb_cache_directory);
+        let log = &run.invocation_log;
+
+        assert!(run.succeeded, "the cached .debs must install; log:\n{log}");
+        assert_eq!(count_of(log, "update"), 0, "log:\n{log}");
+        assert_eq!(count_of(log, "install"), 1, "log:\n{log}");
+        let offline_install = log.lines().next().unwrap_or_default();
+        assert!(
+            offline_install.contains("Acquire::http::Proxy=http://127.0.0.1:9")
+                && offline_install.contains("protobuf-compiler_3.21_amd64.deb"),
+            "the install must hand apt the cached .debs and forbid a fetch; log:\n{log}"
+        );
+    }
+
+    #[test]
+    fn cached_debs_apt_refuses_fall_back_to_the_mirror_downloading_into_the_cache() {
+        let harness =
+            BoundedRetryScriptHarness::new(&apt_fixture(REFUSE_THE_INSTALL_WITHOUT_THE_NETWORK));
+        let deb_cache_directory =
+            harness.deb_cache_directory_holding(&["protobuf-compiler_3.21_amd64.deb"]);
+        let run = harness.run_with_deb_cache_directory(&deb_cache_directory);
+        let log = &run.invocation_log;
+
+        assert!(run.succeeded, "the mirror must still install; log:\n{log}");
+        assert!(
+            log.contains("dpkg-repaired"),
+            "a refused offline install is repaired before the mirror; log:\n{log}"
+        );
+        assert_eq!(count_of(log, "update"), 1, "log:\n{log}");
+        assert_eq!(count_of(log, "install"), 2, "log:\n{log}");
+        let archives_option = format!("Dir::Cache::Archives={}/", deb_cache_directory.display());
+        let network_install = log
+            .lines()
+            .filter(|line| {
+                line.starts_with("install")
+                    && !line.contains("Acquire::http::Proxy=http://127.0.0.1:9")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            network_install.len() == 1 && network_install[0].contains(&archives_option),
+            "the network install must download into the cache; log:\n{log}"
+        );
+        assert_eq!(
+            count_of(log, "autoclean"),
+            1,
+            "the cache is pruned to what the mirror still offers; log:\n{log}"
+        );
+    }
+
+    #[test]
+    fn an_empty_deb_cache_goes_straight_to_the_mirror() {
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture("exit 0\n"));
+        let deb_cache_directory = harness.deb_cache_directory_holding(&[]);
+        let run = harness.run_with_deb_cache_directory(&deb_cache_directory);
+        let log = &run.invocation_log;
+
+        assert!(run.succeeded, "log:\n{log}");
+        assert!(
+            !log.contains("Acquire::http::Proxy=http://127.0.0.1:9"),
+            "nothing cached means no offline attempt; log:\n{log}"
+        );
+        assert_eq!(count_of(log, "update"), 1, "log:\n{log}");
+        assert!(
+            deb_cache_directory.join("partial").is_dir(),
+            "apt refuses an archives directory without partial/"
         );
     }
 }
