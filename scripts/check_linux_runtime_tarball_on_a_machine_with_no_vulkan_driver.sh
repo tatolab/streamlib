@@ -81,6 +81,14 @@ tatolab_executable="$runtime_unit_root/bin/tatolab"
 
 # Copied with its LICENSE symlink resolved: the workspace is mounted read-only.
 cp -rL /workspace/sdk/tatolab-stream /tmp/tatolab-stream-source
+python3 -m pip install --quiet uv
+python3 -m uv build --quiet --wheel --out-dir /tmp/tatolab-stream-wheel /tmp/tatolab-stream-source
+
+# The runtime syncs the project's venv on the load, and the scaffold requires
+# the `tatolab-stream` this runtime was built beside and the modules this run
+# built, which no index carries before the release publishes them. uv reads
+# this comma-separated list from the environment the sync inherits.
+export UV_FIND_LINKS=/tmp/tatolab-stream-wheel,/first-party-module-distributions
 
 "$tatolabd_executable" >/tmp/tatolabd.log 2>&1 &
 tatolabd_pid=$!
@@ -100,11 +108,9 @@ until "$tatolab_executable" streams >/dev/null 2>&1; do
 done
 
 # The venv is made first, from this checkout's `tatolab-stream`, so the load
-# `tatolab new` queues finds an interpreter that runs and syncs nothing. uv
-# brings the CPython 3.12 `requires-python` floors it at: Ubuntu 22.04's own
-# python3 is 3.10.
+# `tatolab new` queues finds an interpreter that runs. uv brings the CPython
+# 3.12 `requires-python` floors it at: Ubuntu 22.04's own python3 is 3.10.
 mkdir -p /tmp/stream-on-the-software-device
-python3 -m pip install --quiet uv
 python3 -m uv venv --quiet --seed --python 3.12 /tmp/stream-on-the-software-device/.venv
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
 /tmp/stream-on-the-software-device/.venv/bin/pip install --quiet \
