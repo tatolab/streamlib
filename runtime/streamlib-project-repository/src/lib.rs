@@ -71,8 +71,9 @@ pub use project_transaction::{
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
     ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectFileContent,
     ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
+    ProjectSettingsAction, ProjectSettingsOperation, ProjectStreamDocumentOperation,
+    ProjectTransaction, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionLineage, ProjectTransactionReversal, ProjectTransactionUndoState,
     StreamGraphOperationOnAStream,
 };
 pub use project_views::{

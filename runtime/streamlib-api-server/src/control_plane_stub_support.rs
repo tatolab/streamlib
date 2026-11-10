@@ -23,6 +23,19 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
                 )))
             })
         }
+        fn write_a_value_onto_an_output_of_a_view_node(
+            &self,
+            node_id: String,
+            port_name: String,
+            _value: ::serde_json::Value,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            Box::pin(async move {
+                Err(::streamlib::sdk::error::Error::Link(format!(
+                    "the stub stream runs no view node `{node_id}`, so its output `{port_name}` \
+                     takes no value"
+                )))
+            })
+        }
     };
 }
 pub(crate) use every_reserved_slot_reader_is_unreachable;
@@ -377,6 +390,14 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "remove_project",
+                ))
+            }
+            fn delete_project(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "delete_project",
                 ))
             }
             fn pause_project(

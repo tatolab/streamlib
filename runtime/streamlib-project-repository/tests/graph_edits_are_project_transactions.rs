@@ -5,9 +5,10 @@ use serde_json::{Map, json};
 use streamlib_project_repository::{
     ProjectAssetAction, ProjectAssetImportSource, ProjectOperation, ProjectRepository,
     ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionLineage, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphOperation,
-    StreamGraphOperationOnAStream, fragment_with_each_node_uuid_kept_by_its_name,
+    ProjectTransactionLineage, ProjectTransactionUndoState, StreamGraphDocumentLink,
+    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
+    StreamGraphOperation, StreamGraphOperationOnAStream,
+    fragment_with_each_node_uuid_kept_by_its_name,
 };
 use uuid::Uuid;
 
@@ -303,6 +304,69 @@ fn a_new_edit_after_an_undo_leaves_nothing_to_redo() {
         project.redo(&agent),
         Err(ProjectRepositoryRefusal::NothingToRedo { .. })
     ));
+}
+
+#[test]
+fn each_edit_and_redo_carries_where_it_stands_with_its_authors_undo_and_redo() {
+    let mut project = ProjectHoldingOneStream::new();
+    let person = an_author(ProjectTransactionAuthorKind::Person, "Jo");
+    let agent = an_author(ProjectTransactionAuthorKind::Agent, "rig agent");
+    for name in ["kept", "undone"] {
+        project
+            .apply(
+                &person,
+                vec![project.on_the_stream(add(&a_node(name, json!({}))))],
+            )
+            .unwrap();
+    }
+    project.undo(&person).unwrap();
+    project.redo(&person).unwrap();
+    project.undo(&person).unwrap();
+    project
+        .apply(
+            &agent,
+            vec![project.on_the_stream(add(&a_node("replaced", json!({}))))],
+        )
+        .unwrap();
+    project.undo(&agent).unwrap();
+    project
+        .apply(
+            &agent,
+            vec![project.on_the_stream(add(&a_node("replacement", json!({}))))],
+        )
+        .unwrap();
+
+    let mut oldest_first = project
+        .repository
+        .applied_transactions_newest_first(usize::MAX)
+        .unwrap();
+    oldest_first.reverse();
+    let undo_state_of_each_transaction = project
+        .repository
+        .the_undo_state_of_each_transaction()
+        .unwrap();
+    let undo_states_oldest_first: Vec<Option<ProjectTransactionUndoState>> = oldest_first
+        .iter()
+        .map(|applied| {
+            undo_state_of_each_transaction
+                .get(&applied.transaction.transaction)
+                .copied()
+        })
+        .collect();
+
+    assert_eq!(
+        undo_states_oldest_first,
+        vec![
+            Some(ProjectTransactionUndoState::Applied),
+            Some(ProjectTransactionUndoState::UndoneRedoable),
+            None,
+            Some(ProjectTransactionUndoState::UndoneRedoable),
+            None,
+            Some(ProjectTransactionUndoState::UndoneNotRedoable),
+            None,
+            Some(ProjectTransactionUndoState::Applied),
+        ]
+    );
 }
 
 #[test]

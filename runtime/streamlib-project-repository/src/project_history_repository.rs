@@ -86,6 +86,17 @@ impl ProjectHistoryRepository {
         Ok(self.head_commit_oid()?.map(|oid| oid.to_string()))
     }
 
+    /// When the commit `main` points at was made, in whole seconds since the Unix epoch, `None`
+    /// before the first commit.
+    pub fn head_committed_at_unix_seconds(&self) -> Result<Option<i64>, ProjectRepositoryRefusal> {
+        let Some(head_oid) = self.head_commit_oid()? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            self.repository.find_commit(head_oid)?.time().seconds(),
+        ))
+    }
+
     /// Commit `tracked_files` — each a project-relative path and its bytes — as the whole tree on `main`.
     pub fn commit_tracked_files(
         &self,
