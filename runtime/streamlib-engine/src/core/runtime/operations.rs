@@ -108,6 +108,16 @@ pub trait RuntimeOperations: Send + Sync {
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
 
+    /// Hand `value` to the StudioView node whose UUID is `node_id`, which publishes it on its
+    /// output `port_name`. Nothing written is recorded. Refused for a node that is no running
+    /// StudioView, an output it lacks, and a value its family does not take.
+    fn write_a_studio_view_output(
+        &self,
+        node_id: String,
+        port_name: String,
+        value: serde_json::Value,
+    ) -> BoxFuture<'_, Result<()>>;
+
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)
     // =========================================================================

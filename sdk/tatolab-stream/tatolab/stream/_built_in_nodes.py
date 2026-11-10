@@ -26,6 +26,8 @@ __all__ = [
     "ImageToArrayConfig",
     "RecordsToChannels",
     "RecordsToChannelsConfig",
+    "StudioView",
+    "StudioViewConfig",
 ]
 
 
@@ -231,3 +233,30 @@ class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:RecordsToChannels"
+
+
+class _StudioViewConfigRequiredKeys(TypedDict):
+    """The keys `StudioView`'s config cannot leave out."""
+
+    view_type: str
+    """The view the node shows, `<project name>:<view folder>`, as `list_project_views`
+    lists it.
+    """
+
+
+class StudioViewConfig(_StudioViewConfigRequiredKeys, total=False):
+    """`StudioView`'s config: the keys `stream_builder.add` takes."""
+
+
+class StudioView(BuiltInNode[StudioViewConfig]):
+    """A Tato Studio view on the canvas. Its inputs and outputs are the ones the view's
+    `tatolab_view.json` declares, each of its declared family, read from the project and
+    its imports when the node loads; its other config keys are the view's settings. A
+    panel reads an input through `open_viewer` on the port linked into it, and writes an
+    output with `write_studio_view_output`, which the node publishes on that port. A
+    written value is live data: nothing written is recorded.
+
+    Config: `StudioViewConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.studio:StudioView"

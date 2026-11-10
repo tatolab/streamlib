@@ -44,6 +44,7 @@ pub mod rhi;
 pub mod runtime;
 pub mod shared_native_services;
 pub mod stable_short_id;
+pub mod studio_view;
 pub mod supervised_child_process;
 pub mod texture;
 pub mod unix_socket_path_cleared_for_bind;

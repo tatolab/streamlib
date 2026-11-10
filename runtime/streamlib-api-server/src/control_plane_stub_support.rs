@@ -4,7 +4,7 @@
 //! Shared test scaffolding for the control plane's two front ends and for
 //! the tests that assert on what it logs.
 
-/// The viewer a control-plane stub never opens.
+/// The viewer a control-plane stub never opens, and the StudioView output it never publishes on.
 macro_rules! every_reserved_slot_reader_is_unreachable {
     ($surface:literal) => {
         fn open_a_viewer_of_an_output_port(
@@ -20,6 +20,19 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
                 Err(::streamlib::sdk::error::Error::Link(format!(
                     "the stub stream runs no node `{node_id}`, so port `{port_name}` has \
                      nothing to view"
+                )))
+            })
+        }
+        fn write_a_studio_view_output(
+            &self,
+            node_id: String,
+            port_name: String,
+            _value: ::serde_json::Value,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            Box::pin(async move {
+                Err(::streamlib::sdk::error::Error::Link(format!(
+                    "the stub stream runs no node `{node_id}`, so its output `{port_name}` \
+                     publishes nothing"
                 )))
             })
         }

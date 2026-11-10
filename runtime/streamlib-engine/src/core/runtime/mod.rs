@@ -35,6 +35,7 @@ mod stream_environment;
 mod stream_graph_operation_applied_live;
 mod stream_location_and_id;
 mod stream_step_coordinator;
+mod studio_view_output_write;
 
 pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_source::{
     ImportedProjectPythonSources, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,

@@ -3321,3 +3321,198 @@ async fn a_project_imported_into_a_folder_that_exists_is_refused() {
         "{refusal}"
     );
 }
+
+// ============================================================================
+// A StudioView node: what a panel writes reaches the node linked from it
+// ============================================================================
+
+/// Each `value` attribute the [`StudioViewTestSink`] read, in the order it read them.
+static VALUES_THE_STUDIO_VIEW_TEST_SINK_READ: std::sync::Mutex<Vec<Vec<f64>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// A native sink that keeps the `value` attribute of each Array frame on `level`.
+#[streamlib::sdk::processor(
+    execution = reactive,
+    input("level", family = Array, delivery_profile = "ordered"),
+)]
+pub struct StudioViewTestSink;
+
+impl streamlib::sdk::processors::ReactiveProcessor for StudioViewTestSink::Processor {
+    fn process(
+        &mut self,
+        _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        use streamlib::sdk::iceoryx2::{
+            ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, array_frame_attribute_table_of,
+        };
+        while let Some(message) = self.inputs.read_raw("level")? {
+            let payload = message.payload.bytes();
+            let Ok(rows) = array_frame_attribute_table_of(
+                ArrayFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body),
+                payload,
+            ) else {
+                continue;
+            };
+            for row in rows.iter().filter(|row| row.name == "value") {
+                if let ArrayFrameAttributeResidency::Cpu {
+                    payload_byte_offset,
+                    byte_len,
+                } = row.residency
+                {
+                    let data = &payload
+                        [payload_byte_offset as usize..(payload_byte_offset + byte_len) as usize];
+                    VALUES_THE_STUDIO_VIEW_TEST_SINK_READ.lock().unwrap().push(
+                        data.as_chunks::<8>()
+                            .0
+                            .iter()
+                            .map(|element| f64::from_le_bytes(*element))
+                            .collect(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn register_the_studio_view_test_sink_once() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| PROCESSOR_REGISTRY.register::<StudioViewTestSink::Processor>());
+}
+
+/// The commits the project's history holds, or `None` while it keeps none.
+fn the_commits_of_the_history_of(project_directory: &Path) -> Option<String> {
+    let history = project_directory.join(".tatolab").join("history.git");
+    if !history.exists() {
+        return None;
+    }
+    let listed = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(&history)
+        .args(["rev-list", "--all"])
+        .output()
+        .expect("git lists the history's commits");
+    Some(String::from_utf8(listed.stdout).expect("commit ids are text"))
+}
+
+/// A project's stream holding a StudioView `deck`, whose `fader` output links into a sink: what
+/// a client writes onto `fader` reaches the sink while the stream runs, the last write read
+/// last, and neither the graph document nor the project's history changes.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+async fn what_a_client_writes_onto_a_studio_view_output_reaches_the_node_linked_from_it() {
+    register_the_studio_view_test_sink_once();
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let deck_id = Uuid::new_v4();
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [
+            {
+                "id": deck_id, "name": "deck", "type": "tatolab.studio:StudioView",
+                "config": { "view_type": format!("{TEST_PROJECT_NAME}:deck") },
+            },
+            {
+                "id": Uuid::new_v4(), "name": "sink",
+                "type": StudioViewTestSink::processor_class_import_path().as_str(), "config": {},
+            },
+        ],
+        "links": [{
+            "source": { "node": "deck", "port": "fader" },
+            "target": { "node": "sink", "port": "level" },
+        }],
+    }));
+    a_view_folder_in(
+        project.path(),
+        "deck",
+        &json!({
+            "contract": "1.0", "title": "DJ Deck", "entry": "index.html", "placement": "node",
+            "outputs": [{ "name": "fader", "family": "array", "range": [0, 1] }],
+        }),
+    );
+    let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
+    let client = rmcp_client_over_the_upgraded_stream(&served).await;
+    let started = the_run_over_the_connection_once_finished(
+        "start_project",
+        &client,
+        &engine.operations_on_the_loaded_streams(),
+        project.path(),
+    )
+    .await;
+    assert_eq!(the_one_stream_of(&started)["state"], "running", "{started}");
+    let stream = project.stream_id_of("main");
+    let graph_document = project.path().join("streams").join("main.graph.json");
+    let document_before = std::fs::read(&graph_document).expect("the graph document");
+    let history_before = the_commits_of_the_history_of(project.path());
+    let write = |value: Value| {
+        let arguments =
+            json!({ "stream": stream, "node": deck_id, "port": "fader", "value": value });
+        let client = &client;
+        async move {
+            tool_answer(
+                &tool_call_over_the_connection(client, "write_studio_view_output", arguments).await,
+            )
+        }
+    };
+    let the_sink_reads = |expected: f64| async move {
+        let gave_up_at = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if VALUES_THE_STUDIO_VIEW_TEST_SINK_READ.lock().unwrap().last() == Some(&vec![expected])
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < gave_up_at,
+                "the sink never read {expected}: it read {:?}",
+                VALUES_THE_STUDIO_VIEW_TEST_SINK_READ.lock().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+
+    let written = write(json!(0.5)).await.expect("the write is taken");
+    assert_eq!(
+        written,
+        json!({ "stream": stream, "node": deck_id.to_string(), "port": "fader" })
+    );
+    the_sink_reads(0.5).await;
+    write(json!(0.1)).await.unwrap();
+    write(json!(0.9)).await.unwrap();
+    the_sink_reads(0.9).await;
+
+    let not_an_output = write(json!({ "nope": "a string" }))
+        .await
+        .expect_err("an Array output takes numbers");
+    assert!(
+        not_an_output.contains("write_studio_view_output failed")
+            && not_an_output.contains("output `fader`"),
+        "{not_an_output}"
+    );
+    assert_eq!(
+        std::fs::read(&graph_document).expect("the graph document"),
+        document_before,
+        "a write is never recorded in the graph document"
+    );
+    assert_eq!(
+        the_commits_of_the_history_of(project.path()),
+        history_before,
+        "a write is never recorded in the project's history"
+    );
+
+    let removed = tool_answer(
+        &tool_call_over_the_connection(
+            &client,
+            "remove_project",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .unwrap();
+    the_stream_action_once_finished(
+        &engine.operations_on_the_loaded_streams(),
+        removed["action"].as_str().unwrap(),
+    )
+    .await;
+}

@@ -240,14 +240,31 @@ pub type DynamicProcessorConstructorFn =
 
 /// Refuse a config the type's own `Config` would not take, naming the node,
 /// its type and the setting.
-type NodeConfigTakenCheckFn =
+pub(crate) type NodeConfigTakenCheckFn =
     Box<dyn Fn(&str, &ProcessorClassImportPath, &serde_json::Value) -> Result<()> + Send + Sync>;
+
+/// The node a type that gives each node its own ports resolves them for.
+pub struct NodeWhosePortsItsTypeResolves<'node> {
+    /// The node's name, which a refusal names it by.
+    pub node_name: &'node str,
+    /// The node's config, which the ports are read from.
+    pub config: &'node serde_json::Value,
+    /// The directory of the project the node's stream loads from, when it has one.
+    pub project_directory: Option<&'node std::path::Path>,
+}
+
+/// The input and output ports one node of a type that gives each node its own ports takes.
+pub(crate) type PortsEachNodeOfItsTypeTakesFn = Box<
+    dyn Fn(&NodeWhosePortsItsTypeResolves<'_>) -> Result<(Vec<PortInfo>, Vec<PortInfo>)>
+        + Send
+        + Sync,
+>;
 
 /// What the factory stores for one host-compiled Rust type: its constructor,
 /// and the check that refuses a config its `Config` would not take.
-struct HostCompiledRustTypeRegistration {
-    constructor: DynamicProcessorConstructorFn,
-    config_taken_check: NodeConfigTakenCheckFn,
+pub(crate) struct HostCompiledRustTypeRegistration {
+    pub(crate) constructor: DynamicProcessorConstructorFn,
+    pub(crate) config_taken_check: NodeConfigTakenCheckFn,
 }
 
 /// The natively compiled node types, registered once for the machine.
@@ -264,6 +281,8 @@ struct HostCompiledRustTypeRegistration {
 pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<ProcessorClassImportPath, HostCompiledRustTypeRegistration>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
+    /// The types whose every node takes its own ports, each with what resolves them.
+    ports_each_node_takes: RwLock<HashMap<ProcessorClassImportPath, PortsEachNodeOfItsTypeTakesFn>>,
     descriptors: RwLock<HashMap<ProcessorClassImportPath, ProcessorDescriptor>>,
     /// Each former built-in node type, with the module node that replaced it.
     built_in_node_types_moved_to_modules:
@@ -280,11 +299,15 @@ struct ModuleNodeThatReplacedABuiltIn {
 
 /// The machine's registry of natively compiled node types.
 ///
-/// Starts empty, and is filled by [`ProcessorInstanceFactory::register`]. A
+/// Starts holding the engine's own StudioView node type, and is filled by
+/// [`ProcessorInstanceFactory::register`]. A
 /// type a processor interpreter describes belongs to the stream it was
 /// described into, never here.
-pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
-    LazyLock::new(ProcessorInstanceFactory::new);
+pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> = LazyLock::new(|| {
+    let factory = ProcessorInstanceFactory::new();
+    crate::core::studio_view::register_the_studio_view_node_type(&factory);
+    factory
+});
 
 impl Default for ProcessorInstanceFactory {
     fn default() -> Self {
@@ -297,6 +320,7 @@ impl ProcessorInstanceFactory {
         Self {
             registrations: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
+            ports_each_node_takes: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
             built_in_node_types_moved_to_modules: RwLock::new(HashMap::new()),
         }
@@ -358,6 +382,34 @@ impl ProcessorInstanceFactory {
             },
         )?;
         Ok(processor_class_import_path)
+    }
+
+    /// Register a natively compiled type whose every node takes its own ports, which
+    /// `ports_each_node_takes` resolves from the node; `descriptor` declares none.
+    pub(crate) fn register_a_native_type_whose_every_node_takes_its_own_ports(
+        &self,
+        descriptor: ProcessorDescriptor,
+        registration: HostCompiledRustTypeRegistration,
+        ports_each_node_takes: PortsEachNodeOfItsTypeTakesFn,
+    ) -> Result<()> {
+        let node_type = descriptor.processor_class_import_path.clone();
+        self.register_with_constructor(descriptor, registration)?;
+        self.ports_each_node_takes
+            .write()
+            .insert(node_type, ports_each_node_takes);
+        Ok(())
+    }
+
+    /// The ports `node` takes when its type gives each node its own; `None` for any other type.
+    pub fn ports_a_node_of_its_type_takes(
+        &self,
+        node_type: &ProcessorClassImportPath,
+        node: &NodeWhosePortsItsTypeResolves<'_>,
+    ) -> Option<Result<(Vec<PortInfo>, Vec<PortInfo>)>> {
+        self.ports_each_node_takes
+            .read()
+            .get(node_type)
+            .map(|ports_each_node_takes| ports_each_node_takes(node))
     }
 
     /// Register `registration` under `descriptor`'s import path, refusing a

@@ -17,7 +17,7 @@ use streamlib_processor_schema::{
 
 use super::read_mode::ReadMode;
 use crate::core::error::{Error, Result};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::graph::PortInfo;
 
 /// The legal `delivery_profile` values as a quoted, comma-joined list.
 fn render_delivery_profile_values() -> String {
@@ -112,16 +112,16 @@ impl DeliveryProfile {
 /// input port carrying no declaration is a wiring error, not a silent
 /// substitution.
 ///
-/// Falls back to [`DeliveryProfile::Newest`] when the destination processor
-/// type isn't registered or the named port doesn't exist (defensive; a Wired
+/// Falls back to [`DeliveryProfile::Newest`] when the destination's input
+/// ports are not resolved or the named port doesn't exist (defensive; a Wired
 /// link always resolves both — the wiring path itself reports the missing
 /// processor).
 pub(crate) fn delivery_profile_for_input_port(
-    node_types: &NodeTypesOneStreamResolves,
+    input_ports_of_the_destination: Option<&[PortInfo]>,
     processor_type: &ProcessorClassImportPath,
     port_name: &str,
 ) -> Result<DeliveryProfile> {
-    let Some((inputs, _outputs)) = node_types.port_info(processor_type) else {
+    let Some(inputs) = input_ports_of_the_destination else {
         return Ok(DeliveryProfile::Newest);
     };
     let Some(port) = inputs.iter().find(|p| p.name == port_name) else {
@@ -202,10 +202,18 @@ mod tests {
             PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
         };
         use crate::core::error::Error;
+        use crate::core::graph::PortInfo;
         use crate::core::processors::{NodeTypesOneStreamResolves, PROCESSOR_REGISTRY};
 
         fn class_path(type_name: &str) -> ProcessorClassImportPath {
             ProcessorClassImportPath::new(format!("{}::{type_name}", module_path!())).unwrap()
+        }
+
+        /// The input ports `ident` declares, as a stream resolves them.
+        fn the_input_ports_of(ident: &ProcessorClassImportPath) -> Option<Vec<PortInfo>> {
+            NodeTypesOneStreamResolves::new()
+                .port_info(ident)
+                .map(|(inputs, _outputs)| inputs)
         }
 
         /// Registers a processor carrying one input port, optionally declaring a
@@ -248,7 +256,7 @@ mod tests {
             let unknown = class_path("NothingRegisteredUnderThisPath");
             assert_eq!(
                 delivery_profile_for_input_port(
-                    &NodeTypesOneStreamResolves::new(),
+                    the_input_ports_of(&unknown).as_deref(),
                     &unknown,
                     "video_in"
                 )
@@ -263,7 +271,7 @@ mod tests {
                 register_processor_with_one_input_port("OrderedSink", "video_in", Some("ordered"));
             assert_eq!(
                 delivery_profile_for_input_port(
-                    &NodeTypesOneStreamResolves::new(),
+                    the_input_ports_of(&ident).as_deref(),
                     &ident,
                     "video_in"
                 )
@@ -279,7 +287,7 @@ mod tests {
         fn missing_declaration_is_a_wiring_error_naming_the_port() {
             let ident = register_processor_with_one_input_port("SampleSink", "audio_in", None);
             let err = delivery_profile_for_input_port(
-                &NodeTypesOneStreamResolves::new(),
+                the_input_ports_of(&ident).as_deref(),
                 &ident,
                 "audio_in",
             )
@@ -303,7 +311,7 @@ mod tests {
                 Some("skip_to_latest"), // retired knob, not a profile
             );
             let err = delivery_profile_for_input_port(
-                &NodeTypesOneStreamResolves::new(),
+                the_input_ports_of(&ident).as_deref(),
                 &ident,
                 "video_in",
             )

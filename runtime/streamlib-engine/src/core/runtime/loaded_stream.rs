@@ -254,7 +254,9 @@ impl LoadedStreamInThisRuntime {
             stream_id: stream_id.clone(),
             stream_tag,
         };
-        let node_types_this_stream_resolves = Arc::new(NodeTypesOneStreamResolves::new());
+        let node_types_this_stream_resolves = Arc::new(
+            NodeTypesOneStreamResolves::of_the_project_in(resolved_project_directory.clone()),
+        );
         let compiler = Arc::new(Compiler::new_resolving_node_types_through(Arc::clone(
             &node_types_this_stream_resolves,
         )));

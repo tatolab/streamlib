@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The view listing: every Tato Studio view a project and its imports bring in their `views/`.
+//! The Tato Studio view tools: the listing of every view a project and its imports bring in
+//! their `views/`, and the write of a panel's value onto a StudioView node's output.
 
 use std::path::PathBuf;
 
@@ -14,9 +15,12 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListProjectViewsToolResult, ProjectViewDeclaredPort, ProjectViewListed,
+    WriteStudioViewOutputToolResult,
 };
 
-use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
+use crate::mcp::{
+    LocalApiMcpServerHandler, STREAM_ARGUMENT_DESCRIPTION, ToolCallAnswer, serialized_tool_result,
+};
 use crate::mcp_project_asset_tools::ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION;
 
 #[derive(Deserialize, JsonSchema)]
@@ -25,6 +29,26 @@ use crate::mcp_project_asset_tools::ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION
 struct ListProjectViewsToolArguments {
     #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct WriteStudioViewOutputToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
+    #[schemars(
+        description = "The `tatolab.studio:StudioView` node's id, as `graph` lists it under `id`."
+    )]
+    node: String,
+    #[schemars(
+        description = "The node's output, one its view's `tatolab_view.json` declares, as `graph` lists it under `ports.outputs`."
+    )]
+    port: String,
+    #[schemars(
+        description = "The value, as the output's family takes it. Array: a number, a rectangular list of numbers, or an object of such, each an attribute by its key, a bare number or list being the attribute `value`; every attribute is `float64`. Channels: `{\"sample_rate\": <samples a second>, \"channels\": [[<sample>, …], …]}`, each channel as many samples, written as `float32`. Records: an object of fields."
+    )]
+    value: serde_json::Value,
 }
 
 fn the_declared_port_on_the_wire(port: &TatolabViewDeclaredPort) -> ProjectViewDeclaredPort {
@@ -101,5 +125,29 @@ impl LocalApiMcpServerHandler {
             )
             .await?;
         serialized_tool_result("list_project_views", &listed)
+    }
+
+    #[tool(
+        description = "Write a value onto an output of a running `tatolab.studio:StudioView` node, which publishes it on that output to every node linked from it, as a node publishes what it writes; a linked reader keeps the last value it read. Any number of panels may write one node, and the last write wins. A write is live data: it is never recorded in the stream's graph document or the project's history. Array, Channels and Records outputs take a value; an Image or Packets output takes none. Refused for a node that is not a running StudioView, an output its view does not declare, and a value its family does not take, in the runtime's own words."
+    )]
+    async fn write_studio_view_output(
+        &self,
+        Parameters(WriteStudioViewOutputToolArguments {
+            stream,
+            node,
+            port,
+            value,
+        }): Parameters<WriteStudioViewOutputToolArguments>,
+    ) -> ToolCallAnswer {
+        let stream_operations =
+            self.the_stream_a_tool_call_names("write_studio_view_output", &stream)?;
+        stream_operations
+            .write_a_studio_view_output(node.clone(), port.clone(), value)
+            .await
+            .map_err(|refusal| format!("write_studio_view_output failed: {refusal}"))?;
+        serialized_tool_result(
+            "write_studio_view_output",
+            &WriteStudioViewOutputToolResult { stream, node, port },
+        )
     }
 }

@@ -450,7 +450,12 @@ impl GraphInterfacePort {
             direction_of_the_linked_port,
         )?;
         let port_cast = cast_of(&linked_port.port)?;
-        let Some((inputs, outputs)) = node_types.port_info(&linked_node.processor_type) else {
+        let Some((inputs, outputs)) = node_types.port_info_of_a_node(
+            &linked_port.node,
+            &linked_node.processor_type,
+            &linked_node.config,
+        )?
+        else {
             return Ok(());
         };
         let linked_declaration = match self.direction {

@@ -661,6 +661,20 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         })
     }
 
+    fn write_a_studio_view_output(
+        &self,
+        node_id: String,
+        port_name: String,
+        value: serde_json::Value,
+    ) -> BoxFuture<'_, Result<()>> {
+        self.in_this_streams_log_route(async move {
+            self.hand_a_studio_view_node_a_value_written_onto_its_output(
+                &node_id, &port_name, value,
+            )
+            .await
+        })
+    }
+
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         self.add_processor_reporting_its_name(spec)
             .map(|added| added.processor_id)

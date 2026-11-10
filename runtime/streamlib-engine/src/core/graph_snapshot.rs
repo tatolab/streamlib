@@ -424,7 +424,10 @@ impl GraphSnapshot {
                 &node.processor_type,
                 &node.config,
             )?;
-            if node_types.port_info(&node.processor_type).is_none() {
+            if node_types
+                .port_info_of_a_node(&node.name, &node.processor_type, &node.config)?
+                .is_none()
+            {
                 return Err(Error::UnknownProcessorType {
                     ident: node.processor_type.clone(),
                 });
@@ -976,8 +979,8 @@ fn keys_listed_for_a_refusal(keys: &[&str]) -> String {
     }
 }
 
-/// Refuse `port` unless `node`'s type declares it in `direction`, listing the
-/// ports it does declare there.
+/// Refuse `port` unless `node` takes it in `direction`, listing the ports it
+/// does take there.
 pub(crate) fn refuse_a_port_the_node_does_not_have(
     node_types: &NodeTypesOneStreamResolves,
     node_name: &str,
@@ -987,7 +990,7 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
 ) -> Result<()> {
     let port_cast = cast_exposed_name_to_url_safe(port)?;
     let port_names: Vec<String> = node_types
-        .port_info(&node.processor_type)
+        .port_info_of_a_node(node_name, &node.processor_type, &node.config)?
         .map(|(inputs, outputs)| match direction {
             PortDirection::Input => inputs,
             PortDirection::Output => outputs,

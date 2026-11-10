@@ -27,7 +27,7 @@ use crate::core::graph::{
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, Link,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
     LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef, PortInfo, ProcessorInstanceComponent,
     ProcessorLossCounts, ProcessorMetrics, ReadOfALinkByTheReaderOfAFunctionNodeIsland,
     SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
 };
@@ -1163,19 +1163,33 @@ fn delivery_resolution_of_input_port(
     dest_port: &str,
 ) -> Result<DeliveryResolution> {
     let dest_type = processor_class_import_path_of(graph, dest_proc_id)?;
-    let node_types = graph.node_types_this_stream_resolves();
-    let declared_borrow_quota = node_types
-        .port_info(&dest_type)
-        .and_then(|(inputs, _outputs)| {
-            inputs
-                .into_iter()
-                .find(|port| port.name == dest_port)
-                .and_then(|port| port.borrow_quota)
-        });
+    let dest_inputs = the_input_ports_the_node_takes(graph, dest_proc_id)?;
+    let declared_borrow_quota = dest_inputs.as_ref().and_then(|inputs| {
+        inputs
+            .iter()
+            .find(|port| port.name == dest_port)
+            .and_then(|port| port.borrow_quota)
+    });
     Ok(DeliveryResolution {
         borrow_quota: input_port_borrow_quota(dest_port, declared_borrow_quota)?,
-        ..delivery_profile_for_input_port(node_types, &dest_type, dest_port)?.resolve()
+        ..delivery_profile_for_input_port(dest_inputs.as_deref(), &dest_type, dest_port)?.resolve()
     })
+}
+
+/// The input ports the node `proc_id` of `graph` takes, as its stream resolves them; `None`
+/// for a node the graph does not hold or whose type it does not resolve.
+fn the_input_ports_the_node_takes(
+    graph: &Graph,
+    proc_id: &ProcessorUniqueId,
+) -> Result<Option<Vec<PortInfo>>> {
+    let Some(node) = graph.traversal().v(proc_id).first() else {
+        return Ok(None);
+    };
+    let config = node.config.clone().unwrap_or(serde_json::Value::Null);
+    Ok(graph
+        .node_types_this_stream_resolves()
+        .port_info_of_a_node(&node.display_name, &node.processor_type, &config)?
+        .map(|(inputs, _outputs)| inputs))
 }
 
 /// The class a processor in the graph was added as, refused by name when the
@@ -1206,7 +1220,7 @@ fn audio_windowing_declared_by_input_port_of(
         return Ok(None);
     };
     audio_windowing_declared_by_input_port(
-        graph.node_types_this_stream_resolves(),
+        the_input_ports_the_node_takes(graph, dest_proc_id)?.as_deref(),
         &dest_type,
         dest_port,
     )

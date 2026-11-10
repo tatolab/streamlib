@@ -21,7 +21,7 @@ use crate::core::descriptors::{
     AudioWindowContractDeclaredValues,
 };
 use crate::core::error::{Error, Result};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::graph::PortInfo;
 use crate::iceoryx2::{ChannelsBlockSampleType, DeliveryProfile};
 
 /// A window contract with every value settled — what the stage reads.
@@ -318,18 +318,18 @@ pub(crate) fn refuse_an_unsettled_match_device_sentinel(
 /// [`delivery_profile_for_input_port`]. `Ok(None)` is a port with no contract,
 /// which is unchanged in every respect.
 ///
-/// Falls back to `None` when the destination processor type isn't registered
+/// Falls back to `None` when the destination's input ports are not resolved
 /// or the named port doesn't exist — defensive, and the same fallback the
 /// delivery-profile resolution takes: a Wired link always resolves both, and
 /// the wiring path itself reports a missing processor.
 ///
 /// [`delivery_profile_for_input_port`]: crate::iceoryx2::delivery_profile_for_input_port
 pub(crate) fn audio_windowing_declared_by_input_port(
-    node_types: &NodeTypesOneStreamResolves,
+    input_ports_of_the_destination: Option<&[PortInfo]>,
     processor_type: &ProcessorClassImportPath,
     port_name: &str,
 ) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
-    let Some((inputs, _outputs)) = node_types.port_info(processor_type) else {
+    let Some(inputs) = input_ports_of_the_destination else {
         return Ok(None);
     };
     let Some(port) = inputs.iter().find(|port| port.name == port_name) else {

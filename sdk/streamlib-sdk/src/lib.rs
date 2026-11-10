@@ -94,6 +94,7 @@ pub mod sdk {
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
     pub use streamlib_engine::core::shared_native_services;
+    pub use streamlib_engine::core::studio_view;
     pub use streamlib_engine::core::supervised_child_process;
     pub use streamlib_engine::core::unix_socket_path_cleared_for_bind;
 

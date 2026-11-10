@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Prints every built-in this floor registers as a JSON array of catalog
-//! entries, sorted by `type` — the input `cargo xtask
+//! Prints every built-in this floor registers, the StudioView node among them, as a JSON array
+//! of catalog entries, sorted by `type` — the input `cargo xtask
 //! generate-built-in-node-classes` renders `tatolab.stream`'s built-in classes
 //! from.
 
@@ -10,6 +10,7 @@ use std::io::Write;
 
 use streamlib::sdk::json_schema::ProcessorDescriptorOutput;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::studio_view::is_the_studio_view_node_type;
 
 fn main() -> std::io::Result<()> {
     streamlib_media_builtins::register_media_builtin_processor_types();
@@ -20,6 +21,7 @@ fn main() -> std::io::Result<()> {
             descriptor
                 .processor_class_import_path
                 .names_a_built_in_node()
+                || is_the_studio_view_node_type(&descriptor.processor_class_import_path)
         })
         .map(ProcessorDescriptorOutput::from)
         .collect();

@@ -31,15 +31,11 @@ impl<'a> TraversalSourceMut<'a> {
     /// why — runtime-dynamic systems prefer "load-and-mark-failed" over
     /// "silently-skip" so observability survives the misconfiguration.
     pub fn add_v(self, spec: ProcessorSpec) -> Result<ProcessorTraversalMut<'a>> {
-        // Gated on `port_info` presence — every registered processor has an
+        // Gated on the ports resolving — every registered processor has an
         // entry (subprocess-only descriptors register empty port lists), so
         // this resolves any registered type and misses only a
         // genuinely-unregistered one.
         let node_types = self.node_types_this_stream_resolves;
-        let resolved_ports = node_types.port_info(&spec.name);
-
-        let registry_miss = resolved_ports.is_none();
-
         let name = the_name_a_new_node_takes(
             self.graph,
             self.node_names_the_graph_only_nodes_hold,
@@ -48,6 +44,9 @@ impl<'a> TraversalSourceMut<'a> {
             &spec.name,
         )?;
         node_types.refuse_a_node_this_stream_cannot_add(&name, &spec.name, &spec.config)?;
+        let resolved_ports = node_types.port_info_of_a_node(&name, &spec.name, &spec.config)?;
+
+        let registry_miss = resolved_ports.is_none();
 
         if registry_miss {
             tracing::error!(

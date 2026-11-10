@@ -38,6 +38,8 @@ from ._built_in_nodes import ImageToArray as ImageToArray
 from ._built_in_nodes import ImageToArrayConfig as ImageToArrayConfig
 from ._built_in_nodes import RecordsToChannels as RecordsToChannels
 from ._built_in_nodes import RecordsToChannelsConfig as RecordsToChannelsConfig
+from ._built_in_nodes import StudioView as StudioView
+from ._built_in_nodes import StudioViewConfig as StudioViewConfig
 from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructureHandle
 from ._gpu_protocols import ComputeKernel as ComputeKernel
 from ._gpu_protocols import GpuContextFullAccess as GpuContextFullAccess
@@ -237,6 +239,8 @@ __all__ = [
     "StreamBuilder",
     "StreamClock",
     "StreamClockReading",
+    "StudioView",
+    "StudioViewConfig",
     "Time",
     "UnreadMessage",
     "clock",

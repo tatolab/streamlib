@@ -43,6 +43,10 @@ pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProce
 // crate has any business holding another helper's board.
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
 pub use processor_instance_factory::{
-    DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
+    DynamicProcessorConstructorFn, NodeWhosePortsItsTypeResolves, PROCESSOR_REGISTRY,
+    ProcessorInstance, ProcessorInstanceFactory,
+};
+pub(crate) use processor_instance_factory::{
+    HostCompiledRustTypeRegistration, NodeConfigTakenCheckFn, PortsEachNodeOfItsTypeTakesFn,
 };
 pub use processor_spec::ProcessorSpec;

@@ -354,6 +354,17 @@ pub struct OpenViewerToolResult {
     pub surface_share_address: Option<String>,
 }
 
+/// The `write_studio_view_output` tool's result: the output the node published the value on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteStudioViewOutputToolResult {
+    /// The stream's id.
+    pub stream: String,
+    /// The StudioView node's id, as `graph` lists it.
+    pub node: String,
+    /// The output the value was published on.
+    pub port: String,
+}
+
 /// The `close_viewer` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CloseViewerToolResult {

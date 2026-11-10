@@ -78,8 +78,9 @@ fn python_spelling_of_a_frame_rate(frame_rate: &BuiltInNodeImageOutputFrameRate)
 pub const GENERATED_BUILT_IN_NODE_CLASSES_PATH: &str =
     "sdk/tatolab-stream/tatolab/stream/_built_in_nodes.py";
 
-/// What every built-in's `type` starts with; the rest is its class name.
-const BUILT_IN_NODE_TYPE_PREFIX: &str = "tatolab.stream:";
+/// What a built-in's `type` starts with, the stream's built-ins' or the StudioView node's; the
+/// rest is its class name.
+const BUILT_IN_NODE_TYPE_PREFIXES: &[&str] = &["tatolab.stream:", "tatolab.studio:"];
 
 /// The column a docstring line wraps before.
 const DOCSTRING_WRAP_COLUMN: usize = 88;
@@ -212,8 +213,18 @@ fn config_name_of(class_name: &str) -> String {
 
 fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<RenderedBuiltInNode> {
     let built_in_node_type = descriptor.built_in_node_type.as_str();
-    let Some(class_name) = built_in_node_type.strip_prefix(BUILT_IN_NODE_TYPE_PREFIX) else {
-        bail!("built-in `{built_in_node_type}` does not start with `{BUILT_IN_NODE_TYPE_PREFIX}`");
+    let Some(class_name) = BUILT_IN_NODE_TYPE_PREFIXES
+        .iter()
+        .find_map(|prefix| built_in_node_type.strip_prefix(prefix))
+    else {
+        bail!(
+            "built-in `{built_in_node_type}` does not start with any of {}",
+            BUILT_IN_NODE_TYPE_PREFIXES
+                .iter()
+                .map(|prefix| format!("`{prefix}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     };
     if class_name.is_empty() || !class_name.chars().all(|c| c.is_ascii_alphanumeric()) {
         bail!("built-in `{built_in_node_type}` does not name a Python class");

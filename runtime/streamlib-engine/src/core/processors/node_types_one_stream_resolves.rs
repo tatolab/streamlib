@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -19,7 +20,8 @@ use crate::core::graph::{
 };
 use crate::core::processors::processor_instance_factory::refuse_port_names_not_cast_or_declared_twice;
 use crate::core::processors::{
-    DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance,
+    DynamicProcessorConstructorFn, NodeWhosePortsItsTypeResolves, PROCESSOR_REGISTRY,
+    ProcessorInstance,
 };
 
 /// A node type described in one stream's processor interpreter: what it
@@ -89,12 +91,28 @@ pub struct NodeTypesOneStreamResolves {
         RwLock<HashMap<ProcessorClassImportPath, InstalledModuleOfANodeType>>,
     execution_each_described_class_declares:
         RwLock<HashMap<ProcessorClassImportPath, ProcessExecution>>,
+    /// The directory of the project the stream loads from, which a type giving each node its
+    /// own ports reads them from; `None` for a stream of no project.
+    project_directory: Option<PathBuf>,
 }
 
 impl NodeTypesOneStreamResolves {
     /// A stream that has described nothing yet: it resolves the native types alone.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A stream of the project in `project_directory` that has described nothing yet.
+    pub fn of_the_project_in(project_directory: PathBuf) -> Self {
+        Self {
+            project_directory: Some(project_directory),
+            ..Self::default()
+        }
+    }
+
+    /// The directory of the project this stream loads from, when it has one.
+    pub fn project_directory(&self) -> Option<&Path> {
+        self.project_directory.as_deref()
     }
 
     /// Whether `node_type` is natively compiled, which no describe replaces.
@@ -188,6 +206,26 @@ impl NodeTypesOneStreamResolves {
                 described.input_and_output_port_info.clone()
             })
         })
+    }
+
+    /// The input and output ports the node `node_name` of `node_type` takes with `config`:
+    /// its own when its type gives each node its own, else the ones its type declares; `None`
+    /// for a type this stream does not resolve.
+    pub fn port_info_of_a_node(
+        &self,
+        node_name: &str,
+        node_type: &ProcessorClassImportPath,
+        config: &serde_json::Value,
+    ) -> Result<Option<(Vec<PortInfo>, Vec<PortInfo>)>> {
+        let node = NodeWhosePortsItsTypeResolves {
+            node_name,
+            config,
+            project_directory: self.project_directory(),
+        };
+        match PROCESSOR_REGISTRY.ports_a_node_of_its_type_takes(node_type, &node) {
+            Some(ports_of_the_node) => ports_of_the_node.map(Some),
+            None => Ok(self.port_info(node_type)),
+        }
     }
 
     /// How `node_type` runs, native first.

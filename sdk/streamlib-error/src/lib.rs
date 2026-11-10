@@ -140,6 +140,15 @@ pub enum Error {
         module_distribution: String,
     },
 
+    #[error(
+        "node `{node_name}` shows the Tato Studio view `{view_type}`, which does not open: {why}"
+    )]
+    StudioViewDoesNotOpen {
+        node_name: String,
+        view_type: String,
+        why: String,
+    },
+
     #[error("node `{node_name}` (`{node_type}`) does not take its config: {refusal}")]
     NodeConfigRefused {
         node_name: String,
