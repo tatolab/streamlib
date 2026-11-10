@@ -395,7 +395,6 @@ pub fn a_stream_record(
         schema_version: STREAM_RECORD_SCHEMA_VERSION,
         stream_id: location.stream_id_named(TEST_PROJECT_NAME, stream_name),
         location,
-        display_name: stream_name.to_owned(),
         interpreter: interpreter.to_path_buf(),
         stopped,
         failed_because: None,
