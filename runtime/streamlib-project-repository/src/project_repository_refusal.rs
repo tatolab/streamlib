@@ -153,6 +153,11 @@ pub enum ProjectRepositoryRefusal {
     #[error("an idempotency key cannot be blank; mint one per user gesture, or send none")]
     BlankIdempotencyKey,
     #[error(
+        "an import's `source` must be an absolute path or a SHA-256 in 64 lowercase hex digits; \
+         got `{0}`"
+    )]
+    ImportSourceNeitherAPathNorAnUpload(String),
+    #[error(
         "the transaction {transaction} in the project's history is in format {format_version}, \
          which a newer runtime wrote; this runtime reads formats up to {newest_format_version}"
     )]

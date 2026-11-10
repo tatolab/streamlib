@@ -7,11 +7,10 @@ use std::process::Command;
 use serde_json::{Map, json};
 use streamlib_project_repository::{
     PROJECT_FILE_NAME, PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER,
-    PROJECT_UPLOADS_DIRECTORY, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetKind, ProjectAssetOperation, ProjectOperation, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransaction,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, the_file_of_an_asset,
-    the_upload_file_of,
+    PROJECT_UPLOADS_DIRECTORY, ProjectAssetAction, ProjectAssetImportSource, ProjectAssetKind,
+    ProjectAssetOperation, ProjectOperation, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, the_file_of_an_asset, the_upload_file_of,
 };
 use uuid::Uuid;
 
@@ -48,8 +47,8 @@ fn agent() -> ProjectTransactionAuthor {
     }
 }
 
-fn import_from(source: &Path, asset_path: &str) -> ProjectAssetChangeRequest {
-    ProjectAssetChangeRequest::ImportAsset {
+fn import_from(source: &Path, asset_path: &str) -> ProjectAssetAction {
+    ProjectAssetAction::ImportAsset {
         source: ProjectAssetImportSource::FileOnThisMachine(source.to_path_buf()),
         asset_path: asset_path.to_owned(),
         kind: None,
@@ -131,9 +130,9 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::RenameAsset {
+            vec![ProjectAssetAction::RelocateAsset {
                 asset: video_asset,
-                file_name: "opening.mp4".to_owned(),
+                to_path: "media/opening.mp4".to_owned(),
             }],
         )
         .unwrap()
@@ -142,9 +141,9 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::MoveAsset {
+            vec![ProjectAssetAction::RelocateAsset {
                 asset: video_asset,
-                into_directory: "archive/2026".to_owned(),
+                to_path: "archive/2026/opening.mp4".to_owned(),
             }],
         )
         .unwrap()
@@ -153,7 +152,7 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: fmu_asset }],
+            vec![ProjectAssetAction::DeleteAsset { asset: fmu_asset }],
         )
         .unwrap()
         .into_applied_transaction();
@@ -299,7 +298,7 @@ fn a_transaction_with_one_refused_change_changes_nothing_and_commits_nothing() {
             None,
             vec![
                 import_from(&video, "media/intro.mp4"),
-                ProjectAssetChangeRequest::DeleteAsset {
+                ProjectAssetAction::DeleteAsset {
                     asset: Uuid::new_v4(),
                 },
             ],
@@ -333,7 +332,7 @@ fn a_transaction_records_its_author_parent_and_inverse() {
             None,
             vec![
                 import_from(&video, "media/intro.mp4"),
-                ProjectAssetChangeRequest::SetAssetSettings {
+                ProjectAssetAction::SetAssetSettings {
                     asset: Uuid::nil(),
                     import_settings: Map::new(),
                 },
@@ -355,7 +354,7 @@ fn a_transaction_records_its_author_parent_and_inverse() {
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::SetAssetSettings {
+            vec![ProjectAssetAction::SetAssetSettings {
                 asset: video_asset,
                 import_settings: settings.clone(),
             }],
@@ -410,7 +409,7 @@ fn an_asset_a_graph_document_references_cannot_be_deleted() {
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: image_asset }],
+            vec![ProjectAssetAction::DeleteAsset { asset: image_asset }],
         )
         .unwrap_err();
     match refusal {
@@ -494,7 +493,7 @@ fn an_upload_is_moved_to_its_assets_path_by_its_hash_and_leaves_the_uploads() {
     std::fs::create_dir_all(upload.parent().unwrap()).unwrap();
     std::fs::write(&upload, b"uploaded weights").unwrap();
     let import_the_upload =
-        |content_sha256: &str, asset_path: &str| ProjectAssetChangeRequest::ImportAsset {
+        |content_sha256: &str, asset_path: &str| ProjectAssetAction::ImportAsset {
             source: ProjectAssetImportSource::UploadedContent(content_sha256.to_owned()),
             asset_path: asset_path.to_owned(),
             kind: Some(ProjectAssetKind::Data),
@@ -585,7 +584,7 @@ fn a_refused_import_leaves_no_copy_in_the_project() {
             None,
             vec![
                 import_from(&video, "media/intro.mp4"),
-                ProjectAssetChangeRequest::DeleteAsset {
+                ProjectAssetAction::DeleteAsset {
                     asset: Uuid::new_v4(),
                 },
             ],
@@ -616,9 +615,9 @@ fn a_file_replaced_at_its_path_is_what_its_asset_reads_and_history_grows_by_no_b
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::RenameAsset {
+            vec![ProjectAssetAction::RelocateAsset {
                 asset,
-                file_name: "intro-take-two.mp4".to_owned(),
+                to_path: "media/intro-take-two.mp4".to_owned(),
             }],
         )
         .unwrap()
@@ -648,7 +647,7 @@ fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_it
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset }],
+            vec![ProjectAssetAction::DeleteAsset { asset }],
         )
         .unwrap()
         .into_applied_transaction();
@@ -657,7 +656,13 @@ fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_it
 
     let reversal = repository.undo_by(&agent()).unwrap();
     repository
-        .apply_project_operations(&agent(), None, reversal.operations, reversal.lineage)
+        .apply_project_operations(
+            &agent(),
+            None,
+            Vec::new(),
+            reversal.operations,
+            reversal.lineage,
+        )
         .unwrap()
         .into_applied_transaction();
 
@@ -686,7 +691,7 @@ fn a_stream_asset_is_never_imported_and_a_project_is_never_created_twice() {
         repository.apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::ImportAsset {
+            vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(graph),
                 asset_path: "streams/main.graph.json".to_owned(),
                 kind: Some(ProjectAssetKind::Stream),
@@ -736,7 +741,7 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
         repository.apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::ImportAsset {
+            vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(data.clone()),
                 asset_path: "data/table.graph.json".to_owned(),
                 kind: Some(ProjectAssetKind::Data),
@@ -755,9 +760,9 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::MoveAsset {
+            vec![ProjectAssetAction::RelocateAsset {
                 asset,
-                into_directory: "streams".to_owned(),
+                to_path: "streams/table.json".to_owned(),
             }],
         )
         .unwrap()
@@ -766,9 +771,9 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
         repository.apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::RenameAsset {
+            vec![ProjectAssetAction::RelocateAsset {
                 asset,
-                file_name: "main.graph.json".to_owned(),
+                to_path: "streams/main.graph.json".to_owned(),
             }],
         ),
         Err(ProjectRepositoryRefusal::AssetPathRefused { .. })
@@ -819,7 +824,7 @@ fn an_unreadable_graph_document_refuses_every_delete() {
         repository.apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: image_asset }],
+            vec![ProjectAssetAction::DeleteAsset { asset: image_asset }],
         ),
         Err(ProjectRepositoryRefusal::GraphDocumentUnreadable { .. })
     ));
@@ -953,9 +958,9 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
         repository.apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::RenameAsset {
+            vec![ProjectAssetAction::RelocateAsset {
                 asset: stream_asset,
-                file_name: "arm-control.json".to_owned(),
+                to_path: "streams/arm-control.json".to_owned(),
             }],
         ),
         Err(ProjectRepositoryRefusal::AssetPathRefused { .. })
@@ -963,7 +968,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(), None,
-            vec![ProjectAssetChangeRequest::SetAssetSettings {
+            vec![ProjectAssetAction::SetAssetSettings {
                 asset: stream_asset,
                 import_settings: Map::new(),
             }],
@@ -975,9 +980,9 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::MoveAsset {
+            vec![ProjectAssetAction::RelocateAsset {
                 asset: stream_asset,
-                into_directory: "streams/cell".to_owned(),
+                to_path: "streams/cell/arm-control.graph.json".to_owned(),
             }],
         )
         .unwrap()
@@ -1004,7 +1009,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     match repository.apply_asset_changes(
         &agent(),
         None,
-        vec![ProjectAssetChangeRequest::DeleteAsset {
+        vec![ProjectAssetAction::DeleteAsset {
             asset: stream_asset,
         }],
     ) {
@@ -1020,7 +1025,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
         .apply_asset_changes(
             &agent(),
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset {
+            vec![ProjectAssetAction::DeleteAsset {
                 asset: stream_asset,
             }],
         )

@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
-    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectOperation,
-    ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, STREAM_FRAGMENT_NODE_TYPE,
-    StreamGraphDocumentNode, StreamGraphOperation, StreamGraphOperationOnAStream,
+    ProjectAssetAction, ProjectAssetImportSource, ProjectOperation, ProjectRelativeAssetPath,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionLineage, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentNode,
+    StreamGraphOperation, StreamGraphOperationOnAStream,
     graph_document_with_each_stream_fragment_reference_resolved, the_file_of_an_imported_asset,
 };
 use uuid::Uuid;
@@ -65,6 +65,7 @@ impl ProjectWithOneStream {
             .apply_project_operations(
                 &a_person(),
                 None,
+                Vec::new(),
                 vec![ProjectOperation::StreamGraph(
                     StreamGraphOperationOnAStream {
                         stream: self.stream,
@@ -98,7 +99,7 @@ impl ProjectWithOneStream {
             .apply_asset_changes(
                 &a_person(),
                 None,
-                vec![ProjectAssetChangeRequest::ImportAsset {
+                vec![ProjectAssetAction::ImportAsset {
                     source: ProjectAssetImportSource::FileOnThisMachine(source),
                     asset_path: "grade.cube".to_owned(),
                     kind: None,
@@ -119,7 +120,13 @@ impl ProjectWithOneStream {
     fn undo(&mut self) {
         let reversal = self.repository.undo_by(&a_person()).unwrap();
         self.repository
-            .apply_project_operations(&a_person(), None, reversal.operations, reversal.lineage)
+            .apply_project_operations(
+                &a_person(),
+                None,
+                Vec::new(),
+                reversal.operations,
+                reversal.lineage,
+            )
             .unwrap()
             .into_applied_transaction();
     }
@@ -127,7 +134,13 @@ impl ProjectWithOneStream {
     fn redo(&mut self) {
         let reversal = self.repository.redo_by(&a_person()).unwrap();
         self.repository
-            .apply_project_operations(&a_person(), None, reversal.operations, reversal.lineage)
+            .apply_project_operations(
+                &a_person(),
+                None,
+                Vec::new(),
+                reversal.operations,
+                reversal.lineage,
+            )
             .unwrap()
             .into_applied_transaction();
     }
@@ -667,6 +680,7 @@ fn a_transaction_in_an_import_opened_as_its_own_project_commits_on_the_enclosing
         .apply_project_operations(
             &a_person(),
             None,
+            Vec::new(),
             vec![ProjectOperation::StreamGraph(
                 StreamGraphOperationOnAStream {
                     stream: imports.arm.stream,
@@ -736,6 +750,7 @@ fn a_created_stream_document_referencing_an_asset_the_project_does_not_hold_is_r
         .apply_project_operations(
             &a_person(),
             None,
+            Vec::new(),
             vec![ProjectOperation::StreamDocument(
                 ProjectStreamDocumentOperation::CreateStreamDocument {
                     stream,

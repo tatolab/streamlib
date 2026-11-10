@@ -41,7 +41,7 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.47" }
 # shapes it serves.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.47" }
 # The projects the asset tools open, each with its one writer.
-streamlib-project-repository = { path = "../streamlib-project-repository" }
+streamlib-project-repository = { path = "../streamlib-project-repository", features = ["mcp-tool-json-schema"] }
 uuid = "1.11"
 
 # `trace` for every request's span.

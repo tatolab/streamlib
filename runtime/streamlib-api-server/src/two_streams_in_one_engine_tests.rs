@@ -16,10 +16,11 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OperationsOnTheStreamsLoadedInThisRuntime,
-    OptionsForLoadingOneStream, Runner,
+    OptionsForLoadingOneStream, Runner, StreamLocation,
 };
 #[cfg(feature = "machine-directories-under-a-test-root")]
 use streamlib_runtime_client_contract::machine_directories_test_root::TestMachineRoot;
+use uuid::Uuid;
 
 use crate::mcp::tests::{
     first_text_block_json, listed_tools, prompt_text, resource_document, tool_call_result,
@@ -38,6 +39,11 @@ impl ManualProcessor for TwoStreamsTestIdleNode::Processor {
 
 /// An engine with the streams `first` and `second` loaded, each holding one
 /// idle node named after its stream.
+/// The stream asset the stream `first` runs.
+const FIRST_STREAM_ASSET: Uuid = Uuid::from_u128(0xf1);
+/// The stream asset the stream `second` runs.
+const SECOND_STREAM_ASSET: Uuid = Uuid::from_u128(0x5ec0);
+
 struct AnEngineLoadingTwoStreams {
     engine: Arc<Runner>,
     first: Arc<LoadedStreamInThisRuntime>,
@@ -53,13 +59,24 @@ impl AnEngineLoadingTwoStreams {
             tempfile::tempdir().expect("a project directory"),
             tempfile::tempdir().expect("a project directory"),
         ];
-        let [first, second] = [("first", 0), ("second", 1)].map(|(stream_id, project)| {
+        let [first, second] = [
+            ("first", 0, FIRST_STREAM_ASSET),
+            ("second", 1, SECOND_STREAM_ASSET),
+        ]
+        .map(|(stream_id, project, stream_asset)| {
             let stream = engine
                 .load_an_empty_stream(
                     OptionsForLoadingOneStream::in_project_directory(
                         project_directories[project].path(),
                     )
-                    .with_stream_id(stream_id),
+                    .at_stream_location(
+                        stream_id.to_owned(),
+                        StreamLocation {
+                            project_directory: project_directories[project].path().to_path_buf(),
+                            project: Uuid::new_v4(),
+                            stream_asset,
+                        },
+                    ),
                 )
                 .expect("the stream loads");
             let mut idle_node = ProcessorSpec::new(
@@ -151,7 +168,7 @@ async fn a_mutation_lands_only_in_the_stream_it_names() {
             loaded.operations_on_the_loaded_streams(),
             "add_node",
             json!({
-                "stream": "second",
+                "stream": SECOND_STREAM_ASSET,
                 "type": TwoStreamsTestIdleNode::processor_class_import_path().as_str(),
                 "name": "added-to-second",
                 "mode": "live",
@@ -174,7 +191,7 @@ async fn a_mutation_lands_only_in_the_stream_it_names() {
 async fn a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
     let loaded = AnEngineLoadingTwoStreams::load();
 
-    for stream_not_loaded in ["third", "First", "", ".."] {
+    for stream_not_loaded in [Uuid::from_u128(0x7d), Uuid::nil()] {
         let refusal = tool_error_text(
             &tool_call_result(
                 loaded.operations_on_the_loaded_streams(),
@@ -189,11 +206,12 @@ async fn a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
         );
 
         assert!(
-            refusal.contains(&format!("`{stream_not_loaded}`")),
+            refusal.contains(&stream_not_loaded.to_string()),
             "{refusal}"
         );
         assert!(
-            refusal.contains("first") && refusal.contains("second"),
+            refusal.contains(&FIRST_STREAM_ASSET.to_string())
+                && refusal.contains(&SECOND_STREAM_ASSET.to_string()),
             "{refusal}"
         );
     }
@@ -305,6 +323,7 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
     .await;
     assert!(
         recipe.contains("`stream`: `second`")
+            && recipe.contains(&format!("`stream`: `{SECOND_STREAM_ASSET}`"))
             && recipe.contains("idle-in-second")
             && !recipe.contains("`stream`: `first`"),
         "{recipe}"

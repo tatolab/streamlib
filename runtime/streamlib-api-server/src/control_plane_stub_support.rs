@@ -204,6 +204,17 @@ pub(crate) fn the_stub_runtimes_description()
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_ID: &str = "stub-stream";
 
+/// The stream asset the stub's one stream runs.
+pub(crate) const STUB_STREAM_ASSET: ::uuid::Uuid =
+    ::uuid::Uuid::from_u128(0x57ab_0000_0000_0000_0000_0000_0001);
+
+/// The project the stub's one stream is of.
+pub(crate) const STUB_PROJECT: ::uuid::Uuid =
+    ::uuid::Uuid::from_u128(0x57ab_0000_0000_0000_0000_0000_0002);
+
+/// Where the stub's one stream's project lives.
+pub(crate) const STUB_PROJECT_DIRECTORY: &str = "/stub-project";
+
 /// Refuse a call naming a stream other than [`STUB_STREAM_ID`], in the
 /// engine's words.
 pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
@@ -412,7 +423,13 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 vec![::streamlib::sdk::runtime::StreamListing {
                     stream_id: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
                     display_name: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
-                    stream_location: None,
+                    stream_location: Some(::streamlib::sdk::runtime::StreamLocation {
+                        project_directory: ::std::path::PathBuf::from(
+                            $crate::control_plane_stub_support::STUB_PROJECT_DIRECTORY,
+                        ),
+                        project: $crate::control_plane_stub_support::STUB_PROJECT,
+                        stream_asset: $crate::control_plane_stub_support::STUB_STREAM_ASSET,
+                    }),
                     state: ::streamlib::sdk::runtime::StreamListingState::Running,
                     node_count: None,
                     failed_because: None,

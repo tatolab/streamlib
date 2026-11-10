@@ -27,6 +27,7 @@ use streamlib::sdk::json_schema::{
     ProcessorNodeOutput,
 };
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
+use uuid::Uuid;
 
 use crate::mcp::LocalApiMcpServerHandler;
 
@@ -35,7 +36,7 @@ use crate::mcp::LocalApiMcpServerHandler;
 pub const VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH: &str =
     "tatolab.virtualcamera:VirtualCameraSink";
 
-const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the recipe is rendered against and every step's tool call names, by the name `list_streams` and `graph` report.";
+const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the recipe is rendered against, by the stream id `list_streams` and `graph` report; each `graph` step names it so, and each graph edit by its stream asset.";
 const LINK_ID_ARGUMENT_DESCRIPTION: &str =
     "The id of the link to splice into, as `graph` lists it under `links`.";
 const TYPE_ARGUMENT_DESCRIPTION: &str = "The import path of the node class to add — a type the `streamlib://node-catalog` resource lists, or a Python class's `module:QualifiedClassName`.";
@@ -174,8 +175,26 @@ impl LocalApiMcpServerHandler {
             .stream
             .clone()
             .unwrap_or_else(|| stream_id.to_string());
-        Ok(recipe_for(&live_graph, &node_catalog)?
-            .prompt_result(&stream_id_as_the_graph_reports_it, description))
+        let stream_asset = operations_on_the_loaded_streams
+            .list_streams()
+            .into_iter()
+            .find(|listing| listing.stream_id == stream_id_as_the_graph_reports_it)
+            .and_then(|listing| listing.stream_location)
+            .map(|stream_location| stream_location.stream_asset)
+            .ok_or_else(|| {
+                McpError::invalid_params(
+                    format!(
+                        "stream `{stream_id_as_the_graph_reports_it}` belongs to no project, so \
+                         no graph edit can name it by its stream asset"
+                    ),
+                    None,
+                )
+            })?;
+        Ok(recipe_for(&live_graph, &node_catalog)?.prompt_result(
+            &stream_id_as_the_graph_reports_it,
+            stream_asset,
+            description,
+        ))
     }
 }
 
@@ -226,26 +245,36 @@ struct GraphRecipe {
 
 impl GraphRecipe {
     /// The recipe as a `prompts/get` result: one user message carrying its
-    /// text, every step naming `stream_id`.
-    fn prompt_result(&self, stream_id: &str, description: &str) -> GetPromptResult {
+    /// text, a `graph` step naming the stream by `stream_id` and a graph edit by `stream_asset`.
+    fn prompt_result(
+        &self,
+        stream_id: &str,
+        stream_asset: Uuid,
+        description: &str,
+    ) -> GetPromptResult {
         GetPromptResult::new(vec![PromptMessage::new_text(
             Role::User,
-            self.rendered_text(stream_id),
+            self.rendered_text(stream_id, stream_asset),
         )])
         .with_description(description)
     }
 
     /// The text an agent follows. Each step is its own line, `N. `tool` — …`.
-    fn rendered_text(&self, stream_id: &str) -> String {
+    fn rendered_text(&self, stream_id: &str, stream_asset: Uuid) -> String {
         let mut text = format!(
             "{}\n\nSteps — each calls one tool this runtime serves:\n",
             self.introduction_text
         );
         for (index, step) in self.steps.iter().enumerate() {
+            let stream_the_step_names = if step.tool_name == "graph" {
+                stream_id.to_owned()
+            } else {
+                stream_asset.to_string()
+            };
             // Writing into a `String` cannot fail.
             let _ = writeln!(
                 text,
-                "{}. `{}` — `stream`: `{stream_id}`; {}",
+                "{}. `{}` — `stream`: `{stream_the_step_names}`; {}",
                 index + 1,
                 step.tool_name,
                 step.instruction

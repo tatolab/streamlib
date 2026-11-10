@@ -23,6 +23,7 @@ mod project_stream_document;
 mod project_transaction;
 mod project_views;
 mod stream_fragment_references;
+mod stream_graph_action;
 mod stream_graph_document;
 mod tatolab_view_manifest;
 
@@ -61,10 +62,10 @@ pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
 };
 pub use project_transaction::{
-    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionApplyOutcome,
-    ProjectActionIdempotencyKey, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
+    ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
+    ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
+    ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
     StreamGraphOperationOnAStream,
 };
@@ -76,6 +77,16 @@ pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
     graph_document_with_each_stream_fragment_reference_resolved,
     the_fragment_a_stream_fragment_places, the_stream_document_of_an_import,
+};
+pub use stream_graph_action::{
+    DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,
+    DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION, EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
+    GROUP_ARGUMENT_DESCRIPTION, GROUP_COLOUR_ARGUMENT_DESCRIPTION,
+    GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
 };
 pub use stream_graph_document::{
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,

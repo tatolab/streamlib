@@ -40,10 +40,10 @@ use crate::project_pyproject_import_sources::{
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
 use crate::project_transaction::{
-    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionApplyOutcome,
-    ProjectActionIdempotencyKey, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
+    ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
+    ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
+    ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
     StreamGraphOperationOnAStream,
 };
@@ -410,7 +410,7 @@ impl ProjectRepository {
         &mut self,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
-        changes: Vec<ProjectAssetChangeRequest>,
+        changes: Vec<ProjectAssetAction>,
     ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
         if let Some(applied_before) =
@@ -420,10 +420,12 @@ impl ProjectRepository {
                 applied_before,
             ));
         }
+        let actions_as_sent = changes.iter().cloned().map(ProjectAction::Asset).collect();
         let applied = self.operations_for_changes(changes).and_then(|operations| {
             self.apply_and_commit_project_operations(
                 author,
                 idempotency_key,
+                actions_as_sent,
                 operations,
                 ProjectTransactionLineage::NewEdit,
             )
@@ -439,7 +441,7 @@ impl ProjectRepository {
 
     fn operations_for_changes(
         &mut self,
-        changes: Vec<ProjectAssetChangeRequest>,
+        changes: Vec<ProjectAssetAction>,
     ) -> Result<Vec<ProjectOperation>, ProjectRepositoryRefusal> {
         let mut staged_assets = self.every_asset()?;
         let mut operations = Vec::with_capacity(changes.len());
@@ -496,12 +498,13 @@ impl ProjectRepository {
     }
 
     /// Apply `operations` by `author` as one transaction, whole or not at all, write the
-    /// files they change and commit it; sent again under the same `idempotency_key`, it applies
+    /// files they change and commit it, recording `actions_as_sent` beside them; sent again under the same `idempotency_key`, it applies
     /// nothing and answers the first transaction.
     pub fn apply_project_operations(
         &mut self,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        actions_as_sent: Vec<ProjectAction>,
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
     ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
@@ -512,14 +515,21 @@ impl ProjectRepository {
                 applied_before,
             ));
         }
-        self.apply_and_commit_project_operations(author, idempotency_key, operations, lineage)
-            .map(ProjectActionApplyOutcome::AppliedNow)
+        self.apply_and_commit_project_operations(
+            author,
+            idempotency_key,
+            actions_as_sent,
+            operations,
+            lineage,
+        )
+        .map(ProjectActionApplyOutcome::AppliedNow)
     }
 
     fn apply_and_commit_project_operations(
         &mut self,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        actions_as_sent: Vec<ProjectAction>,
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
@@ -616,6 +626,7 @@ impl ProjectRepository {
             undoes,
             redoes,
             idempotency_key: idempotency_key.cloned(),
+            actions: actions_as_sent,
         };
 
         let mut performed_effects = Vec::with_capacity(transaction.operations.len());
@@ -792,6 +803,7 @@ impl ProjectRepository {
             self.apply_and_commit_project_operations(
                 author,
                 idempotency_key,
+                Vec::new(),
                 vec![ProjectOperation::Import(
                     ProjectImportOperation::PlaceImport {
                         import,
@@ -857,6 +869,7 @@ impl ProjectRepository {
             self.apply_and_commit_project_operations(
                 author,
                 idempotency_key,
+                Vec::new(),
                 vec![ProjectOperation::Import(
                     ProjectImportOperation::PlaceImport {
                         import,
@@ -961,6 +974,7 @@ impl ProjectRepository {
         self.apply_and_commit_project_operations(
             author,
             idempotency_key,
+            Vec::new(),
             vec![ProjectOperation::Import(
                 ProjectImportOperation::RemoveImport { import },
             )],
@@ -1659,7 +1673,7 @@ impl ProjectRepository {
     fn operation_for_change(
         &self,
         staged_assets: &BTreeMap<Uuid, ProjectAsset>,
-        change: ProjectAssetChangeRequest,
+        change: ProjectAssetAction,
     ) -> Result<Option<StagedAssetChange>, ProjectRepositoryRefusal> {
         let staged_asset = |asset: Uuid| {
             staged_assets
@@ -1667,7 +1681,7 @@ impl ProjectRepository {
                 .ok_or(ProjectRepositoryRefusal::NoSuchAsset(asset))
         };
         match change {
-            ProjectAssetChangeRequest::ImportAsset {
+            ProjectAssetAction::ImportAsset {
                 source,
                 asset_path,
                 kind,
@@ -1743,24 +1757,14 @@ impl ProjectRepository {
                     asset_file_waiting_for_its_import: waiting.map(|waiting| (asset, waiting)),
                 }))
             }
-            ProjectAssetChangeRequest::RenameAsset { asset, file_name } => {
+            ProjectAssetAction::RelocateAsset { asset, to_path } => {
                 let current = staged_asset(asset)?;
-                let to = current.path.renamed_to(&file_name)?;
+                let to = ProjectRelativeAssetPath::parse(&to_path)?;
                 Ok(self
                     .relocation(staged_assets, current, to)?
                     .map(StagedAssetChange::of))
             }
-            ProjectAssetChangeRequest::MoveAsset {
-                asset,
-                into_directory,
-            } => {
-                let current = staged_asset(asset)?;
-                let to = current.path.moved_into_directory(&into_directory)?;
-                Ok(self
-                    .relocation(staged_assets, current, to)?
-                    .map(StagedAssetChange::of))
-            }
-            ProjectAssetChangeRequest::DeleteAsset { asset } => {
+            ProjectAssetAction::DeleteAsset { asset } => {
                 let current = staged_asset(asset)?;
                 self.refuse_a_path_through_a_symbolic_link(&current.path)?;
                 if current.kind == ProjectAssetKind::Stream {
@@ -1782,7 +1786,7 @@ impl ProjectRepository {
                     },
                 )))
             }
-            ProjectAssetChangeRequest::SetAssetSettings {
+            ProjectAssetAction::SetAssetSettings {
                 asset,
                 import_settings,
             } => {

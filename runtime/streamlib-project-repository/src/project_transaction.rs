@@ -55,8 +55,10 @@ impl ProjectTransactionAuthor {
 }
 
 /// Where an import's bytes come from; they reach the asset's path once, never the transaction.
+/// On the wire it is one string: an absolute path, or an upload's SHA-256 in 64 lowercase hex
+/// digits.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(into = "String", try_from = "String")]
 pub enum ProjectAssetImportSource {
     /// A file on this machine, by absolute path.
     FileOnThisMachine(PathBuf),
@@ -65,22 +67,60 @@ pub enum ProjectAssetImportSource {
     UploadedContent(String),
 }
 
-/// One change a caller asks of a project's assets.
+impl TryFrom<String> for ProjectAssetImportSource {
+    type Error = ProjectRepositoryRefusal;
+
+    fn try_from(source: String) -> Result<Self, Self::Error> {
+        if std::path::Path::new(&source).is_absolute() {
+            return Ok(Self::FileOnThisMachine(PathBuf::from(source)));
+        }
+        let names_an_upload = source.len() == 64
+            && source
+                .bytes()
+                .all(|digit| digit.is_ascii_digit() || (b'a'..=b'f').contains(&digit));
+        if names_an_upload {
+            return Ok(Self::UploadedContent(source));
+        }
+        Err(ProjectRepositoryRefusal::ImportSourceNeitherAPathNorAnUpload(source))
+    }
+}
+
+impl From<ProjectAssetImportSource> for String {
+    fn from(source: ProjectAssetImportSource) -> Self {
+        match source {
+            ProjectAssetImportSource::FileOnThisMachine(path) => {
+                path.to_string_lossy().into_owned()
+            }
+            ProjectAssetImportSource::UploadedContent(content_sha256) => content_sha256,
+        }
+    }
+}
+
+/// One action as its caller sent it, of whichever family, each tagged by its `operation`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "change", rename_all = "snake_case")]
-pub enum ProjectAssetChangeRequest {
+#[serde(untagged)]
+pub enum ProjectAction {
+    /// An action on the project's assets.
+    Asset(ProjectAssetAction),
+    /// An action on one of the project's stream graphs.
+    StreamGraph(crate::stream_graph_action::StreamGraphAction),
+}
+
+/// One action on a project's assets, as every caller sends it and history records it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProjectAssetAction {
     /// Track new bytes as an asset at `asset_path`, of `kind` or the kind its extension implies.
     ImportAsset {
         source: ProjectAssetImportSource,
         asset_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<ProjectAssetKind>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Map::is_empty")]
         import_settings: Map<String, Value>,
     },
-    /// Give an asset another file name in its folder.
-    RenameAsset { asset: Uuid, file_name: String },
-    /// Put an asset in another folder of the project, `""` being its root.
-    MoveAsset { asset: Uuid, into_directory: String },
+    /// Put an asset at another path of the project, its sidecar going with it.
+    RelocateAsset { asset: Uuid, to_path: String },
     /// Stop tracking an asset; its file leaves the project and nothing keeps its bytes.
     DeleteAsset { asset: Uuid },
     /// Replace an asset's import settings.
@@ -444,6 +484,10 @@ pub struct ProjectTransaction {
     /// The key the caller sent it under, when it sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<ProjectActionIdempotencyKey>,
+    /// The actions its caller sent, exactly as sent; empty for an undo, a redo, or a change the
+    /// runtime made itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ProjectAction>,
 }
 
 impl ProjectTransaction {

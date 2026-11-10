@@ -1974,11 +1974,71 @@ fn an_agent_named(name: &str) -> Value {
 /// Five edits sent as one `transact` are one commit: the graph document keeps them, so a
 /// fresh runtime loading it finds them, and one `undo` reverses all five, on the document and
 /// on the running stream.
+/// The graph actions a `transact` is sent, and the one action a single-operation tool is sent,
+/// are what their commits record, field for field, once the mode, the author and the key that
+/// carry them are set aside.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_action_sent_over_mcp_is_the_action_its_commit_records() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let transacted_actions = json!([
+        { "operation": "add_node", "stream": stream_asset, "type": sink_type.as_str(),
+          "name": "monitor", "as": "monitor" },
+        { "operation": "connect", "stream": stream_asset,
+          "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+          "target": { "node": "monitor", "port": "video" } },
+    ]);
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({
+                "author": an_agent_named("alice"), "idempotency_key": "wire-monitor",
+                "operations": transacted_actions,
+            }),
+        )
+        .await,
+    )
+    .expect("the transaction applies");
+    let rename = json!({ "stream": stream_asset, "node": SOURCE_NODE_UUID, "name": "camera" });
+    let mut rename_sent = rename.clone();
+    rename_sent["author"] = an_agent_named("alice");
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "rename_node",
+            rename_sent,
+        )
+        .await,
+    )
+    .expect("the rename applies");
+
+    let recorded_actions_oldest_first: Vec<Value> =
+        streamlib_project_repository::ProjectRepository::open(project.path())
+            .expect("the project opens")
+            .applied_transactions_newest_first(2)
+            .expect("history reads")
+            .into_iter()
+            .rev()
+            .map(|applied| serde_json::to_value(&applied.transaction.actions).unwrap())
+            .collect();
+    let mut rename_as_recorded = rename;
+    rename_as_recorded["operation"] = json!("rename_node");
+    assert_eq!(
+        recorded_actions_oldest_first,
+        vec![transacted_actions, json!([rename_as_recorded])]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_reverses_them() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
 
     let applied = tool_answer(
@@ -1988,16 +2048,16 @@ async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_re
             json!({
                 "author": an_agent_named("alice"),
                 "operations": [
-                    { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+                    { "operation": "add_node", "stream": stream_asset, "type": sink_type.as_str(),
                       "name": "monitor", "as": "monitor" },
-                    { "operation": "connect", "stream": stream_id,
+                    { "operation": "connect", "stream": stream_asset,
                       "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                       "target": { "node": "monitor", "port": "video" } },
-                    { "operation": "rename_node", "stream": stream_id,
+                    { "operation": "rename_node", "stream": stream_asset,
                       "node": SOURCE_NODE_UUID, "name": "camera" },
-                    { "operation": "set_studio_fields", "stream": stream_id,
+                    { "operation": "set_studio_fields", "stream": stream_asset,
                       "node": SOURCE_NODE_UUID, "studio": { "position": [120, 40] } },
-                    { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+                    { "operation": "add_node", "stream": stream_asset, "type": sink_type.as_str(),
                       "name": "spare" },
                 ],
             }),
@@ -2070,6 +2130,7 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
@@ -2082,7 +2143,7 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     };
     let add_a_sink_as = |author: &str, name: &str| {
         json!({
-            "stream": stream_id, "type": sink_type.as_str(), "name": name,
+            "stream": stream_asset, "type": sink_type.as_str(), "name": name,
             "author": an_agent_named(author),
         })
     };
@@ -2095,7 +2156,7 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     call(
         "rename_node",
         json!({
-            "stream": stream_id, "node": alice_first, "name": "alice-renamed",
+            "stream": stream_asset, "node": alice_first, "name": "alice-renamed",
             "author": an_agent_named("alice"),
         }),
     )
@@ -2142,7 +2203,8 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
 async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let editing_connection = rmcp_client_over_the_upgraded_stream(&served).await;
     let listening_connection = rmcp_client_over_the_upgraded_stream(&served).await;
@@ -2177,7 +2239,7 @@ async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
         &editing_connection,
         "remove_node",
         json!({
-            "stream": stream_id, "node": absent_node, "author": an_agent_named("alice"),
+            "stream": stream_asset, "node": absent_node, "author": an_agent_named("alice"),
             "idempotency_key": "remove-gesture",
         }),
     )
@@ -2187,7 +2249,7 @@ async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
         &editing_connection,
         "rename_node",
         json!({
-            "stream": stream_id, "node": absent_node, "name": "glow", "mode": "live",
+            "stream": stream_asset, "node": absent_node, "name": "glow", "mode": "live",
             "author": an_agent_named("bob"),
         }),
     )
@@ -2226,7 +2288,7 @@ async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
     assert_eq!(refused_before_it["idempotency_key"], "remove-gesture");
     assert_eq!(
         refused_before_it["operations"],
-        json!([{ "operation": "remove_node", "stream": stream_id, "node": absent_node }])
+        json!([{ "operation": "remove_node", "stream": stream_asset, "node": absent_node }])
     );
     assert_eq!(
         refused_before_it["refusal"], refused["structuredContent"]["refusal"],
@@ -2262,6 +2324,7 @@ async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
@@ -2273,7 +2336,7 @@ async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
         }
     };
     let add_the_sink = json!({
-        "stream": stream_id, "type": sink_type.as_str(), "name": "sink",
+        "stream": stream_asset, "type": sink_type.as_str(), "name": "sink",
         "author": an_agent_named("alice"), "idempotency_key": "add-sink-gesture",
     });
 
@@ -2425,10 +2488,11 @@ async fn an_imported_graph_generator_runs_as_a_fragment_and_a_rerun_keeps_each_n
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let import_the_look = || {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
         let arguments = json!({
-            "stream": stream_id, "generator": LOOK_GENERATOR, "author": an_agent_named("alice"),
+            "stream": stream_asset, "generator": LOOK_GENERATOR, "author": an_agent_named("alice"),
         });
         async move {
             tool_answer(
@@ -2512,7 +2576,8 @@ async fn an_import_under_the_name_of_a_node_that_is_no_fragment_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     std::fs::write(
         project.path().join("generator-run.json"),
         json!({
@@ -2529,7 +2594,7 @@ async fn an_import_under_the_name_of_a_node_that_is_no_fragment_is_refused() {
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "import_graph_generator",
-            json!({ "stream": stream_id, "generator": LOOK_GENERATOR, "name": "source" }),
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR, "name": "source" }),
         )
         .await,
     )
@@ -2551,12 +2616,13 @@ async fn refresh_fragments_reruns_the_fragments_a_changed_module_defines() {
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     project.next_look_run_places(a_source_into_a_sink_fragment(false));
     tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "import_graph_generator",
-            json!({ "stream": stream_id, "generator": LOOK_GENERATOR }),
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR }),
         )
         .await,
     )
@@ -2608,6 +2674,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
     project.next_look_run_places(json!({
         "nodes": [
@@ -2624,7 +2691,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "import_graph_generator",
-            json!({ "stream": stream_id, "generator": LOOK_GENERATOR }),
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR }),
         )
         .await,
     )
@@ -2636,7 +2703,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
             engine.operations_on_the_loaded_streams(),
             "connect",
             json!({
-                "stream": stream_id,
+                "stream": stream_asset,
                 "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                 "target": { "node": look, "port": "video" },
             }),
@@ -2665,6 +2732,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let call = |tool_name: &'static str, arguments: Value| {
         let operations = engine.operations_on_the_loaded_streams();
         async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
@@ -2672,7 +2740,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
 
     let added = call(
         "add_group",
-        json!({ "stream": stream_id, "title": "sources", "description": "every camera",
+        json!({ "stream": stream_asset, "title": "sources", "description": "every camera",
                 "colour": "#3b82f6", "nodes": [SOURCE_NODE_UUID],
                 "author": an_agent_named("alice") }),
     )
@@ -2685,7 +2753,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
     assert_eq!(added["added_groups"][0]["title"], "sources", "{added}");
     call(
         "set_group_fields",
-        json!({ "stream": stream_id, "group": group, "colour": "#22c55e",
+        json!({ "stream": stream_asset, "group": group, "colour": "#22c55e",
                 "author": an_agent_named("alice") }),
     )
     .await
@@ -2715,7 +2783,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
 
     let removed = call(
         "remove_group",
-        json!({ "stream": stream_id, "group": group, "author": an_agent_named("alice") }),
+        json!({ "stream": stream_asset, "group": group, "author": an_agent_named("alice") }),
     )
     .await
     .expect("the group is taken out");
@@ -2765,6 +2833,7 @@ impl ProjectWithGraphDocuments {
                     name: "arm maintainer".to_owned(),
                 },
                 None,
+                Vec::new(),
                 vec![streamlib_project_repository::ProjectOperation::StreamGraph(
                     streamlib_project_repository::StreamGraphOperationOnAStream {
                         stream: self.stream_asset_of("main"),
@@ -2843,6 +2912,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
         .to_owned();
     let cell = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let stream_asset = cell.stream_asset_of("main");
     let arm_stream = arm.stream_asset_of("main").to_string();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations = engine.operations_on_the_loaded_streams();
@@ -2869,7 +2939,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
 
     let used = call(
         "use_dependency_stream",
-        json!({ "stream": stream_id, "project": arm.project, "dependency_stream": arm_stream,
+        json!({ "stream": stream_asset, "project": arm.project, "dependency_stream": arm_stream,
                 "name": "arm", "author": an_agent_named("alice") }),
     )
     .await
@@ -2897,7 +2967,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
     );
     let placed_again = call(
         "use_dependency_stream",
-        json!({ "stream": stream_id, "project": arm.project, "dependency_stream": arm_stream,
+        json!({ "stream": stream_asset, "project": arm.project, "dependency_stream": arm_stream,
                 "name": "arm", "author": an_agent_named("alice") }),
     )
     .await
@@ -3001,7 +3071,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
 
     call(
         "remove_node",
-        json!({ "stream": stream_id, "node": fragment, "author": an_agent_named("alice") }),
+        json!({ "stream": stream_asset, "node": fragment, "author": an_agent_named("alice") }),
     )
     .await
     .expect("the fragment is taken out");
@@ -3320,7 +3390,8 @@ async fn an_edit_to_a_stream_reaches_each_loaded_stream_holding_it_at_any_depth(
         "top",
         &["left"],
     ));
-    let main_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let main_asset = cell.stream_asset_of("main");
     let left_id = engine.a_stream_loaded_from_its_graph_document(&cell, "left");
     let top_id = engine.a_stream_loaded_from_its_graph_document(&cell, "top");
     let main_in_top = |engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory| {
@@ -3334,7 +3405,7 @@ async fn an_edit_to_a_stream_reaches_each_loaded_stream_holding_it_at_any_depth(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "add_node",
-            json!({ "stream": main_id, "type": sink_type.as_str(), "name": "wrist",
+            json!({ "stream": main_asset, "type": sink_type.as_str(), "name": "wrist",
                     "author": an_agent_named("alice") }),
         )
         .await,
@@ -3379,12 +3450,13 @@ async fn a_stream_fragment_that_would_close_a_cycle_is_refused_naming_each_strea
         &["main"],
     ));
     let main_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let main_asset = cell.stream_asset_of("main");
 
     let refusal = tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "add_node",
-            json!({ "stream": main_id, "type": STREAM_FRAGMENT_NODE_TYPE, "name": "left",
+            json!({ "stream": main_asset, "type": STREAM_FRAGMENT_NODE_TYPE, "name": "left",
                     "config": { "stream": { "asset": cell.stream_asset_of("left") } },
                     "author": an_agent_named("alice") }),
         )
