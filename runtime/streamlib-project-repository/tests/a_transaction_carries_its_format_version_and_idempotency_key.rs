@@ -394,3 +394,19 @@ fn a_key_recorded_before_the_project_was_reopened_still_answers_its_transaction(
     );
     assert_eq!(project.node_names_in_the_stream(), vec!["grade"]);
 }
+
+#[test]
+fn a_trailer_with_no_readable_envelope_leaves_the_project_openable() {
+    let project = ProjectHoldingOneStream::new();
+    let history = project.repository.history();
+    history
+        .commit_tracked_files(
+            &history.files_at_head().unwrap(),
+            &a_person(),
+            &format!("unreadable\n\n{PROJECT_TRANSACTION_COMMIT_TRAILER}: not json\n"),
+        )
+        .unwrap();
+
+    ProjectRepository::open(project.repository.project_directory())
+        .expect("one unreadable trailer does not keep the project from opening");
+}

@@ -2114,7 +2114,18 @@ fn the_commit_of_each_idempotency_key_in(
         else {
             continue;
         };
-        let envelope: ProjectTransactionEnvelopeHeader = serde_json::from_str(transaction_json)?;
+        let envelope: ProjectTransactionEnvelopeHeader =
+            match serde_json::from_str(transaction_json) {
+                Ok(envelope) => envelope,
+                Err(unreadable) => {
+                    tracing::warn!(
+                        commit = %history_commit.commit,
+                        %unreadable,
+                        "a transaction trailer has no readable envelope; its key is not indexed"
+                    );
+                    continue;
+                }
+            };
         if let Some(idempotency_key) = envelope.idempotency_key {
             commit_of_each_idempotency_key
                 .entry(idempotency_key)
