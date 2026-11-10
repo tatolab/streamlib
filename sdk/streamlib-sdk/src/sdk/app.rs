@@ -9,7 +9,6 @@
 //! runtime doesn't. [`App::runner`] and [`App::stream`] are the escape hatches
 //! for anything the sugar doesn't cover.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -18,7 +17,9 @@ use crate::sdk::descriptors::ProcessorClassImportPath;
 use crate::sdk::error::{Error, Result};
 use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
 use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec};
-use crate::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
+use crate::sdk::runtime::{
+    LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, StreamLocation,
+};
 
 /// A `(processor, port)` endpoint for [`App::connect`]. The processor is
 /// referenced by the [`AddedProcessor`] an `add`/`add_local` call returned;
@@ -64,27 +65,15 @@ pub struct App {
 }
 
 impl App {
-    /// Build an `App` over a fresh [`Runner`] holding one empty stream with the id
-    /// [`THE_STREAM_ID_AN_APP_LOADS`] whose project directory is the current
-    /// directory.
-    pub fn new() -> Result<Self> {
-        let project_directory = std::env::current_dir().map_err(|e| {
-            Error::Configuration(format!(
-                "an App's stream lives in the current directory, which cannot be read: {e}"
-            ))
-        })?;
-        Self::new_in_project_directory(project_directory)
-    }
-
-    /// Build an `App` over a fresh [`Runner`] holding one empty stream with the id
-    /// [`THE_STREAM_ID_AN_APP_LOADS`] whose project directory is
-    /// `project_directory`.
-    pub fn new_in_project_directory(project_directory: impl Into<PathBuf>) -> Result<Self> {
+    /// Build an `App` over a fresh [`Runner`] holding one empty stream, the stream of
+    /// `stream_location`, under the id [`THE_STREAM_ID_AN_APP_LOADS`].
+    pub fn new_at_stream_location(stream_location: StreamLocation) -> Result<Self> {
         let runner = Runner::new()?;
-        let stream = runner.load_an_empty_stream(
-            OptionsForLoadingOneStream::in_project_directory(project_directory)
-                .with_stream_id(THE_STREAM_ID_AN_APP_LOADS),
-        )?;
+        let stream =
+            runner.load_an_empty_stream(OptionsForLoadingOneStream::at_stream_location(
+                THE_STREAM_ID_AN_APP_LOADS,
+                stream_location,
+            ))?;
         Ok(Self { runner, stream })
     }
 

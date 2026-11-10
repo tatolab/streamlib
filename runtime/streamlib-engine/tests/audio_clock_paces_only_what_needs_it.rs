@@ -14,6 +14,7 @@
 //! gate, which never builds `tests/` integration binaries.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
 use streamlib::sdk::processors::ProcessorSpec;
@@ -93,12 +94,10 @@ fn run_a_graph_of(processor: ProcessorSpec) {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = runner
-        .load_an_empty_stream(
-            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
-                project_directory.path(),
-            )
-            .with_stream_id("main"),
-        )
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
         .expect("an empty stream loads");
     stream.add_processor(processor).expect("add the processor");
     stream.start().expect("stream start");

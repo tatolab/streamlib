@@ -435,8 +435,8 @@ pub struct StreamListing {
     pub stream_id: String,
     /// The label the stream is shown under.
     pub display_name: String,
-    /// Where the stream's code lives; `None` for a stream a library host
-    /// loaded, and for a record an earlier runtime wrote.
+    /// The project and stream asset the stream is; `None` for a record an earlier runtime
+    /// wrote.
     pub stream_location: Option<StreamLocation>,
     /// Whether it is running, stopped or failed.
     pub state: StreamListingState,
@@ -920,7 +920,7 @@ impl Runner {
                 streams.push(StreamOfAStreamAction {
                     stream_id: loaded.stream_id().to_string(),
                     display_name: loaded.display_name(),
-                    stream_location: loaded.stream_location().cloned(),
+                    stream_location: Some(loaded.stream_location().clone()),
                     state: None,
                 });
             }
@@ -1063,7 +1063,7 @@ impl Runner {
                 streams.push(StreamOfAStreamAction {
                     stream_id: loaded.stream_id().to_string(),
                     display_name: loaded.display_name(),
-                    stream_location: loaded.stream_location().cloned(),
+                    stream_location: Some(loaded.stream_location().clone()),
                     state: None,
                 });
             }
@@ -1568,7 +1568,7 @@ impl Runner {
             .map(|stream| StreamListing {
                 stream_id: stream.stream_id().to_string(),
                 display_name: stream.display_name(),
-                stream_location: stream.stream_location().cloned(),
+                stream_location: Some(stream.stream_location().clone()),
                 state: if is_paused(stream.status()) {
                     StreamListingState::Paused
                 } else {
@@ -2484,10 +2484,13 @@ impl Runner {
             );
         let stream = match self.load_stream_held_as_unless_interrupted(
             graph,
-            OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                .with_display_name(display_name)
-                .at_stream_location(stream_id.to_string(), stream_location.clone())
-                .with_capture_device_access_prompting(capture_device_access_prompting),
+            OptionsForLoadingOneStream::at_stream_location(
+                stream_id.to_string(),
+                stream_location.clone(),
+            )
+            .in_stream_environment(stream_environment)
+            .with_display_name(display_name)
+            .with_capture_device_access_prompting(capture_device_access_prompting),
             LoadedStreamHolding::RecordedByTheRuntime,
             is_interrupted,
         )? {
@@ -3115,17 +3118,9 @@ fn refuse_an_id_another_location_holds(
             || another_copy_of_the_project_holds(held, &stream_location.project_directory)
     };
     if let Some(loaded) = loaded {
-        match loaded.stream_location() {
-            Some(loaded_location) if !held_by_another(loaded_location) => {}
-            Some(loaded_location) => {
-                return refuse(format!("the loaded stream from {loaded_location}"));
-            }
-            None => {
-                return refuse(format!(
-                    "a stream its host loaded from {}",
-                    loaded.project_directory().display()
-                ));
-            }
+        let loaded_location = loaded.stream_location();
+        if held_by_another(loaded_location) {
+            return refuse(format!("the loaded stream from {loaded_location}"));
         }
     }
     match record {
@@ -3414,6 +3409,7 @@ fn refuse_the_cancel_of_a_running_unload(running: &StreamAction) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     /// What [`Runner::remove_one_stream`] did.
@@ -3857,7 +3853,7 @@ mod tests {
     }
 
     /// The stream `stream_name` of `project` loaded by a library host under the id a run
-    /// records it under, not started.
+    /// records it under, not recorded and not started.
     fn a_stream_its_host_loaded(
         runner: &Runner,
         project: &ProjectWithGraphDocuments,
@@ -3868,8 +3864,10 @@ mod tests {
         runner
             .load_stream_from_graph_snapshot(
                 &graph,
-                OptionsForLoadingOneStream::in_project_directory(project.path())
-                    .with_stream_id(project.stream_id_of(stream_name)),
+                OptionsForLoadingOneStream::at_stream_location(
+                    project.stream_id_of(stream_name),
+                    project.location_of(stream_name),
+                ),
             )
             .expect("the host loads its stream")
     }
@@ -3991,14 +3989,16 @@ mod tests {
         let host_loaded = runner
             .load_stream_from_graph_snapshot(
                 &graph,
-                OptionsForLoadingOneStream::in_project_directory(host_project.path())
-                    .with_stream_id(camera.clone()),
+                OptionsForLoadingOneStream::at_stream_location(
+                    camera.clone(),
+                    host_project.location_of("camera"),
+                ),
             )
             .expect("the host loads its stream under the id it names");
 
         let refusal = refusal_of(runner.load_the_project_off_its_queue(project.run_request()));
 
-        assert!(refusal.contains("its host loaded"), "{refusal}");
+        assert!(refusal.contains("the loaded stream from"), "{refusal}");
         assert!(
             refusal.contains(&host_project.path().display().to_string()),
             "{refusal}"
@@ -5019,7 +5019,6 @@ mod tests {
         let mut expected = [
             StreamListing {
                 display_name: project.stream_id_of("a-hosted"),
-                stream_location: None,
                 ..listing_of("a-hosted", StreamListingState::Running, Some(1))
             },
             listing_of("b-recorded", StreamListingState::Running, Some(1)),

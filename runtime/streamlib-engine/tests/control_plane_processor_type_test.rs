@@ -19,6 +19,7 @@ use streamlib::sdk::descriptors::{
 };
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 /// An empty stream loaded into `runner`, its project in `project_directory`.
 fn an_empty_stream_loaded_into(
@@ -26,12 +27,10 @@ fn an_empty_stream_loaded_into(
     project_directory: &std::path::Path,
 ) -> std::sync::Arc<streamlib::sdk::runtime::LoadedStreamInThisRuntime> {
     runner
-        .load_an_empty_stream(
-            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
-                project_directory,
-            )
-            .with_stream_id("main"),
-        )
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory,
+            "main",
+        ))
         .expect("an empty stream loads")
 }
 
