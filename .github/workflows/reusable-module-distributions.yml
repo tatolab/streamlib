@@ -1,0 +1,385 @@
+name: Module Distributions
+
+# Every first-party module the runtime unit does not carry, built from the
+# release's tag and published to Tatolab's own package index,
+# https://get.tatolab.com/simple/, at that release's version. It runs after
+# reusable-distributions.yml has published the core, so nothing here withholds
+# the runtime or `tatolab-stream`; a module that fails to build is left out
+# and the rest still publish. A module missing from a release is recovered by
+# re-running its failed job in the original run: a new dispatch rebuilds every
+# module, whose compiled `_native` differs byte for byte from the files the
+# index already holds, so their upload fails on a hash mismatch. Only a run
+# whose `dry_run` is false uploads.
+on:
+  workflow_call:
+    inputs:
+      tag_name:
+        description: "Release tag to build and publish"
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: "Build and check every module without uploading"
+        type: boolean
+        required: false
+        default: true
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag to build (blank = the ref this run was dispatched on; an upload needs one)"
+        type: string
+        required: false
+      dry_run:
+        description: "Build and check every module without uploading"
+        type: boolean
+        required: false
+        default: true
+
+env:
+  # The uv that builds and checks every module.
+  PINNED_UV_VERSION: "0.12.23"
+
+jobs:
+  # Each module's install check installs it beside the `tatolab-stream` of its
+  # own ref, built here; this one is never uploaded.
+  build-the-tatolab-stream-the-module-checks-install:
+    name: tatolab-stream wheel for the module install checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Build the tatolab-stream wheel
+        run: uv build --wheel --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
+
+      - name: Keep the wheel for the module install checks
+        uses: actions/upload-artifact@v6
+        with:
+          name: module-check-tatolab-stream
+          path: sdk/tatolab-stream/dist/*.whl
+          if-no-files-found: error
+
+  # An extension is a standalone project built from the same ref. A named block
+  # rather than a matrix over a JSON array: an empty `include` is a matrix
+  # expansion failure, and a second extension is one more block like this one.
+  # Its install check resolves `tatolab-stream` from this run's distribution,
+  # which is why it waits for it.
+  build-tatolab-webrtc-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/streamlib-webrtc
+      extension_distribution_name: tatolab-webrtc
+      extension_import_package_name: tatolab.webrtc
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+
+  build-tatolab-microphone-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-microphone
+      extension_distribution_name: tatolab-microphone
+      extension_import_package_name: tatolab.microphone
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+
+  build-tatolab-speaker-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-speaker
+      extension_distribution_name: tatolab-speaker
+      extension_import_package_name: tatolab.speaker
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+
+  # The codec modules: the scaffold depends on tatolab-h264, and tatolab-h265 is
+  # its H.265 twin.
+  build-tatolab-h264-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/streamlib-h264
+      extension_distribution_name: tatolab-h264
+      extension_import_package_name: tatolab.h264
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+      extension_build_needs_the_slang_compiler: true
+
+  build-tatolab-h265-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/streamlib-h265
+      extension_distribution_name: tatolab-h265
+      extension_import_package_name: tatolab.h265
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+      extension_build_needs_the_slang_compiler: true
+
+  # Linux and macOS: V4L2 and AVFoundation.
+  build-tatolab-camera-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-camera
+      extension_distribution_name: tatolab-camera
+      extension_import_package_name: tatolab.camera
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+
+  # Linux only. build.rs fetches rive-runtime with git and builds it with
+  # clang; premake needs libuuid's headers.
+  build-tatolab-rive-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-rive
+      extension_distribution_name: tatolab-rive
+      extension_import_package_name: tatolab.rive
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+      extension_build_needs_the_shader_compilers: true
+      extension_build_extra_dnf_packages: clang git libuuid-devel
+      extension_builds_for_macos: false
+
+  # Linux only at run time — both of its doors are Linux's — so a manylinux
+  # wheel only.
+  build-tatolab-virtualcamera-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-virtualcamera
+      extension_distribution_name: tatolab-virtualcamera
+      extension_import_package_name: tatolab.virtualcamera
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+      extension_builds_for_macos: false
+
+  build-tatolab-opus-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-opus
+      extension_distribution_name: tatolab-opus
+      extension_import_package_name: tatolab.opus
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+
+  build-tatolab-moq-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-moq
+      extension_distribution_name: tatolab-moq
+      extension_import_package_name: tatolab.moq
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+
+  # The node side of a web page source: its wheel carries no browser, which is
+  # the shared browser host the runtime unit ships.
+  build-tatolab-browser-distribution:
+    needs: build-the-tatolab-stream-the-module-checks-install
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-extension-wheel.yml
+    with:
+      extension_package_directory: packages/tatolab-browser
+      extension_distribution_name: tatolab-browser
+      extension_import_package_name: tatolab.browser
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
+      extension_builds_for_macos: false
+  # Wheels and their sidecars first and the pages last, so a page never links a
+  # file the bucket does not hold. It shares one concurrency group with the core
+  # modules' publish: the pages are written from what the bucket holds, so a
+  # later run's pages always list an earlier run's wheels.
+  publish-the-modules-to-the-tatolab-package-index:
+    name: Publish the modules that built to get.tatolab.com/simple/
+    if: ${{ !cancelled() }}
+    needs:
+      - build-tatolab-webrtc-distribution
+      - build-tatolab-microphone-distribution
+      - build-tatolab-speaker-distribution
+      - build-tatolab-opus-distribution
+      - build-tatolab-moq-distribution
+      - build-tatolab-browser-distribution
+      - build-tatolab-virtualcamera-distribution
+      - build-tatolab-h264-distribution
+      - build-tatolab-h265-distribution
+      - build-tatolab-camera-distribution
+      - build-tatolab-rive-distribution
+    concurrency:
+      group: get-tatolab-com-package-index
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GET_TATOLAB_COM_BUCKET: get-tatolab-com
+      GET_TATOLAB_COM_URL: https://get.tatolab.com
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag_name }}
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Collect every module wheel this run built
+        uses: actions/download-artifact@v7
+        with:
+          pattern: module-distribution-*
+          path: dist
+          merge-multiple: true
+
+      - name: Name each module that did not build
+        env:
+          MODULE_BUILD_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$MODULE_BUILD_RESULTS" | python3 -c "
+          import json, sys
+          for job_name, job in json.load(sys.stdin).items():
+              if job['result'] != 'success':
+                  print('::warning::' + job_name + ' ended ' + job['result'] + '; its module is left out of this publish')
+          "
+          mkdir -p dist
+          ls -l dist
+
+      # The index never takes a file name twice, so a wheel uploaded at the wrong
+      # version cannot be replaced by the right one.
+      - name: Every wheel carries the release's version
+        if: inputs.tag_name != ''
+        env:
+          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG_NAME#v}"
+          for distribution_path in dist/*.whl; do
+            [ -e "$distribution_path" ] || continue
+            distribution_file_name="$(basename "$distribution_path")"
+            distribution_version="$(echo "$distribution_file_name" | cut -d- -f2)"
+            if [ "$distribution_version" != "$release_version" ]; then
+              echo "::error::$distribution_file_name is version $distribution_version, not the $release_version $RELEASE_TAG_NAME releases"
+              exit 1
+            fi
+          done
+
+      - name: An upload names the release it publishes
+        if: ${{ !inputs.dry_run && inputs.tag_name == '' }}
+        run: |
+          echo "::error::an upload to the index publishes a release — name its tag in tag_name"
+          exit 1
+
+      - name: Copy the index's sidecars from the bucket
+        if: ${{ !inputs.dry_run }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: >-
+          aws s3 sync --endpoint-url "https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com" --only-show-errors
+          --exclude '*' --include '*.sha256' --include '*.metadata'
+          "s3://$GET_TATOLAB_COM_BUCKET/packages/" index/packages/
+
+      # A wheel the index holds byte for byte is skipped; one it holds with other
+      # bytes fails the job.
+      - name: Add this run's wheels and write the pages
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          module_wheels=(dist/*.whl)
+          if [ "${#module_wheels[@]}" -gt 0 ]; then
+            python3 scripts/tatolab_package_index.py add-wheels index "${module_wheels[@]}"
+          fi
+          python3 scripts/tatolab_package_index.py write-pages index
+          find index -type f | sort
+
+      # A custom domain serves an object at its exact key and maps no directory
+      # to an `index.html`, so each page goes up at the key uv requests.
+      - name: Upload the new wheels, then the pages
+        if: ${{ !inputs.dry_run }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          r2_endpoint="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+          put_object() {
+            aws s3api put-object --endpoint-url "$r2_endpoint" --bucket "$GET_TATOLAB_COM_BUCKET" \
+              --body "$1" --key "$2" --content-type "$3" --cache-control "$4" > /dev/null
+          }
+          # Only a wheel this run added is on disk: the sync left the held ones in the bucket.
+          for wheel_path in index/packages/*/*.whl; do
+            [ -e "$wheel_path" ] || continue
+            wheel_key="${wheel_path#index/}"
+            put_object "$wheel_path" "$wheel_key" application/octet-stream "public, max-age=31536000, immutable"
+            put_object "$wheel_path.metadata" "$wheel_key.metadata" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
+            put_object "$wheel_path.sha256" "$wheel_key.sha256" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
+          done
+          for project_page in index/simple/*/index.html; do
+            project_directory="$(basename "$(dirname "$project_page")")"
+            put_object "$project_page" "simple/$project_directory/" "text/html; charset=utf-8" "public, max-age=0, must-revalidate"
+          done
+          put_object index/simple/index.html simple/ "text/html; charset=utf-8" "public, max-age=0, must-revalidate"
+
+      - name: What a publish would upload
+        if: inputs.dry_run
+        run: find index -type f | sort
+
+      # Through the public domain, as a project's `uv sync` reads it: every wheel
+      # this run added is served with the bytes the index lists.
+      - name: get.tatolab.com serves every module wheel this run added
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          for wheel_path in index/packages/*/*.whl; do
+            [ -e "$wheel_path" ] || continue
+            wheel_key="${wheel_path#index/}"
+            served_sha256="$(curl -fsSL "$GET_TATOLAB_COM_URL/$wheel_key" | sha256sum | cut -d ' ' -f 1)"
+            if [ "$served_sha256" != "$(cut -d ' ' -f 1 "$wheel_path.sha256")" ]; then
+              echo "::error::$GET_TATOLAB_COM_URL serves $wheel_key with sha256 $served_sha256, not the one the index lists"
+              exit 1
+            fi
+          done
