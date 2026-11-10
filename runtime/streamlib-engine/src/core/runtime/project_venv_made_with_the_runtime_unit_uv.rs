@@ -21,8 +21,10 @@ use crate::core::child_process_lifetime::{
 use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
     HowABoundedChildProcessRunEnded, remove_every_python_variable_named_in,
     run_a_child_process_to_its_exit_within,
+    run_a_child_process_to_its_exit_within_handing_on_its_standard_error_lines,
 };
 use crate::core::error::Error;
+use crate::core::runtime::project_stream_action_queue::StreamActionVenvSyncReport;
 use crate::core::runtime::what_interrupted_a_load;
 use streamlib_project_repository::{
     FirstPartyModuleDeclaredByAProject, PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY,
@@ -99,12 +101,14 @@ impl From<ProjectVenvNotMade> for Error {
 /// `first_party_module_wheels` is declared in the project first, so the sync
 /// installs it.
 /// A sync is unbounded — uv's own network timeouts end a stalled download —
-/// and cut short whenever `is_interrupted_by_the_host` reports true.
+/// cut short whenever `is_interrupted_by_the_host` reports true, and reported
+/// line by line to `report_of_the_venv_sync` when one is given.
 pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
     first_party_module_wheels: &[PathBuf],
     is_interrupted_by_the_host: &dyn Fn() -> bool,
+    report_of_the_venv_sync: Option<StreamActionVenvSyncReport>,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
     refuse_a_project_directory_not_named_by_its_absolute_path(project_directory)
@@ -159,6 +163,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
             first_party_module_wheels,
             is_interrupted_by_the_host,
             WhatAFailedSyncLeaves::TheVenvAsItWas,
+            report_of_the_venv_sync,
         );
     };
     let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) else {
@@ -192,6 +197,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         first_party_module_wheels,
         is_interrupted_by_the_host,
         WhatAFailedSyncLeaves::NoVenv,
+        report_of_the_venv_sync,
     )
 }
 
@@ -452,6 +458,7 @@ fn sync_the_venv_with_the_runtime_unit_uv(
     first_party_module_wheels: &[PathBuf],
     is_interrupted_by_the_host: &dyn Fn() -> bool,
     what_a_failed_sync_leaves: WhatAFailedSyncLeaves,
+    mut report_of_the_venv_sync: Option<StreamActionVenvSyncReport>,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
     let venv = project_directory.join(".venv");
@@ -470,11 +477,20 @@ fn sync_the_venv_with_the_runtime_unit_uv(
         project_venv_sync_command(runtime_unit_uv, project_directory),
     )];
     for (step, mut command) in steps {
-        let run = run_a_child_process_to_its_exit_within(
+        let each_uv_standard_error_line_taken_in = report_of_the_venv_sync.take().map(
+            |mut report_of_the_venv_sync| -> Box<dyn FnMut(&str) + Send> {
+                report_of_the_venv_sync.hold_the_venv_sync_so_far();
+                Box::new(move |uv_standard_error_line| {
+                    report_of_the_venv_sync.take_in_a_uv_standard_error_line(uv_standard_error_line)
+                })
+            },
+        );
+        let run = run_a_child_process_to_its_exit_within_handing_on_its_standard_error_lines(
             &mut command,
             PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
             Duration::MAX,
             is_interrupted_by_the_host,
+            each_uv_standard_error_line_taken_in,
         )
         .map_err(|spawn_failure| {
             let failed = ProjectVenvNotMade::Failed {
@@ -729,6 +745,7 @@ mod tests {
                 Some(&self.stub_uv),
                 &[],
                 &|| false,
+                None,
             )
         }
 
@@ -741,6 +758,7 @@ mod tests {
                 Some(&self.stub_uv),
                 first_party_module_wheels,
                 &|| false,
+                None,
             )
         }
 
@@ -931,6 +949,7 @@ mod tests {
                 None,
                 &[],
                 &|| false,
+                None,
             ));
 
         assert!(
@@ -955,6 +974,7 @@ mod tests {
                 Some(&project.stub_uv),
                 &[],
                 &|| false,
+                None,
             ));
         }
         assert!(project.uv_runs().is_empty(), "{:?}", project.uv_runs());
@@ -970,6 +990,7 @@ mod tests {
             Some(&project.stub_uv),
             &[],
             &|| std::time::Instant::now() >= interrupted_after,
+            None,
         ));
 
         assert!(refusal.contains("was not made: "), "{refusal}");
@@ -987,6 +1008,7 @@ mod tests {
             None,
             &[],
             &|| std::time::Instant::now() >= interrupted_after,
+            None,
         ));
 
         assert!(refusal.contains("was not made: "), "{refusal}");

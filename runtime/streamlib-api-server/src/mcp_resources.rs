@@ -37,6 +37,7 @@ pub(crate) fn resources_list_result() -> ListResourcesResult {
             .with_title("Live graph")
             .with_description("Every loaded stream's running graph as the `graph` tool returns it without `stream`: `machine`, this machine's name, and under `streams` each stream's nodes by name with their types, ports, config and state, and its links with their state.")
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
+        crate::mcp_stream_action_resources::stream_actions_under_way_resource(),
     ])
 }
 

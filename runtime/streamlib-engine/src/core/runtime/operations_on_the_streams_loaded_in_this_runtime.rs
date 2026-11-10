@@ -98,6 +98,12 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::cancel_stream_action`].
     fn cancel_stream_action(&self, action_id: &str) -> Result<StreamAction>;
 
+    /// [`Runner::stream_actions_under_way`].
+    fn stream_actions_under_way(&self) -> Vec<StreamAction>;
+
+    /// [`Runner::listen_for_each_stream_action_change`].
+    fn listen_for_each_stream_action_change(&self) -> tokio::sync::broadcast::Receiver<String>;
+
     /// [`Runner::forget_the_stream_of_a_deleted_stream_asset`].
     fn forget_the_stream_of_a_deleted_stream_asset(
         &self,
@@ -246,6 +252,14 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn cancel_stream_action(&self, action_id: &str) -> Result<StreamAction> {
         Runner::cancel_stream_action(self, action_id)
+    }
+
+    fn stream_actions_under_way(&self) -> Vec<StreamAction> {
+        Runner::stream_actions_under_way(self)
+    }
+
+    fn listen_for_each_stream_action_change(&self) -> tokio::sync::broadcast::Receiver<String> {
+        Runner::listen_for_each_stream_action_change(self)
     }
 
     fn forget_the_stream_of_a_deleted_stream_asset(

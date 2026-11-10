@@ -367,6 +367,14 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "cancel_stream_action",
                 ))
             }
+            fn stream_actions_under_way(&self) -> Vec<::streamlib::sdk::runtime::StreamAction> {
+                Vec::new()
+            }
+            fn listen_for_each_stream_action_change(
+                &self,
+            ) -> ::tokio::sync::broadcast::Receiver<String> {
+                ::tokio::sync::broadcast::channel(1).1
+            }
             fn forget_the_stream_of_a_deleted_stream_asset(
                 &self,
                 _project: ::uuid::Uuid,
