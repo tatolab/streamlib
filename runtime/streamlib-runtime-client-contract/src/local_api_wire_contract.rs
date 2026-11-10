@@ -335,10 +335,104 @@ pub struct DescribeStreamActionToolResult {
     pub state: StreamActionStateOnTheWire,
     /// The step it is on while `in_progress`; `null` otherwise.
     pub step: Option<StreamActionStepOnTheWire>,
+    /// What its latest `uv sync` of the project's `.venv` has done, from the moment uv starts,
+    /// kept once the sync and the action end; `null` for an action that has not synced.
+    pub venv_sync: Option<ProjectVenvSyncOnTheWire>,
     /// The streams it works on, once its project's graph documents named them.
     pub streams: Vec<DescribeStreamActionToolResultStream>,
     /// Why it failed; `null` unless it did.
     pub failed_because: Option<String>,
+}
+
+/// What one `uv sync` of a project's `.venv` has done so far, read from uv's own lines: uv
+/// names a sync's downloads, builds and installs one package at a time and no byte of a
+/// download, so a sync is followed by package.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectVenvSyncOnTheWire {
+    /// The phase uv's last line put it in.
+    pub phase: ProjectVenvSyncPhaseOnTheWire,
+    /// How many packages its resolution named, the project's own among them; `null` until it
+    /// resolved.
+    pub packages_resolved: Option<u64>,
+    /// How many packages it downloaded or built before installing; `null` until uv prepared them.
+    pub packages_prepared: Option<u64>,
+    /// How many packages it installed; `null` until uv installed them.
+    pub packages_installed: Option<u64>,
+    /// How many of the downloads uv named have started; uv names only a download over its own
+    /// size threshold, about a MiB, so a small one shows only in `packages_prepared`.
+    pub downloads_started: usize,
+    /// How many of the downloads uv named have ended.
+    pub downloads_done: usize,
+    /// Each package uv named by its download, build, install or removal, first named first.
+    pub packages: Vec<ProjectVenvSyncPackageOnTheWire>,
+}
+
+/// The phase a project's `uv sync` is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectVenvSyncPhaseOnTheWire {
+    /// Finding a Python and resolving the project's requirements.
+    Resolving,
+    /// Fetching a package or a Python.
+    Downloading,
+    /// Building a package from its source.
+    Building,
+    /// Every package is prepared and the venv is being changed.
+    Installing,
+    /// The venv holds every package the project requires.
+    Installed,
+}
+
+/// One package a `uv sync` named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectVenvSyncPackageOnTheWire {
+    /// The distribution's name, or the Python build's, as uv writes it.
+    pub name: String,
+    /// The version installed or removed; `null` until uv names it.
+    pub version: Option<String>,
+    /// A `distribution` or the `python_interpreter` the venv is made with.
+    pub kind: ProjectVenvSyncPackageKindOnTheWire,
+    /// Where it stands.
+    pub state: ProjectVenvSyncPackageStateOnTheWire,
+    /// The download's size as uv states it, to its one decimal of KiB, MiB or GiB; `null` for a
+    /// package uv downloads without naming it or does not download.
+    pub download_size_bytes: Option<u64>,
+}
+
+/// What a package a `uv sync` names is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectVenvSyncPackageKindOnTheWire {
+    /// A Python distribution the venv installs.
+    Distribution,
+    /// The Python interpreter the venv is made with, which uv fetches when the machine has none.
+    PythonInterpreter,
+}
+
+/// Where one package a `uv sync` names stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectVenvSyncPackageStateOnTheWire {
+    /// Its download has started.
+    Downloading,
+    /// Its download has ended.
+    Downloaded,
+    /// Its build from source has started.
+    Building,
+    /// Its build has ended.
+    Built,
+    /// The venv holds it.
+    Installed,
+    /// The venv no longer holds it.
+    Uninstalled,
+}
+
+/// The resource `streamlib://stream-actions`: every stream action queued or under way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamActionsUnderWayResourceContents {
+    /// Each action queued or running, the earliest queued first, as `describe_stream_action`
+    /// answers it.
+    pub actions: Vec<DescribeStreamActionToolResult>,
 }
 
 /// The `cancel_stream_action` tool's result: the action's state once the cancel was taken.
@@ -1184,6 +1278,7 @@ mod tests {
                 kind: StreamActionKindOnTheWire::Load,
                 state: StreamActionStateOnTheWire::InProgress,
                 step: Some(StreamActionStepOnTheWire::Starting),
+                venv_sync: None,
                 streams: vec![DescribeStreamActionToolResultStream {
                     stream: "desk-main-0a1b2c".to_owned(),
                     display_name: "main".to_owned(),
@@ -1191,7 +1286,34 @@ mod tests {
                 }],
                 failed_because: None,
             }),
-            r#"{"action":"Rabc-3","project_directory":"/srv/desk","kind":"load","state":"in_progress","step":"starting","streams":[{"stream":"desk-main-0a1b2c","display_name":"main","state":null}],"failed_because":null}"#
+            r#"{"action":"Rabc-3","project_directory":"/srv/desk","kind":"load","state":"in_progress","step":"starting","venv_sync":null,"streams":[{"stream":"desk-main-0a1b2c","display_name":"main","state":null}],"failed_because":null}"#
+        );
+        assert_eq!(
+            wire_text(&ProjectVenvSyncOnTheWire {
+                phase: ProjectVenvSyncPhaseOnTheWire::Downloading,
+                packages_resolved: Some(8),
+                packages_prepared: None,
+                packages_installed: None,
+                downloads_started: 2,
+                downloads_done: 1,
+                packages: vec![
+                    ProjectVenvSyncPackageOnTheWire {
+                        name: "numpy".to_owned(),
+                        version: None,
+                        kind: ProjectVenvSyncPackageKindOnTheWire::Distribution,
+                        state: ProjectVenvSyncPackageStateOnTheWire::Downloading,
+                        download_size_bytes: Some(16_672_358),
+                    },
+                    ProjectVenvSyncPackageOnTheWire {
+                        name: "cpython-3.12.15-macos-aarch64-none".to_owned(),
+                        version: None,
+                        kind: ProjectVenvSyncPackageKindOnTheWire::PythonInterpreter,
+                        state: ProjectVenvSyncPackageStateOnTheWire::Downloaded,
+                        download_size_bytes: Some(34_288_435),
+                    },
+                ],
+            }),
+            r#"{"phase":"downloading","packages_resolved":8,"packages_prepared":null,"packages_installed":null,"downloads_started":2,"downloads_done":1,"packages":[{"name":"numpy","version":null,"kind":"distribution","state":"downloading","download_size_bytes":16672358},{"name":"cpython-3.12.15-macos-aarch64-none","version":null,"kind":"python_interpreter","state":"downloaded","download_size_bytes":34288435}]}"#
         );
         assert_eq!(
             wire_text(&CancelStreamActionToolResult {
