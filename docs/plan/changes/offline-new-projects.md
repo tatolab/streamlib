@@ -66,30 +66,33 @@ tatolab-stream slice of #3502 (#3505).
 ## ADDED
 
 - **The unit's carried wheels.** `cargo xtask build-runtime` downloads, for the platform it
-  builds, each wheel `runtime-unit-carried-wheels.toml` pins (name, version, file name, URL,
-  SHA-256, per platform), refuses one whose digest differs, and places them in
-  `lib/tatolab/carried-wheels/`. `cargo xtask pin-runtime-unit-carried-wheels` rewrites the pin
-  file: it resolves the core modules' third-party requirements with the unit's uv for each
-  platform the unit ships (`--python-platform aarch64-apple-darwin` and
-  `x86_64-manylinux_2_28`, Python 3.12), and writes what it resolved. The pin moves only when
-  someone runs it, the way uv's pin does.
-- **The unit's carried Python.** `build-runtime` downloads the CPython build the unit's uv names
-  for the scaffold's `.python-version` on its platform (`uv python list --only-downloads`), pinned
-  by SHA-256 in the same file, into `lib/tatolab/python-downloads/<build>/<file name>`, the layout
-  uv reads from a mirror.
+  builds, each wheel `xtask/runtime_unit_carried_packages.toml` pins (name, version, path in
+  the unit, URL, SHA-256, per platform), refuses one whose digest differs, and places them in
+  `lib/tatolab/carried-wheels/` (`xtask/src/stage_runtime_unit_carried_packages.rs`).
+  `cargo xtask pin-runtime-unit-carried-packages` rewrites the pin file: it resolves the core
+  modules' third-party requirements with the unit's uv for each platform the unit ships
+  (`--python-platform aarch64-apple-darwin` at `MACOSX_DEPLOYMENT_TARGET=26.0`, and
+  `x86_64-manylinux_2_28`, Python 3.12), keeps the most specific wheel of each, and writes what
+  it resolved. The pin moves only when someone runs it, the way uv's pin does.
+- **The unit's carried Python.** The same command pins the CPython build the unit's uv names
+  for the scaffold's `.python-version` on each platform (`uv python list --only-downloads`), from
+  python-build-standalone's GitHub release, and `build-runtime` places it in
+  `lib/tatolab/python-downloads/<build>/<file name>`, the layout uv reads from a mirror.
 - **A project's link to the carried wheels.** Each time the runtime makes, syncs or locks a
   project's `.venv`, it links `.tatolab/carried-wheels` to the unit's folder, beside
-  `.tatolab/first-party-imports/`, and takes the link out when the unit carries none.
-- **Carried first, then the index.** Each uv run the runtime makes for a project goes in two
-  steps:
-  1. With `UV_PYTHON_INSTALL_MIRROR=file://<unit>/lib/tatolab/python-downloads`, the runtime runs
-     `uv python install` for the project's `.python-version`. uv takes a Python already on the
-     machine when one matches, and otherwise installs the carried one, with no network. A
-     version the unit does not carry is installed the way it is today, through uv's own
-     download.
-  2. `uv sync --offline --find-links .tatolab/carried-wheels` (and the same for `lock`). If it
-     fails, the runtime runs it again without `--offline`, keeping `--find-links`. The second
-     run's refusal is the one the action reports, in uv's words.
+  `.tatolab/first-party-imports/`, and names the link in the project's `pyproject.toml` as
+  `[tool.uv].find-links`, so a person's own `uv sync` finds the same wheels. Both are taken out
+  when the unit carries none.
+- **Carried first, then the index.** When the unit carries a Python and wheels, each sync the
+  runtime makes for a project goes in two steps:
+  1. `uv python find` for the project's `.python-version`. When it finds none, the runtime runs
+     `uv python install --no-bin` with `UV_PYTHON_INSTALL_MIRROR=file://<unit's python-downloads>`,
+     which installs the carried one with no network and writes nothing into the person's
+     `~/.local/bin`. A version the unit does not carry is left to the sync, which downloads it
+     the way it does today.
+  2. `uv sync --offline` (and `uv lock --offline` for a lock). If it fails, the runtime runs it
+     again without `--offline`. The second run's refusal is the one the action reports, in uv's
+     words.
 - **Notices.** `THIRD-PARTY-NOTICES.md` names each carried wheel and the CPython build with its
   licence: numpy (BSD-3-Clause, with the libraries its wheel vendors), numba and llvmlite
   (BSD-2-Clause, and LLVM under Apache-2.0 with the LLVM exception), pillow (MIT-CMU, and the
@@ -104,12 +107,15 @@ tatolab-stream slice of #3502 (#3505).
     offline attempt finds it in uv's cache, so a reload, a remade `.venv` or a runtime update
     that resyncs the project needs no network. The runtime never prunes uv's cache. A
     dependency added while offline, and not already in the cache, is refused in uv's words.
-- **Proof.** A test on the unit, on both platforms: `create_project` and its first run, with the
-  network refused, and `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` empty, ends `done` with the
-  starter running. On Linux it runs in an `ubuntu:22.04` container with no Python 3.12 installed.
-  A second test adds a dependency from a local index while online, then refuses the network and
-  reloads the project, deletes its `.venv` and loads it again, and loads it under a unit whose
-  carried wheels changed. Each load ends `done`.
+- **Proof.** `test_create_project_on_tatolabd.py`, on the unit, on both platforms:
+  `create_project` and its first run, with every request refused through an unreachable proxy,
+  `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` empty and uv kept to the Pythons it installs, ends
+  `done` with the starter running and the Python installed from the unit. The same test then
+  deletes the `.venv` and starts the project again, still offline, and it runs. The engine's own
+  tests drive the steps with a stub uv: Python found or installed from the mirror, the offline
+  sync, the fall-through to the indexes, the refusal in the second run's words, and a resync once
+  the carried wheels change. Adding a dependency online and remaking the `.venv` offline from
+  uv's cache was proven by hand with uv 0.13.1.
 
 ## MODIFIED
 
@@ -164,11 +170,9 @@ Nothing. This change adds what the unit carries and the order the runtime looks.
 - **CI's unit cache** grows by the same 79 or 122 MB per platform. The downloads are cached by
   the pin file's digest, so a unit rebuild does not fetch them again.
 
-## Tickets (sketch for `/derive-tickets`)
+## Tickets
 
-1. Notarization probe: a Tato Studio bundle carrying the macOS wheels and Python archive,
-   notarized. This settles the first risk before anything else lands.
-2. The pin file, `pin-runtime-unit-carried-wheels`, and `build-runtime` placing the carried wheels
-   and Python, with their notices.
-3. The runtime's two-step sync and lock, the project link, the stamp, and the offline proof on
-   both platforms.
+1. tatolab/tatolab-app#265: the notarization probe, and the bundle's allowed entries.
+2. #3502: the pin file, `build-runtime` placing the carried wheels and Python, the runtime's
+   two-step sync and lock, the project link, the stamp, and the offline proofs.
+3. The notices for the carried wheels and Python, in the same change before a release ships it.

@@ -9,6 +9,10 @@
 //! unit carries is linked into the project's `.tatolab/first-party-imports/`
 //! and declared in its `pyproject.toml` as a uv path source through that link,
 //! so any `uv sync`, the runtime's or a person's, keeps it and its requirements.
+//! When the unit carries third-party wheels and a Python, the project links the
+//! wheels into `.tatolab/carried-wheels` and names that link as a uv find-links
+//! source, and each sync installs the carried Python unless the machine has one
+//! and syncs offline first, reaching an index only when the offline sync fails.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -24,10 +28,48 @@ use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
 };
 use crate::core::error::Error;
 use crate::core::runtime::what_interrupted_a_load;
-use streamlib_project_repository::{
-    FirstPartyModuleDeclaredByAProject, PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY,
-    pyproject_with_each_first_party_module_as_a_uv_path_source,
+use streamlib_consumer_rhi::runtime_unit_layout::{
+    carried_python_downloads_directory_beside_the_lend, carried_wheels_directory_beside_the_lend,
+    first_party_modules_directory_beside_the_lend,
 };
+use streamlib_project_repository::{
+    FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
+    PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY,
+    pyproject_with_each_first_party_module_as_a_uv_path_source,
+    pyproject_with_the_carried_wheels_as_a_uv_find_links_source,
+};
+
+/// What the runtime unit carries for every project's `.venv`, found beside its lend.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct PackagesTheRuntimeUnitCarries {
+    /// Each first-party module wheel, in name order.
+    pub(crate) first_party_module_wheels: Vec<PathBuf>,
+    /// The folder of third-party wheels the core modules require, when the unit carries one.
+    pub(crate) carried_wheels_directory: Option<PathBuf>,
+    /// The uv Python mirror holding the CPython build the unit carries, when it carries one.
+    pub(crate) carried_python_downloads_directory: Option<PathBuf>,
+}
+
+impl PackagesTheRuntimeUnitCarries {
+    /// What the unit whose lend is at `lend_directory` carries beside it.
+    pub(crate) fn beside_the_lend(lend_directory: &Path) -> Self {
+        let a_directory_that_is_there =
+            |directory: Option<PathBuf>| directory.filter(|directory| directory.is_dir());
+        Self {
+            first_party_module_wheels: first_party_modules_directory_beside_the_lend(
+                lend_directory,
+            )
+            .map(|directory| every_first_party_module_wheel_in(&directory))
+            .unwrap_or_default(),
+            carried_wheels_directory: a_directory_that_is_there(
+                carried_wheels_directory_beside_the_lend(lend_directory),
+            ),
+            carried_python_downloads_directory: a_directory_that_is_there(
+                carried_python_downloads_directory_beside_the_lend(lend_directory),
+            ),
+        }
+    }
+}
 
 /// The interpreter a project's streams run in: `<project>/.venv/bin/python`,
 /// taken as it is spelled, never resolved through its symlink.
@@ -103,9 +145,10 @@ impl From<ProjectVenvNotMade> for Error {
 pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
-    first_party_module_wheels: &[PathBuf],
+    packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<(), ProjectVenvNotMade> {
+    let first_party_module_wheels = &packages_the_runtime_unit_carries.first_party_module_wheels;
     let project = project_directory.display();
     refuse_a_project_directory_not_named_by_its_absolute_path(project_directory)
         .map_err(ProjectVenvNotMade::Refused)?;
@@ -121,6 +164,12 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         )))
     };
     declare_each_first_party_module_in_the_project(project_directory, first_party_module_wheels)?;
+    declare_the_carried_wheels_in_the_project(
+        project_directory,
+        packages_the_runtime_unit_carries
+            .carried_wheels_directory
+            .as_deref(),
+    )?;
     let interpreter = the_projects_venv_interpreter(project_directory);
     let venv = project_directory.join(".venv");
     let why_the_interpreter_does_not_run = match probe_the_venv_interpreter(
@@ -132,7 +181,8 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         VenvInterpreterProbe::CutShortByTheHost => return Err(an_interrupt_refusal()),
         VenvInterpreterProbe::DoesNotRun { why } => Some(why),
     };
-    let sync_stamp_now = the_venv_sync_stamp_of(project_directory, first_party_module_wheels);
+    let sync_stamp_now =
+        the_venv_sync_stamp_of(project_directory, packages_the_runtime_unit_carries);
     let Some(why_the_interpreter_does_not_run) = why_the_interpreter_does_not_run else {
         let synced_with_what_it_holds_now = sync_stamp_now.as_deref()
             == std::fs::read_to_string(venv.join(PROJECT_VENV_SYNC_STAMP_FILE_NAME))
@@ -156,7 +206,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         return sync_the_venv_with_the_runtime_unit_uv(
             project_directory,
             runtime_unit_uv,
-            first_party_module_wheels,
+            packages_the_runtime_unit_carries,
             is_interrupted_by_the_host,
             WhatAFailedSyncLeaves::TheVenvAsItWas,
         );
@@ -189,7 +239,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
     sync_the_venv_with_the_runtime_unit_uv(
         project_directory,
         runtime_unit_uv,
-        first_party_module_wheels,
+        packages_the_runtime_unit_carries,
         is_interrupted_by_the_host,
         WhatAFailedSyncLeaves::NoVenv,
     )
@@ -282,6 +332,65 @@ fn declare_each_first_party_module_in_the_project(
     Ok(())
 }
 
+/// Link the project's [`PROJECT_CARRIED_WHEELS_LINK`] to `carried_wheels_directory` and name
+/// it in the project's `pyproject.toml` as a uv find-links source, or take both out when the
+/// unit carries no wheels. Nothing is written when the project holds no `pyproject.toml`.
+fn declare_the_carried_wheels_in_the_project(
+    project_directory: &Path,
+    carried_wheels_directory: Option<&Path>,
+) -> Result<(), ProjectVenvNotMade> {
+    let pyproject_path = project_directory.join("pyproject.toml");
+    if !pyproject_path.is_file() {
+        return Ok(());
+    }
+    let not_declared_because = |why: String| ProjectVenvNotMade::Failed {
+        failed_because: format!(
+            "the wheels the runtime carries could not be declared in {}: {why}",
+            pyproject_path.display()
+        ),
+    };
+    let link = project_directory.join(PROJECT_CARRIED_WHEELS_LINK);
+    match carried_wheels_directory {
+        Some(carried_wheels_directory) => {
+            if !std::fs::read_link(&link).is_ok_and(|target| target == carried_wheels_directory) {
+                remove_what_stands_at(&link)?;
+                if let Some(links_parent) = link.parent() {
+                    std::fs::create_dir_all(links_parent).map_err(|not_made| {
+                        not_declared_because(format!(
+                            "{} was not made: {not_made}",
+                            links_parent.display()
+                        ))
+                    })?;
+                }
+                std::os::unix::fs::symlink(carried_wheels_directory, &link).map_err(
+                    |not_linked| {
+                        not_declared_because(format!(
+                            "{} was not linked to {}: {not_linked}",
+                            link.display(),
+                            carried_wheels_directory.display()
+                        ))
+                    },
+                )?;
+            }
+        }
+        None => remove_what_stands_at(&link)?,
+    }
+    let pyproject_as_it_was = std::fs::read_to_string(&pyproject_path)
+        .map_err(|not_read| not_declared_because(format!("it was not read: {not_read}")))?;
+    let pyproject = pyproject_with_the_carried_wheels_as_a_uv_find_links_source(
+        &pyproject_as_it_was,
+        project_directory,
+        carried_wheels_directory.is_some(),
+    )
+    .map_err(|refusal| not_declared_because(refusal.to_string()))?;
+    if pyproject != pyproject_as_it_was {
+        std::fs::write(&pyproject_path, pyproject).map_err(|not_written| {
+            not_declared_because(format!("it was not written: {not_written}"))
+        })?;
+    }
+    Ok(())
+}
+
 /// The file in a project's `.venv` naming what its last sync was made from.
 const PROJECT_VENV_SYNC_STAMP_FILE_NAME: &str = "tatolab-runtime-sync";
 
@@ -292,11 +401,12 @@ const PROJECT_FILES_A_VENV_IS_SYNCED_FROM: [&str; 3] =
 /// What a project's `.venv` would be synced from now: the SHA-256 over its
 /// `pyproject.toml`, `uv.lock` and `.python-version`, each import's
 /// `pyproject.toml`, this runtime's version and the path, size and modification
-/// time of each first-party module's wheel. `None` when the project
-/// holds no `pyproject.toml`, which uv syncs nothing from.
+/// time of each first-party module's wheel, and the name of each wheel and
+/// Python archive the unit carries. `None` when the project holds no
+/// `pyproject.toml`, which uv syncs nothing from.
 fn the_venv_sync_stamp_of(
     project_directory: &Path,
-    first_party_module_wheels: &[PathBuf],
+    packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
 ) -> Option<String> {
     use sha2::{Digest, Sha256};
     if !project_directory.join("pyproject.toml").is_file() {
@@ -312,7 +422,18 @@ fn the_venv_sync_stamp_of(
         stamp.update(import_pyproject.as_os_str().as_encoded_bytes());
         stamp.update(std::fs::read(&import_pyproject).unwrap_or_default());
     }
-    for module_wheel in first_party_module_wheels {
+    for carried_directory in [
+        &packages_the_runtime_unit_carries.carried_wheels_directory,
+        &packages_the_runtime_unit_carries.carried_python_downloads_directory,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for carried_file_name in every_file_name_below(carried_directory) {
+            stamp.update(carried_file_name.as_bytes());
+        }
+    }
+    for module_wheel in &packages_the_runtime_unit_carries.first_party_module_wheels {
         stamp.update(module_wheel.as_os_str().as_encoded_bytes());
         if let Ok(wheel_metadata) = std::fs::metadata(module_wheel) {
             stamp.update(wheel_metadata.len().to_le_bytes());
@@ -328,6 +449,28 @@ fn the_venv_sync_stamp_of(
             .map(|byte| format!("{byte:02x}"))
             .collect(),
     )
+}
+
+/// The path of each file below `directory`, relative to it, in name order; none when it is
+/// not there.
+fn every_file_name_below(directory: &Path) -> Vec<String> {
+    let mut file_names = Vec::new();
+    let mut directories_to_read = vec![directory.to_owned()];
+    while let Some(directory_to_read) = directories_to_read.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory_to_read) else {
+            continue;
+        };
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                directories_to_read.push(path);
+            } else if let Ok(relative) = path.strip_prefix(directory) {
+                file_names.push(relative.to_string_lossy().into_owned());
+            }
+        }
+    }
+    file_names.sort();
+    file_names
 }
 
 /// Each wheel file in `first_party_modules_directory`, in name order; none
@@ -405,9 +548,9 @@ fn the_escaped_distribution_name_of_the_module_wheel(module_wheel: &Path) -> Opt
 /// finding the same runs no uv.
 pub(crate) fn record_the_venv_synced_with_what_the_project_holds_now(
     project_directory: &Path,
-    first_party_module_wheels: &[PathBuf],
+    packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
 ) -> std::io::Result<()> {
-    match the_venv_sync_stamp_of(project_directory, first_party_module_wheels) {
+    match the_venv_sync_stamp_of(project_directory, packages_the_runtime_unit_carries) {
         Some(sync_stamp) => std::fs::write(
             project_directory
                 .join(".venv")
@@ -443,13 +586,101 @@ enum WhatAFailedSyncLeaves {
     TheVenvAsItWas,
 }
 
+/// The uv runs a sync or a lock tries in turn, each a step name and its command: offline first,
+/// against the carried wheels and uv's cache, when the unit carries wheels, and then the same
+/// run reaching the project's indexes.
+fn the_uv_runs_tried_in_turn(
+    runtime_unit_uv: &Path,
+    project_directory: &Path,
+    uv_subcommand: &str,
+    packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
+) -> Vec<(String, Command)> {
+    let mut runs = Vec::new();
+    if packages_the_runtime_unit_carries
+        .carried_wheels_directory
+        .is_some()
+    {
+        let mut offline = project_venv_uv_command(runtime_unit_uv, project_directory);
+        offline.args([uv_subcommand, "--offline"]);
+        runs.push((format!("uv {uv_subcommand} --offline"), offline));
+    }
+    let mut reaching_the_indexes = project_venv_uv_command(runtime_unit_uv, project_directory);
+    reaching_the_indexes.arg(uv_subcommand);
+    runs.push((format!("uv {uv_subcommand}"), reaching_the_indexes));
+    runs
+}
+
+/// Install the CPython build the unit carries for the project's `.python-version` from the
+/// unit's uv mirror, unless uv finds a matching Python on the machine, and never into the
+/// person's own `~/.local/bin` (`--no-bin`). A Python the mirror does not hold is left to the
+/// sync, which downloads it; only an interrupt is refused.
+fn install_the_carried_python_unless_the_machine_has_one(
+    project_directory: &Path,
+    runtime_unit_uv: &Path,
+    carried_python_downloads_directory: &Path,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+) -> Result<(), ProjectVenvNotMade> {
+    let mut find = project_venv_uv_command(runtime_unit_uv, project_directory);
+    find.args(["python", "find"]);
+    let mut install = project_venv_uv_command(runtime_unit_uv, project_directory);
+    install.args(["python", "install", "--no-bin"]).env(
+        UV_PYTHON_INSTALL_MIRROR_VARIABLE,
+        the_file_url_of(carried_python_downloads_directory),
+    );
+    for (step, mut command) in [("uv python find", find), ("uv python install", install)] {
+        let run = match run_a_child_process_to_its_exit_within(
+            &mut command,
+            PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
+            Duration::MAX,
+            is_interrupted_by_the_host,
+        ) {
+            Ok(run) => run,
+            Err(not_started) => {
+                tracing::warn!(%not_started, "`{step}` could not be started, so the sync finds its own Python");
+                return Ok(());
+            }
+        };
+        if matches!(
+            run.ended,
+            HowABoundedChildProcessRunEnded::InterruptedByTheHost
+        ) {
+            return Err(ProjectVenvNotMade::Refused(Error::Runtime(format!(
+                "the .venv of {} was not made: {}",
+                project_directory.display(),
+                what_interrupted_a_load()
+            ))));
+        }
+        if run.exited_successfully() {
+            return Ok(());
+        }
+        if step == "uv python install" {
+            tracing::warn!(
+                "`uv python install` from the runtime unit's {} failed, so the sync finds its own \
+                 Python: {}",
+                carried_python_downloads_directory.display(),
+                run.standard_error_as_a_refusal_quotes_it()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `uv` names the folder it reads Python downloads from instead of their release with this.
+const UV_PYTHON_INSTALL_MIRROR_VARIABLE: &str = "UV_PYTHON_INSTALL_MIRROR";
+
+/// `directory` as a `file://` URL.
+fn the_file_url_of(directory: &Path) -> String {
+    format!("file://{}", directory.display())
+}
+
 /// `uv sync` in `project_directory`, then the stamp naming what it was made
 /// from, taken after the sync since it may write `uv.lock`; refused in uv's
-/// own words.
+/// own words. When the unit carries a Python it is installed first, and when it carries wheels
+/// the sync runs offline first and reaches an index only when that fails.
 fn sync_the_venv_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: &Path,
-    first_party_module_wheels: &[PathBuf],
+    packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
     what_a_failed_sync_leaves: WhatAFailedSyncLeaves,
 ) -> Result<(), ProjectVenvNotMade> {
@@ -465,11 +696,26 @@ fn sync_the_venv_with_the_runtime_unit_uv(
             what_interrupted_a_load()
         )))
     };
-    let steps = [(
-        "uv sync",
-        project_venv_sync_command(runtime_unit_uv, project_directory),
-    )];
-    for (step, mut command) in steps {
+    if let Some(carried_python_downloads_directory) =
+        &packages_the_runtime_unit_carries.carried_python_downloads_directory
+        && let Err(interrupted) = install_the_carried_python_unless_the_machine_has_one(
+            project_directory,
+            runtime_unit_uv,
+            carried_python_downloads_directory,
+            is_interrupted_by_the_host,
+        )
+    {
+        leave_what_a_failed_sync_leaves()?;
+        return Err(interrupted);
+    }
+    let runs = the_uv_runs_tried_in_turn(
+        runtime_unit_uv,
+        project_directory,
+        "sync",
+        packages_the_runtime_unit_carries,
+    );
+    let last_run = runs.len() - 1;
+    for (run_index, (step, mut command)) in runs.into_iter().enumerate() {
         let run = run_a_child_process_to_its_exit_within(
             &mut command,
             PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
@@ -487,28 +733,37 @@ fn sync_the_venv_with_the_runtime_unit_uv(
             leave_what_a_failed_sync_leaves().err().unwrap_or(failed)
         })?;
         if run.exited_successfully() {
-            continue;
+            break;
         }
         let quoted_standard_error = run.standard_error_as_a_refusal_quotes_it();
-        let failed_because = match run.ended {
-            HowABoundedChildProcessRunEnded::Exited
-            | HowABoundedChildProcessRunEnded::BoundElapsed => format!(
+        if matches!(
+            run.ended,
+            HowABoundedChildProcessRunEnded::InterruptedByTheHost
+        ) {
+            leave_what_a_failed_sync_leaves()?;
+            return Err(an_interrupt_refusal());
+        }
+        if run_index < last_run {
+            tracing::info!(
+                "`{step}` could not sync {} from what the runtime carries and uv's cache, so \
+                 it syncs from the project's indexes: {quoted_standard_error}",
+                venv.display()
+            );
+            continue;
+        }
+        leave_what_a_failed_sync_leaves()?;
+        return Err(ProjectVenvNotMade::Failed {
+            failed_because: format!(
                 "`{step}` failed for {}: it exited with {}. {quoted_standard_error}",
                 venv.display(),
                 run.exit_status_rendered()
             ),
-            HowABoundedChildProcessRunEnded::InterruptedByTheHost => {
-                leave_what_a_failed_sync_leaves()?;
-                return Err(an_interrupt_refusal());
-            }
-        };
-        leave_what_a_failed_sync_leaves()?;
-        return Err(ProjectVenvNotMade::Failed { failed_because });
+        });
     }
     tracing::info!("`uv sync` made {}", venv.display());
     if let Err(not_written) = record_the_venv_synced_with_what_the_project_holds_now(
         project_directory,
-        first_party_module_wheels,
+        packages_the_runtime_unit_carries,
     ) {
         tracing::warn!(
             venv = %venv.display(),
@@ -519,41 +774,68 @@ fn sync_the_venv_with_the_runtime_unit_uv(
     Ok(())
 }
 
-/// `<runtime_unit_uv> lock` in `project_directory`, each module of
-/// `first_party_module_wheels` declared in the project first; refused in uv's
-/// own words when the requirements its `pyproject.toml` declares cannot be
-/// resolved.
+/// `<runtime_unit_uv> lock` in `project_directory`, each package the unit carries declared in
+/// the project first, offline first when the unit carries wheels; refused in uv's own words
+/// when the requirements its `pyproject.toml` declares cannot be resolved.
 pub(crate) fn lock_the_projects_python_requirements_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: &Path,
-    first_party_module_wheels: &[PathBuf],
+    packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
 ) -> Result<(), String> {
-    declare_each_first_party_module_in_the_project(project_directory, first_party_module_wheels)
-        .map_err(|not_declared| Error::from(not_declared).to_string())?;
-    let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
-    command.arg("lock");
-    let run = run_a_child_process_to_its_exit_within(
-        &mut command,
-        PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
-        Duration::MAX,
-        &|| false,
+    declare_each_first_party_module_in_the_project(
+        project_directory,
+        &packages_the_runtime_unit_carries.first_party_module_wheels,
     )
-    .map_err(|spawn_failure| {
-        format!(
-            "`{} lock` could not be started in {}: {spawn_failure}",
-            runtime_unit_uv.display(),
-            project_directory.display()
+    .map_err(|not_declared| Error::from(not_declared).to_string())?;
+    declare_the_carried_wheels_in_the_project(
+        project_directory,
+        packages_the_runtime_unit_carries
+            .carried_wheels_directory
+            .as_deref(),
+    )
+    .map_err(|not_declared| Error::from(not_declared).to_string())?;
+    let runs = the_uv_runs_tried_in_turn(
+        runtime_unit_uv,
+        project_directory,
+        "lock",
+        packages_the_runtime_unit_carries,
+    );
+    let last_run = runs.len() - 1;
+    for (run_index, (step, mut command)) in runs.into_iter().enumerate() {
+        let run = run_a_child_process_to_its_exit_within(
+            &mut command,
+            PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
+            Duration::MAX,
+            &|| false,
         )
-    })?;
-    if run.exited_successfully() {
-        return Ok(());
+        .map_err(|spawn_failure| {
+            format!(
+                "`{} {}` could not be started in {}: {spawn_failure}",
+                runtime_unit_uv.display(),
+                step.trim_start_matches("uv "),
+                project_directory.display()
+            )
+        })?;
+        if run.exited_successfully() {
+            return Ok(());
+        }
+        if run_index < last_run {
+            tracing::info!(
+                "`{step}` could not lock {} from what the runtime carries and uv's cache, so it \
+                 locks from the project's indexes: {}",
+                project_directory.display(),
+                run.standard_error_as_a_refusal_quotes_it()
+            );
+            continue;
+        }
+        return Err(format!(
+            "`{step}` failed in {}: it exited with {}. {}",
+            project_directory.display(),
+            run.exit_status_rendered(),
+            run.standard_error_as_a_refusal_quotes_it()
+        ));
     }
-    Err(format!(
-        "`uv lock` failed in {}: it exited with {}. {}",
-        project_directory.display(),
-        run.exit_status_rendered(),
-        run.standard_error_as_a_refusal_quotes_it()
-    ))
+    Ok(())
 }
 
 /// What a probe of a venv's interpreter found.
@@ -618,14 +900,6 @@ fn a_command_detached_from_the_terminal_in(program: &Path, project_directory: &P
         .stdout(Stdio::null());
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
     give_the_child_no_descriptor_beyond_stdio(&mut command);
-    command
-}
-
-/// `<runtime_unit_uv> sync` in `project_directory`, started without the
-/// variables that would point uv at another environment or Python.
-fn project_venv_sync_command(runtime_unit_uv: &Path, project_directory: &Path) -> Command {
-    let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
-    command.arg("sync");
     command
 }
 
@@ -727,7 +1001,7 @@ mod tests {
             make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &self.project_directory,
                 Some(&self.stub_uv),
-                &[],
+                &PackagesTheRuntimeUnitCarries::default(),
                 &|| false,
             )
         }
@@ -739,7 +1013,10 @@ mod tests {
             make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &self.project_directory,
                 Some(&self.stub_uv),
-                first_party_module_wheels,
+                &PackagesTheRuntimeUnitCarries {
+                    first_party_module_wheels: first_party_module_wheels.to_vec(),
+                    ..PackagesTheRuntimeUnitCarries::default()
+                },
                 &|| false,
             )
         }
@@ -748,7 +1025,11 @@ mod tests {
         fn given_the_venv_synced_with_what_the_project_holds_now(&self) {
             std::fs::write(
                 self.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME),
-                the_venv_sync_stamp_of(&self.project_directory, &[]).unwrap(),
+                the_venv_sync_stamp_of(
+                    &self.project_directory,
+                    &PackagesTheRuntimeUnitCarries::default(),
+                )
+                .unwrap(),
             )
             .unwrap();
         }
@@ -929,7 +1210,7 @@ mod tests {
             the_reason_it_failed(make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &project.project_directory,
                 None,
-                &[],
+                &PackagesTheRuntimeUnitCarries::default(),
                 &|| false,
             ));
 
@@ -953,7 +1234,7 @@ mod tests {
             the_refusal(make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &project_directory,
                 Some(&project.stub_uv),
-                &[],
+                &PackagesTheRuntimeUnitCarries::default(),
                 &|| false,
             ));
         }
@@ -968,7 +1249,7 @@ mod tests {
         let refusal = the_refusal(make_the_projects_venv_current_with_the_runtime_unit_uv(
             &project.project_directory,
             Some(&project.stub_uv),
-            &[],
+            &PackagesTheRuntimeUnitCarries::default(),
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 
@@ -985,7 +1266,7 @@ mod tests {
         let refusal = the_refusal(make_the_projects_venv_current_with_the_runtime_unit_uv(
             &project.project_directory,
             None,
-            &[],
+            &PackagesTheRuntimeUnitCarries::default(),
             &|| std::time::Instant::now() >= interrupted_after,
         ));
 
@@ -998,10 +1279,15 @@ mod tests {
 
     #[test]
     fn the_sync_is_started_without_the_variables_that_point_uv_elsewhere() {
-        let command = project_venv_sync_command(
+        let [(step, command)]: [(String, Command); 1] = the_uv_runs_tried_in_turn(
             Path::new("/opt/tatolab/bin/uv"),
             Path::new("/home/someone/app"),
-        );
+            "sync",
+            &PackagesTheRuntimeUnitCarries::default(),
+        )
+        .try_into()
+        .expect("one run when the unit carries no wheels");
+        assert_eq!(step, "uv sync");
         let removed: Vec<&std::ffi::OsStr> = command
             .get_envs()
             .filter(|(_, value)| value.is_none())
@@ -1108,6 +1394,15 @@ mod tests {
                 .unwrap(),
             "stale"
         );
+    }
+
+    fn first_party_modules_only(
+        first_party_module_wheels: &[PathBuf],
+    ) -> PackagesTheRuntimeUnitCarries {
+        PackagesTheRuntimeUnitCarries {
+            first_party_module_wheels: first_party_module_wheels.to_vec(),
+            ..PackagesTheRuntimeUnitCarries::default()
+        }
     }
 
     /// A first-party module's wheel beside the project, of `distribution_name`.
@@ -1255,7 +1550,11 @@ mod tests {
         .unwrap();
         std::fs::write(
             project.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME),
-            the_venv_sync_stamp_of(&project.project_directory, std::slice::from_ref(&ops)).unwrap(),
+            the_venv_sync_stamp_of(
+                &project.project_directory,
+                &first_party_modules_only(std::slice::from_ref(&ops)),
+            )
+            .unwrap(),
         )
         .unwrap();
 
@@ -1313,12 +1612,259 @@ mod tests {
     fn a_running_venv_is_synced_again_once_a_first_party_wheel_is_rebuilt() {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
         let ops = a_first_party_module_beside(&project, "tatolab-ops");
-        let stamp_before =
-            the_venv_sync_stamp_of(&project.project_directory, std::slice::from_ref(&ops));
+        let stamp_before = the_venv_sync_stamp_of(
+            &project.project_directory,
+            &first_party_modules_only(std::slice::from_ref(&ops)),
+        );
         std::fs::write(&ops, "a rebuilt wheel of another size").unwrap();
         assert_ne!(
-            the_venv_sync_stamp_of(&project.project_directory, std::slice::from_ref(&ops)),
+            the_venv_sync_stamp_of(
+                &project.project_directory,
+                &first_party_modules_only(std::slice::from_ref(&ops))
+            ),
             stamp_before
+        );
+    }
+
+    /// A runtime unit's carried wheels folder and Python mirror beside the project.
+    fn carried_packages_beside(project: &ProjectAndAStubUv) -> PackagesTheRuntimeUnitCarries {
+        let unit_lib = project.project_directory.parent().unwrap().join("unit-lib");
+        let carried_wheels_directory = unit_lib.join("carried-wheels");
+        let carried_python_downloads_directory = unit_lib.join("python-downloads");
+        std::fs::create_dir_all(&carried_wheels_directory).unwrap();
+        std::fs::write(
+            carried_wheels_directory.join("numpy-2.5.4-cp312-cp312-manylinux_2_28_x86_64.whl"),
+            "a wheel",
+        )
+        .unwrap();
+        std::fs::create_dir_all(carried_python_downloads_directory.join("20261013")).unwrap();
+        PackagesTheRuntimeUnitCarries {
+            first_party_module_wheels: Vec::new(),
+            carried_wheels_directory: Some(carried_wheels_directory),
+            carried_python_downloads_directory: Some(carried_python_downloads_directory),
+        }
+    }
+
+    /// A stub uv body that finds no Python, installs one, and runs `sync_body` for a sync.
+    fn a_uv_finding_no_python_and_syncing_with(sync_body: &str) -> String {
+        format!(
+            "case \"$1 $2\" in\n\
+             'python find') exit 2 ;;\n\
+             'python install') echo \"mirror=$UV_PYTHON_INSTALL_MIRROR\" >> \"$(dirname \"$0\")/uv-environment\"; exit 0 ;;\n\
+             esac\n{sync_body}"
+        )
+    }
+
+    #[test]
+    fn a_unit_carrying_wheels_and_python_installs_its_python_then_syncs_offline_from_its_link() {
+        let project = ProjectAndAStubUv::whose_uv_runs(&a_uv_finding_no_python_and_syncing_with(
+            MAKES_A_VENV_WHOSE_INTERPRETER_RUNS,
+        ));
+        let carried = carried_packages_beside(&project);
+
+        make_the_projects_venv_current_with_the_runtime_unit_uv(
+            &project.project_directory,
+            Some(&project.stub_uv),
+            &carried,
+            &|| false,
+        )
+        .expect("the venv is made");
+
+        let project_resolved = project.the_project_directory_resolved();
+        assert_eq!(
+            project.uv_runs(),
+            [
+                format!("python find in {project_resolved}"),
+                format!("python install --no-bin in {project_resolved}"),
+                format!("sync --offline in {project_resolved}"),
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.stub_uv.parent().unwrap().join("uv-environment"))
+                .unwrap()
+                .trim(),
+            format!(
+                "mirror=file://{}",
+                carried
+                    .carried_python_downloads_directory
+                    .as_ref()
+                    .unwrap()
+                    .display()
+            )
+        );
+        assert_eq!(
+            std::fs::read_link(project.project_directory.join(".tatolab/carried-wheels")).unwrap(),
+            *carried.carried_wheels_directory.as_ref().unwrap()
+        );
+        assert_eq!(
+            the_projects_pyproject(&project)["tool"]["uv"]["find-links"],
+            toml::Value::try_from([".tatolab/carried-wheels"]).unwrap(),
+            "a find-links source through the project's own link keeps uv.lock free of the unit's path"
+        );
+    }
+
+    #[test]
+    fn a_python_the_machine_has_is_used_and_none_is_installed() {
+        let project = ProjectAndAStubUv::whose_uv_runs(&format!(
+            "[ \"$1 $2\" = 'python find' ] && exit 0\n{MAKES_A_VENV_WHOSE_INTERPRETER_RUNS}"
+        ));
+        let carried = carried_packages_beside(&project);
+
+        make_the_projects_venv_current_with_the_runtime_unit_uv(
+            &project.project_directory,
+            Some(&project.stub_uv),
+            &carried,
+            &|| false,
+        )
+        .expect("the venv is made");
+
+        let project_resolved = project.the_project_directory_resolved();
+        assert_eq!(
+            project.uv_runs(),
+            [
+                format!("python find in {project_resolved}"),
+                format!("sync --offline in {project_resolved}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_failed_offline_sync_is_followed_by_one_that_reaches_the_projects_indexes() {
+        let project = ProjectAndAStubUv::whose_uv_runs(&a_uv_finding_no_python_and_syncing_with(
+            &format!(
+                "[ \"$2\" = '--offline' ] && {{ echo 'robot-arm was not found in the cache' >&2; exit 1; }}\n\
+                 {MAKES_A_VENV_WHOSE_INTERPRETER_RUNS}"
+            ),
+        ));
+        let carried = carried_packages_beside(&project);
+
+        make_the_projects_venv_current_with_the_runtime_unit_uv(
+            &project.project_directory,
+            Some(&project.stub_uv),
+            &carried,
+            &|| false,
+        )
+        .expect("the venv is made from the indexes");
+
+        let project_resolved = project.the_project_directory_resolved();
+        assert_eq!(
+            project.uv_runs()[2..],
+            [
+                format!("sync --offline in {project_resolved}"),
+                format!("sync in {project_resolved}"),
+            ]
+        );
+        assert!(project.interpreter().is_file());
+    }
+
+    #[test]
+    fn a_sync_that_fails_offline_and_from_the_indexes_is_refused_in_the_second_ones_words() {
+        let project = ProjectAndAStubUv::whose_uv_runs(&a_uv_finding_no_python_and_syncing_with(
+            "[ \"$2\" = '--offline' ] && { echo 'not in the cache' >&2; exit 1; }\n\
+             echo 'robot-arm was not found in the package registry' >&2\nexit 1",
+        ));
+        let carried = carried_packages_beside(&project);
+
+        let failed_because =
+            the_reason_it_failed(make_the_projects_venv_current_with_the_runtime_unit_uv(
+                &project.project_directory,
+                Some(&project.stub_uv),
+                &carried,
+                &|| false,
+            ));
+
+        assert!(
+            failed_because.contains("`uv sync` failed"),
+            "{failed_because}"
+        );
+        assert!(
+            failed_because.contains("robot-arm was not found in the package registry"),
+            "{failed_because}"
+        );
+        assert!(
+            !failed_because.contains("not in the cache"),
+            "{failed_because}"
+        );
+        assert!(!project.venv().exists(), "the half-made venv is removed");
+    }
+
+    #[test]
+    fn a_running_venv_is_synced_again_once_the_carried_wheels_change() {
+        let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
+        let carried = carried_packages_beside(&project);
+        let stamp_before = the_venv_sync_stamp_of(&project.project_directory, &carried).unwrap();
+
+        std::fs::write(
+            carried
+                .carried_wheels_directory
+                .as_ref()
+                .unwrap()
+                .join("pillow-13.0.0-cp312-cp312-manylinux_2_28_x86_64.whl"),
+            "a wheel",
+        )
+        .unwrap();
+
+        assert_ne!(
+            the_venv_sync_stamp_of(&project.project_directory, &carried).unwrap(),
+            stamp_before
+        );
+    }
+
+    #[test]
+    fn a_unit_that_stops_carrying_wheels_takes_the_link_and_the_find_links_source_out() {
+        let project = ProjectAndAStubUv::whose_uv_runs(&a_uv_finding_no_python_and_syncing_with(
+            MAKES_A_VENV_WHOSE_INTERPRETER_RUNS,
+        ));
+        let carried = carried_packages_beside(&project);
+        make_the_projects_venv_current_with_the_runtime_unit_uv(
+            &project.project_directory,
+            Some(&project.stub_uv),
+            &carried,
+            &|| false,
+        )
+        .expect("the venv is made");
+
+        project
+            .make_the_venv()
+            .expect("the venv is synced again with nothing carried");
+
+        assert!(
+            project
+                .project_directory
+                .join(".tatolab/carried-wheels")
+                .symlink_metadata()
+                .is_err()
+        );
+        assert!(
+            the_projects_pyproject(&project)
+                .get("tool")
+                .and_then(|tool| tool.get("uv"))
+                .and_then(|uv| uv.get("find-links"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_lock_with_carried_wheels_runs_offline_first_then_from_the_indexes() {
+        let project = ProjectAndAStubUv::whose_uv_runs(
+            "[ \"$2\" = '--offline' ] && { echo 'not in the cache' >&2; exit 1; }\nexit 0",
+        );
+        let carried = carried_packages_beside(&project);
+
+        lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+            &project.project_directory,
+            &project.stub_uv,
+            &carried,
+        )
+        .unwrap();
+
+        let project_resolved = project.the_project_directory_resolved();
+        assert_eq!(
+            project.uv_runs(),
+            [
+                format!("lock --offline in {project_resolved}"),
+                format!("lock in {project_resolved}"),
+            ]
         );
     }
 
@@ -1328,7 +1874,7 @@ mod tests {
         lock_the_projects_python_requirements_with_the_runtime_unit_uv(
             &project.project_directory,
             &project.stub_uv,
-            &[],
+            &PackagesTheRuntimeUnitCarries::default(),
         )
         .unwrap();
         assert_eq!(
@@ -1348,7 +1894,7 @@ mod tests {
         lock_the_projects_python_requirements_with_the_runtime_unit_uv(
             &project.project_directory,
             &project.stub_uv,
-            &[ops],
+            &first_party_modules_only(&[ops]),
         )
         .unwrap();
 
@@ -1368,7 +1914,7 @@ mod tests {
         let refusal = lock_the_projects_python_requirements_with_the_runtime_unit_uv(
             &project.project_directory,
             &project.stub_uv,
-            &[],
+            &PackagesTheRuntimeUnitCarries::default(),
         )
         .unwrap_err();
         assert!(refusal.contains("`uv lock` failed"), "{refusal}");

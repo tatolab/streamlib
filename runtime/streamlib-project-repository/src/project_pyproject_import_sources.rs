@@ -246,6 +246,66 @@ pub fn pyproject_with_each_first_party_module_as_a_uv_path_source(
     Ok(pyproject.to_string())
 }
 
+/// Where a project links the third-party wheels the runtime carries, relative to the project.
+pub const PROJECT_CARRIED_WHEELS_LINK: &str = ".tatolab/carried-wheels";
+
+/// `pyproject_text` with [`PROJECT_CARRIED_WHEELS_LINK`] named once in `[tool.uv].find-links`
+/// when `the_runtime_carries_wheels`, so any `uv sync` of the project, the runtime's or a
+/// person's, finds the wheels the runtime carries beside its indexes, and with it taken out
+/// otherwise. Every other find-links entry is kept as written, and a manifest with no
+/// `[project]` table is left as it is.
+pub fn pyproject_with_the_carried_wheels_as_a_uv_find_links_source(
+    pyproject_text: &str,
+    project_directory: &Path,
+    the_runtime_carries_wheels: bool,
+) -> Result<String, ProjectRepositoryRefusal> {
+    let mut pyproject: DocumentMut =
+        pyproject_text
+            .parse()
+            .map_err(|not_toml: toml_edit::TomlError| {
+                ProjectRepositoryRefusal::PyprojectUnreadable {
+                    path: project_directory.join(PYPROJECT_FILE_NAME),
+                    why: not_toml.to_string(),
+                }
+            })?;
+    if !pyproject.contains_table("project") {
+        return Ok(pyproject_text.to_owned());
+    }
+    let names_the_link = |find_links: &Array| {
+        find_links
+            .iter()
+            .any(|entry| entry.as_str() == Some(PROJECT_CARRIED_WHEELS_LINK))
+    };
+    let already_named = pyproject
+        .get("tool")
+        .and_then(|tool| tool.get("uv"))
+        .and_then(|uv| uv.get("find-links"))
+        .and_then(Item::as_array)
+        .is_some_and(names_the_link);
+    if already_named == the_runtime_carries_wheels {
+        return Ok(pyproject_text.to_owned());
+    }
+    let uv = the_table_at(&mut pyproject, &["tool", "uv"], project_directory)?;
+    let find_links = uv
+        .entry("find-links")
+        .or_insert_with(|| Item::Value(Value::Array(Array::new())))
+        .as_array_mut()
+        .ok_or_else(|| ProjectRepositoryRefusal::PyprojectUnreadable {
+            path: project_directory.join(PYPROJECT_FILE_NAME),
+            why: "its `[tool.uv].find-links` is not an array".to_owned(),
+        })?;
+    if the_runtime_carries_wheels {
+        find_links.push(PROJECT_CARRIED_WHEELS_LINK);
+    } else {
+        find_links.retain(|entry| entry.as_str() != Some(PROJECT_CARRIED_WHEELS_LINK));
+        if find_links.is_empty() {
+            uv.remove("find-links");
+        }
+        remove_the_empty_tables_down_to(&mut pyproject, &["tool", "uv"]);
+    }
+    Ok(pyproject.to_string())
+}
+
 fn is_a_source_into_the_first_party_module_links_folder(source: &Item) -> bool {
     source
         .get("path")
@@ -630,6 +690,83 @@ mod tests {
         assert_eq!(
             pyproject["tool"]["uv"]["sources"]["tatolab-stream"]["path"].as_str(),
             Some(".tatolab/first-party-imports/tatolab_stream-0.68.56-py3-none-any.whl")
+        );
+    }
+
+    #[test]
+    fn the_carried_wheels_link_is_named_once_as_find_links_and_taken_out_with_the_wheels() {
+        let project = tempfile::tempdir().unwrap();
+        let with_a_find_links_of_its_own =
+            format!("{SCAFFOLDED_PYPROJECT}\n[tool.uv]\nfind-links = [\"../wheels\"]\n");
+
+        let declared = pyproject_with_the_carried_wheels_as_a_uv_find_links_source(
+            &with_a_find_links_of_its_own,
+            project.path(),
+            true,
+        )
+        .unwrap();
+        let pyproject: toml::Value = toml::from_str(&declared).unwrap();
+        assert_eq!(
+            pyproject["tool"]["uv"]["find-links"],
+            toml::Value::try_from(["../wheels", ".tatolab/carried-wheels"]).unwrap()
+        );
+        assert_eq!(
+            pyproject_with_the_carried_wheels_as_a_uv_find_links_source(
+                &declared,
+                project.path(),
+                true
+            )
+            .unwrap(),
+            declared,
+            "a project that names it already is left as it is"
+        );
+
+        let taken_out = pyproject_with_the_carried_wheels_as_a_uv_find_links_source(
+            &declared,
+            project.path(),
+            false,
+        )
+        .unwrap();
+        let pyproject: toml::Value = toml::from_str(&taken_out).unwrap();
+        assert_eq!(
+            pyproject["tool"]["uv"]["find-links"],
+            toml::Value::try_from(["../wheels"]).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_scaffolded_project_gains_a_find_links_table_and_loses_it_with_the_wheels() {
+        let project = tempfile::tempdir().unwrap();
+        let declared = pyproject_with_the_carried_wheels_as_a_uv_find_links_source(
+            SCAFFOLDED_PYPROJECT,
+            project.path(),
+            true,
+        )
+        .unwrap();
+        let pyproject: toml::Value = toml::from_str(&declared).unwrap();
+        assert_eq!(
+            pyproject["tool"]["uv"]["find-links"],
+            toml::Value::try_from([".tatolab/carried-wheels"]).unwrap()
+        );
+        assert_eq!(
+            pyproject["tool"]["uv"]["index"][0]["name"].as_str(),
+            Some("tatolab")
+        );
+
+        let taken_out = pyproject_with_the_carried_wheels_as_a_uv_find_links_source(
+            &declared,
+            project.path(),
+            false,
+        )
+        .unwrap();
+        let pyproject: toml::Value = toml::from_str(&taken_out).unwrap();
+        assert!(
+            pyproject["tool"]["uv"].get("find-links").is_none(),
+            "{taken_out}"
+        );
+        assert_eq!(
+            pyproject["tool"]["uv"]["index"][0]["name"].as_str(),
+            Some("tatolab")
         );
     }
 

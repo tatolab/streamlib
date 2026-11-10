@@ -162,7 +162,7 @@ pub fn refuse_an_archive_whose_sha256_is_not_pinned(
 
 /// The sha256 of the file at `path` as lowercase hex, as uv publishes it,
 /// read through without holding the file in memory.
-fn sha256_hex_of_the_file(path: &Path) -> Result<String> {
+pub(crate) fn sha256_hex_of_the_file(path: &Path) -> Result<String> {
     let mut file =
         std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut hasher = Sha256::new();

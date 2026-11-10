@@ -10,7 +10,9 @@ raises is listed failed beside the running one, with its traceback in the
 project's log, and a start of a stream
 whose `.venv` was deleted has the runtime unit's uv make it again. With no
 directory, the project is created in a folder `<adjective>-<noun>` drawn under
-the machine's streams root. `tatolabd`'s `PATH` holds no uv.
+the machine's streams root. With no network and empty uv caches, a project is
+created, runs, and has its `.venv` made again from what the runtime unit carries.
+`tatolabd`'s `PATH` holds no uv.
 """
 
 from __future__ import annotations
@@ -216,6 +218,73 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
     assert start_once_ended["state"] == "done", start_once_ended
     states_after_the_run = {stream["stream"]: stream["state"] for stream in start_once_ended["streams"]}
     assert states_after_the_run[created["stream"]] == "running", start_once_ended
+    assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
+
+
+#: A proxy no request gets through: every index and download uv would reach is refused.
+UNREACHABLE_PROXY = "http://127.0.0.1:9"
+
+
+def environment_with_no_network_and_empty_uv_caches(scratch: Path) -> "dict[str, str | None]":
+    """`tatolabd`'s environment with every request refused, uv's cache and its Python installs
+    empty, and uv kept to the Pythons it installs, so a sync can only use what the runtime unit
+    carries."""
+    return {
+        "PATH": path_without_any_uv(),
+        "HTTPS_PROXY": UNREACHABLE_PROXY,
+        "HTTP_PROXY": UNREACHABLE_PROXY,
+        "ALL_PROXY": UNREACHABLE_PROXY,
+        "https_proxy": UNREACHABLE_PROXY,
+        "http_proxy": UNREACHABLE_PROXY,
+        "all_proxy": UNREACHABLE_PROXY,
+        "NO_PROXY": None,
+        "no_proxy": None,
+        "UV_CACHE_DIR": str(scratch / "uv-cache"),
+        "UV_PYTHON_INSTALL_DIR": str(scratch / "uv-pythons"),
+        "UV_PYTHON_PREFERENCE": "only-managed",
+    }
+
+
+def test_create_project_with_no_network_and_empty_uv_caches_runs_the_starter_and_runs_again_offline(
+    runtime_unit: RuntimeUnitUnderTest,
+    private_machine_directories: PrivateMachineDirectories,
+    make_tatolab_project: "Callable[..., Path]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+    tmp_path: Path,
+):
+    project_directory = make_tatolab_project(
+        directory_name="quiet-otter", runs_in_the_suite_venv=False
+    )
+    tatolabd = start_tatolabd(
+        extra_environment=environment_with_no_network_and_empty_uv_caches(tmp_path)
+    )
+
+    created = create_project_through_tatolab_mcp(
+        runtime_unit, private_machine_directories, {"project_directory": str(project_directory)}
+    )
+
+    local_api = tatolabd.local_api_client()
+    create_once_ended = local_api.stream_action_once_ended(created["action"])
+    assert create_once_ended["state"] == "done", create_once_ended
+    assert create_once_ended["streams"] == [
+        {"stream": created["stream"], "display_name": "quiet-otter", "state": "running"}
+    ], create_once_ended
+    assert_every_first_party_package_came_from_the_runtime_unit(project_directory)
+    assert (project_directory / ".tatolab" / "carried-wheels").resolve().is_dir()
+    assert list((tmp_path / "uv-pythons").glob("cpython-3.12*")), (
+        "the Python came from the runtime unit"
+    )
+
+    queued_stop = local_api.call_tool("stop_project", {"project_directory": str(project_directory)})
+    assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
+    shutil.rmtree(project_directory / ".venv")
+    queued_start = local_api.call_tool("start_project", {"project_directory": str(project_directory)})
+    start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
+
+    assert start_once_ended["state"] == "done", start_once_ended
+    assert {stream["stream"]: stream["state"] for stream in start_once_ended["streams"]} == {
+        created["stream"]: "running"
+    }, start_once_ended
     assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
 
 
