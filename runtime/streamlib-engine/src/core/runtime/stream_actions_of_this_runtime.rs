@@ -1531,9 +1531,8 @@ impl Runner {
         display_name: &str,
     ) -> Option<String> {
         let loaded = self.every_loaded_stream().into_iter().find(|loaded| {
-            loaded.stream_location().is_some_and(|location| {
-                location.project == project && location.stream_asset == stream_asset
-            })
+            let location = loaded.stream_location();
+            location.project == project && location.stream_asset == stream_asset
         })?;
         loaded.rename(display_name.to_string());
         Some(loaded.stream_id().to_string())
