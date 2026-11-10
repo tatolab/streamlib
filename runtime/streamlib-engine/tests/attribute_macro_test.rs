@@ -183,7 +183,9 @@ fn the_descriptor_carries_the_config_types_schema_rather_than_its_name() {
         "The recording's **label**."
     );
     assert!(
-        config_schema["properties"]["path"].get("description").is_none(),
+        config_schema["properties"]["path"]
+            .get("description")
+            .is_none(),
         "a doc comment never reaches the document"
     );
     assert_eq!(
