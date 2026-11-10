@@ -1946,6 +1946,64 @@ fn an_agent_named(name: &str) -> Value {
 /// Five edits sent as one `transact` are one commit: the graph document keeps them, so a
 /// fresh runtime loading it finds them, and one `undo` reverses all five, on the document and
 /// on the running stream.
+/// The graph actions a `transact` is sent, and the one action a single-operation tool is sent,
+/// are what their commits record, field for field, once the mode, the author and the key that
+/// carry them are set aside.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_action_sent_over_mcp_is_the_action_its_commit_records() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let transacted_actions = json!([
+        { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+          "name": "monitor", "as": "monitor" },
+        { "operation": "connect", "stream": stream_id,
+          "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+          "target": { "node": "monitor", "port": "video" } },
+    ]);
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({
+                "author": an_agent_named("alice"), "idempotency_key": "wire-monitor",
+                "operations": transacted_actions,
+            }),
+        )
+        .await,
+    )
+    .expect("the transaction applies");
+    let rename = json!({ "stream": stream_id, "node": SOURCE_NODE_UUID, "name": "camera" });
+    let mut rename_sent = rename.clone();
+    rename_sent["author"] = an_agent_named("alice");
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "rename_node",
+            rename_sent,
+        )
+        .await,
+    )
+    .expect("the rename applies");
+
+    let recorded_actions_oldest_first: Vec<Value> =
+        streamlib_project_repository::ProjectRepository::open(project.path())
+            .expect("the project opens")
+            .applied_transactions_newest_first(2)
+            .expect("history reads")
+            .into_iter()
+            .rev()
+            .map(|applied| serde_json::to_value(&applied.transaction.actions).unwrap())
+            .collect();
+    let mut rename_as_recorded = rename;
+    rename_as_recorded["operation"] = json!("rename_node");
+    assert_eq!(
+        recorded_actions_oldest_first,
+        vec![transacted_actions, json!([rename_as_recorded])]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_reverses_them() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -2737,6 +2795,7 @@ impl ProjectWithGraphDocuments {
                     name: "arm maintainer".to_owned(),
                 },
                 None,
+                Vec::new(),
                 vec![streamlib_project_repository::ProjectOperation::StreamGraph(
                     streamlib_project_repository::StreamGraphOperationOnAStream {
                         stream: self.stream_asset_of("main"),

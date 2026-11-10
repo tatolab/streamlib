@@ -656,7 +656,13 @@ fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_it
 
     let reversal = repository.undo_by(&agent()).unwrap();
     repository
-        .apply_project_operations(&agent(), None, reversal.operations, reversal.lineage)
+        .apply_project_operations(
+            &agent(),
+            None,
+            Vec::new(),
+            reversal.operations,
+            reversal.lineage,
+        )
         .unwrap()
         .into_applied_transaction();
 

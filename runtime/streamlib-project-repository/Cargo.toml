@@ -26,6 +26,7 @@ git2 = { version = "0.21", default-features = false, features = ["vendored-libgi
 # promises a host, and `libz.so.1` is not among it.
 libz-sys = { version = "1.1", default-features = false, features = ["static"], optional = true }
 parking_lot = { version = "0.12", optional = true }
+schemars = "1.2"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

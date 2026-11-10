@@ -71,21 +71,39 @@ impl ProjectHoldingOneStream {
         operations: Vec<ProjectOperation>,
     ) -> Result<(), ProjectRepositoryRefusal> {
         self.repository
-            .apply_project_operations(author, None, operations, ProjectTransactionLineage::NewEdit)
+            .apply_project_operations(
+                author,
+                None,
+                Vec::new(),
+                operations,
+                ProjectTransactionLineage::NewEdit,
+            )
             .map(|_| ())
     }
 
     fn undo(&mut self, author: &ProjectTransactionAuthor) -> Result<(), ProjectRepositoryRefusal> {
         let reversal = self.repository.undo_by(author)?;
         self.repository
-            .apply_project_operations(author, None, reversal.operations, reversal.lineage)
+            .apply_project_operations(
+                author,
+                None,
+                Vec::new(),
+                reversal.operations,
+                reversal.lineage,
+            )
             .map(|_| ())
     }
 
     fn redo(&mut self, author: &ProjectTransactionAuthor) -> Result<(), ProjectRepositoryRefusal> {
         let reversal = self.repository.redo_by(author)?;
         self.repository
-            .apply_project_operations(author, None, reversal.operations, reversal.lineage)
+            .apply_project_operations(
+                author,
+                None,
+                Vec::new(),
+                reversal.operations,
+                reversal.lineage,
+            )
             .map(|_| ())
     }
 }

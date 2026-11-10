@@ -102,6 +102,8 @@ impl From<ProjectAssetImportSource> for String {
 pub enum ProjectAction {
     /// An action on the project's assets.
     Asset(ProjectAssetAction),
+    /// An action on one of the project's stream graphs.
+    StreamGraph(crate::stream_graph_action::StreamGraphAction),
 }
 
 /// One action on a project's assets, as every caller sends it and history records it.

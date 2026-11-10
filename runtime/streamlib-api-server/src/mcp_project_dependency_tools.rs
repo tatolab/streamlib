@@ -12,9 +12,11 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{Peer, RoleServer, tool, tool_router};
 use serde::Deserialize;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectImport, ProjectImportOperation, ProjectOperation,
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
-    ProjectRepositoryRefusal,
+    AppliedProjectTransaction, DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION,
+    DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION, ProjectImport, ProjectImportOperation,
+    ProjectOperation, ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
+    ProjectRepositoryRefusal, StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DependencyTransactionToolResult, ListDependenciesToolResult, ListedProjectDependencyOnTheWire,
@@ -28,11 +30,7 @@ use crate::mcp_project_asset_tools::{
     ProjectTransactionAuthorToolArgument, the_author_of_a_change,
     the_idempotency_key_a_caller_sent,
 };
-use crate::mcp_stream_graph_tools::{
-    DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,
-    DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
-    GraphEditMode, GraphTransactionInFlight, StreamGraphOperationToolArgument,
-};
+use crate::mcp_stream_graph_tools::{GraphEditMode, GraphTransactionInFlight};
 
 const IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
     "The project that imports, by absolute path: a folder holding `tatolab-project.json`.";
@@ -380,7 +378,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<UseDependencyStreamToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::UseDependencyStream {
+        let operation = StreamGraphAction::UseDependencyStream {
             stream,
             project,
             dependency_stream,

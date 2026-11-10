@@ -108,6 +108,7 @@ fn a_new_transaction_records_the_format_version_and_the_callers_idempotency_key(
         .apply_project_operations(
             &a_person(),
             Some(&idempotency_key),
+            Vec::new(),
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
@@ -143,6 +144,7 @@ fn an_action_sent_again_under_its_key_applies_once_and_answers_the_first_transac
         .apply_project_operations(
             &a_person(),
             Some(&idempotency_key),
+            Vec::new(),
             vec![operation.clone()],
             ProjectTransactionLineage::NewEdit,
         )
@@ -155,6 +157,7 @@ fn an_action_sent_again_under_its_key_applies_once_and_answers_the_first_transac
         .apply_project_operations(
             &a_person(),
             Some(&idempotency_key),
+            Vec::new(),
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
@@ -181,6 +184,7 @@ fn an_action_sent_without_a_key_applies_each_time() {
             .apply_project_operations(
                 &a_person(),
                 None,
+                Vec::new(),
                 vec![operation],
                 ProjectTransactionLineage::NewEdit,
             )
@@ -276,14 +280,14 @@ fn a_transaction_recorded_before_format_versions_still_reads_undoes_and_redoes()
     );
     project
         .repository
-        .apply_project_operations(&a_person(), None, undo.operations, undo.lineage)
+        .apply_project_operations(&a_person(), None, Vec::new(), undo.operations, undo.lineage)
         .unwrap();
     assert!(project.node_names_in_the_stream().is_empty());
 
     let redo = project.repository.redo_by(&a_person()).unwrap();
     project
         .repository
-        .apply_project_operations(&a_person(), None, redo.operations, redo.lineage)
+        .apply_project_operations(&a_person(), None, Vec::new(), redo.operations, redo.lineage)
         .unwrap();
     assert_eq!(project.node_names_in_the_stream(), vec!["grade"]);
 }
@@ -297,6 +301,7 @@ fn a_transaction_in_a_format_newer_than_this_runtime_is_refused_by_name() {
         .apply_project_operations(
             &a_person(),
             None,
+            Vec::new(),
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
@@ -340,6 +345,7 @@ fn an_applied_transaction_carries_when_its_commit_was_made() {
         .apply_project_operations(
             &a_person(),
             None,
+            Vec::new(),
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
@@ -371,6 +377,7 @@ fn a_key_recorded_before_the_project_was_reopened_still_answers_its_transaction(
         .apply_project_operations(
             &a_person(),
             Some(&idempotency_key),
+            Vec::new(),
             vec![operation.clone()],
             ProjectTransactionLineage::NewEdit,
         )
@@ -383,6 +390,7 @@ fn a_key_recorded_before_the_project_was_reopened_still_answers_its_transaction(
         .apply_project_operations(
             &a_person(),
             Some(&idempotency_key),
+            Vec::new(),
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )

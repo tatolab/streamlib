@@ -466,12 +466,13 @@ impl ProjectRepository {
     }
 
     /// Apply `operations` by `author` as one transaction, whole or not at all, write the
-    /// files they change and commit it; sent again under the same `idempotency_key`, it applies
+    /// files they change and commit it, recording `actions_as_sent` beside them; sent again under the same `idempotency_key`, it applies
     /// nothing and answers the first transaction.
     pub fn apply_project_operations(
         &mut self,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        actions_as_sent: Vec<ProjectAction>,
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
     ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
@@ -485,7 +486,7 @@ impl ProjectRepository {
         self.apply_and_commit_project_operations(
             author,
             idempotency_key,
-            Vec::new(),
+            actions_as_sent,
             operations,
             lineage,
         )
