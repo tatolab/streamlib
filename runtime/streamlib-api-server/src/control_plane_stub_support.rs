@@ -193,11 +193,11 @@ pub(crate) const STUB_STREAM_ID: &str = "stub-stream";
 
 /// The stream asset the stub's one stream runs.
 pub(crate) const STUB_STREAM_ASSET: ::uuid::Uuid =
-    ::uuid::Uuid::from_u128(0x5_7ab_0000_0000_0000_0000_0000_0001);
+    ::uuid::Uuid::from_u128(0x57ab_0000_0000_0000_0000_0000_0001);
 
 /// The project the stub's one stream is of.
 pub(crate) const STUB_PROJECT: ::uuid::Uuid =
-    ::uuid::Uuid::from_u128(0x5_7ab_0000_0000_0000_0000_0000_0002);
+    ::uuid::Uuid::from_u128(0x57ab_0000_0000_0000_0000_0000_0002);
 
 /// Where the stub's one stream's project lives.
 pub(crate) const STUB_PROJECT_DIRECTORY: &str = "/stub-project";
