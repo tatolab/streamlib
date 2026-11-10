@@ -1,6 +1,6 @@
 [package]
 name = "tatolab-rive"
-version = "0.68.49"
+version = "0.68.50"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
