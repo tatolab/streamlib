@@ -158,13 +158,11 @@ jobs:
   # consumes the `@tatolab/streamlib-client` package it publishes. Restoring it
   # to the release path is a decision for whenever a consumer exists.
 
-  # Publish the release just cut: `tatolab-stream` to PyPI, every first-party
-  # module to Tatolab's index, and the Linux runtime to get.tatolab.com.
-  #
-  # Every distribution this repository publishes releases on the one tag, so
-  # one call builds and uploads them all. This call alone passes
-  # `dry_run: false`; any other run of reusable-distributions.yml is a dry run unless
-  # dispatched with `dry_run` unticked.
+  # Publish the core of the release just cut: `tatolab-stream` to PyPI, the
+  # core modules the runtime unit carries to Tatolab's index, and the Linux
+  # runtime to get.tatolab.com. This call alone passes `dry_run: false`; any
+  # other run of reusable-distributions.yml is a dry run unless dispatched with
+  # `dry_run` unticked.
   publish-the-release:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
@@ -172,6 +170,20 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/reusable-distributions.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs.tag_name }}
+      dry_run: false
+    secrets: inherit
+
+  # Every other first-party module, at the same tag, once the core is out. A
+  # module that fails to build is left out of the index and withholds neither
+  # the core nor Tato Studio's release.
+  publish-the-modules:
+    needs: [release-please, publish-the-release]
+    if: ${{ needs.release-please.outputs.release_created }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-module-distributions.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
       dry_run: false
