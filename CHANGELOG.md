@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.47](https://github.com/tatolab/streamlib/compare/v0.68.46...v0.68.47) (2026-11-10)
+
+
+### Features
+
+* each view a project brings is a node type; write_studio_view_output ([2dd68df](https://github.com/tatolab/streamlib/commit/2dd68df1992c8e694c0cd373a44f12c079ec35c9))
+
 ## [0.68.46](https://github.com/tatolab/streamlib/compare/v0.68.45...v0.68.46) (2026-11-10)
 
 
