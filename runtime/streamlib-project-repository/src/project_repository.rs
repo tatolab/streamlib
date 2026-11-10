@@ -1970,6 +1970,7 @@ impl ProjectRepository {
                 let display_name = refuse_a_display_name_that_shows_nothing(display_name)?;
                 let (path, document) =
                     self.read_stream_graph_document(staged_assets, stream_asset)?;
+                self.refuse_a_path_through_a_symbolic_link(&path)?;
                 let from = document.display_name().map(str::to_owned);
                 if from.as_deref() == Some(display_name.as_str()) {
                     return Ok(None);

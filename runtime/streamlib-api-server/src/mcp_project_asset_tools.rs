@@ -294,7 +294,7 @@ impl LocalApiMcpServerHandler {
             asset,
         }): Parameters<DescribeAssetToolArguments>,
     ) -> ToolCallAnswer {
-        let asset = the_asset_a_call_names("describe_asset", &asset)?;
+        let asset = the_asset_a_call_names("describe_asset", "asset", &asset)?;
         let described = self
             .a_project_repository_call_off_the_async_runtime(
                 "describe_asset",
@@ -367,7 +367,7 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::RelocateAsset {
-                asset: the_asset_a_call_names("relocate_asset", &asset)?,
+                asset: the_asset_a_call_names("relocate_asset", "asset", &asset)?,
                 to_path,
             },
         )
@@ -393,7 +393,7 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::DeleteAsset {
-                asset: the_asset_a_call_names("delete_asset", &asset)?,
+                asset: the_asset_a_call_names("delete_asset", "asset", &asset)?,
             },
         )
         .await
@@ -419,7 +419,7 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::SetAssetSettings {
-                asset: the_asset_a_call_names("set_asset_settings", &asset)?,
+                asset: the_asset_a_call_names("set_asset_settings", "asset", &asset)?,
                 import_settings,
             },
         )
@@ -468,7 +468,11 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::DeleteStream {
-                stream_asset: the_asset_a_call_names("delete_stream", &stream_asset)?,
+                stream_asset: the_asset_a_call_names(
+                    "delete_stream",
+                    "stream_asset",
+                    &stream_asset,
+                )?,
             },
         )
         .await
@@ -494,7 +498,11 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::SetStreamDisplayName {
-                stream_asset: the_asset_a_call_names("set_stream_display_name", &stream_asset)?,
+                stream_asset: the_asset_a_call_names(
+                    "set_stream_display_name",
+                    "stream_asset",
+                    &stream_asset,
+                )?,
                 display_name,
             },
         )
@@ -691,10 +699,15 @@ pub(crate) fn the_author_of_a_change(
     }
 }
 
-/// The asset UUID a call's `asset` spells.
-fn the_asset_a_call_names(tool_name: &str, asset: &str) -> Result<Uuid, String> {
-    Uuid::parse_str(asset)
-        .map_err(|_| format!("{tool_name} failed: `asset` must be an asset's UUID; got `{asset}`"))
+/// The asset UUID a call spells in its argument `argument_name`.
+fn the_asset_a_call_names(
+    tool_name: &str,
+    argument_name: &str,
+    asset: &str,
+) -> Result<Uuid, String> {
+    Uuid::parse_str(asset).map_err(|_| {
+        format!("{tool_name} failed: `{argument_name}` must be an asset's UUID; got `{asset}`")
+    })
 }
 
 /// `source` as an import reads it: an absolute path, or a content hash the store holds.
