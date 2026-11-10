@@ -1897,7 +1897,7 @@ mod tests {
     fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node() {
         use crate::core::compiler::PendingOperation;
         use crate::core::processors::ProcessorSpec;
-        use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
+        use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
 
         ensure_test_mocks_registered();
         let project_directory = a_project_directory_this_test_owns();
@@ -1905,13 +1905,13 @@ mod tests {
         let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
         let processor_id = stream
             .add_processor(ProcessorSpec::new(
-                MockOutputOnlyProcessor::processor_class_import_path(),
-                serde_json::Value::Null,
+                MockSourceTakingOneSetting::processor_class_import_path(),
+                serde_json::json!({}),
             ))
             .expect("the mock is added");
 
         stream
-            .update_processor_config(&processor_id, serde_json::json!({"gain": 3}))
+            .update_processor_config(&processor_id, serde_json::json!({"frame_width": 3}))
             .expect("the update is queued");
 
         let config_on_the_node = stream.compiler.scope(|graph, _tx| {
@@ -1923,14 +1923,49 @@ mod tests {
                 .config
                 .clone()
         });
-        assert_eq!(config_on_the_node, Some(serde_json::Value::Null));
+        assert_eq!(config_on_the_node, Some(serde_json::json!({})));
         assert!(
             stream.compiler.logged_pending_operations().iter().any(|op| matches!(
                 op,
                 PendingOperation::UpdateProcessorConfig { processor_id: queued_for, config_to_apply }
-                    if *queued_for == processor_id && *config_to_apply == serde_json::json!({"gain": 3})
+                    if *queued_for == processor_id && *config_to_apply == serde_json::json!({"frame_width": 3})
             )),
             "the update carries its configuration to the commit"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_configuration_its_node_types_config_schema_refuses_is_refused_and_never_queued() {
+        use crate::core::compiler::PendingOperation;
+        use crate::core::processors::ProcessorSpec;
+        use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
+
+        ensure_test_mocks_registered();
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
+        let processor_id = stream
+            .add_processor(ProcessorSpec::new(
+                MockSourceTakingOneSetting::processor_class_import_path(),
+                serde_json::json!({}),
+            ))
+            .expect("the mock is added");
+
+        let refusal = stream
+            .update_processor_config(&processor_id, serde_json::json!({"frame_width": "wide"}))
+            .expect_err("a string where the schema states an integer is refused")
+            .to_string();
+
+        assert!(refusal.contains("`frame_width`"), "{refusal}");
+        assert!(refusal.contains("\"wide\""), "{refusal}");
+        assert!(
+            !stream
+                .compiler
+                .logged_pending_operations()
+                .iter()
+                .any(|op| matches!(op, PendingOperation::UpdateProcessorConfig { .. })),
+            "a refused update reaches no commit"
         );
     }
 

@@ -1307,8 +1307,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `processor_class(config=config_class(**configuration))` and whatever the config class
   raises is what the author sees; a class declaring no config takes an empty
   configuration and refuses a non-empty one by name; reconfiguration calls
-  `configure(config_class(**configuration))`. Construction is the only check — the wheel
-  carries no validator, and how strict it is stays the author's choice of config class.
+  `configure(config_class(**configuration))`. The wheel carries no validator: the runtime
+  holds a config to its node type's catalog document, in either language, when a live edit
+  adds the node or sets its config — `null` held as the empty object — and refuses it before
+  the edit commits, naming each field and what the document states; a graph load is not
+  held to it. How strict the document is stays the author's choice of config class.
   On the wire, `stream_builder.add(cls, config={…})` carries a dict, the graph node stores its JSON, and
   `ctx.config` is that mapping. [agent-readable-processor-catalog — SHIPPED #2226]
 - **DECIDED** — Port rendering in the control plane is name, description, `family` (the
