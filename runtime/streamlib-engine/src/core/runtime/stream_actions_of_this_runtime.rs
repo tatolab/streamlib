@@ -3182,6 +3182,8 @@ mod tests {
             let project_file = TatolabProjectFile {
                 project,
                 name: TEST_PROJECT_NAME.to_string(),
+                description: None,
+                cover: None,
                 created_with_runtime: None,
                 dependencies: Vec::new(),
             };

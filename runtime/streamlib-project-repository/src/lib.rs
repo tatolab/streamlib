@@ -59,7 +59,7 @@ pub use project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionApplyOutcome,
     ProjectActionIdempotencyKey, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectSettingsOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
     StreamGraphOperationOnAStream,
 };

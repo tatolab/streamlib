@@ -219,13 +219,24 @@ fn copy_the_project_folder(
         path: source.to_path_buf(),
         why: why.to_string(),
     };
-    std::fs::create_dir_all(staging_directory)?;
+    copy_the_files_a_project_copy_carries(source, staging_directory, unreadable)
+}
+
+/// Copy into `destination`, made when missing, every file of the project folder `source` a copy
+/// of it carries, as [`files_an_import_carries`] lists them; a file that does not copy is
+/// refused as `refusal_of_a_file_not_copied` words it.
+pub(crate) fn copy_the_files_a_project_copy_carries(
+    source: &Path,
+    destination: &Path,
+    refusal_of_a_file_not_copied: impl Fn(std::io::Error) -> ProjectRepositoryRefusal,
+) -> Result<(), ProjectRepositoryRefusal> {
+    std::fs::create_dir_all(destination)?;
     for relative in files_an_import_carries(source)? {
-        let destination = staging_directory.join(&relative);
-        if let Some(parent) = destination.parent() {
+        let copied_to = destination.join(&relative);
+        if let Some(parent) = copied_to.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::copy(source.join(&relative), destination).map_err(unreadable)?;
+        std::fs::copy(source.join(&relative), copied_to).map_err(&refusal_of_a_file_not_copied)?;
     }
     Ok(())
 }

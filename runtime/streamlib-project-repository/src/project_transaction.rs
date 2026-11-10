@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
-use crate::project_file::ProjectImport;
+use crate::project_file::{ProjectImport, TatolabProjectFile};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::stream_graph_document::StreamGraphOperation;
 
@@ -283,6 +283,54 @@ impl ProjectStreamDocumentOperation {
     }
 }
 
+/// One change to how people see a project, a field of `tatolab-project.json`, recorded with
+/// its value before and after.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ProjectSettingsOperation {
+    /// The project's name went from `from` to `to`.
+    SetProjectName { from: String, to: String },
+    /// The project's description went from `from` to `to`, `None` for none.
+    SetProjectDescription {
+        from: Option<String>,
+        to: Option<String>,
+    },
+    /// The project's cover went from the image asset `from` to `to`, `None` for none.
+    SetProjectCover { from: Option<Uuid>, to: Option<Uuid> },
+}
+
+impl ProjectSettingsOperation {
+    /// The operation that undoes this one.
+    pub fn inverse(&self) -> Self {
+        match self.clone() {
+            Self::SetProjectName { from, to } => Self::SetProjectName { from: to, to: from },
+            Self::SetProjectDescription { from, to } => {
+                Self::SetProjectDescription { from: to, to: from }
+            }
+            Self::SetProjectCover { from, to } => Self::SetProjectCover { from: to, to: from },
+        }
+    }
+
+    /// Set the field this operation changes in `project_file` to its value after.
+    pub(crate) fn write_into(&self, project_file: &mut TatolabProjectFile) {
+        match self {
+            Self::SetProjectName { to, .. } => project_file.name = to.clone(),
+            Self::SetProjectDescription { to, .. } => project_file.description = to.clone(),
+            Self::SetProjectCover { to, .. } => project_file.cover = *to,
+        }
+    }
+
+    /// The operation as a commit's summary line names it.
+    #[cfg(feature = "history")]
+    pub(crate) fn summary(&self) -> String {
+        match self {
+            Self::SetProjectName { to, .. } => format!("rename_project {to}"),
+            Self::SetProjectDescription { .. } => "set_project_description".to_owned(),
+            Self::SetProjectCover { .. } => "set_project_cover".to_owned(),
+        }
+    }
+}
+
 /// One change to one stream's graph: the stream by its asset's UUID, and the operation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StreamGraphOperationOnAStream {
@@ -305,6 +353,8 @@ pub enum ProjectOperation {
     Import(ProjectImportOperation),
     /// A stream asset's graph document written or taken out whole.
     StreamDocument(ProjectStreamDocumentOperation),
+    /// A change to how people see the project.
+    ProjectSettings(ProjectSettingsOperation),
 }
 
 impl ProjectOperation {
@@ -325,6 +375,9 @@ impl ProjectOperation {
             Self::StreamDocument(stream_document_operation) => {
                 Self::StreamDocument(stream_document_operation.inverse())
             }
+            Self::ProjectSettings(project_settings_operation) => {
+                Self::ProjectSettings(project_settings_operation.inverse())
+            }
         }
     }
 
@@ -336,6 +389,9 @@ impl ProjectOperation {
             Self::StreamGraph(on_a_stream) => on_a_stream.graph_operation.summary(),
             Self::Import(import_operation) => import_operation.summary(),
             Self::StreamDocument(stream_document_operation) => stream_document_operation.summary(),
+            Self::ProjectSettings(project_settings_operation) => {
+                project_settings_operation.summary()
+            }
         }
     }
 }
