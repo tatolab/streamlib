@@ -652,6 +652,7 @@ jobs:
         env:
           UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist,${{ runner.temp }}/tatolab-testpattern-dist
         run: |
+          mkdir -p "$RUNNER_TEMP/tatolab-testpattern-dist"
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-testpattern-dist" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
           .venv/bin/pytest -v -m "not rig_only_capability"
 
@@ -1130,6 +1131,7 @@ jobs:
         env:
           UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist,${{ runner.temp }}/tatolab-testpattern-dist
         run: |
+          mkdir -p "$RUNNER_TEMP/tatolab-testpattern-dist"
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-testpattern-dist" "$GITHUB_WORKSPACE/packages/tatolab-testpattern"
           rm -rf target/tatolab-runtime
           mkdir -p target/tatolab-runtime
