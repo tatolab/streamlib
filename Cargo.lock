@@ -5308,6 +5308,7 @@ dependencies = [
  "git2",
  "libz-sys",
  "parking_lot",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "sha2",

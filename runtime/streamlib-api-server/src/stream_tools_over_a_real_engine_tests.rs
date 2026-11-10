@@ -2895,6 +2895,105 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     );
 }
 
+/// Write `manifest` as the `tatolab_view.json` of `views/<view_folder_name>/` in `project_directory`.
+fn a_view_folder_in(project_directory: &Path, view_folder_name: &str, manifest: &Value) {
+    let folder = project_directory.join("views").join(view_folder_name);
+    std::fs::create_dir_all(&folder).expect("the view's folder");
+    std::fs::write(folder.join("tatolab_view.json"), manifest.to_string()).expect("its manifest");
+}
+
+/// Project `cell` brings the view `deck` and imports project `levels`, which brings `meter` and a
+/// folder whose manifest is not JSON: each is listed under the project bringing it, and the one
+/// that does not open says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let levels = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    std::fs::write(
+        levels.path().join("tatolab-project.json"),
+        json!({ "project": levels.project, "name": "levels", "dependencies": [] }).to_string(),
+    )
+    .expect("the import's project file names it");
+    a_view_folder_in(
+        levels.path(),
+        "meter",
+        &json!({ "contract": "1.0", "title": "Meter", "entry": "index.html", "placement": "area" }),
+    );
+    let broken_folder = levels.path().join("views/broken");
+    std::fs::create_dir_all(&broken_folder).expect("the broken view's folder");
+    std::fs::write(broken_folder.join("tatolab_view.json"), "{").expect("a manifest cut short");
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let deck_manifest = json!({
+        "contract": "1.0", "title": "DJ Deck", "description": "Two decks and a crossfader.",
+        "icon": "icon.svg", "preview": "preview.png", "entry": "index.html", "placement": "node",
+        "inputs": [{ "name": "waveform", "family": "channels" }],
+        "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+    });
+    a_view_folder_in(cell.path(), "deck", &deck_manifest);
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    let added = call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": levels.path().display().to_string(),
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("levels is imported");
+    let folder = added["dependency"]["folder"].clone();
+    let import_directory = cell
+        .path()
+        .canonicalize()
+        .expect("the cell on disk")
+        .join("imports")
+        .join(folder.as_str().expect("a folder name"));
+
+    let listed = call(
+        "list_project_views",
+        json!({ "project_directory": cell.path() }),
+    )
+    .await
+    .expect("the cell's views are listed");
+
+    assert_eq!(listed["project"], json!(cell.project), "{listed}");
+    assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
+    let views = listed["views"].as_array().expect("a list of views");
+    assert_eq!(views.len(), 3, "{listed}");
+    assert_eq!(
+        views[0],
+        json!({
+            "view_type": format!("{TEST_PROJECT_NAME}:deck"),
+            "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
+            "folder": cell.path().canonicalize().expect("the cell on disk").join("views/deck"),
+            "opens": true, "not_opened_because": null,
+            "title": "DJ Deck", "description": "Two decks and a crossfader.",
+            "icon": "icon.svg", "preview": "preview.png", "placement": "node",
+            "inputs": [{ "name": "waveform", "family": "channels", "description": null, "range": null }],
+            "outputs": [{ "name": "crossfader", "family": "array", "description": null, "range": [-1.0, 1.0] }],
+            "manifest": deck_manifest,
+        })
+    );
+    assert_eq!(views[1]["view_type"], "levels:broken", "{listed}");
+    assert_eq!(views[1]["opens"], false, "{listed}");
+    assert_eq!(views[1]["import_folder"], folder, "{listed}");
+    assert!(
+        views[1]["not_opened_because"]
+            .as_str()
+            .is_some_and(|why| why.starts_with("`tatolab_view.json` is not JSON: ")),
+        "{listed}"
+    );
+    assert_eq!(views[2]["view_type"], "levels:meter", "{listed}");
+    assert_eq!(views[2]["project"], json!(levels.project), "{listed}");
+    assert_eq!(views[2]["project_name"], "levels", "{listed}");
+    assert_eq!(views[2]["placement"], "area", "{listed}");
+    assert_eq!(
+        views[2]["folder"],
+        json!(import_directory.join("views/meter")),
+        "{listed}"
+    );
+}
+
 /// A listing whose interpreter prints no listing is refused naming the project, in the
 /// runtime's own words.
 #[tokio::test(flavor = "multi_thread")]
