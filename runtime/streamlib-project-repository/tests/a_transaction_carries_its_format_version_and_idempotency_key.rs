@@ -335,10 +335,6 @@ fn a_transaction_in_a_format_newer_than_this_runtime_is_refused_by_name() {
 #[test]
 fn an_applied_transaction_carries_when_its_commit_was_made() {
     let mut project = ProjectHoldingOneStream::new();
-    let before = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
     let operation = project.add_node_operation(&a_node("grade"));
     let applied = project
         .repository
@@ -351,11 +347,12 @@ fn an_applied_transaction_carries_when_its_commit_was_made() {
         )
         .unwrap()
         .into_applied_transaction();
-    let after = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    assert!((before..=after).contains(&applied.applied_at_unix_seconds));
+    let commit = &project.repository.history().commits_newest_first().unwrap()[0];
+    assert_eq!(commit.commit, applied.commit);
+    assert_eq!(
+        applied.applied_at_unix_seconds,
+        commit.committed_at_unix_seconds
+    );
     assert_eq!(
         project
             .repository

@@ -2659,15 +2659,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly five surfaces and nowhere else: log record `host_ts`
-  and `source_ts`, log file naming, the local relay certificate's validity — its UTC
+  Wall clock is permitted on exactly six surfaces and nowhere else: log record `host_ts`
+  and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an
+  action was refused, beside the `applied_at` a transaction reads off its commit — the local
+  relay certificate's validity — its UTC
   `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
   (owner, 2026-10-17) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro
   JWTs the moq.pro adapter and the live proof's subscribe minter sign (owner, 2026-10-20) —
   their job is correlating with the outside world, which monotonic time cannot do. A wall-clock value never enters the data plane and is never compared
   against a media timestamp; another surface is a plan change, not a judgement call. The
   list is mechanically enforced, with no per-line pragma and no opt-out attribute: the
-  permitted surfaces are a closed set in the gate, so a sixth is a source change that
+  permitted surfaces are a closed set in the gate, so a seventh is a source change that
   surfaces in review rather than a line quietly appended, and an
   entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
   allowlist is per-file, which is why a data-plane file never joins it — a machine-global
