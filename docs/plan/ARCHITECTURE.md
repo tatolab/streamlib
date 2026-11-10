@@ -2661,7 +2661,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
   Wall clock is permitted on exactly six surfaces and nowhere else: log record `host_ts`
   and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an
-  action was refused, beside the `applied_at` a transaction reads off its commit — the local
+  action was refused, beside the `applied_at` a transaction reads off its commit (owner,
+  2026-11-10) — the local
   relay certificate's validity — its UTC
   `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
   (owner, 2026-10-17) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro
