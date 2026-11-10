@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-h264"
-version = "0.68.50"
+version = "0.68.51"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
@@ -24,7 +24,7 @@ pyo3 = { version = "0.29.2", features = ["abi3-py312"] }
 tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.11.0", features = ["pyo3"] }
 # The encoder and decoder node bodies, shared with tatolab-h265: on Linux they
 # code on a Vulkan device this helper owns, on macOS on VideoToolbox.
-streamlib-owned-device-video-codec-nodes = { path = "../../runtime/streamlib-owned-device-video-codec-nodes", version = "0.68.50" }
+streamlib-owned-device-video-codec-nodes = { path = "../../runtime/streamlib-owned-device-video-codec-nodes", version = "0.68.51" }
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a
 # third party would build one, with its own root, its own lockfile and its own
