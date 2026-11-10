@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, json};
 use streamlib_project_repository::{
-    PROJECT_HISTORY_DIRECTORY, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind,
+    PROJECT_HISTORY_DIRECTORY, ProjectAssetAction, ProjectAssetImportSource, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
 };
 use uuid::Uuid;
 
@@ -47,7 +46,7 @@ impl ZippedProject {
             .apply_asset_changes(
                 &a_person(),
                 None,
-                vec![ProjectAssetChangeRequest::ImportAsset {
+                vec![ProjectAssetAction::ImportAsset {
                     source: ProjectAssetImportSource::FileOnThisMachine(lut_source),
                     asset_path: "luts/grade.cube".to_owned(),
                     kind: None,
