@@ -565,6 +565,7 @@ impl GraphSnapshot {
             values_the_set_variables_hold,
             graph_the_runtime_runs: GraphSnapshot {
                 asset: self.asset,
+                display_name: self.display_name.clone(),
                 stream: self.stream.clone(),
                 clock: self.clock,
                 nodes: runtime_nodes,
@@ -1348,6 +1349,7 @@ mod tests {
         let resolution = resolved(graph).unwrap();
         let mut graph_response = GraphResponse {
             asset: None,
+            display_name: None,
             stream: None,
             clock: Default::default(),
             nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],
@@ -1380,6 +1382,7 @@ mod tests {
         let resolution = resolved(a_camera_variable_read_by_two_displays()).unwrap();
         let mut graph_response = GraphResponse {
             asset: None,
+            display_name: None,
             stream: None,
             clock: Default::default(),
             nodes: vec![a_rendered_node("camera"), a_rendered_node("back")],

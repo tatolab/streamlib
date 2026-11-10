@@ -64,6 +64,8 @@ pub enum ProjectRepositoryRefusal {
     DuplicateIntoTheProjectItself { into: PathBuf },
     #[error("the project holds no stream asset {0}")]
     NoSuchStream(Uuid),
+    #[error("{0:?} cannot be a stream's display name: it shows nothing")]
+    DisplayNameShowsNothing(String),
     #[error("the graph document {path} refused the change: {why}")]
     GraphOperationRefused { path: String, why: String },
     #[error("node {node}'s config references the asset {asset}, which the project does not hold")]

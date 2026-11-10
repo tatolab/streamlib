@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::project_stream_document::STREAM_DOCUMENT_DISPLAY_NAME_KEY;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -328,6 +329,29 @@ pub struct StreamGraphDocument {
 }
 
 impl StreamGraphDocument {
+    /// The name its stream asset is shown under, `None` when it writes none.
+    pub fn display_name(&self) -> Option<&str> {
+        self.every_other_key
+            .get(STREAM_DOCUMENT_DISPLAY_NAME_KEY)
+            .and_then(Value::as_str)
+    }
+
+    /// Show its stream asset under `display_name`, or under its file name for `None`.
+    pub fn set_display_name(&mut self, display_name: Option<&str>) {
+        match display_name {
+            Some(display_name) => {
+                self.every_other_key.insert(
+                    STREAM_DOCUMENT_DISPLAY_NAME_KEY.to_owned(),
+                    Value::String(display_name.to_owned()),
+                );
+            }
+            None => {
+                self.every_other_key
+                    .remove(STREAM_DOCUMENT_DISPLAY_NAME_KEY);
+            }
+        }
+    }
+
     /// Read a graph document, or a `graph` render of one, from its parsed JSON.
     pub fn from_value(document: Value) -> Result<Self, String> {
         let Value::Object(mut every_other_key) = document else {

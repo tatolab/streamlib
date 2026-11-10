@@ -13,6 +13,8 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
 /// The top-level key of a graph document that holds its stream asset's UUID.
 pub const STREAM_DOCUMENT_ASSET_KEY: &str = "asset";
+/// The key a graph document writes the name its stream asset is shown under at.
+pub const STREAM_DOCUMENT_DISPLAY_NAME_KEY: &str = "display_name";
 
 /// One stream asset's graph document as it sits in its project: its path and its bytes, or why
 /// they do not read.
@@ -31,6 +33,22 @@ impl ProjectStreamDocument {
         file_name
             .strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX)
             .unwrap_or(file_name)
+    }
+
+    /// The name the stream is shown under: the one its document writes, or, while it writes
+    /// none it can be read by, its [`Self::stream_name`].
+    pub fn display_name(&self) -> String {
+        self.bytes
+            .as_ref()
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+            .and_then(|document| {
+                document
+                    .get(STREAM_DOCUMENT_DISPLAY_NAME_KEY)
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| self.stream_name().to_owned())
     }
 
     /// The stream asset's UUID the document holds under `asset`, or why it holds none.

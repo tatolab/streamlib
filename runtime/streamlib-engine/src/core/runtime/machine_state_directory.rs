@@ -22,14 +22,13 @@ use crate::core::graph::is_in_exposed_name_cast_form;
 use crate::core::{Error, Result};
 
 /// The schema version of a stream record this runtime writes and reads.
-pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 6;
+pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 7;
 
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
-/// One stream, as its runtime re-loads it from its graph document: its id and location, its
-/// display name, the interpreter its processors start in, and whether it was stopped or has
-/// failed.
+/// One stream, as its runtime re-loads it from its graph document: its id and location, the
+/// interpreter its processors start in, and whether it was stopped or has failed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamRecord {
@@ -39,8 +38,6 @@ pub struct StreamRecord {
     pub stream_id: String,
     /// Its project and stream asset, and where the project sat at its last load.
     pub location: StreamLocation,
-    /// The label the stream is shown under.
-    pub display_name: String,
     /// The project's venv interpreter, as it was spelled at the load.
     pub interpreter: PathBuf,
     /// Whether the owner stopped the stream, so a restart leaves it unloaded.
@@ -121,19 +118,17 @@ pub enum PendingStreamActionKind {
 }
 
 impl StreamRecord {
-    /// A record of the stream at `location` under `stream_id`, shown as `display_name` and
-    /// running from `stream_environment`, neither stopped nor failed, and implicated in no crash.
+    /// A record of the stream at `location` under `stream_id`, running from
+    /// `stream_environment`, neither stopped nor failed, and implicated in no crash.
     pub fn of_a_running_stream(
         stream_id: String,
         location: StreamLocation,
-        display_name: impl Into<String>,
         stream_environment: &StreamEnvironment,
     ) -> Self {
         Self {
             schema_version: STREAM_RECORD_SCHEMA_VERSION,
             stream_id,
             location,
-            display_name: display_name.into(),
             interpreter: stream_environment.interpreter.clone(),
             stopped: false,
             failed_because: None,
@@ -209,10 +204,9 @@ impl StreamRecord {
     }
 
     /// Take the record's attributes from `current`, the record as it is on
-    /// disk: the display name, the pending actions and the function-node
-    /// states, none of which a load changes.
+    /// disk: the pending actions and the function-node states, neither of which a load
+    /// changes.
     pub fn keep_the_attributes_of(&mut self, current: &StreamRecord) {
-        self.display_name = current.display_name.clone();
         self.pending_stream_actions = current.pending_stream_actions.clone();
         self.function_node_states_by_node_name = current.function_node_states_by_node_name.clone();
     }
@@ -621,7 +615,6 @@ mod tests {
         StreamRecord::of_a_running_stream(
             location.stream_id_named(folder, stream_name),
             location,
-            stream_name,
             &StreamEnvironment {
                 interpreter: project_directory.join(".venv/bin/python"),
                 project_directory,
@@ -715,8 +708,8 @@ mod tests {
     }
 
     #[test]
-    fn a_record_of_schema_5_or_earlier_is_read_as_an_earlier_runtimes() {
-        for schema_version in [3, 4, 5] {
+    fn a_record_of_schema_6_or_earlier_is_read_as_an_earlier_runtimes() {
+        for schema_version in [3, 4, 5, 6] {
             let state_directory = tempfile::tempdir().unwrap();
             let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
             std::fs::write(
@@ -805,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn a_record_holds_its_id_location_and_display_name_under_the_current_schema() {
+    fn a_record_holds_its_id_and_location_under_the_current_schema_and_no_display_name() {
         let record = a_record_of("camera-app", "preview");
 
         let written = serde_json::to_value(&record).unwrap();
@@ -822,7 +815,7 @@ mod tests {
             })
         );
         assert_eq!(written.get("graph"), None);
-        assert_eq!(written["display_name"], "preview");
+        assert_eq!(written.get("display_name"), None);
     }
 
     #[test]
@@ -932,11 +925,10 @@ mod tests {
     }
 
     #[test]
-    fn a_loads_record_keeps_the_display_name_rulings_and_marks_written_since_it_read() {
+    fn a_loads_record_keeps_the_pending_actions_queued_while_it_loaded() {
         let state_directory = tempfile::tempdir().unwrap();
         let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
         let mut renamed_while_it_loaded = a_record_of("camera-app", "preview");
-        renamed_while_it_loaded.display_name = "Desk".to_string();
         renamed_while_it_loaded
             .queue_the_pending_stream_action("R-3", PendingStreamActionKind::Stop);
         records.write(&renamed_while_it_loaded).unwrap();
@@ -947,7 +939,6 @@ mod tests {
             .write_the_record_a_load_made(what_the_load_made)
             .unwrap();
 
-        assert_eq!(written.display_name, "Desk");
         assert_eq!(written.failed_because.as_deref(), Some("it raised"));
         assert_eq!(
             written.pending_stream_actions,

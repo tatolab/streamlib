@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab start`, `reload`, `stop`, `pause`, `resume`, `rm`, `rename`, `streams` and `clock` run as a user runs
+//! `tatolab start`, `reload`, `stop`, `pause`, `resume`, `rm`, `streams` and `clock` run as a user runs
 //! them, against a stub local API at an isolated machine's fixed socket: the tool each calls, the
 //! arguments it sends, the one line or table it prints, and how a refusal reads. A verb naming one
 //! stream resolves its argument through `list_streams` — by id, by a display name one stream
@@ -19,8 +19,7 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    StubToolCallTransport, rename_stream_tool_result_text,
-    start_or_reload_project_tool_result_text,
+    StubToolCallTransport, start_or_reload_project_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -558,11 +557,11 @@ fn a_scale_the_runtime_refused_exits_one_in_its_own_words() {
 #[test]
 fn a_stream_the_runtime_does_not_hold_is_refused_listing_the_streams_before_any_action() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "rename_stream",
-        StubToolAnswer::tool_result(&rename_stream_tool_result_text("cam", "Desk")),
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(&json!({ "stream": "cam", "scale": 0.5 }).to_string()),
     );
 
-    let refused = isolated_machine_directories.run_tatolab(&["rename", "nope", "Desk"]);
+    let refused = isolated_machine_directories.run_tatolab(&["clock", "nope", "--scale", "0.5"]);
 
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
@@ -571,7 +570,7 @@ fn a_stream_the_runtime_does_not_hold_is_refused_listing_the_streams_before_any_
          \"Camera\"\n"
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("rename_stream"),
+        stub_local_api_server.recorded_arguments_of("set_stream_clock_scale"),
         Vec::<serde_json::Value>::new()
     );
 }
@@ -586,14 +585,16 @@ fn an_empty_stream_argument_is_refused_and_never_falls_back_to_the_working_direc
             "main",
             &canonical_project_directory,
         )],
-        "rename_stream",
-        StubToolAnswer::tool_result(&rename_stream_tool_result_text("hello-main-3f2a9c", "Desk")),
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(
+            &json!({ "stream": "hello-main-3f2a9c", "scale": 0.5 }).to_string(),
+        ),
     );
 
     let refused = run_tatolab_in(
         &isolated_machine_directories,
         project_directory.path(),
-        &["rename", "", "Desk"],
+        &["clock", "", "--scale", "0.5"],
     );
 
     assert_eq!(refused.status.code(), Some(1));
@@ -603,7 +604,7 @@ fn an_empty_stream_argument_is_refused_and_never_falls_back_to_the_working_direc
         standard_error_text(&refused)
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("rename_stream"),
+        stub_local_api_server.recorded_arguments_of("set_stream_clock_scale"),
         Vec::<serde_json::Value>::new()
     );
 }
@@ -615,71 +616,56 @@ fn a_display_name_one_stream_holds_reaches_the_tool_as_that_streams_id() {
             listed_stream("hello-main-3f2a9c", "Hello camera", Path::new("/srv/hello")),
             listed_stream("desk-main-0a1b2c", "Desk", Path::new("/srv/desk")),
         ],
-        "rename_stream",
-        StubToolAnswer::tool_result(&rename_stream_tool_result_text(
-            "hello-main-3f2a9c",
-            "Front",
-        )),
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(
+            &json!({ "stream": "hello-main-3f2a9c", "scale": 0.5 }).to_string(),
+        ),
     );
 
     printed_by_a_successful(
         &isolated_machine_directories,
-        &["rename", "Hello camera", "Front"],
+        &["clock", "Hello camera", "--scale", "0.5"],
     );
 
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("rename_stream"),
-        [json!({"stream": "hello-main-3f2a9c", "display_name": "Front"})]
+        stub_local_api_server.recorded_arguments_of("set_stream_clock_scale"),
+        [json!({"stream": "hello-main-3f2a9c", "scale": 0.5})]
     );
 }
 
-/// In a project directory one stream was loaded from, every verb naming a stream acts on it
+/// In a project directory one stream was loaded from, a verb naming a stream acts on it
 /// without naming it.
 #[test]
-fn every_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_none_is_named() {
+fn a_stream_verb_acts_on_the_stream_loaded_from_the_working_directory_when_none_is_named() {
     let project_directory = tempfile::tempdir().unwrap();
     let canonical_project_directory = project_directory.path().canonicalize().unwrap();
-    for (tatolab_arguments, tool_name, tool_answer, sent) in [
-        (
-            &["rename", "Hello camera"][..],
-            "rename_stream",
-            json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}).to_string(),
-            json!({"stream": "hello-main-3f2a9c", "display_name": "Hello camera"}),
+    let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
+        vec![
+            listed_stream("hello-main-3f2a9c", "main", &canonical_project_directory),
+            listed_stream("desk-main-0a1b2c", "main", Path::new("/srv/desk")),
+        ],
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(
+            &json!({"stream": "hello-main-3f2a9c", "scale": 0.5}).to_string(),
         ),
-        (
-            &["clock", "--scale", "0.5"][..],
-            "set_stream_clock_scale",
-            json!({"stream": "hello-main-3f2a9c", "scale": 0.5}).to_string(),
-            json!({"stream": "hello-main-3f2a9c", "scale": 0.5}),
-        ),
-    ] {
-        let (isolated_machine_directories, stub_local_api_server) = a_runtime_listing_and_answering(
-            vec![
-                listed_stream("hello-main-3f2a9c", "main", &canonical_project_directory),
-                listed_stream("desk-main-0a1b2c", "main", Path::new("/srv/desk")),
-            ],
-            tool_name,
-            StubToolAnswer::tool_result(&tool_answer),
-        );
+    );
 
-        let finished = run_tatolab_in(
-            &isolated_machine_directories,
-            project_directory.path(),
-            tatolab_arguments,
-        );
+    let finished = run_tatolab_in(
+        &isolated_machine_directories,
+        project_directory.path(),
+        &["clock", "--scale", "0.5"],
+    );
 
-        assert_eq!(
-            finished.status.code(),
-            Some(0),
-            "{tatolab_arguments:?}: {}",
-            standard_error_text(&finished)
-        );
-        assert_eq!(
-            stub_local_api_server.recorded_arguments_of(tool_name),
-            [sent],
-            "{tatolab_arguments:?}"
-        );
-    }
+    assert_eq!(
+        finished.status.code(),
+        Some(0),
+        "{}",
+        standard_error_text(&finished)
+    );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("set_stream_clock_scale"),
+        [json!({"stream": "hello-main-3f2a9c", "scale": 0.5})]
+    );
 }
 
 #[test]
@@ -691,14 +677,16 @@ fn a_directory_several_streams_were_loaded_from_is_refused_listing_them_and_noth
             listed_stream("rig-front-0a1b2c", "front", &canonical_project_directory),
             listed_stream("rig-back-9f8e7d", "back", &canonical_project_directory),
         ],
-        "rename_stream",
-        StubToolAnswer::tool_result(&rename_stream_tool_result_text("rig-front-0a1b2c", "Desk")),
+        "set_stream_clock_scale",
+        StubToolAnswer::tool_result(
+            &json!({ "stream": "rig-front-0a1b2c", "scale": 0.5 }).to_string(),
+        ),
     );
 
     let refused = run_tatolab_in(
         &isolated_machine_directories,
         project_directory.path(),
-        &["rename", "Desk"],
+        &["clock", "--scale", "0.5"],
     );
 
     assert_eq!(refused.status.code(), Some(1));
@@ -711,7 +699,7 @@ fn a_directory_several_streams_were_loaded_from_is_refused_listing_them_and_noth
         )
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("rename_stream"),
+        stub_local_api_server.recorded_arguments_of("set_stream_clock_scale"),
         Vec::<serde_json::Value>::new()
     );
 }
@@ -723,11 +711,11 @@ fn a_display_name_several_streams_hold_is_refused_listing_their_ids() {
             listed_stream("hello-main-3f2a9c", "main", Path::new("/srv/hello")),
             listed_stream("desk-main-0a1b2c", "main", Path::new("/srv/desk")),
         ],
-        "rename_stream",
+        "set_stream_clock_scale",
         StubToolAnswer::tool_result("{}"),
     );
 
-    let refused = isolated_machine_directories.run_tatolab(&["rename", "main", "Hello camera"]);
+    let refused = isolated_machine_directories.run_tatolab(&["clock", "main", "--scale", "0.5"]);
 
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
@@ -736,26 +724,7 @@ fn a_display_name_several_streams_hold_is_refused_listing_their_ids() {
          \"main\"\n  desk-main-0a1b2c  \"main\"\n"
     );
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("rename_stream"),
+        stub_local_api_server.recorded_arguments_of("set_stream_clock_scale"),
         Vec::<serde_json::Value>::new()
-    );
-}
-
-#[test]
-fn rename_shows_a_named_stream_under_the_display_name_as_given() {
-    let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
-        "rename_stream",
-        StubToolAnswer::tool_result(r#"{"stream":"cam","display_name":"  Desk cam ✨"}"#),
-    );
-
-    let printed = printed_by_a_successful(
-        &isolated_machine_directories,
-        &["rename", "cam", "  Desk cam ✨"],
-    );
-
-    assert_eq!(printed, "cam is shown as \"  Desk cam ✨\"\n");
-    assert_eq!(
-        stub_local_api_server.recorded_arguments_of("rename_stream"),
-        [json!({"stream": "cam", "display_name": "  Desk cam ✨"})]
     );
 }

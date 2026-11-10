@@ -277,6 +277,7 @@ impl GraphSnapshot {
         Ok(GraphSnapshotWithInterfaceResolved {
             graph_the_runtime_runs: GraphSnapshot {
                 asset: self.asset,
+                display_name: self.display_name.clone(),
                 stream: self.stream.clone(),
                 clock: self.clock,
                 nodes: runtime_nodes,

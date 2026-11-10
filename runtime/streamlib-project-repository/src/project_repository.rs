@@ -379,6 +379,55 @@ impl ProjectRepository {
             .ok_or(ProjectRepositoryRefusal::NoSuchAsset(asset))
     }
 
+    /// The asset `transaction`'s first operation changed: as it is now, or, taken out, as it was.
+    pub fn the_asset_a_transaction_changed(
+        &self,
+        transaction: &ProjectTransaction,
+    ) -> Result<ProjectAsset, ProjectRepositoryRefusal> {
+        match transaction.operations.first() {
+            Some(ProjectOperation::Asset(
+                ProjectAssetOperation::ImportAsset { asset }
+                | ProjectAssetOperation::DeleteAsset { asset },
+            )) => Ok(asset.clone()),
+            Some(ProjectOperation::Asset(
+                ProjectAssetOperation::RelocateAsset { asset, .. }
+                | ProjectAssetOperation::SetAssetSettings { asset, .. },
+            )) => self.asset(*asset),
+            Some(ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::CreateStreamDocument { stream, .. }
+                | ProjectStreamDocumentOperation::SetStreamDisplayName { stream, .. },
+            )) => self.asset(*stream),
+            Some(ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::DeleteStreamDocument {
+                    stream,
+                    path,
+                    document,
+                },
+            )) => {
+                let bytes = StreamGraphDocument::from_value(document.clone())
+                    .map_err(|why| ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                        path: path.to_string(),
+                        why,
+                    })?
+                    .canonical_bytes()?;
+                Ok(ProjectAsset {
+                    asset: *stream,
+                    kind: ProjectAssetKind::Stream,
+                    content_sha256: content_sha256_of(&bytes),
+                    content_byte_len: bytes.len() as u64,
+                    import_settings: serde_json::Map::new(),
+                    path: path.clone(),
+                })
+            }
+            Some(
+                ProjectOperation::StreamGraph(_)
+                | ProjectOperation::Import(_)
+                | ProjectOperation::ProjectSettings(_),
+            )
+            | None => Err(ProjectRepositoryRefusal::EmptyTransaction),
+        }
+    }
+
     fn every_asset(&self) -> Result<BTreeMap<Uuid, ProjectAsset>, ProjectRepositoryRefusal> {
         let mut every_asset = self.assets_by_uuid.clone();
         for stream_document in project_stream_documents(&self.project_directory)? {
@@ -1763,6 +1812,32 @@ impl ProjectRepository {
                 staged_documents.remove(stream);
                 stream_documents_taken_out.insert(path.clone());
             }
+            ProjectStreamDocumentOperation::SetStreamDisplayName {
+                stream,
+                path,
+                from,
+                to,
+            } => {
+                if !staged_assets.get(stream).is_some_and(|asset| {
+                    asset.kind == ProjectAssetKind::Stream && asset.path == *path
+                }) {
+                    return Err(ProjectRepositoryRefusal::NoSuchStream(*stream));
+                }
+                let staged_document = match staged_documents.entry(*stream) {
+                    Entry::Occupied(staged) => staged.into_mut(),
+                    Entry::Vacant(unstaged) => {
+                        unstaged.insert(self.read_stream_graph_document(staged_assets, *stream)?.1)
+                    }
+                };
+                if staged_document.display_name() != from.as_deref() {
+                    return Err(
+                        ProjectRepositoryRefusal::StreamDocumentEditedSinceItWasWritten {
+                            path: path.to_string(),
+                        },
+                    );
+                }
+                staged_document.set_display_name(to.as_deref());
+            }
         }
         Ok(())
     }
@@ -1925,17 +2000,7 @@ impl ProjectRepository {
                 let current = staged_asset(asset)?;
                 self.refuse_a_path_through_a_symbolic_link(&current.path)?;
                 if current.kind == ProjectAssetKind::Stream {
-                    let (path, document) = self.read_stream_graph_document(staged_assets, asset)?;
-                    return Ok(Some(StagedAssetChange {
-                        operation: ProjectOperation::StreamDocument(
-                            ProjectStreamDocumentOperation::DeleteStreamDocument {
-                                stream: asset,
-                                path,
-                                document: serde_json::from_slice(&document.canonical_bytes()?)?,
-                            },
-                        ),
-                        asset_file_waiting_for_its_import: None,
-                    }));
+                    return self.deletion_of_the_stream_document(staged_assets, asset);
                 }
                 Ok(Some(StagedAssetChange::of(
                     ProjectAssetOperation::DeleteAsset {
@@ -1966,7 +2031,83 @@ impl ProjectRepository {
                     },
                 )))
             }
+            ProjectAssetAction::CreateStream { path, display_name } => {
+                let display_name = refuse_a_display_name_that_shows_nothing(display_name)?;
+                let path = ProjectRelativeAssetPath::parse(&path)?;
+                let stream = Uuid::new_v4();
+                let mut document = StreamGraphDocument::from_value(serde_json::json!({
+                    STREAM_DOCUMENT_ASSET_KEY: stream,
+                }))
+                .map_err(|why| {
+                    ProjectRepositoryRefusal::GraphDocumentUnreadable {
+                        path: path.to_string(),
+                        why,
+                    }
+                })?;
+                document.set_display_name(Some(&display_name));
+                Ok(Some(StagedAssetChange {
+                    operation: ProjectOperation::StreamDocument(
+                        ProjectStreamDocumentOperation::CreateStreamDocument {
+                            stream,
+                            path,
+                            document: document.to_value(),
+                        },
+                    ),
+                    asset_file_waiting_for_its_import: None,
+                }))
+            }
+            ProjectAssetAction::DeleteStream { stream_asset } => {
+                let current = staged_assets
+                    .get(&stream_asset)
+                    .filter(|asset| asset.kind == ProjectAssetKind::Stream)
+                    .ok_or(ProjectRepositoryRefusal::NoSuchStream(stream_asset))?;
+                self.refuse_a_path_through_a_symbolic_link(&current.path)?;
+                self.deletion_of_the_stream_document(staged_assets, stream_asset)
+            }
+            ProjectAssetAction::SetStreamDisplayName {
+                stream_asset,
+                display_name,
+            } => {
+                let display_name = refuse_a_display_name_that_shows_nothing(display_name)?;
+                let (path, document) =
+                    self.read_stream_graph_document(staged_assets, stream_asset)?;
+                self.refuse_a_path_through_a_symbolic_link(&path)?;
+                let from = document.display_name().map(str::to_owned);
+                if from.as_deref() == Some(display_name.as_str()) {
+                    return Ok(None);
+                }
+                Ok(Some(StagedAssetChange {
+                    operation: ProjectOperation::StreamDocument(
+                        ProjectStreamDocumentOperation::SetStreamDisplayName {
+                            stream: stream_asset,
+                            path,
+                            from,
+                            to: Some(display_name),
+                        },
+                    ),
+                    asset_file_waiting_for_its_import: None,
+                }))
+            }
         }
+    }
+
+    /// The operation taking the stream asset `stream`'s graph document out, as it is on disk.
+    fn deletion_of_the_stream_document(
+        &self,
+        staged_assets: &BTreeMap<Uuid, ProjectAsset>,
+        stream: Uuid,
+    ) -> Result<Option<StagedAssetChange>, ProjectRepositoryRefusal> {
+        let (path, document) = self.read_stream_graph_document(staged_assets, stream)?;
+        Ok(Some(StagedAssetChange {
+            operation: ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::DeleteStreamDocument {
+                    stream,
+                    path,
+                    document: serde_json::from_slice(&document.canonical_bytes()?)?,
+                },
+            ),
+            asset_file_waiting_for_its_import: None,
+        }))
     }
 
     /// What an upload named `content_sha256` records, refused when the project holds no such
@@ -2681,6 +2822,19 @@ fn refuse_an_author_without_a_name(
     } else {
         Ok(())
     }
+}
+
+/// `display_name` trimmed, refused when it shows nothing.
+fn refuse_a_display_name_that_shows_nothing(
+    display_name: String,
+) -> Result<String, ProjectRepositoryRefusal> {
+    let trimmed = display_name.trim();
+    if trimmed.is_empty() {
+        return Err(ProjectRepositoryRefusal::DisplayNameShowsNothing(
+            display_name,
+        ));
+    }
+    Ok(trimmed.to_owned())
 }
 
 /// One author's transactions an undo reverses and a redo reapplies, each newest last.

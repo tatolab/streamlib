@@ -97,6 +97,7 @@ impl GraphSnapshot {
         Ok(GraphSnapshotWithFragmentsFlattened {
             graph_the_runtime_runs: GraphSnapshot {
                 asset: self.asset,
+                display_name: self.display_name.clone(),
                 stream: self.stream.clone(),
                 clock: self.clock,
                 nodes: level.nodes,
@@ -181,6 +182,7 @@ fn flatten_one_level(
         )?;
         let interface = GraphSnapshot {
             asset: None,
+            display_name: None,
             stream: None,
             clock: Default::default(),
             nodes: inner.nodes,
@@ -943,6 +945,7 @@ mod tests {
     fn a_render_of(graph: &GraphSnapshot) -> GraphResponse {
         GraphResponse {
             asset: None,
+            display_name: None,
             stream: None,
             clock: Default::default(),
             nodes: graph.nodes.iter().map(rendered_as_running).collect(),

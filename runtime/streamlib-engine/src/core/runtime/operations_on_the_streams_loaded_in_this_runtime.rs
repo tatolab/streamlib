@@ -12,7 +12,6 @@ use super::operations::RuntimeOperations;
 use super::{
     CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectPausedOrResumed,
     ProjectStartOrReloadRequest, Runner, StreamAction, StreamActionQueued, StreamListing,
-    StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::context::StreamClockReading;
@@ -121,8 +120,20 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::resume_project`].
     fn resume_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
 
-    /// [`Runner::rename_stream`].
-    fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome>;
+    /// [`Runner::show_the_stream_of_a_stream_asset_under`].
+    fn show_the_stream_of_a_stream_asset_under(
+        &self,
+        project: Uuid,
+        stream_asset: Uuid,
+        display_name: &str,
+    ) -> Option<String>;
+
+    /// [`Runner::load_the_stream_of_a_created_stream_asset`].
+    fn load_the_stream_of_a_created_stream_asset(
+        &self,
+        project_directory: &Path,
+        stream_asset: Uuid,
+    ) -> Option<StreamActionQueued>;
 
     /// [`Runner::list_streams`].
     fn list_streams(&self) -> Vec<StreamListing>;
@@ -255,12 +266,25 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::remove_project(self, project_directory)
     }
 
-    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
-        Runner::delete_project(self, project_directory)
+    fn show_the_stream_of_a_stream_asset_under(
+        &self,
+        project: Uuid,
+        stream_asset: Uuid,
+        display_name: &str,
+    ) -> Option<String> {
+        Runner::show_the_stream_of_a_stream_asset_under(self, project, stream_asset, display_name)
     }
 
-    fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {
-        Runner::rename_stream(self, stream_id, display_name)
+    fn load_the_stream_of_a_created_stream_asset(
+        &self,
+        project_directory: &Path,
+        stream_asset: Uuid,
+    ) -> Option<StreamActionQueued> {
+        Runner::load_the_stream_of_a_created_stream_asset(self, project_directory, stream_asset)
+    }
+
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::delete_project(self, project_directory)
     }
 
     fn list_streams(&self) -> Vec<StreamListing> {

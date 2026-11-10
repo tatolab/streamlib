@@ -130,11 +130,12 @@ impl NewProjectScaffold {
     }
 
     /// Its stream asset's graph document: the template's graph, holding the stream asset's
-    /// UUID and a fresh UUID on each node.
+    /// UUID, the project's name to show it under, and a fresh UUID on each node.
     fn main_graph_document_contents(&self) -> Result<String> {
         let mut graph = GraphSnapshot::from_json_str(MAIN_GRAPH_DOCUMENT_TEMPLATE)?
             .with_a_uuid_minted_for_each_node_holding_none();
         graph.asset = Some(self.stream_asset);
+        graph.display_name = Some(self.project_name.clone());
         String::from_utf8(graph.graph_document_bytes()?).map_err(|not_utf8| {
             Error::Runtime(format!("the graph document is not UTF-8: {not_utf8}"))
         })

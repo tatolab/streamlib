@@ -34,6 +34,9 @@ pub struct GraphResponse {
     /// The UUID of the stream asset whose graph document this graph was loaded from: a spec key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
+    /// The name the stream is shown under: a spec key, which its graph document writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// The stream id this graph was loaded under, its stream's address. Absent until a load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
@@ -1527,6 +1530,7 @@ mod graph_response_top_level_key_rendering_tests {
             [
                 "asset",
                 "clock",
+                "display_name",
                 "groups",
                 "links",
                 "machine",

@@ -4,7 +4,7 @@
 //! The stream tools over a real engine: a stream run over a `/mcp/stdio`
 //! connection outlives the connection and the local API, `logs` pages a
 //! stream's records by sequence number, and `list_streams`,
-//! `stop_project`, `remove_project` and `rename_stream` act on
+//! `stop_project`, `remove_project` and the stream asset tools act on
 //! an engine recording its streams in a temporary state
 //! directory, `open_viewer` opens only over `/mcp/stdio`, and graph edits are
 //! transactions kept in a stream's graph document that each author's `undo` reverses.
@@ -32,7 +32,7 @@ use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
     ProjectStartOrReloadRequest, Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment,
     StreamListing, StreamLocation, StreamRecord, StreamRecordAsRead,
-    StreamRecordsInTheStateDirectory, StreamRenameOutcome,
+    StreamRecordsInTheStateDirectory,
 };
 use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
 use uuid::Uuid;
@@ -313,7 +313,6 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         let mut record = StreamRecord::of_a_running_stream(
             project.stream_id_of(stream_name),
             project.location_of(stream_name),
-            stream_name,
             &project.stream_environment(),
         );
         record.stopped = stopped;
@@ -521,11 +520,28 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
-    fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {
-        OperationsOnTheStreamsLoadedInThisRuntime::rename_stream(
+    fn show_the_stream_of_a_stream_asset_under(
+        &self,
+        project: uuid::Uuid,
+        stream_asset: uuid::Uuid,
+        display_name: &str,
+    ) -> Option<String> {
+        OperationsOnTheStreamsLoadedInThisRuntime::show_the_stream_of_a_stream_asset_under(
             self.engine.as_ref(),
-            stream_id,
+            project,
+            stream_asset,
             display_name,
+        )
+    }
+    fn load_the_stream_of_a_created_stream_asset(
+        &self,
+        project_directory: &Path,
+        stream_asset: uuid::Uuid,
+    ) -> Option<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::load_the_stream_of_a_created_stream_asset(
+            self.engine.as_ref(),
+            project_directory,
+            stream_asset,
         )
     }
     fn list_streams(&self) -> Vec<StreamListing> {
@@ -972,11 +988,12 @@ async fn stop_project_and_remove_project_queue_actions_on_the_streams_the_runtim
     );
 }
 
-/// `rename_stream` shows a stream under a new display name by its id alone:
-/// a recorded stream's record carries it, a loaded one's listing shows it,
-/// and the id the call named is the id it answers.
+/// `set_stream_display_name` writes a stream's display name in its graph document: a loaded
+/// stream is shown under it at once and keeps its id, and a stream recorded and not loaded is
+/// listed under it; `delete_stream` forgets a recorded stream, and `create_stream` in a
+/// project with a loaded stream queues the load of the stream it created.
 #[tokio::test(flavor = "multi_thread")]
-async fn rename_stream_shows_a_stream_under_a_new_display_name_and_records_a_recorded_one() {
+async fn the_stream_tools_name_delete_and_create_a_projects_streams_in_their_graph_documents() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
@@ -989,60 +1006,159 @@ async fn rename_stream_shows_a_stream_under_a_new_display_name_and_records_a_rec
             )
         }
     };
+    let shown_as = |listed: &Value| -> Vec<(String, String)> {
+        listed["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|listed| {
+                (
+                    listed["stream"].as_str().unwrap().to_owned(),
+                    listed["display_name"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
 
-    assert_eq!(
-        call(
-            "rename_stream",
-            json!({ "stream": parked, "display_name": "Hello camera" })
+    for (stream_name, display_name) in [("parked", "Hello camera"), ("live", "Desk mic")] {
+        let named = call(
+            "set_stream_display_name",
+            json!({
+                "project_directory": project.path(),
+                "stream_asset": project.stream_asset_of(stream_name),
+                "display_name": display_name,
+            }),
         )
         .await
-        .unwrap(),
-        json!({ "stream": parked, "display_name": "Hello camera" })
-    );
-    assert_eq!(
-        call(
-            "rename_stream",
-            json!({ "stream": live, "display_name": "Desk mic" })
-        )
-        .await
-        .unwrap(),
-        json!({ "stream": live, "display_name": "Desk mic" })
-    );
-
-    assert_eq!(
-        engine
-            .current_record_of(&parked)
-            .expect("the record is there")
-            .display_name,
-        "Hello camera"
-    );
-    let listed = call("list_streams", json!({})).await.unwrap();
-    let shown_as: Vec<(&str, &str)> = listed["streams"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|listed| {
-            (
-                listed["stream"].as_str().unwrap(),
-                listed["display_name"].as_str().unwrap(),
-            )
-        })
-        .collect();
+        .unwrap();
+        assert_eq!(
+            named["asset"]["asset"],
+            json!(project.stream_asset_of(stream_name))
+        );
+        assert_eq!(named["asset"]["kind"], "stream");
+    }
     let mut expected = vec![
-        (live.as_str(), "Desk mic"),
-        (parked.as_str(), "Hello camera"),
+        (live.clone(), "Desk mic".to_owned()),
+        (parked.clone(), "Hello camera".to_owned()),
     ];
     expected.sort_unstable();
-    assert_eq!(shown_as, expected);
-    let refusal = call(
-        "rename_stream",
-        json!({ "stream": "Hello camera", "display_name": "Other" }),
+    assert_eq!(
+        shown_as(&call("list_streams", json!({})).await.unwrap()),
+        expected
+    );
+
+    call(
+        "delete_stream",
+        json!({
+            "project_directory": project.path(),
+            "stream_asset": project.stream_asset_of("parked"),
+        }),
     )
     .await
-    .expect_err("a display name is never an id");
-    assert!(
-        refusal.contains("`Hello camera`") && refusal.contains(&parked),
-        "{refusal}"
+    .unwrap();
+    assert_eq!(
+        shown_as(&call("list_streams", json!({})).await.unwrap()),
+        vec![(live, "Desk mic".to_owned())]
+    );
+    assert!(engine.current_record_of(&parked).is_none());
+
+    let created = call(
+        "create_stream",
+        json!({
+            "project_directory": project.path(),
+            "path": "streams/preview.graph.json",
+            "display_name": "Preview",
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(created["asset"]["path"], "streams/preview.graph.json");
+    let load_of_the_created_stream = call(
+        "describe_stream_action",
+        json!({ "action": created["action"] }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        load_of_the_created_stream["project_directory"],
+        json!(project.path()),
+        "a running project loads the stream it created: {load_of_the_created_stream}"
+    );
+}
+
+/// An undo of `set_stream_display_name` shows the loaded stream under its former name again,
+/// and an undo of `create_stream` unloads and forgets the stream the creation loaded.
+#[tokio::test(flavor = "multi_thread")]
+async fn undoing_a_stream_tool_brings_the_loaded_streams_back_in_line() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+        }
+    };
+    let listed_stream_ids_and_names = || async {
+        let listed = call("list_streams", json!({})).await.unwrap();
+        listed["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|listed| {
+                (
+                    listed["stream"].as_str().unwrap().to_owned(),
+                    listed["display_name"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let undo = || call("undo", json!({ "project_directory": project.path() }));
+
+    call(
+        "set_stream_display_name",
+        json!({
+            "project_directory": project.path(),
+            "stream_asset": project.stream_asset_of("live"),
+            "display_name": "Desk mic",
+        }),
+    )
+    .await
+    .unwrap();
+    undo().await.expect("the display name change undoes");
+    assert_eq!(
+        listed_stream_ids_and_names().await,
+        vec![(live.clone(), "live".to_owned())]
+    );
+
+    let created = call(
+        "create_stream",
+        json!({
+            "project_directory": project.path(),
+            "path": "streams/preview.graph.json",
+            "display_name": "Preview",
+        }),
+    )
+    .await
+    .unwrap();
+    the_stream_action_once_finished(
+        &engine.operations_on_the_loaded_streams(),
+        created["action"]
+            .as_str()
+            .expect("the creation queues a load"),
+    )
+    .await;
+    assert_eq!(
+        listed_stream_ids_and_names().await.len(),
+        2,
+        "the created stream is listed once its load ran"
+    );
+    undo().await.expect("the creation undoes");
+    assert_eq!(
+        listed_stream_ids_and_names().await,
+        vec![(live, "live".to_owned())]
     );
 }
 
@@ -1410,13 +1526,12 @@ async fn create_project_in_a_directory_writes_the_project_and_runs_its_stream_un
             "{file_a_new_project_starts_with}"
         );
     }
-    assert_eq!(
-        engine
-            .current_record_of(&stream_id)
-            .expect("the stream is recorded")
-            .display_name,
-        folder_name
-    );
+    assert!(engine.current_record_of(&stream_id).is_some());
+    let main_graph_document: Value = serde_json::from_slice(
+        &std::fs::read(project.path().join("streams/main.graph.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(main_graph_document["display_name"], json!(folder_name));
 }
 
 /// `create_project` over a directory already holding a file a new project starts with
@@ -1598,6 +1713,77 @@ exec sleep 30
     )
     .unwrap_err();
     assert!(again.contains("is already cancelled"), "{again}");
+}
+
+/// A graph document deleted while its project's load makes the venv is left out when the load
+/// starts its streams: no record of its stream is written, and the project's other stream is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_document_deleted_while_its_load_makes_the_venv_never_records_its_stream() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project = ProjectWithGraphDocuments::with_no_venv();
+    project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
+    project.write_the_graph_document(the_graph_of_a_stream_named("screen"));
+    let uv_directory = tempfile::tempdir().expect("a directory for the runtime unit's uv");
+    let uv_released = uv_directory.path().join("released");
+    let uv_held_until_released = uv_directory.path().join("uv");
+    write_an_executable_script_from_a_child_process(
+        &uv_held_until_released,
+        &format!(
+            "#!/bin/sh
+while [ ! -e '{}' ]; do sleep 0.05; done
+exit 1
+",
+            uv_released.display()
+        ),
+    );
+    engine
+        .engine
+        .set_runtime_unit_uv_executable(uv_held_until_released)
+        .expect("the runtime is handed its uv");
+    let queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "start_project",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a run of a project is queued");
+    let action = queued["action"]
+        .as_str()
+        .expect("the action's id")
+        .to_string();
+    the_stream_action_once(operations_on_the_loaded_streams, &action, |described| {
+        described["step"] == "making_the_venv"
+    })
+    .await;
+
+    std::fs::remove_file(project.path().join("streams/screen.graph.json"))
+        .expect("the screen stream's graph document is deleted");
+    std::fs::write(&uv_released, "").expect("uv is released");
+    the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+
+    let listed = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "list_streams",
+            json!({}),
+        )
+        .await,
+    )
+    .expect("list_streams answers");
+    let listed_stream_ids: Vec<&str> = listed["streams"]
+        .as_array()
+        .expect("the streams listed")
+        .iter()
+        .map(|listed_stream| listed_stream["stream"].as_str().expect("a stream id"))
+        .collect();
+    assert_eq!(
+        listed_stream_ids,
+        vec![project.stream_id_of("camera").as_str()],
+        "{listed}"
+    );
 }
 
 /// An action the runtime never queued, and a relative project directory, are refused

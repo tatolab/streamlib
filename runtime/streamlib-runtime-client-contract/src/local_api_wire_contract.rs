@@ -124,15 +124,6 @@ pub struct ProjectSettingsTransactionToolResult {
     pub commit: String,
 }
 
-/// The `rename_stream` tool's result.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RenameStreamToolResult {
-    /// The stream's id, which a rename leaves as it was.
-    pub stream: String,
-    /// The label the stream is shown under now.
-    pub display_name: String,
-}
-
 /// The `list_streams` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListStreamsToolResult {
@@ -701,6 +692,10 @@ pub struct AssetTransactionToolResult {
     pub transaction: String,
     /// The commit on the project history's `main` that records it.
     pub commit: String,
+    /// The stream action loading the stream a created stream asset holds, while its project
+    /// runs; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }
 
 /// A project this one imports, as a dependency tool answers it.
@@ -1199,6 +1194,7 @@ mod tests {
             },
             transaction: "0b6f4e1d-3c55-4b0e-8d1e-6e2f0f9b7c21".to_owned(),
             commit: "c".repeat(40),
+            action: None,
         };
         assert_eq!(
             serde_json::to_value(&result).unwrap(),
