@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.56](https://github.com/tatolab/streamlib/compare/v0.68.55...v0.68.56) (2026-11-10)
+
+
+### Features
+
+* create_node_file writes a new node file from the runtime's node template ([a07d7eb](https://github.com/tatolab/streamlib/commit/a07d7eb207ef24a1a086412aba686f17390b956c))
+* create_node_file writes a new node file from the runtime's node template ([8d710b1](https://github.com/tatolab/streamlib/commit/8d710b1153567d5de2c0c76c34fdf1a96131a3e2)), closes [#3488](https://github.com/tatolab/streamlib/issues/3488)
+
 ## [0.68.55](https://github.com/tatolab/streamlib/compare/v0.68.54...v0.68.55) (2026-11-10)
 
 
