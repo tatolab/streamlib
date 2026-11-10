@@ -3,6 +3,9 @@
 > **The owner, 2026-11-10**, on #3502: the runtime should always carry every dependency needed
 > to create a new project and run it, "at minimum tatolab-stream". On the decision card "How much
 > should the runtime carry so a new project works offline?": "Everything, Python too".
+> And on this proposal: "Carried first for stream bundling, people should be able to create a new
+> project offline with no failures and they should be able to continue working offline (so if
+> they've imported and added things to their project it continues working even when offline)".
 
 **The direction, in three sentences:**
 1. The runtime unit carries, for the one platform it is built for, a wheel of every third-party
@@ -93,9 +96,20 @@ tatolab-stream slice of #3502 (#3505).
   image libraries its wheel vendors), and CPython (PSF-2.0, with the libraries
   python-build-standalone links). Each wheel and the Python archive keep their own licence files,
   unmodified.
+- **A project keeps working offline after create.** What a project holds once it has synced
+  stays usable with no network:
+  - An imported module project carries its own wheels as path sources (#3216), so it syncs
+    offline like the carried ones.
+  - A dependency the person adds reaches its index once, when it is added. From then on the
+    offline attempt finds it in uv's cache, so a reload, a remade `.venv` or a runtime update
+    that resyncs the project needs no network. The runtime never prunes uv's cache. A
+    dependency added while offline, and not already in the cache, is refused in uv's words.
 - **Proof.** A test on the unit, on both platforms: `create_project` and its first run, with the
   network refused, and `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` empty, ends `done` with the
   starter running. On Linux it runs in an `ubuntu:22.04` container with no Python 3.12 installed.
+  A second test adds a dependency from a local index while online, then refuses the network and
+  reloads the project, deletes its `.venv` and loads it again, and loads it under a unit whose
+  carried wheels changed. Each load ends `done`.
 
 ## MODIFIED
 
@@ -118,14 +132,12 @@ Nothing. This change adds what the unit carries and the order the runtime looks.
 
 ## Decisions
 
-1. **[NEEDS DECISION] Carried first, or the index first?**
-   - **Carried first** (recommended): every runtime sync tries `--offline` against the carried
-     wheels before reaching an index. A new project never waits on the network, and its
-     `uv.lock` names the carried versions. A project that needs a newer numpy than the unit
-     carries pins it, and its first sync falls through to the index once.
-   - **The index first, carried as a fallback**: always online when there is a network, and
-     carried only when the online sync fails. A new project then gets the newest numpy on PyPI,
-     but also waits on PyPI every time, which is what #3502 set out to end.
+1. **DECIDED — Carried first (owner, 2026-11-10).** Every runtime sync and lock tries `--offline`
+   against the carried wheels and uv's cache before it reaches an index. A new project never waits
+   on the network, and its `uv.lock` names the carried versions. A project that needs a newer
+   numpy than the unit carries pins it, and its first sync falls through to the index once.
+   Rejected: the index first, carried only when the online sync fails — every sync would wait on
+   PyPI again, which #3502 set out to end (owner, 2026-11-10).
 2. **Assumed unless overruled: the carried set is the core modules' requirements alone.** The
    scaffold's own `pyproject.toml` requires nothing more. A module project a person imports
    brings its own wheels (#3216), and no other package rides the unit.
@@ -135,8 +147,10 @@ Nothing. This change adds what the unit carries and the order the runtime looks.
 
 ## Known risks
 
-- **Notarization of Tato Studio.** The app signs and notarizes the unit inside its bundle
-  (tatolab-app). The carried wheels and the Python archive hold Mach-O binaries signed by their
+- **Notarization of Tato Studio.** Tato Studio is not distributed through the App Store, but
+  each release is signed with the Developer ID and notarized for Gatekeeper
+  (tatolab-app `release.yml`, `notarize-and-staple.sh`). The app signs and notarizes the unit
+  inside its bundle. The carried wheels and the Python archive hold Mach-O binaries signed by their
   builders (numpy's, pillow's, llvmlite's and python-build-standalone's), not with Tatolab's
   Developer ID. Apple's notary service inspects archives in a submission, and may refuse unsigned
   or foreign-signed code inside a `.whl` (a zip). This is not proven either way. The first ticket
