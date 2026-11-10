@@ -3,7 +3,7 @@
 
 use serde_json::{Map, json};
 use streamlib_project_repository::{
-    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectOperation, ProjectRepository,
+    ProjectAssetAction, ProjectAssetImportSource, ProjectOperation, ProjectRepository,
     ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
     ProjectTransactionLineage, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphOperation,
@@ -359,7 +359,7 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
         .apply_asset_changes(
             &agent,
             None,
-            vec![ProjectAssetChangeRequest::ImportAsset {
+            vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(image_source),
                 asset_path: "media/logo.png".to_owned(),
                 kind: None,
@@ -384,7 +384,7 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
         .apply_asset_changes(
             &agent,
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: image.asset }],
+            vec![ProjectAssetAction::DeleteAsset { asset: image.asset }],
         )
         .unwrap_err();
     assert!(
@@ -472,7 +472,7 @@ fn an_imported_asset(
         .apply_asset_changes(
             author,
             None,
-            vec![ProjectAssetChangeRequest::ImportAsset {
+            vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(source),
                 asset_path: "media/grade.cube".to_owned(),
                 kind: None,
@@ -570,7 +570,7 @@ fn an_asset_only_a_fragments_inner_node_references_is_held_against_deletion() {
         .apply_asset_changes(
             &agent,
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: lut }],
+            vec![ProjectAssetAction::DeleteAsset { asset: lut }],
         )
         .unwrap_err();
     assert!(

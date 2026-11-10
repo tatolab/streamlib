@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
-    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectOperation,
-    ProjectRelativeAssetPath, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectStreamDocumentOperation, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, STREAM_FRAGMENT_NODE_TYPE,
-    StreamGraphDocumentNode, StreamGraphOperation, StreamGraphOperationOnAStream,
+    ProjectAssetAction, ProjectAssetImportSource, ProjectOperation, ProjectRelativeAssetPath,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionLineage, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentNode,
+    StreamGraphOperation, StreamGraphOperationOnAStream,
     graph_document_with_each_stream_fragment_reference_resolved, the_file_of_an_imported_asset,
 };
 use uuid::Uuid;
@@ -98,7 +98,7 @@ impl ProjectWithOneStream {
             .apply_asset_changes(
                 &a_person(),
                 None,
-                vec![ProjectAssetChangeRequest::ImportAsset {
+                vec![ProjectAssetAction::ImportAsset {
                     source: ProjectAssetImportSource::FileOnThisMachine(source),
                     asset_path: "grade.cube".to_owned(),
                     kind: None,

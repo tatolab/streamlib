@@ -427,6 +427,10 @@ pub struct ProjectTransactionOnTheWire {
     /// The key the caller sent it under, when it sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    /// The actions its caller sent, exactly as sent, each tagged by its `operation`; absent for
+    /// an undo, a redo, or a change the runtime made itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<serde_json::Value>,
     /// When the runtime applied it, RFC 3339 in UTC to the second, for display only.
     pub applied_at: String,
 }

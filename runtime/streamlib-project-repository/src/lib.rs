@@ -56,10 +56,10 @@ pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
 };
 pub use project_transaction::{
-    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionApplyOutcome,
-    ProjectActionIdempotencyKey, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
+    ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
+    ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
+    ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
     StreamGraphOperationOnAStream,
 };
