@@ -190,9 +190,13 @@ fn load(
     project_directory: &Path,
     graph_document: serde_json::Value,
 ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+    let stream_name = graph_document["stream"]
+        .as_str()
+        .expect("a test's graph document names its stream")
+        .to_owned();
     runner.load_stream_from_graph_snapshot(
         &GraphSnapshot::from_graph_document(graph_document).expect("a graph document is a graph"),
-        options_loading_a_stream_of_the_test_project_at(project_directory, "main"),
+        options_loading_a_stream_of_the_test_project_at(project_directory, &stream_name),
     )
 }
 
