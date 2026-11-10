@@ -6,9 +6,10 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use uuid::Uuid;
 
 /// How a graph action's `stream` is described to its caller.
-pub const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the edit is to, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
+pub const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.";
 /// How a graph action's `node` is described to its caller.
 pub const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.";
 /// How `import_graph_generator`'s `generator` is described to its caller.
@@ -53,7 +54,7 @@ pub enum StreamGraphAction {
     /// Place a node, answering the UUID the runtime makes for it.
     AddNode {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[serde(rename = "type")]
         #[schemars(
             description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
@@ -88,14 +89,14 @@ pub enum StreamGraphAction {
     /// Take a node out, with every link it has.
     RemoveNode {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
         node: String,
     },
     /// Link an output port to an input port.
     Connect {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = "The output port the link carries from.")]
         source: StreamGraphActionLinkEnd,
         #[schemars(description = "The input port the link carries into.")]
@@ -104,7 +105,7 @@ pub enum StreamGraphAction {
     /// Take out the link between two ports.
     Disconnect {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = "The output port the link carries from.")]
         source: StreamGraphActionLinkEnd,
         #[schemars(description = "The input port the link carries into.")]
@@ -113,7 +114,7 @@ pub enum StreamGraphAction {
     /// Replace a node's config whole.
     SetNodeConfig {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
         node: String,
         #[schemars(description = "The node's new config, as the keys its type's schema declares.")]
@@ -122,7 +123,7 @@ pub enum StreamGraphAction {
     /// Set the value on one of a node's inputs.
     SetPinValue {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
         node: String,
         #[schemars(
@@ -138,7 +139,7 @@ pub enum StreamGraphAction {
     /// Give a node another name.
     RenameNode {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
         node: String,
         #[schemars(
@@ -149,7 +150,7 @@ pub enum StreamGraphAction {
     /// Replace a node's studio fields whole.
     SetStudioFields {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
         node: String,
         #[schemars(
@@ -161,7 +162,7 @@ pub enum StreamGraphAction {
     /// refresh the fragment of that name with a fresh run.
     ImportGraphGenerator {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION)]
         generator: String,
         #[schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION)]
@@ -180,7 +181,7 @@ pub enum StreamGraphAction {
     /// Replace the config fields a node takes as inputs whole.
     SetExposedConfigFields {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
         node: String,
         #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
@@ -189,7 +190,7 @@ pub enum StreamGraphAction {
     /// Make a labelled group of nodes of the stream's own level.
     AddGroup {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
         title: String,
         #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
@@ -206,7 +207,7 @@ pub enum StreamGraphAction {
     /// Set a labelled group's title, description or colour.
     SetGroupFields {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
         group: String,
         #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
@@ -222,7 +223,7 @@ pub enum StreamGraphAction {
     /// Place a stream of an imported project as a fragment node referencing it.
     UseDependencyStream {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
         project: String,
         #[schemars(description = DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION)]
@@ -240,7 +241,7 @@ pub enum StreamGraphAction {
     /// Take out a labelled group, its nodes left ungrouped.
     RemoveGroup {
         #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
+        stream: Uuid,
         #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
         group: String,
     },
@@ -250,8 +251,8 @@ pub enum StreamGraphAction {
 pub const EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION: &str = "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.";
 
 impl StreamGraphAction {
-    /// The stream the action is to, as its caller named it.
-    pub fn stream(&self) -> &str {
+    /// The stream asset whose graph the action is to.
+    pub fn stream(&self) -> Uuid {
         match self {
             Self::AddNode { stream, .. }
             | Self::RemoveNode { stream, .. }
@@ -266,7 +267,7 @@ impl StreamGraphAction {
             | Self::AddGroup { stream, .. }
             | Self::SetGroupFields { stream, .. }
             | Self::RemoveGroup { stream, .. }
-            | Self::UseDependencyStream { stream, .. } => stream,
+            | Self::UseDependencyStream { stream, .. } => *stream,
         }
     }
 }

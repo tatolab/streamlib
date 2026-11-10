@@ -285,6 +285,12 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     machine_wide_graph_before = client.read_json_resource(resource_uris_by_name["graph"])
     (graph_before,) = machine_wide_graph_before["streams"]
     stream_id = graph_before["stream"]
+    [listed_stream] = [
+        listed
+        for listed in client.call_tool("list_streams", {})["streams"]
+        if listed["stream"] == stream_id
+    ]
+    stream_asset = listed_stream["location"]["stream_asset"]
     assert len(graph_before["links"]) == 1, graph_before["links"]
     replaced_link = graph_before["links"][0]
 
@@ -330,8 +336,10 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     graph_after: "dict[str, Any]" = {}
     for tool_name, instruction in steps:
         spelled = dict(EXPLICIT_ARGUMENT.findall(instruction))
-        assert spelled.get("stream") == stream_id, (
-            f"step `{tool_name}` must name the stream the graph resource reported: {instruction}"
+        stream_the_step_must_name = stream_id if tool_name == "graph" else stream_asset
+        assert spelled.get("stream") == stream_the_step_must_name, (
+            f"step `{tool_name}` must name the stream by its id for `graph` and by its stream "
+            f"asset for a graph edit: {instruction}"
         )
         stream_the_step_names = spelled["stream"]
         if tool_name == "add_node":

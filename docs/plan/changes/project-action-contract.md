@@ -63,6 +63,8 @@ on-disk transaction format.
   again. A client mints one key per user gesture, so a slider drag that commits on release is one
   key and one transaction (owner, 2026-11-09). The key is optional: an action sent without one applies, and a
   retry of it can apply twice (owner, 2026-11-10).
+  A graph action names the stream it changes by its stream asset's UUID, which is the same on
+  every machine the project is on, never by a runtime's stream id (owner, 2026-11-10).
 - **Structured refusals.** A refused action answers a typed refusal: the action, the field or link
   it refused, and the runtime's own words. A client shows it beside what caused it and never
   rewrites it (owner, 2026-11-09). A project's change feed carries each refused action beside the

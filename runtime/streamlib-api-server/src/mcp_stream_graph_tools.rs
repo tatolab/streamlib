@@ -140,7 +140,7 @@ struct TransactToolArguments {
 #[serde(deny_unknown_fields)]
 struct AddNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[serde(rename = "type")]
     #[schemars(
         description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
@@ -175,7 +175,7 @@ struct AddNodeToolArguments {
 #[serde(deny_unknown_fields)]
 struct OneNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -191,7 +191,7 @@ struct OneNodeToolArguments {
 #[serde(deny_unknown_fields)]
 struct OneLinkToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(
         description = "The output port the link carries from: a node's UUID and its output port's name."
     )]
@@ -213,7 +213,7 @@ struct OneLinkToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetNodeConfigToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -233,7 +233,7 @@ struct SetNodeConfigToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetPinValueToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -257,7 +257,7 @@ struct SetPinValueToolArguments {
 #[serde(deny_unknown_fields)]
 struct RenameNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -277,7 +277,7 @@ struct RenameNodeToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetStudioFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -297,7 +297,7 @@ struct SetStudioFieldsToolArguments {
 #[serde(deny_unknown_fields)]
 struct AddGroupToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
     title: String,
     #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
@@ -321,7 +321,7 @@ struct AddGroupToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetGroupFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
     group: String,
     #[schemars(description = "The group's new title; kept when omitted.")]
@@ -343,7 +343,7 @@ struct SetGroupFieldsToolArguments {
 #[serde(deny_unknown_fields)]
 struct RemoveGroupToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
     group: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -359,7 +359,7 @@ struct RemoveGroupToolArguments {
 #[serde(deny_unknown_fields)]
 struct ImportGraphGeneratorToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION)]
     generator: String,
     #[schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION)]
@@ -379,7 +379,7 @@ struct ImportGraphGeneratorToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetExposedConfigFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
@@ -990,10 +990,8 @@ impl LocalApiMcpServerHandler {
                 .iter()
                 .map(|operation| serde_json::to_value(operation).unwrap_or_default())
                 .collect();
-            let streams_named: Vec<String> = operations
-                .iter()
-                .map(|operation| operation.stream().to_owned())
-                .collect();
+            let stream_assets_named: Vec<Uuid> =
+                operations.iter().map(StreamGraphAction::stream).collect();
             let (idempotency_key, applied) =
                 match the_idempotency_key_a_caller_sent(idempotency_key) {
                     Ok(idempotency_key) => {
@@ -1005,7 +1003,8 @@ impl LocalApiMcpServerHandler {
                 };
             applied.map_err(|refusal| {
                 let refusal = refusal.into_the_refusal_on_the_wire(tool_name);
-                if let Some(project) = in_flight.the_project_of_the_first_stream_of(&streams_named)
+                if let Some(project) =
+                    in_flight.the_project_of_the_first_stream_asset_of(&stream_assets_named)
                 {
                     project_actions_refused.keep_and_announce(
                         &project_repositories,
@@ -1200,13 +1199,11 @@ impl GraphTransactionInFlight<'_> {
             ));
         }
         let stream_locations = self.the_location_of_each_loaded_stream();
+        let stream_id_of_each_request = self.the_loaded_stream_each_request_names(&requests)?;
         let mut stream_ids_in_order: Vec<String> = Vec::new();
-        for request in &requests {
-            if !stream_ids_in_order
-                .iter()
-                .any(|seen| seen == request.stream())
-            {
-                stream_ids_in_order.push(request.stream().to_owned());
+        for stream_id in &stream_id_of_each_request {
+            if !stream_ids_in_order.contains(stream_id) {
+                stream_ids_in_order.push(stream_id.clone());
             }
         }
         let project_repository = match mode {
@@ -1227,7 +1224,10 @@ impl GraphTransactionInFlight<'_> {
             ));
         }
         let applied = self.apply_the_requests(
-            requests,
+            requests
+                .into_iter()
+                .zip(stream_id_of_each_request)
+                .collect(),
             mode,
             author,
             idempotency_key,
@@ -1292,12 +1292,65 @@ impl GraphTransactionInFlight<'_> {
     }
 
     /// The project of the first of `stream_ids` that is a loaded stream of a project.
-    fn the_project_of_the_first_stream_of(&self, stream_ids: &[String]) -> Option<Uuid> {
-        let stream_locations = self.the_location_of_each_loaded_stream();
-        stream_ids
+    fn the_project_of_the_first_stream_asset_of(&self, stream_assets: &[Uuid]) -> Option<Uuid> {
+        let project_of_each_loaded_stream_asset: HashMap<Uuid, Uuid> = self
+            .the_location_of_each_loaded_stream()
+            .into_values()
+            .flatten()
+            .map(|stream_location| (stream_location.stream_asset, stream_location.project))
+            .collect();
+        stream_assets.iter().find_map(|stream_asset| {
+            project_of_each_loaded_stream_asset
+                .get(stream_asset)
+                .copied()
+        })
+    }
+
+    /// The stream id of the stream running each request's stream asset, in request order; a
+    /// loaded one over one only recorded.
+    fn the_loaded_stream_each_request_names(
+        &self,
+        requests: &[StreamGraphAction],
+    ) -> Result<Vec<String>, GraphTransactionRefusal> {
+        let mut listings_loaded_last = self.operations_on_the_loaded_streams.list_streams();
+        listings_loaded_last.sort_by_key(|listing| listing.node_count.is_some());
+        let stream_id_of_each_loaded_stream_asset: HashMap<Uuid, String> = listings_loaded_last
+            .into_iter()
+            .filter_map(|listing| Some((listing.stream_location?.stream_asset, listing.stream_id)))
+            .collect();
+        requests
             .iter()
-            .find_map(|stream_id| stream_locations.get(stream_id).cloned().flatten())
-            .map(|stream_location| stream_location.project)
+            .enumerate()
+            .map(|(request_index, request)| {
+                stream_id_of_each_loaded_stream_asset
+                    .get(&request.stream())
+                    .cloned()
+                    .ok_or_else(|| {
+                        let mut loaded_stream_assets: Vec<String> =
+                            stream_id_of_each_loaded_stream_asset
+                                .iter()
+                                .map(|(stream_asset, stream_id)| {
+                                    format!("{stream_asset} (stream `{stream_id}`)")
+                                })
+                                .collect();
+                        loaded_stream_assets.sort();
+                        GraphTransactionRefusal::of_the_operation(
+                            request_index,
+                            what_a_graph_action_names(request),
+                            format!(
+                                "no stream the runtime holds runs the stream asset {}; the stream \
+                                 assets it holds are: {}",
+                                request.stream(),
+                                if loaded_stream_assets.is_empty() {
+                                    "none".to_owned()
+                                } else {
+                                    loaded_stream_assets.join(", ")
+                                }
+                            ),
+                        )
+                    })
+            })
+            .collect()
     }
 
     /// The location of each loaded stream by its stream id, `None` for one of no project.
@@ -1326,29 +1379,25 @@ impl GraphTransactionInFlight<'_> {
             .collect()
     }
 
-    /// Apply `requests` as one transaction by `author`, to the project `project_repository_held`
-    /// holds when the transaction is committed.
+    /// Apply each request, to the loaded stream it names, as one transaction by `author`, to the
+    /// project `project_repository_held` holds when the transaction is committed.
     fn apply_the_requests(
         &self,
-        requests: Vec<StreamGraphAction>,
+        requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)>,
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
         stream_locations: &HashMap<String, Option<StreamLocation>>,
         project_repository_held: Option<&mut ProjectRepository>,
     ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
-        let actions_as_sent: Vec<ProjectAction> = requests
+        let actions_as_sent: Vec<ProjectAction> = requests_and_the_stream_id_each_names
             .iter()
-            .cloned()
-            .map(ProjectAction::StreamGraph)
+            .map(|(request, _)| ProjectAction::StreamGraph(request.clone()))
             .collect();
         let mut stream_ids_in_order: Vec<String> = Vec::new();
-        for request in &requests {
-            if !stream_ids_in_order
-                .iter()
-                .any(|seen| seen == request.stream())
-            {
-                stream_ids_in_order.push(request.stream().to_owned());
+        for (_, stream_id) in &requests_and_the_stream_id_each_names {
+            if !stream_ids_in_order.contains(stream_id) {
+                stream_ids_in_order.push(stream_id.clone());
             }
         }
 
@@ -1396,8 +1445,10 @@ impl GraphTransactionInFlight<'_> {
         let mut labels_of_added_nodes: HashMap<Uuid, String> = HashMap::new();
         let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
         let project_repository_read_during_the_requests = project_repository_held.as_deref();
-        for (request_index, request) in requests.into_iter().enumerate() {
-            let stream_id = request.stream().to_owned();
+        for (request_index, (request, stream_id)) in requests_and_the_stream_id_each_names
+            .into_iter()
+            .enumerate()
+        {
             let what_the_request_names = what_a_graph_action_names(&request);
             let applied = streams
                 .get_mut(&stream_id)
@@ -2323,7 +2374,7 @@ fn the_refresh_of_each_fragment_a_changed_module_defines(
                 continue;
             }
             refreshes.push(StreamGraphAction::ImportGraphGenerator {
-                stream: listing.stream_id.clone(),
+                stream: stream_location.stream_asset,
                 generator: fragment_node.node_type,
                 name: Some(fragment_node.name),
                 config: match fragment_node.config {

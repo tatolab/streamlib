@@ -108,7 +108,7 @@ struct RemoveDependencyToolArguments {
 #[serde(deny_unknown_fields)]
 struct UseDependencyStreamToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
     project: String,
     #[schemars(description = DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION)]

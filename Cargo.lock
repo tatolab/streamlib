@@ -4492,6 +4492,7 @@ dependencies = [
  "schemars_derive 1.2.2",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
