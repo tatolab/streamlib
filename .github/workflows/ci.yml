@@ -644,8 +644,13 @@ jobs:
         working-directory: tests/stream-on-runtime
         run: uv sync --frozen
 
+      # The runtime syncs each scaffolded project's venv, which requires this
+      # checkout's `tatolab-stream`; once `main`'s version is ahead of PyPI's,
+      # only this run's build has it.
       - name: Integration suite (all but rig-only)
         working-directory: tests/stream-on-runtime
+        env:
+          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist
         run: .venv/bin/pytest -v -m "not rig_only_capability"
 
       # A scaffolded stream compiles and type-checks with no runtime installed,
@@ -1116,7 +1121,12 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
           .venv/bin/pytest tests -q
 
+      # The runtime syncs each scaffolded project's venv, which requires this
+      # checkout's `tatolab-stream`; once `main`'s version is ahead of PyPI's,
+      # only this run's build has it.
       - name: Integration suite (GPU-free half)
+        env:
+          UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist
         run: |
           rm -rf target/tatolab-runtime
           mkdir -p target/tatolab-runtime

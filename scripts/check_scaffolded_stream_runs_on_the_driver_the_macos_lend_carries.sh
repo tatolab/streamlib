@@ -25,6 +25,14 @@ tatolab_stream_wheel_directory="${2:?$usage}"
 tatolabd_executable="$runtime_unit_root/bin/tatolabd"
 tatolab_executable="$runtime_unit_root/bin/tatolab"
 
+# The runtime syncs the project's venv on the load, and the scaffold requires
+# the `tatolab-stream` this runtime was built beside, which no index carries
+# before the release publishes it. uv reads this from the environment the sync
+# inherits from `tatolabd`, and resolves it from the project directory, so the
+# path is absolute.
+UV_FIND_LINKS="$(cd "$tatolab_stream_wheel_directory" && pwd)"
+export UV_FIND_LINKS
+
 "$tatolabd_executable" > /tmp/tatolabd.log 2>&1 &
 tatolabd_pid=$!
 trap 'kill -KILL "$tatolabd_pid" 2>/dev/null || true' EXIT
@@ -43,8 +51,8 @@ until "$tatolab_executable" streams > /dev/null 2>&1; do
   sleep 1
 done
 
-# The venv is made first, from this run's build, so the create's
-# load finds an interpreter that runs and syncs nothing.
+# The venv is made first, from this run's build, so the create's load finds
+# an interpreter that runs and its sync has only the lock left to write.
 mkdir -p /tmp/scaffold-check
 python3 -m venv /tmp/scaffold-check/.venv
 # `--no-index` keeps `tatolab-stream` to this run's build, so the one
