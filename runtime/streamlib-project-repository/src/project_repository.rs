@@ -1773,6 +1773,33 @@ impl ProjectRepository {
         applied.map(ProjectActionApplyOutcome::AppliedNow)
     }
 
+    /// Write a new file of the project as one transaction, as [`Self::write_project_file`]
+    /// does, refused when anything is already at `path`.
+    pub fn create_project_file(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        path: &str,
+        content: &[u8],
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        refuse_an_author_without_a_name(author)?;
+        if let Some(applied_before) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(
+                applied_before,
+            ));
+        }
+        let parsed_path = ProjectRelativeFilePath::parse(path)?;
+        let on_disk = parsed_path.on_disk_under(&self.project_directory);
+        if on_disk.symlink_metadata().is_ok() {
+            return Err(ProjectRepositoryRefusal::ProjectFileAlreadyExists(
+                parsed_path.as_str().to_owned(),
+            ));
+        }
+        self.write_project_file(author, idempotency_key, path, content)
+    }
+
     /// Commit the project's files as they are now when history holds other bytes at `path`
     /// than `bytes_on_disk_now`, so a write's inverse puts back what the write replaced.
     fn record_the_file_when_history_holds_other_bytes(

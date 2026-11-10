@@ -21,6 +21,7 @@ mod mcp_prompts;
 mod mcp_resources;
 mod mcp_stdio_upgrade;
 mod mcp_stream_graph_tools;
+mod new_node_file_template;
 #[cfg(test)]
 mod project_asset_tools_tests;
 mod state;

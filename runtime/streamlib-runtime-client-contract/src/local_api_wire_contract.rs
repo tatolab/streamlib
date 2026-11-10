@@ -748,6 +748,19 @@ pub struct ProjectFileTransactionToolResult {
     pub commit: String,
 }
 
+/// The `create_node_file` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateNodeFileToolResult {
+    /// The file created.
+    pub path: String,
+    /// The node type the file declares, `<module>:<class>`, as `add_node` takes it.
+    pub node_type: String,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+}
+
 /// A project this one imports, as a dependency tool answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectDependencyOnTheWire {

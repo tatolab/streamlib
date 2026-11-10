@@ -49,6 +49,8 @@ pub enum ProjectRepositoryRefusal {
     ProjectFilePathRefused { path: String, why: &'static str },
     #[error("the project holds no file at `{0}`")]
     NoSuchProjectFile(String),
+    #[error("the project already holds `{0}`, and a new file is never written over it")]
+    ProjectFileAlreadyExists(String),
     #[error("the project holds no folder at `{0}`")]
     NoSuchProjectFolder(String),
     #[error("the file `{path}` is not written with write_project_file: {why}")]
