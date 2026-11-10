@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.57](https://github.com/tatolab/streamlib/compare/v0.68.56...v0.68.57) (2026-11-10)
+
+
+### Features
+
+* **runtime:** move a project's first-party packages to the runtime's version before it loads ([01a9956](https://github.com/tatolab/streamlib/commit/01a9956a390b7a71d0f62975b1702c249321c23a))
+
 ## [0.68.56](https://github.com/tatolab/streamlib/compare/v0.68.55...v0.68.56) (2026-11-10)
 
 
