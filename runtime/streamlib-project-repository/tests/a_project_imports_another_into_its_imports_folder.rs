@@ -101,7 +101,8 @@ impl ProjectWithOneStream {
                 None,
                 vec![ProjectAssetAction::ImportAsset {
                     source: ProjectAssetImportSource::FileOnThisMachine(source),
-                    asset_path: "grade.cube".to_owned(),
+                    asset_path: Some("grade.cube".to_owned()),
+                    file_name: None,
                     kind: None,
                     import_settings: Map::new(),
                 }],

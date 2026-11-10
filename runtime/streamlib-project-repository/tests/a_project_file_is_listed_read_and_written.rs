@@ -315,7 +315,8 @@ fn a_file_another_verb_changes_or_history_does_not_record_is_never_written() {
             None,
             vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(take),
-                asset_path: "media/intro.mp4".to_owned(),
+                asset_path: Some("media/intro.mp4".to_owned()),
+                file_name: None,
                 kind: None,
                 import_settings: Map::new(),
             }],

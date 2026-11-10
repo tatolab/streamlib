@@ -45,6 +45,15 @@ pub enum ProjectRepositoryRefusal {
     AssetPathHoldsAnotherFile { path: String },
     #[error("a stream asset is a graph document the stream verbs create; it is never imported")]
     StreamAssetsAreNotImported,
+    #[error(
+        "an upload imported with no `asset_path` needs a `file_name`: its bytes carry no name of their own"
+    )]
+    UploadImportedWithNoPathNamesNoFileName,
+    #[error("`{file_name}` is not a file name: {why}")]
+    ImportFileNameRefused {
+        file_name: String,
+        why: &'static str,
+    },
     #[error("the file path `{path}` is refused: {why}")]
     ProjectFilePathRefused { path: String, why: &'static str },
     #[error("the project holds no file at `{0}`")]

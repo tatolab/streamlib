@@ -78,7 +78,8 @@ fn import_an_image(repository: &mut ProjectRepository, source_directory: &Path) 
             None,
             vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(source),
-                asset_path: "assets/cover.png".to_owned(),
+                asset_path: Some("assets/cover.png".to_owned()),
+                file_name: None,
                 kind: None,
                 import_settings: Map::new(),
             }],

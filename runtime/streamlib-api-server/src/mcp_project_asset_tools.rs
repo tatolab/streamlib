@@ -133,9 +133,13 @@ struct ImportAssetToolArguments {
     )]
     source: String,
     #[schemars(
-        description = "Where the asset sits in the project, `/`-separated and relative to the project directory, such as `media/intro.mp4`."
+        description = "Where the asset sits in the project, `/`-separated and relative to the project directory, such as `media/intro.mp4`. Omit it to place the file in its kind's folder — `media/`, `scenes/` or `data/` — under `file_name`, numbered `<name>-2.<extension>`, `-3`, … past a name already taken there."
     )]
-    asset_path: String,
+    asset_path: Option<String>,
+    #[schemars(
+        description = "The asset's file name in its kind's folder when `asset_path` is omitted, such as `intro.mp4`. Omit it for the source file's own name; an upload, which carries no name, needs it."
+    )]
+    file_name: Option<String>,
     #[schemars(
         description = "`media`, `scene` or `data`. Omit it for the kind the file's extension implies, `data` when it implies none."
     )]
@@ -339,7 +343,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later relocation keeps, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Undoing the import removes the file at `asset_path`, one imported in place included, and nothing keeps its bytes. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
+        description = "Import a file as a new asset of the project at `asset_path`, or, with no `asset_path`, in its kind's folder of the project's standard layout — `media/` for video, audio and images, `scenes/` for USD, glTF and other 3D scenes, `data/` for everything else — under `file_name` or the source file's own name, numbered `<name>-2.<extension>`, `-3`, … past a name an asset or another file already takes there. Answers the `asset`, with the UUID the runtime made for it, which every later relocation keeps, and the `path` it landed at, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Undoing the import removes the file at `asset_path`, one imported in place included, and nothing keeps its bytes. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
     )]
     async fn import_asset(
         &self,
@@ -348,6 +352,7 @@ impl LocalApiMcpServerHandler {
             project_directory,
             source,
             asset_path,
+            file_name,
             kind,
             import_settings,
             author,
@@ -358,6 +363,7 @@ impl LocalApiMcpServerHandler {
             source: ProjectAssetImportSource::try_from(source)
                 .map_err(|refusal| format!("import_asset failed: {refusal}"))?,
             asset_path,
+            file_name,
             kind: kind.map(ProjectAssetKind::from),
             import_settings: import_settings.unwrap_or_default(),
         };
