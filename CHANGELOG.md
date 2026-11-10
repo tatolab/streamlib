@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.54](https://github.com/tatolab/streamlib/compare/v0.68.53...v0.68.54) (2026-11-10)
+
+
+### Features
+
+* **project:** hold a node's studio fields to a versioned contract and keep canvas notes ([f904035](https://github.com/tatolab/streamlib/commit/f904035196834d5616fabaef1b77df3f4558c658))
+
 ## [0.68.53](https://github.com/tatolab/streamlib/compare/v0.68.52...v0.68.53) (2026-11-10)
 
 
