@@ -15,6 +15,7 @@
 //! drop the signal removes.
 
 use std::time::{Duration, Instant};
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
@@ -29,12 +30,10 @@ fn an_empty_stream_loaded_into(
     project_directory: &std::path::Path,
 ) -> std::sync::Arc<streamlib::sdk::runtime::LoadedStreamInThisRuntime> {
     runner
-        .load_an_empty_stream(
-            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
-                project_directory,
-            )
-            .with_stream_id("main"),
-        )
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory,
+            "main",
+        ))
         .expect("an empty stream loads")
 }
 

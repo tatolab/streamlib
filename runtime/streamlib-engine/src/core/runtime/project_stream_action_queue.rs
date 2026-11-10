@@ -124,8 +124,7 @@ pub struct StreamOfAStreamAction {
     pub stream_id: String,
     /// The label the stream is shown under.
     pub display_name: String,
-    /// Where the stream's code lives; `None` for a stream a library host
-    /// loaded.
+    /// Where the stream's code lives; `None` for a stream no record of this runtime locates.
     pub stream_location: Option<StreamLocation>,
     /// `None` until the action took the stream in; then the state it left it in.
     pub state: Option<StreamListingState>,

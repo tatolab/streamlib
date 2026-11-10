@@ -36,10 +36,10 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.49" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.50" }
 # The runtime directory the local API's socket is bound in, and the wire names and tool result
 # shapes it serves.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.49" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.50" }
 # The projects the asset tools open, each with its one writer.
 streamlib-project-repository = { path = "../streamlib-project-repository", features = ["mcp-tool-json-schema"] }
 uuid = "1.11"
@@ -72,6 +72,8 @@ rmcp = { version = "3.5.1", features = ["server", "macros", "transport-streamabl
 tokio-util = "0.7"
 
 [dev-dependencies]
+# The real-engine tests load their streams from a project on disk.
+streamlib = { path = "../../sdk/streamlib-sdk", features = ["test-support"] }
 # The MCP wire tests drive the real router over its socket with rmcp's own client.
 rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"

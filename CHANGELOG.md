@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.50](https://github.com/tatolab/streamlib/compare/v0.68.49...v0.68.50) (2026-11-10)
+
+
+### Features
+
+* **project:** rename, duplicate, delete and cover a project through the local API ([607b038](https://github.com/tatolab/streamlib/commit/607b03897237b1f38f24b5d8c7a436bf76605aa7))
+
 ## [0.68.49](https://github.com/tatolab/streamlib/compare/v0.68.48...v0.68.49) (2026-11-10)
 
 

@@ -392,51 +392,16 @@ pub struct RunnerConstructionOptions {
 }
 
 /// Where a loaded stream's id comes from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WhatALoadedStreamIsKeyedBy {
-    /// Its project and stream asset, under the id the runtime records it by.
-    ItsLocation {
-        /// The id the stream is recorded under.
-        stream_id: String,
-        /// Its project and stream asset.
-        stream_location: StreamLocation,
-    },
-    /// The id its host gave it, cast.
-    TheIdItsHostGave(String),
-}
-
-impl WhatALoadedStreamIsKeyedBy {
-    /// The id the load asks for, before the cast.
-    fn requested_stream_id(&self) -> String {
-        match self {
-            Self::ItsLocation { stream_id, .. } => stream_id.clone(),
-            Self::TheIdItsHostGave(stream_id) => stream_id.clone(),
-        }
-    }
-
-    /// The location, when the stream is keyed by one.
-    fn into_stream_location(self) -> Option<StreamLocation> {
-        match self {
-            Self::ItsLocation {
-                stream_location, ..
-            } => Some(stream_location),
-            Self::TheIdItsHostGave(_) => None,
-        }
-    }
-}
-
-/// What a host chooses as it loads one stream into a [`Runner`].
-#[derive(Debug, Clone, Default)]
+/// What a host chooses as it loads one stream of a project into a [`Runner`].
+#[derive(Debug, Clone)]
 pub struct OptionsForLoadingOneStream {
-    /// Where the stream's id comes from; the name the graph carries, cast, when
-    /// none is given. Required for an empty stream.
-    pub keyed_by: Option<WhatALoadedStreamIsKeyedBy>,
+    /// The id the runtime records the stream under, cast.
+    pub stream_id: String,
+    /// The project and stream asset the stream is.
+    pub stream_location: StreamLocation,
     /// The label the stream is shown under; the stream id when none is given.
     pub display_name: Option<String>,
-    /// The stream's project directory, when no stream environment is given.
-    pub project_directory: Option<PathBuf>,
-    /// Where the stream's processor interpreters start; its project directory
-    /// is the stream's project directory.
+    /// Where the stream's processor interpreters start; none starts when none is given.
     pub stream_environment: Option<StreamEnvironment>,
     /// Whether the stream's capture devices may ask the user for access nobody
     /// has answered yet.
@@ -444,29 +409,25 @@ pub struct OptionsForLoadingOneStream {
 }
 
 impl OptionsForLoadingOneStream {
-    /// A stream whose project lives in `project_directory` and starts no
-    /// processor interpreter.
-    pub fn in_project_directory(project_directory: impl Into<PathBuf>) -> Self {
+    /// The stream of `stream_location`, loaded under the id `stream_id` the runtime records
+    /// it by, starting no processor interpreter.
+    pub fn at_stream_location(
+        stream_id: impl Into<String>,
+        stream_location: StreamLocation,
+    ) -> Self {
         Self {
-            project_directory: Some(project_directory.into()),
-            ..Self::default()
+            stream_id: stream_id.into(),
+            stream_location,
+            display_name: None,
+            stream_environment: None,
+            capture_device_access_prompting: CaptureDeviceAccessPrompting::default(),
         }
     }
 
-    /// A stream whose processor interpreters start in `stream_environment`.
-    pub fn in_stream_environment(stream_environment: StreamEnvironment) -> Self {
+    /// These options, starting the stream's processor interpreters in `stream_environment`.
+    pub fn in_stream_environment(self, stream_environment: StreamEnvironment) -> Self {
         Self {
             stream_environment: Some(stream_environment),
-            ..Self::default()
-        }
-    }
-
-    /// These options, loading the stream under the id `stream_id`, cast.
-    pub fn with_stream_id(self, stream_id: impl Into<String>) -> Self {
-        Self {
-            keyed_by: Some(WhatALoadedStreamIsKeyedBy::TheIdItsHostGave(
-                stream_id.into(),
-            )),
             ..self
         }
     }
@@ -491,47 +452,23 @@ impl OptionsForLoadingOneStream {
         }
     }
 
-    /// These options, loading the stream of `stream_location` under the id `stream_id` the
-    /// runtime records it by.
-    pub fn at_stream_location(self, stream_id: String, stream_location: StreamLocation) -> Self {
-        Self {
-            keyed_by: Some(WhatALoadedStreamIsKeyedBy::ItsLocation {
-                stream_id,
-                stream_location,
-            }),
-            ..self
-        }
-    }
-
-    /// The id the load asks for, before the cast: the key's, else `graph_stream`.
-    fn requested_stream_id(&self, graph_stream: Option<&str>) -> Option<String> {
-        match &self.keyed_by {
-            Some(keyed_by) => Some(keyed_by.requested_stream_id()),
-            None => graph_stream.map(str::to_string),
-        }
-    }
-
-    /// The stream's project directory: the stream environment's, else the one
-    /// given, refused when the two disagree or neither is given.
+    /// The stream's project directory, its location's, refused when its stream environment
+    /// lives in another.
     fn resolved_project_directory(&self, stream_id: &str) -> Result<PathBuf> {
-        match (&self.stream_environment, &self.project_directory) {
-            (Some(stream_environment), Some(project_directory))
-                if *project_directory != stream_environment.project_directory =>
+        let project_directory = &self.stream_location.project_directory;
+        match &self.stream_environment {
+            Some(stream_environment)
+                if stream_environment.project_directory != *project_directory =>
             {
                 Err(Error::Configuration(format!(
-                    "the stream `{stream_id}` was given the project directory `{}` and a \
+                    "the stream `{stream_id}` is of the project in `{}` and was given a \
                      stream environment in `{}`; a stream's environment lives in its project \
-                     directory, so give one of them, or the same directory to both",
+                     directory",
                     project_directory.display(),
                     stream_environment.project_directory.display()
                 )))
             }
-            (Some(stream_environment), _) => Ok(stream_environment.project_directory.clone()),
-            (None, Some(project_directory)) => Ok(project_directory.clone()),
-            (None, None) => Err(Error::Configuration(format!(
-                "the stream `{stream_id}` was given no project directory; a stream's logs, \
-                 caches and node identities live under its project, so load it with one"
-            ))),
+            _ => Ok(project_directory.clone()),
         }
     }
 }
@@ -1068,10 +1005,8 @@ impl Runner {
         load_options: OptionsForLoadingOneStream,
         teardown_watchdog_budget: Duration,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let requested_stream_id = load_options.requested_stream_id(None);
-        self.refuse_a_load_while_the_machine_shuts_down(requested_stream_id.as_deref())?;
-        let stream_id =
-            the_cast_stream_id_a_load_names(requested_stream_id.as_deref(), "an empty stream")?;
+        self.refuse_a_load_while_the_machine_shuts_down(&load_options.stream_id)?;
+        let stream_id = the_cast_stream_id_a_load_names(&load_options.stream_id)?;
         let stream = self.build_a_stream(
             stream_id,
             load_options,
@@ -1351,10 +1286,8 @@ impl Runner {
         load_options: OptionsForLoadingOneStream,
         holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let requested_stream_id = load_options.requested_stream_id(graph.stream.as_deref());
-        self.refuse_a_load_while_the_machine_shuts_down(requested_stream_id.as_deref())?;
-        let stream_id =
-            the_cast_stream_id_a_load_names(requested_stream_id.as_deref(), "the graph")?;
+        self.refuse_a_load_while_the_machine_shuts_down(&load_options.stream_id)?;
+        let stream_id = the_cast_stream_id_a_load_names(&load_options.stream_id)?;
         if graph.nodes.is_empty() {
             return Err(Error::GraphError(format!(
                 "the stream `{stream_id}` holds no node — a stream whose function adds \
@@ -1387,9 +1320,7 @@ impl Runner {
                     .display_name
                     .unwrap_or_else(|| stream_id.clone()),
                 stream_id,
-                stream_location: load_options
-                    .keyed_by
-                    .and_then(WhatALoadedStreamIsKeyedBy::into_stream_location),
+                stream_location: load_options.stream_location,
             },
             project_directory,
             load_options.stream_environment,
@@ -1472,16 +1403,13 @@ impl Runner {
         )))
     }
 
-    fn refuse_a_load_while_the_machine_shuts_down(
-        &self,
-        requested_stream_id: Option<&str>,
-    ) -> Result<()> {
+    fn refuse_a_load_while_the_machine_shuts_down(&self, requested_stream_id: &str) -> Result<()> {
         if !crate::core::runtime::is_the_machines_shutdown_requested() {
             return Ok(());
         }
         Err(Error::Runtime(format!(
-            "the stream `{}` was not loaded: the machine is shutting every stream down",
-            requested_stream_id.unwrap_or("(unnamed)")
+            "the stream `{requested_stream_id}` was not loaded: the machine is shutting every \
+             stream down"
         )))
     }
 
@@ -1500,16 +1428,7 @@ impl Drop for Runner {
 
 /// The URL-safe cast of the stream id a load names, refused when it casts to
 /// nothing and when there is none.
-pub(super) fn the_cast_stream_id_a_load_names(
-    requested_stream_id: Option<&str>,
-    what_is_loaded: &str,
-) -> Result<String> {
-    let Some(requested_stream_id) = requested_stream_id else {
-        return Err(Error::GraphError(format!(
-            "{what_is_loaded} names no stream; give it an id with \
-             `OptionsForLoadingOneStream::with_stream_id`"
-        )));
-    };
+pub(super) fn the_cast_stream_id_a_load_names(requested_stream_id: &str) -> Result<String> {
     cast_exposed_name_to_url_safe(requested_stream_id)
         .map(|cast| cast.into_owned())
         .map_err(|casts_to_nothing| {
@@ -1521,7 +1440,7 @@ pub(super) fn the_cast_stream_id_a_load_names(
 
 /// How a load refused for an id already loaded is told to go on.
 const LOAD_UNDER_ANOTHER_STREAM_ID_IN_CODE: &str =
-    "load this one under another id with `OptionsForLoadingOneStream::with_stream_id`";
+    "load this one under another id with `OptionsForLoadingOneStream::at_stream_location`";
 
 /// The refusal of a load under the id `first` is loaded as, naming where it
 /// was loaded from and ending with `how_to_load_this_one`.
@@ -1529,14 +1448,11 @@ pub(super) fn a_stream_id_already_loaded_refusal(
     first: &LoadedStreamInThisRuntime,
     how_to_load_this_one: &str,
 ) -> Error {
-    let loaded_from = match first.stream_location() {
-        Some(stream_location) => stream_location.to_string(),
-        None => first.project_directory().display().to_string(),
-    };
     Error::GraphError(format!(
-        "a stream with the id `{}` is already loaded in this runtime, from `{loaded_from}`; \
+        "a stream with the id `{}` is already loaded in this runtime, from `{}`; \
          {how_to_load_this_one}",
-        first.stream_id()
+        first.stream_id(),
+        first.stream_location()
     ))
 }
 
@@ -1760,6 +1676,7 @@ fn bring_up_mach_surface_share_service(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
     use crate::core::runtime::{HowALoadedStreamEnded, RuntimeStatus};
     use serial_test::serial;
 
@@ -1771,10 +1688,10 @@ mod tests {
         stream_id: &str,
     ) -> Arc<LoadedStreamInThisRuntime> {
         runner
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(project_directory)
-                    .with_stream_id(stream_id),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory,
+                stream_id,
+            ))
             .expect("an empty stream loads")
     }
 
@@ -2772,8 +2689,7 @@ mod tests {
         let runner = Runner::new().expect("Runner::new");
         let hung = runner
             .load_an_empty_stream_whose_teardown_watchdog_fires_after(
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("hung"),
+                options_loading_a_stream_of_the_test_project_at(project_directory.path(), "hung"),
                 Duration::from_millis(300),
             )
             .expect("the stream loads");
@@ -3394,8 +3310,7 @@ mod tests {
         .expect("the machine's shutdown is requested");
 
         let Err(refusal) = runner.load_an_empty_stream(
-            OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                .with_stream_id("too-late"),
+            options_loading_a_stream_of_the_test_project_at(project_directory.path(), "too-late"),
         ) else {
             panic!("a stream loaded while the machine shuts down");
         };
@@ -3432,8 +3347,10 @@ mod tests {
         let load_outcome = runner
             .load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
                 &graph,
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("too-late"),
+                options_loading_a_stream_of_the_test_project_at(
+                    project_directory.path(),
+                    "too-late",
+                ),
             )
             .expect("a load the machine's shutdown reached is abandoned, not refused");
 
@@ -3536,10 +3453,10 @@ mod tests {
         let runner = Runner::new().expect("Runner::new");
         let load_named = |stream_id: &str| {
             runner
-                .load_an_empty_stream(
-                    OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                        .with_stream_id(stream_id),
-                )
+                .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                    project_directory.path(),
+                    stream_id,
+                ))
                 .expect("an empty stream loads")
         };
         let first = load_named("first");
@@ -3864,10 +3781,10 @@ mod tests {
         let runner = Runner::new().expect("Runner::new");
         let load_named = |stream_id: &str| {
             runner
-                .load_an_empty_stream(
-                    OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                        .with_stream_id(stream_id),
-                )
+                .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                    project_directory.path(),
+                    stream_id,
+                ))
                 .expect("an empty stream loads")
         };
         let first = load_named("first");
@@ -3959,10 +3876,10 @@ mod tests {
         let second_runner = Runner::new().expect("the second runner constructs");
         for runner in [&first_runner, &second_runner] {
             runner
-                .load_an_empty_stream(
-                    OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                        .with_stream_id("main"),
-                )
+                .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                    project_directory.path(),
+                    "main",
+                ))
                 .expect("an empty stream loads");
             runner.unload_stream("main").expect("the stream unloads");
         }
@@ -3992,10 +3909,10 @@ mod tests {
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let runner = Runner::new().expect("Runner::new");
         let stream = runner
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("main"),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory.path(),
+                "main",
+            ))
             .expect("an empty stream loads");
         stream.log_route().run_entered(|| {
             for token_index in 0..3 {
@@ -4132,10 +4049,10 @@ mod tests {
         );
 
         let stream = runner
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("main"),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory.path(),
+                "main",
+            ))
             .expect("an empty stream loads");
         stream
             .log_route()
