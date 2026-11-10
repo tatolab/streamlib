@@ -2660,21 +2660,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
   Wall clock is permitted on exactly six surfaces and nowhere else: log record `host_ts`
-  and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an
-  action was refused, beside the `applied_at` a transaction reads off its commit (owner,
-  2026-11-10) — the local
-  relay certificate's validity — its UTC
-  `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
-  (owner, 2026-10-17) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro
-  JWTs the moq.pro adapter and the live proof's subscribe minter sign (owner, 2026-10-20) —
-  their job is correlating with the outside world, which monotonic time cannot do. A wall-clock value never enters the data plane and is never compared
-  against a media timestamp; another surface is a plan change, not a judgement call. The
-  list is mechanically enforced, with no per-line pragma and no opt-out attribute: the
-  permitted surfaces are a closed set in the gate, so a seventh is a source change that
-  surfaces in review rather than a line quietly appended, and an
-  entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
-  allowlist is per-file, which is why a data-plane file never joins it — a machine-global
-  unique name comes from the engine's unique-name primitive, never from reading a clock.
+  and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an action
+  was refused, beside the `applied_at` a transaction reads off its commit (owner,
+  2026-11-10) — the local relay certificate's validity — its UTC `notBefore` / `notAfter`,
+  issued and aged by the one file that writes the certificate (owner, 2026-10-17) — and a
+  relay token's expiry — the UTC `iat` / `exp` of the moq.pro JWTs the moq.pro adapter and
+  the live proof's subscribe minter sign (owner, 2026-10-20) — their job is correlating with
+  the outside world, which monotonic time cannot do. A wall-clock value never enters the
+  data plane and is never compared against a media timestamp; another surface is a plan
+  change, not a judgement call. The gate enforces the list in the tree it scans — `runtime`,
+  `sdk`, `adapters`, `xtask` and `packages/test-fixtures` — with no per-line pragma and no
+  opt-out attribute: the surfaces read there are a closed set of kinds in the gate, so
+  another is a source change that surfaces in review rather than a line quietly appended,
+  and an entry whose file stops reading a wall clock is a licence the gate makes you hand
+  back. The relay certificate and token surfaces are read outside its scan, a relay token in
+  `packages/tatolab-moq`. The allowlist is per-file, which is why a data-plane file never joins it — a
+  machine-global unique name comes from the engine's unique-name primitive, never from
+  reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
   SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158]
 - **DECIDED** — Audio backend: one chain per platform, probed once per process and logged

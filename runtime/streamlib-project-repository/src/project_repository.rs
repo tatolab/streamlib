@@ -339,13 +339,19 @@ impl ProjectRepository {
         else {
             return Ok(None);
         };
-        for applied in self.each_applied_transaction_newest_first()? {
-            let applied = applied?;
-            if applied.commit == *commit {
-                return Ok(Some(applied));
-            }
-        }
-        Ok(None)
+        let Some(history_commit) = self
+            .history
+            .commits_newest_first()?
+            .into_iter()
+            .find(|history_commit| history_commit.commit == *commit)
+        else {
+            return Ok(None);
+        };
+        let Some(transaction_json) = the_transaction_trailer_of(&history_commit.message) else {
+            return Ok(None);
+        };
+        let transaction_json = transaction_json.to_owned();
+        applied_transaction_read_from_its_trailer(&transaction_json, history_commit).map(Some)
     }
 
     fn each_applied_transaction_newest_first(
@@ -354,17 +360,13 @@ impl ProjectRepository {
         impl Iterator<Item = Result<AppliedProjectTransaction, ProjectRepositoryRefusal>>,
         ProjectRepositoryRefusal,
     > {
-        let trailer_prefix = format!("{PROJECT_TRANSACTION_COMMIT_TRAILER}: ");
         Ok(self
             .history
             .commits_newest_first()?
             .into_iter()
-            .filter_map(move |history_commit| {
-                let transaction_json = history_commit
-                    .message
-                    .lines()
-                    .find_map(|line| line.strip_prefix(&trailer_prefix))?
-                    .to_owned();
+            .filter_map(|history_commit| {
+                let transaction_json =
+                    the_transaction_trailer_of(&history_commit.message)?.to_owned();
                 Some(applied_transaction_read_from_its_trailer(
                     &transaction_json,
                     history_commit,
@@ -2108,14 +2110,9 @@ impl ProjectRepository {
 fn the_commit_of_each_idempotency_key_in(
     history: &ProjectHistoryRepository,
 ) -> Result<HashMap<ProjectActionIdempotencyKey, String>, ProjectRepositoryRefusal> {
-    let trailer_prefix = format!("{PROJECT_TRANSACTION_COMMIT_TRAILER}: ");
     let mut commit_of_each_idempotency_key = HashMap::new();
     for history_commit in history.commits_newest_first()? {
-        let Some(transaction_json) = history_commit
-            .message
-            .lines()
-            .find_map(|line| line.strip_prefix(&trailer_prefix))
-        else {
+        let Some(transaction_json) = the_transaction_trailer_of(&history_commit.message) else {
             continue;
         };
         let envelope: ProjectTransactionEnvelopeHeader =
@@ -2137,6 +2134,14 @@ fn the_commit_of_each_idempotency_key_in(
         }
     }
     Ok(commit_of_each_idempotency_key)
+}
+
+/// The transaction JSON a commit message carries in its trailer, if it carries one.
+fn the_transaction_trailer_of(commit_message: &str) -> Option<&str> {
+    commit_message.lines().find_map(|line| {
+        line.strip_prefix(PROJECT_TRANSACTION_COMMIT_TRAILER)?
+            .strip_prefix(": ")
+    })
 }
 
 fn applied_transaction_read_from_its_trailer(

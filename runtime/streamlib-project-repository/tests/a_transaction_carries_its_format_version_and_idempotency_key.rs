@@ -415,3 +415,45 @@ fn a_trailer_with_no_readable_envelope_leaves_the_project_openable() {
     ProjectRepository::open(project.repository.project_directory())
         .expect("one unreadable trailer does not keep the project from opening");
 }
+
+#[test]
+fn a_key_sent_again_answers_its_transaction_past_a_newer_unreadable_trailer() {
+    let mut project = ProjectHoldingOneStream::new();
+    let idempotency_key =
+        ProjectActionIdempotencyKey::from_caller("gesture-before-an-unreadable-commit").unwrap();
+    let operation = project.add_node_operation(&a_node("grade"));
+    let first = project
+        .repository
+        .apply_project_operations(
+            &a_person(),
+            Some(&idempotency_key),
+            vec![operation.clone()],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap()
+        .into_applied_transaction();
+    let history = project.repository.history();
+    history
+        .commit_tracked_files(
+            &history.files_at_head().unwrap(),
+            &a_person(),
+            &format!("unreadable\n\n{PROJECT_TRANSACTION_COMMIT_TRAILER}: not json\n"),
+        )
+        .unwrap();
+
+    project.repository = ProjectRepository::open(project.repository.project_directory()).unwrap();
+    let retried = project
+        .repository
+        .apply_project_operations(
+            &a_person(),
+            Some(&idempotency_key),
+            vec![operation],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+
+    assert_eq!(
+        retried,
+        ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(first)
+    );
+}
