@@ -263,8 +263,9 @@ fn register_the_described_node_type(
             return node_types_of_the_stream
                     .register_a_type_described_in_this_streams_processor_interpreter(
                         descriptor,
-                        HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(
-                            move |node| {
+                        HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
+                            shader_node_program: program.clone(),
+                            evaluator_of_the_island_it_hosts: Box::new(move |node| {
                                 Ok(Box::new(
                                     super::shader_node_native_evaluator::ShaderNodeNativeEvaluatorProcessor::for_the_node(
                                         node,
@@ -273,8 +274,8 @@ fn register_the_described_node_type(
                                     ),
                                 )
                                     as Box<dyn DynGeneratedProcessor + Send>)
-                            },
-                        )),
+                            }),
+                        },
                     );
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]

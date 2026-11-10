@@ -353,8 +353,9 @@ class NodeDeclarationDecorator:
         returning the `float4` pixel it computes; the decorated function's
         signature declares the ports and its body is `...`. Each `ImageFrame`
         parameter arrives in Slang as an `ImageInput`, whose `pixel` is the
-        input at this pixel and whose `sample(uv)` reads it at any position,
-        bilinear; each `float` arrives as a value, a push constant. The return
+        input at this pixel, whose `uv` is this pixel's position from 0 to 1,
+        and whose `sample(uv)` reads it at any position, bilinear; each `float`
+        arrives as a value, a push constant. The return
         is one `ImageFrame`, the output `result`, at the extent of the first
         `ImageFrame` input. The runtime compiles and runs it on the GPU with no
         Python process, and takes RGBA Images only.

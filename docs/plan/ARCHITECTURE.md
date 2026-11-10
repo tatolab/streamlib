@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract, project-run-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -481,7 +481,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: across streams, a stream reads another's track through gateway nodes; amended by project-and-assets: a generator's output is stored as a fragment, a container in the document]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes, first-party-package-index)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes, first-party-package-index, studio-view-nodes)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -998,7 +998,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports; unbuilt: fragments; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes; unbuilt: fragments; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -2453,7 +2453,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts, project-run-controls; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -3917,7 +3917,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, project-run-controls, studio-view-nodes)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension

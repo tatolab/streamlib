@@ -17,3 +17,37 @@ float4 tint(ImageInput image, float amount)
 """
 )
 def tint(image: ImageFrame, amount: float = TINT_AMOUNT) -> ImageFrame: ...
+
+
+@node.shader(
+    """
+float4 invert(ImageInput image)
+{
+    return float4(1.0 - image.pixel.rgb, image.pixel.a);
+}
+"""
+)
+def invert(image: ImageFrame) -> ImageFrame: ...
+
+
+@node.shader(
+    """
+float4 swap_red_and_blue(ImageInput image)
+{
+    return image.pixel.bgra;
+}
+"""
+)
+def swap_red_and_blue(image: ImageFrame) -> ImageFrame: ...
+
+
+@node.shader(
+    """
+float4 horizontal_blur(ImageInput image)
+{
+    float2 one_column = float2(1.0 / 64.0, 0.0);
+    return (image.sample(image.uv - one_column) + image.sample(image.uv + one_column)) * 0.5;
+}
+"""
+)
+def horizontal_blur(image: ImageFrame) -> ImageFrame: ...
