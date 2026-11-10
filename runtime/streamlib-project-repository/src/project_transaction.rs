@@ -298,7 +298,10 @@ pub enum ProjectSettingsOperation {
         to: Option<String>,
     },
     /// The project's cover went from the image asset `from` to `to`, `None` for none.
-    SetProjectCover { from: Option<Uuid>, to: Option<Uuid> },
+    SetProjectCover {
+        from: Option<Uuid>,
+        to: Option<Uuid>,
+    },
 }
 
 impl ProjectSettingsOperation {

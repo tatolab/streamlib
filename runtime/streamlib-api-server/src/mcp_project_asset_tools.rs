@@ -207,7 +207,7 @@ struct SetAssetSettingsToolArguments {
 #[tool_router(router = project_asset_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID and name and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
+        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID, `project_name`, `project_description`, `project_cover` — the UUID of the image asset it is shown by — and `project_last_edited_at`, when its history last changed in seconds since the Unix epoch, each `null` when it has none, and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
     )]
     async fn list_assets(
         &self,
@@ -233,6 +233,12 @@ impl LocalApiMcpServerHandler {
                         project_directory: project_repository.project_directory().to_path_buf(),
                         project: project_repository.project_file().project.to_string(),
                         project_name: project_repository.project_file().name.clone(),
+                        project_description: project_repository.project_file().description.clone(),
+                        project_cover: project_repository
+                            .project_file()
+                            .cover
+                            .map(|cover| cover.to_string()),
+                        project_last_edited_at: project_repository.last_edited_at_unix_seconds()?,
                         assets,
                         transactions_resource_uri: project_transactions_resource_uri(
                             project_repository.project_file().project,
@@ -526,7 +532,8 @@ impl LocalApiMcpServerHandler {
                     Some(
                         ProjectOperation::StreamGraph(_)
                         | ProjectOperation::Import(_)
-                        | ProjectOperation::StreamDocument(_),
+                        | ProjectOperation::StreamDocument(_)
+                        | ProjectOperation::ProjectSettings(_),
                     )
                     | None => {
                         return Err(ProjectRepositoryRefusal::EmptyTransaction);

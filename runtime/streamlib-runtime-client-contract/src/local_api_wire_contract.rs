@@ -65,6 +65,47 @@ pub struct RemoveProjectToolResult {
     pub project_directory: PathBuf,
 }
 
+/// The `delete_project` tool's result: the deletion of the whole project queued on its queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteProjectToolResult {
+    /// The queued deletion, as `describe_stream_action` takes it.
+    pub action: String,
+    /// The project whose streams it forgets and whose folder it moves to the Trash, symlinks
+    /// resolved.
+    pub project_directory: PathBuf,
+}
+
+/// The `duplicate_project` tool's result: the duplicate, a project of its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicateProjectToolResult {
+    /// The duplicate's folder.
+    pub project_directory: PathBuf,
+    /// The duplicate's UUID, new to it.
+    pub project: String,
+    /// The duplicate's name.
+    pub project_name: String,
+    /// The commit on the duplicate's history that records it was duplicated.
+    pub commit: String,
+}
+
+/// The result of `rename_project`, `set_project_description` and `set_project_cover`: how
+/// people see the project after the transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectSettingsTransactionToolResult {
+    /// The project's UUID, which no settings change touches.
+    pub project: String,
+    /// The project's name.
+    pub project_name: String,
+    /// What the project is, `null` for no description.
+    pub project_description: Option<String>,
+    /// The image asset the project is shown by, by its UUID, `null` for no cover.
+    pub project_cover: Option<String>,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+}
+
 /// The `rename_stream` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenameStreamToolResult {
@@ -394,6 +435,13 @@ pub struct ListAssetsToolResult {
     pub project: String,
     /// The project's name.
     pub project_name: String,
+    /// What the project is, `null` when nobody has described it.
+    pub project_description: Option<String>,
+    /// The image asset the project is shown by, by its UUID, `null` when it has no cover.
+    pub project_cover: Option<String>,
+    /// When the project's history last changed, in whole seconds since the Unix epoch, for
+    /// display only; `null` before its first commit.
+    pub project_last_edited_at: Option<i64>,
     /// The assets, narrowed to one kind when the call named one.
     pub assets: Vec<ProjectAssetOnTheWire>,
     /// The project's change feed: the resource a client reads for its newest transactions and

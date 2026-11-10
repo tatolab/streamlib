@@ -25,13 +25,14 @@ use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
 use crate::project_history_repository::{
-    PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit, ProjectHistoryCommitWritten,
-    ProjectHistoryRepository,
+    PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit,
+    ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 use crate::project_import_copy::{
-    PROJECT_IMPORT_STAGING_DIRECTORY, copy_the_files_a_project_copy_carries, files_an_import_carries, files_edited_since_the_copy,
-    refuse_an_import_folder_name, sha256_of_each_file_under, stage_a_copy_of_the_project_source,
-    the_import_folder_in, the_import_folder_named_after, version_of_the_copied_files,
+    PROJECT_IMPORT_STAGING_DIRECTORY, copy_the_files_a_project_copy_carries,
+    files_an_import_carries, files_edited_since_the_copy, refuse_an_import_folder_name,
+    sha256_of_each_file_under, stage_a_copy_of_the_project_source, the_import_folder_in,
+    the_import_folder_named_after, version_of_the_copied_files,
 };
 use crate::project_pyproject_import_sources::{
     PYPROJECT_FILE_NAME, pyproject_with_each_import_as_a_uv_path_source,
@@ -2251,7 +2252,9 @@ fn transaction_commit_message(
 }
 
 /// `path` resolved through its nearest ancestor that exists, the rest appended as written.
-fn the_nearest_existing_ancestor_resolved(path: &Path) -> Result<PathBuf, ProjectRepositoryRefusal> {
+fn the_nearest_existing_ancestor_resolved(
+    path: &Path,
+) -> Result<PathBuf, ProjectRepositoryRefusal> {
     let mut not_yet_existing = Vec::new();
     let mut ancestor = path;
     loop {

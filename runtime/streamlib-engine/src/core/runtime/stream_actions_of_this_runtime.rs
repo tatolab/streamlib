@@ -20,8 +20,8 @@ use streamlib_project_repository::{
 use uuid::Uuid;
 
 use super::new_project_name_drawing::draw_new_project_directory_under_the_streams_root;
-use super::project_folder_moved_to_the_trash::move_the_project_folder_to_the_trash;
 use super::new_project_scaffold::{NewProjectScaffold, write_the_new_project_scaffold_into};
+use super::project_folder_moved_to_the_trash::move_the_project_folder_to_the_trash;
 use super::project_stream_action_queue::{
     StreamAction, StreamActionCancelOutcome, StreamActionKind, StreamActionProgress,
     StreamActionQueueOfEachProject, StreamActionQueued, StreamActionState, StreamActionStep,
@@ -921,8 +921,8 @@ impl Runner {
     pub fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
         let project_directory = the_absolute_project_directory_resolved(project_directory)?;
         let action_id = self.next_stream_action_id();
-        let streams =
-            self.every_stream_of_the_project_marked_for_its_removal(&action_id, &project_directory)?;
+        let streams = self
+            .every_stream_of_the_project_marked_for_its_removal(&action_id, &project_directory)?;
         if streams.is_empty() {
             return Err(Error::NotFound(format!(
                 "this runtime holds no stream of the project in {}, so there is none to remove. \
@@ -954,8 +954,8 @@ impl Runner {
             )));
         }
         let action_id = self.next_stream_action_id();
-        let streams =
-            self.every_stream_of_the_project_marked_for_its_removal(&action_id, &project_directory)?;
+        let streams = self
+            .every_stream_of_the_project_marked_for_its_removal(&action_id, &project_directory)?;
         Ok(self.queue_the_removal_of_the_project(
             action_id,
             project_directory,
@@ -1190,7 +1190,10 @@ impl Runner {
     /// Unload every loaded stream of the project in `project_directory` and
     /// forget every record of it, answering why each record that was not
     /// forgotten was not.
-    fn unload_and_forget_every_stream_of_the_project(&self, project_directory: &Path) -> Vec<String> {
+    fn unload_and_forget_every_stream_of_the_project(
+        &self,
+        project_directory: &Path,
+    ) -> Vec<String> {
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let loaded_of_the_project: Vec<Arc<LoadedStreamInThisRuntime>> = self
             .every_loaded_stream()
@@ -2917,8 +2920,10 @@ fn the_absolute_project_directory_resolved(project_directory: &Path) -> Result<P
             project_directory.display()
         )));
     }
-    Ok(std::fs::canonicalize(project_directory)
-        .unwrap_or_else(|_| project_directory.to_path_buf()))
+    Ok(
+        std::fs::canonicalize(project_directory)
+            .unwrap_or_else(|_| project_directory.to_path_buf()),
+    )
 }
 
 /// Why a removal finished failed: the records in `not_forgotten`, each with why.
@@ -6979,9 +6984,7 @@ mod tests {
         assert!(!project.path().exists());
         let trashed = data_home.path().join("Trash/files").join(&folder_name);
         assert!(trashed.join(PROJECT_FILE_NAME).is_file());
-        assert!(
-            refusal_of(runner.delete_project(project.path())).contains("holds no project")
-        );
+        assert!(refusal_of(runner.delete_project(project.path())).contains("holds no project"));
         assert!(refusal_of(runner.delete_project(Path::new("relative"))).contains("absolute"));
     }
 

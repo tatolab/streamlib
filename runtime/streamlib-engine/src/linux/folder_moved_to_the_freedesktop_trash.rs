@@ -14,7 +14,11 @@ pub(crate) fn move_the_folder_to_the_trash(folder: &Path) -> Result<(), String> 
         Some(data_home) => PathBuf::from(data_home),
         None => match std::env::var_os("HOME").filter(|value| !value.is_empty()) {
             Some(home) => PathBuf::from(home).join(".local/share"),
-            None => return Err("neither XDG_DATA_HOME nor HOME is set, so there is no Trash".to_owned()),
+            None => {
+                return Err(
+                    "neither XDG_DATA_HOME nor HOME is set, so there is no Trash".to_owned(),
+                );
+            }
         },
     };
     move_the_folder_into_the_trash_at(folder, &data_home.join("Trash"), &the_local_time_now())
@@ -35,8 +39,9 @@ pub(crate) fn move_the_folder_into_the_trash_at(
     let files_directory = trash_directory.join("files");
     let info_directory = trash_directory.join("info");
     for directory in [&files_directory, &info_directory] {
-        std::fs::create_dir_all(directory)
-            .map_err(|not_made| format!("the Trash {} was not made: {not_made}", directory.display()))?;
+        std::fs::create_dir_all(directory).map_err(|not_made| {
+            format!("the Trash {} was not made: {not_made}", directory.display())
+        })?;
     }
     for attempt in 1..=u32::MAX {
         let trashed_name = if attempt == 1 {
@@ -57,7 +62,10 @@ pub(crate) fn move_the_folder_into_the_trash_at(
             Ok(info_file) => info_file,
             Err(taken) if taken.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(not_written) => {
-                return Err(format!("{} was not written: {not_written}", info_path.display()));
+                return Err(format!(
+                    "{} was not written: {not_written}",
+                    info_path.display()
+                ));
             }
         };
         let written = info_file.write_all(
@@ -68,7 +76,9 @@ pub(crate) fn move_the_folder_into_the_trash_at(
             .as_bytes(),
         );
         let moved = written
-            .map_err(|not_written| format!("{} was not written: {not_written}", info_path.display()))
+            .map_err(|not_written| {
+                format!("{} was not written: {not_written}", info_path.display())
+            })
             .and_then(|()| {
                 std::fs::rename(folder, &trashed_path).map_err(|not_moved| {
                     if not_moved.raw_os_error() == Some(libc::EXDEV) {
@@ -87,7 +97,10 @@ pub(crate) fn move_the_folder_into_the_trash_at(
         }
         return moved;
     }
-    Err(format!("the Trash {} has no free name left", trash_directory.display()))
+    Err(format!(
+        "the Trash {} has no free name left",
+        trash_directory.display()
+    ))
 }
 
 /// `path` as a `Path=` key holds it: every byte but an unreserved one or `/` percent-encoded.
@@ -147,8 +160,7 @@ mod tests {
             "first"
         );
         assert_eq!(
-            std::fs::read_to_string(trash.join("files/robot cell.2/tatolab-project.json"))
-                .unwrap(),
+            std::fs::read_to_string(trash.join("files/robot cell.2/tatolab-project.json")).unwrap(),
             "second"
         );
         let info = std::fs::read_to_string(trash.join("info/robot cell.trashinfo")).unwrap();
@@ -165,7 +177,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let trash = root.path().join("Trash");
         let missing = root.path().join("gone");
-        assert!(move_the_folder_into_the_trash_at(&missing, &trash, "2026-11-10T01:02:03").is_err());
+        assert!(
+            move_the_folder_into_the_trash_at(&missing, &trash, "2026-11-10T01:02:03").is_err()
+        );
         assert_eq!(std::fs::read_dir(trash.join("info")).unwrap().count(), 0);
     }
 

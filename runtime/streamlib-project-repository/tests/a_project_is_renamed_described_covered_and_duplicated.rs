@@ -21,8 +21,8 @@ impl ProjectInATemporaryRoot {
     fn created() -> (Self, ProjectRepository) {
         let root = tempfile::tempdir().unwrap();
         let project_directory = root.path().join("robot-cell");
-        let repository = ProjectRepository::create(&project_directory, "Robot cell", &person())
-            .unwrap();
+        let repository =
+            ProjectRepository::create(&project_directory, "Robot cell", &person()).unwrap();
         (
             Self {
                 root,
@@ -132,7 +132,10 @@ fn a_blank_name_is_refused_with_nothing_committed() {
         },
     )
     .unwrap_err();
-    assert!(matches!(refusal, ProjectRepositoryRefusal::BlankProjectName));
+    assert!(matches!(
+        refusal,
+        ProjectRepositoryRefusal::BlankProjectName
+    ));
     assert_eq!(
         repository.history().commits_newest_first().unwrap().len(),
         commits_before
@@ -160,13 +163,19 @@ fn a_description_and_a_cover_are_set_cleared_and_undone_independently() {
     )
     .unwrap();
     let on_disk = project_file_on_disk(&project.project_directory);
-    assert_eq!(on_disk.description.as_deref(), Some("Two arms and a camera"));
+    assert_eq!(
+        on_disk.description.as_deref(),
+        Some("Two arms and a camera")
+    );
     assert_eq!(on_disk.cover, Some(cover));
 
     undo(&mut repository);
     let on_disk = project_file_on_disk(&project.project_directory);
     assert_eq!(on_disk.cover, None);
-    assert_eq!(on_disk.description.as_deref(), Some("Two arms and a camera"));
+    assert_eq!(
+        on_disk.description.as_deref(),
+        Some("Two arms and a camera")
+    );
 }
 
 #[test]
@@ -236,10 +245,16 @@ fn a_duplicate_carries_the_files_and_history_under_a_new_uuid_and_leaves_the_run
     let (project, mut repository) = ProjectInATemporaryRoot::created();
     import_an_image(&mut repository, project.root.path());
     std::fs::create_dir_all(project.project_directory.join(".venv")).unwrap();
-    std::fs::write(project.project_directory.join(".venv/pyvenv.cfg"), b"home = /x").unwrap();
+    std::fs::write(
+        project.project_directory.join(".venv/pyvenv.cfg"),
+        b"home = /x",
+    )
+    .unwrap();
     std::fs::create_dir_all(project.project_directory.join(".tatolab/logs")).unwrap();
     std::fs::write(
-        project.project_directory.join(".tatolab/logs/project.jsonl"),
+        project
+            .project_directory
+            .join(".tatolab/logs/project.jsonl"),
         b"{}\n",
     )
     .unwrap();

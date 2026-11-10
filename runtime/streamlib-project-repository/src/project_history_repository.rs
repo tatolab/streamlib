@@ -92,7 +92,9 @@ impl ProjectHistoryRepository {
         let Some(head_oid) = self.head_commit_oid()? else {
             return Ok(None);
         };
-        Ok(Some(self.repository.find_commit(head_oid)?.time().seconds()))
+        Ok(Some(
+            self.repository.find_commit(head_oid)?.time().seconds(),
+        ))
     }
 
     /// Commit `tracked_files` — each a project-relative path and its bytes — as the whole tree on `main`.

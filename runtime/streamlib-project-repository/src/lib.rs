@@ -59,9 +59,9 @@ pub use project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionApplyOutcome,
     ProjectActionIdempotencyKey, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectSettingsOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphOperationOnAStream,
+    ProjectSettingsOperation, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
+    ProjectTransactionReversal, StreamGraphOperationOnAStream,
 };
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
