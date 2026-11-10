@@ -12,9 +12,9 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CancelStreamActionToolResult, CreateProjectToolResult, ListStreamsToolResult,
-    ListStreamsToolResultStream, ListedStreamState, RemoveProjectToolResult,
-    RenameStreamToolResult, RunProjectToolResult, SetStreamClockScaleToolResult,
-    StopProjectToolResult, StreamActionStateOnTheWire,
+    ListStreamsToolResultStream, ListedStreamState, PauseProjectToolResult,
+    RemoveProjectToolResult, RenameStreamToolResult, ResumeProjectToolResult, RunProjectToolResult,
+    SetStreamClockScaleToolResult, StopProjectToolResult, StreamActionStateOnTheWire,
 };
 
 use crate::TatolabCommandFailure;
@@ -33,6 +33,10 @@ pub(crate) enum StreamActionTool {
     CreateProject,
     /// Unloads every stream of a project, recording each stopped.
     StopProject,
+    /// Pauses every loaded stream of a project at once.
+    PauseProject,
+    /// Resumes every paused stream of a project at once.
+    ResumeProject,
     /// Unloads every stream of a project and forgets every record of it.
     RemoveProject,
     /// Drops a queued stream action, or stops a running one at its step.
@@ -52,6 +56,8 @@ impl StreamActionTool {
             StreamActionTool::RunProject => "run_project",
             StreamActionTool::CreateProject => "create_project",
             StreamActionTool::StopProject => "stop_project",
+            StreamActionTool::PauseProject => "pause_project",
+            StreamActionTool::ResumeProject => "resume_project",
             StreamActionTool::RemoveProject => "remove_project",
             StreamActionTool::CancelStreamAction => "cancel_stream_action",
             StreamActionTool::RenameStream => "rename_stream",
@@ -286,6 +292,75 @@ pub(crate) fn stop_project(
         "stop",
         &stop_project_result.project_directory.display().to_string(),
     ))
+}
+
+/// `tatolab pause [--dir DIR]`: the pause of the whole project — `--dir` resolved against
+/// `caller_working_directory`, else the working directory itself.
+pub(crate) fn pause_project(
+    caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
+) -> Result<u8, TatolabCommandFailure> {
+    let pause_project_result: PauseProjectToolResult = call_one_project_tool(
+        StreamActionTool::PauseProject,
+        caller_working_directory,
+        requested_project_directory,
+    )?;
+    write_verb_standard_output(&rendered_paused_or_resumed_project_line(
+        "paused",
+        &pause_project_result.project_directory,
+        &pause_project_result.streams,
+    ))
+}
+
+/// `tatolab resume [--dir DIR]`: the resume of the whole project — `--dir` resolved against
+/// `caller_working_directory`, else the working directory itself.
+pub(crate) fn resume_project(
+    caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
+) -> Result<u8, TatolabCommandFailure> {
+    let resume_project_result: ResumeProjectToolResult = call_one_project_tool(
+        StreamActionTool::ResumeProject,
+        caller_working_directory,
+        requested_project_directory,
+    )?;
+    write_verb_standard_output(&rendered_paused_or_resumed_project_line(
+        "resumed",
+        &resume_project_result.project_directory,
+        &resume_project_result.streams,
+    ))
+}
+
+/// Call `tool`, whose one argument is the project directory a verb names.
+fn call_one_project_tool<ToolResult: DeserializeOwned>(
+    tool: StreamActionTool,
+    caller_working_directory: &Path,
+    requested_project_directory: Option<&Path>,
+) -> Result<ToolResult, TatolabCommandFailure> {
+    let project_directory =
+        the_project_directory_a_verb_names(caller_working_directory, requested_project_directory)?;
+    let mut project_tool_arguments = serde_json::Map::new();
+    project_tool_arguments.insert(
+        "project_directory".to_owned(),
+        project_directory.display().to_string().into(),
+    );
+    call_one_stream_action_tool(tool, project_tool_arguments)
+}
+
+/// `<paused|resumed> <project>: <stream ids>`, the line `pause` and `resume` print.
+fn rendered_paused_or_resumed_project_line(
+    paused_or_resumed: &str,
+    project_directory: &Path,
+    stream_ids: &[String],
+) -> String {
+    let streams_cell = if stream_ids.is_empty() {
+        "no stream loaded yet".to_owned()
+    } else {
+        stream_ids.join(", ")
+    };
+    format!(
+        "{paused_or_resumed} {}: {streams_cell}\n",
+        project_directory.display()
+    )
 }
 
 /// `tatolab rm [--dir DIR]`: the removal of the whole project — `--dir` resolved against

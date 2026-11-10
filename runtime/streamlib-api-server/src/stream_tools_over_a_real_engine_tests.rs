@@ -483,6 +483,24 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn pause_project(
+        &self,
+        project_directory: &Path,
+    ) -> Result<streamlib::sdk::runtime::ProjectPausedOrResumed> {
+        OperationsOnTheStreamsLoadedInThisRuntime::pause_project(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
+    fn resume_project(
+        &self,
+        project_directory: &Path,
+    ) -> Result<streamlib::sdk::runtime::ProjectPausedOrResumed> {
+        OperationsOnTheStreamsLoadedInThisRuntime::resume_project(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
         OperationsOnTheStreamsLoadedInThisRuntime::remove_project(
             self.engine.as_ref(),
