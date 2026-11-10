@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.43](https://github.com/tatolab/streamlib/compare/v0.68.42...v0.68.43) (2026-11-10)
+
+
+### Features
+
+* **project:** import_project unpacks a .zip of a project as a new project ([3dcf235](https://github.com/tatolab/streamlib/commit/3dcf235a72d19d544647cae6a77f355f22a946eb))
+
 ## [0.68.42](https://github.com/tatolab/streamlib/compare/v0.68.41...v0.68.42) (2026-11-10)
 
 
