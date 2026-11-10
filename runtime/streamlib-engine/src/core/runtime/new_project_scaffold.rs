@@ -16,10 +16,6 @@ use super::StreamLocation;
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::{Error, Result};
 
-/// The licence header each `.py` template opens with; the project it starts is the user's own.
-const SCAFFOLD_TEMPLATE_LICENSE_HEADER: &str =
-    "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n";
-
 /// The name of the one stream asset a new project starts with.
 pub(crate) const NEW_PROJECT_SCAFFOLD_STREAM_NAME: &str = "main";
 
@@ -29,13 +25,6 @@ const NEW_PROJECT_SCAFFOLD_STREAM_DOCUMENT_PATH: &str = "streams/main.graph.json
 /// The graph a new project's stream asset starts as, its nodes and links named by node name.
 const MAIN_GRAPH_DOCUMENT_TEMPLATE: &str =
     include_str!("../../../../../sdk/tatolab-stream/scaffold_template/streams/main.graph.json");
-const NODES_INIT_PY_TEMPLATE: &str =
-    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/nodes/__init__.py");
-const HALFTONE_LENS_EFFECT_PY_TEMPLATE: &str = include_str!(
-    "../../../../../sdk/tatolab-stream/scaffold_template/nodes/halftone_lens_effect.py"
-);
-const BRIGHTNESS_METER_PY_TEMPLATE: &str =
-    include_str!("../../../../../sdk/tatolab-stream/scaffold_template/nodes/brightness_meter.py");
 const PYPROJECT_TOML_TEMPLATE: &str =
     include_str!("../../../../../sdk/tatolab-stream/scaffold_template/pyproject.toml");
 const PYTHON_VERSION_TEMPLATE: &str =
@@ -63,12 +52,6 @@ pub(crate) struct ScaffoldedProjectFile {
     pub(crate) path_in_project: &'static str,
     /// The file's contents.
     pub(crate) rendered_contents: String,
-}
-
-fn without_license_header(python_template: &'static str) -> &'static str {
-    python_template
-        .strip_prefix(SCAFFOLD_TEMPLATE_LICENSE_HEADER)
-        .unwrap_or(python_template)
 }
 
 /// A new project as the scaffold starts it: its name, its project's UUID and its one stream
@@ -170,18 +153,6 @@ pub(crate) fn render_scaffold_template_files(
             rendered_contents: scaffold.main_graph_document_contents()?,
         },
         ScaffoldedProjectFile {
-            path_in_project: "nodes/__init__.py",
-            rendered_contents: without_license_header(NODES_INIT_PY_TEMPLATE).to_owned(),
-        },
-        ScaffoldedProjectFile {
-            path_in_project: "nodes/halftone_lens_effect.py",
-            rendered_contents: without_license_header(HALFTONE_LENS_EFFECT_PY_TEMPLATE).to_owned(),
-        },
-        ScaffoldedProjectFile {
-            path_in_project: "nodes/brightness_meter.py",
-            rendered_contents: without_license_header(BRIGHTNESS_METER_PY_TEMPLATE).to_owned(),
-        },
-        ScaffoldedProjectFile {
             path_in_project: "pyproject.toml",
             rendered_contents: rendered_pyproject_toml,
         },
@@ -276,13 +247,6 @@ pub(crate) fn write_the_new_project_scaffold_into(
 mod tests {
     use super::*;
 
-    /// Every `.py` template, each opening with [`SCAFFOLD_TEMPLATE_LICENSE_HEADER`].
-    const EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES: [&str; 3] = [
-        NODES_INIT_PY_TEMPLATE,
-        HALFTONE_LENS_EFFECT_PY_TEMPLATE,
-        BRIGHTNESS_METER_PY_TEMPLATE,
-    ];
-
     #[test]
     fn distribution_name_matches_the_pep_503_normalization_new_has_always_used() {
         assert_eq!(python_distribution_name_for("My Cool App"), "my-cool-app");
@@ -300,45 +264,26 @@ mod tests {
     }
 
     #[test]
-    fn every_embedded_python_template_opens_with_the_license_header() {
-        for python_template in EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES {
-            assert!(
-                python_template.starts_with(SCAFFOLD_TEMPLATE_LICENSE_HEADER),
-                "a scaffold template lost its licence header:\n{python_template}"
-            );
-        }
-    }
-
-    #[test]
-    fn every_python_file_in_the_scaffold_template_directory_is_an_embedded_template() {
+    fn the_scaffold_template_directory_holds_no_python() {
         let scaffold_template_directory = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../sdk/tatolab-stream/scaffold_template");
         let mut pending_directories = vec![scaffold_template_directory];
-        let mut walked_python_template_count = 0;
         while let Some(walked_directory) = pending_directories.pop() {
             for directory_entry in fs::read_dir(&walked_directory).unwrap() {
                 let entry_path = directory_entry.unwrap().path();
                 if entry_path.is_dir() {
                     pending_directories.push(entry_path);
-                } else if entry_path
-                    .extension()
-                    .is_some_and(|extension| extension == "py")
-                {
-                    let python_template_on_disk = fs::read_to_string(&entry_path).unwrap();
+                } else {
                     assert!(
-                        EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES
-                            .contains(&python_template_on_disk.as_str()),
-                        "{} is not in EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES",
+                        entry_path
+                            .extension()
+                            .is_none_or(|extension| extension != "py"),
+                        "{} is node code, and a new project holds none",
                         entry_path.display()
                     );
-                    walked_python_template_count += 1;
                 }
             }
         }
-        assert_eq!(
-            walked_python_template_count,
-            EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES.len()
-        );
     }
 
     #[test]
@@ -395,7 +340,7 @@ mod tests {
         assert!(
             rendered_pyproject_toml.contains(&format!(
                 "dependencies = [\"tatolab-stream>={runtime_version}\", \
-                 \"tatolab-testpattern>={runtime_version}\", \"numpy>=2.1\"]",
+                 \"tatolab-testpattern>={runtime_version}\"]",
                 runtime_version = env!("CARGO_PKG_VERSION")
             )),
             "a new project floors tatolab-stream and tatolab-testpattern at the version of \
@@ -423,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn the_sample_stream_is_a_graph_document_running_the_test_pattern_through_the_effect() {
+    fn the_starter_stream_is_a_graph_document_holding_one_test_pattern_source() {
         let scaffold = a_scaffold_named("probe-app");
         let rendered_files = render_scaffold_template_files("probe-app", &scaffold).unwrap();
 
@@ -440,27 +385,19 @@ mod tests {
             .iter()
             .map(|node| node.processor_type.as_str())
             .collect();
-        assert_eq!(
-            node_types,
-            [
-                "tatolab.testpattern:TestPatternSource",
-                "nodes.halftone_lens_effect:HalftoneLensEffect",
-                "nodes.brightness_meter:BrightnessMeter",
-            ]
-        );
+        assert_eq!(node_types, ["tatolab.testpattern:TestPatternSource"]);
         assert!(graph.nodes.iter().all(|node| node.id.is_some()));
-        assert_eq!(graph.links.len(), 2);
+        assert!(graph.links.is_empty());
         assert_eq!(
             graph.graph_document_bytes().unwrap(),
             graph_document.as_bytes(),
             "the scaffold writes the document canonically"
         );
         assert!(
-            !rendered_files.iter().any(|rendered_file| rendered_file
-                .path_in_project
-                .ends_with(".py")
-                && !rendered_file.path_in_project.starts_with("nodes/")),
-            "a new project holds no stream code outside its node modules"
+            !rendered_files
+                .iter()
+                .any(|rendered_file| rendered_file.path_in_project.ends_with(".py")),
+            "a new project holds no node code of its own"
         );
     }
 

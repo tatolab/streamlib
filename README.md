@@ -119,8 +119,9 @@ on PyPI:
 uv add tatolab-stream
 ```
 
-A new project's `pyproject.toml` depends on `numpy>=2.1` and on `tatolab-stream` at least as new as
-the runtime that created it.
+A new project's `pyproject.toml` depends on `tatolab-stream` and `tatolab-testpattern`, each at
+least as new as the runtime that created it, and names Tatolab's own package index,
+`https://get.tatolab.com/simple/`, which serves every first-party module.
 The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
 does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
 setup step.
@@ -166,9 +167,9 @@ tatolabd                    # in a terminal of its own: this machine's runtime
 ```
 
 ```bash
-tatolab new my-stream       # the runtime writes a test pattern → GPU effect, plus a CPU meter, and runs it
+tatolab new my-stream       # the runtime writes a project holding one test pattern source, and runs it
 cd my-stream
-tatolab dev                 # the test pattern through a GPU lens, its brightness logged
+tatolab dev                 # watch `testpatternsource`'s `video` in Tato Studio's viewer
 ```
 
 `tatolab new` asks the runtime to create the project: it writes the files, makes the `.venv` and
@@ -202,20 +203,9 @@ them, and nothing that runs. `tatolab new` writes `streams/main.graph.json`:
 ```json
 {
   "asset": "6f1c2e9a-3b4d-4c5e-8f60-71a2b3c4d5e6",
-  "links": [
-    {
-      "source": {"node": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "port": "video"},
-      "target": {"node": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "port": "video_from_upstream"}
-    },
-    {
-      "source": {"node": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "port": "video_to_downstream"},
-      "target": {"node": "8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f", "port": "video_from_upstream"}
-    }
-  ],
+  "links": [],
   "nodes": [
-    {"config": {}, "id": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"},
-    {"config": {}, "id": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8", "name": "halftonelenseffect", "type": "nodes.halftone_lens_effect:HalftoneLensEffect"},
-    {"config": {}, "id": "8c9d0e1f-2a3b-4c4d-8e5f-6a7b8c9d0e1f", "name": "brightnessmeter", "type": "nodes.brightness_meter:BrightnessMeter"}
+    {"config": {}, "id": "0b7c1d2e-5a3f-4b6c-9d8e-1f2a3b4c5d6e", "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"}
   ]
 }
 ```
@@ -226,156 +216,18 @@ places the node and never reuses; a link end names its node by that UUID. A node
 document runs no code, but a load imports each node's module in the project's interpreter to
 describe its ports, so a module's import-time code runs at every load.
 
-The meter reads the effect's output and logs its brightness each second; open that output in
-Tato Studio's viewer to watch it. Swap `tatolab.testpattern:TestPatternSource` for
-`tatolab.camera:CameraSource` (`uv add tatolab-camera` in the project), which publishes on the same `video`
-port, to run your camera through the same effect.
+The one source is the starting point: open its `video` in Tato Studio's viewer, then add nodes
+and link them. Swap `tatolab.testpattern:TestPatternSource` for `tatolab.camera:CameraSource`
+(`uv add tatolab-camera` in the project), which publishes on the same `video` port, to start from
+your camera. `examples/test-pattern-halftone-lens` is a project of this shape grown by two nodes of
+its own: a Slang compute kernel that keeps the pixels on the GPU, and a meter that reads each frame
+back on the CPU.
 
 To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes
 (`uv add tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
 declares a track of it, and a `MoqTrackSend` writes a port's messages to that track. Another
 stream, on this machine or another, reads the track through a `MoqTrackReceive` node naming a
 gateway on the same relay; a link's two ends are always in one stream.
-
-Pixels stay on the GPU. `nodes/halftone_lens_effect.py` is one Slang compute kernel, with a lens
-that drifts around the frame and turns what it covers into dots:
-
-```python
-import struct
-
-from tatolab.stream import (
-    Image,
-    ImageFrameToWrite,
-    Input,
-    NodeOutputTextureRing,
-    Output,
-    RuntimeContextFullAccess,
-    RuntimeContextLimitedAccess,
-    node,
-)
-
-# The whole effect, as a Slang compute kernel: one invocation per output pixel.
-# A lens drifts around the frame and turns what it covers into dots. `dials`
-# are the values `process()` pushes each frame. Edit it while `tatolab dev`
-# runs to see the change.
-HALFTONE_LENS_SLANG = """
-[[vk::binding(0, 0)]] Sampler2D source_frame;
-[[vk::binding(1, 0)]] [format("rgba8")] RWTexture2D<float4> halftone_frame;
-
-struct HalftoneLensDials {
-    float2 frame_size;
-    float seconds;
-};
-[[vk::push_constant]] ConstantBuffer<HalftoneLensDials> dials;
-
-// How big the drifting lens is, as a share of the frame's height.
-static const float LENS_RADIUS = 0.3;
-// How many pixels apart the dots sit under the lens.
-static const float DOT_CELL_SIZE = 8.0;
-// How far the gaps between the dots fade toward grey.
-static const float GAP_FADE = 0.35;
-
-[numthreads(8, 8, 1)]
-void main(uint3 invocation : SV_DispatchThreadID) {
-    if (any(float2(invocation.xy) >= dials.frame_size)) {
-        return;
-    }
-    float4 source = source_frame.Load(int3(invocation.xy, 0));
-    float2 pixel = float2(invocation.xy) + 0.5;
-    float2 lens_centre = dials.frame_size * float2(
-        0.5 + 0.3 * sin(dials.seconds * 0.4),
-        0.5 + 0.25 * sin(dials.seconds * 0.55)
-    );
-    float distance_from_lens_centre = length(pixel - lens_centre) / dials.frame_size.y;
-    float under_the_lens =
-        1.0 - smoothstep(LENS_RADIUS * 0.92, LENS_RADIUS, distance_from_lens_centre);
-
-    // Each cell keeps a round dot of the picture and fades the gap around it
-    // toward grey, so the dots show on every colour, black included.
-    float2 cell_centre = (floor(pixel / DOT_CELL_SIZE) + 0.5) * DOT_CELL_SIZE;
-    float dot_radius = DOT_CELL_SIZE * 0.42;
-    float in_the_dot = 1.0 - smoothstep(dot_radius - 1.0, dot_radius, length(pixel - cell_centre));
-    float3 gap = lerp(source.rgb, float3(0.5), GAP_FADE);
-    float3 dotted = lerp(gap, source.rgb, in_the_dot);
-
-    halftone_frame[invocation.xy] = float4(lerp(source.rgb, dotted, under_the_lens), source.a);
-}
-"""
-
-# `HalftoneLensDials` as the push constants lay it out: two floats, then one.
-HALFTONE_LENS_DIALS = struct.Struct("<fff")
-
-WORKGROUP_TILE_SIZE_IN_PIXELS = 8
-
-NANOSECONDS_PER_SECOND = 1_000_000_000
-
-
-def workgroups_covering(pixels: int) -> int:
-    return (pixels + WORKGROUP_TILE_SIZE_IN_PIXELS - 1) // WORKGROUP_TILE_SIZE_IN_PIXELS
-
-
-@node.process
-class HalftoneLensEffect:
-    """Turns what a slowly drifting lens covers into dots on the GPU, and passes each frame on."""
-
-    video_from_upstream = Input(Image, delivery="newest")
-    video_to_downstream = Output(Image)
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.halftone_lens_kernel = ctx.gpu_full_access.create_compute_kernel(
-            source=HALFTONE_LENS_SLANG,
-            push_constant_size=HALFTONE_LENS_DIALS.size,
-            bindings={
-                "source_frame": "sampled_texture",
-                "halftone_frame": "storage_image",
-            },
-        )
-        # A frame arrives as a pixel buffer, which a kernel cannot sample, so
-        # each one is copied into a texture first.
-        self.source_frame_textures = NodeOutputTextureRing(
-            "rgba8_unorm", ["texture_binding"], depth=1
-        )
-        self.halftone_frame_textures = NodeOutputTextureRing(
-            "rgba8_unorm", ["storage_binding", "texture_binding"]
-        )
-        self.first_frame_at_ns: int | None = None
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.video_from_upstream)
-        if frame is None:
-            return
-        # `ctx.time` is stream time in ns, on the clock the stream runs on.
-        if self.first_frame_at_ns is None:
-            self.first_frame_at_ns = ctx.time
-        seconds = (ctx.time - self.first_frame_at_ns) / NANOSECONDS_PER_SECOND
-
-        gpu = ctx.gpu_limited_access
-        source_frame = self.source_frame_textures.next_texture_for_this_frame(
-            gpu, frame.width, frame.height
-        )
-        gpu.copy_surface_to_surface(frame.surface_id, source_frame)
-        halftone_frame = self.halftone_frame_textures.next_texture_for_this_frame(
-            gpu, frame.width, frame.height
-        )
-        self.halftone_lens_kernel.dispatch(
-            bindings={"source_frame": source_frame, "halftone_frame": halftone_frame},
-            group_count=(
-                workgroups_covering(frame.width),
-                workgroups_covering(frame.height),
-                1,
-            ),
-            push_constants=HALFTONE_LENS_DIALS.pack(frame.width, frame.height, seconds),
-        )
-        ctx.outputs.write(
-            self.video_to_downstream,
-            ImageFrameToWrite.of_texture(halftone_frame, frame.colour),
-            timestamp_ns=frame.timestamp_ns,
-        )
-```
-
-Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through an explicit
-`frame.cpu()` view and logs its mean brightness once a second. It sits on a fan-out in its own
-process, so it never slows the picture — it is the node you replace with your model call.
 
 What a node declares:
 

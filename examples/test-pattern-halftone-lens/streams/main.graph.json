@@ -1,0 +1,45 @@
+{
+  "asset": "0eaf9ee2-0f73-4154-a3f6-a99c261b850d",
+  "links": [
+    {
+      "source": {
+        "node": "777c0dab-ae92-4df3-9d8f-bb1c4d4e98b6",
+        "port": "video"
+      },
+      "target": {
+        "node": "02a2b427-bbc4-4d9f-a376-854af4fa8755",
+        "port": "video_from_upstream"
+      }
+    },
+    {
+      "source": {
+        "node": "02a2b427-bbc4-4d9f-a376-854af4fa8755",
+        "port": "video_to_downstream"
+      },
+      "target": {
+        "node": "cc82bb1b-e53b-43c4-938b-60be47f48da1",
+        "port": "video_from_upstream"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {},
+      "id": "777c0dab-ae92-4df3-9d8f-bb1c4d4e98b6",
+      "name": "testpatternsource",
+      "type": "tatolab.testpattern:TestPatternSource"
+    },
+    {
+      "config": {},
+      "id": "02a2b427-bbc4-4d9f-a376-854af4fa8755",
+      "name": "halftonelenseffect",
+      "type": "nodes.halftone_lens_effect:HalftoneLensEffect"
+    },
+    {
+      "config": {},
+      "id": "cc82bb1b-e53b-43c4-938b-60be47f48da1",
+      "name": "brightnessmeter",
+      "type": "nodes.brightness_meter:BrightnessMeter"
+    }
+  ]
+}
