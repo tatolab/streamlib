@@ -239,6 +239,10 @@ pub struct StreamGraphDocumentNote {
 /// The `studio` key of a graph document holding its canvas notes.
 const STUDIO_NOTES_KEY: &str = "notes";
 
+/// The keys a canvas note takes; serde's `deny_unknown_fields` does not reach through the
+/// `flatten` of [`StreamGraphDocumentNote`], so a document's notes are checked by name.
+const STUDIO_NOTE_KEYS: [&str; 4] = ["id", "text", "position", "size"];
+
 /// The canvas notes a graph document's own `studio` object holds; none when it holds none.
 pub(crate) fn the_notes_of_a_documents_studio(
     studio: Option<&Value>,
@@ -261,8 +265,23 @@ pub(crate) fn the_notes_of_a_documents_studio(
     }
     match studio.get(STUDIO_NOTES_KEY) {
         None => Ok(Vec::new()),
-        Some(notes) => serde_json::from_value(notes.clone())
-            .map_err(|not_read| format!("the graph's `studio.notes` do not read: {not_read}")),
+        Some(notes) => {
+            if let Some(key) = notes
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object)
+                .flat_map(Map::keys)
+                .find(|key| !STUDIO_NOTE_KEYS.contains(&key.as_str()))
+            {
+                return Err(format!(
+                    "a note of the graph's `studio.notes` carries `{key}`, which a note does not \
+                     take; it takes `id`, `text`, `position` and `size`"
+                ));
+            }
+            serde_json::from_value(notes.clone())
+                .map_err(|not_read| format!("the graph's `studio.notes` do not read: {not_read}"))
+        }
     }
 }
 
