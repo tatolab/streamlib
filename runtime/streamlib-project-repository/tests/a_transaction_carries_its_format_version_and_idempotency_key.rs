@@ -427,6 +427,7 @@ fn a_key_sent_again_answers_its_transaction_past_a_newer_unreadable_trailer() {
         .apply_project_operations(
             &a_person(),
             Some(&idempotency_key),
+            Vec::new(),
             vec![operation.clone()],
             ProjectTransactionLineage::NewEdit,
         )
@@ -447,6 +448,7 @@ fn a_key_sent_again_answers_its_transaction_past_a_newer_unreadable_trailer() {
         .apply_project_operations(
             &a_person(),
             Some(&idempotency_key),
+            Vec::new(),
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
