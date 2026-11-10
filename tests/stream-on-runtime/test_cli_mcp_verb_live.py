@@ -78,6 +78,7 @@ CONTROL_TOOL_NAMES = {
     "relocate_asset",
     "delete_asset",
     "set_asset_settings",
+    "replace_asset",
     "create_stream",
     "delete_stream",
     "set_stream_display_name",

@@ -45,6 +45,10 @@ pub enum ProjectRepositoryRefusal {
     AssetPathHoldsAnotherFile { path: String },
     #[error("a stream asset is a graph document the stream verbs create; it is never imported")]
     StreamAssetsAreNotImported,
+    #[error(
+        "the stream asset {0} is a graph document, which graph edits change; its bytes are never replaced"
+    )]
+    StreamAssetsAreNotReplaced(Uuid),
     #[error("the stream asset {0} has no import settings: its settings are in its graph document")]
     StreamAssetHasNoImportSettings(Uuid),
     #[error("the asset {asset} cannot be deleted while {referencing_documents:?} reference it")]

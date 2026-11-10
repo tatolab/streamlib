@@ -65,8 +65,8 @@ pub use project_stream_document::{
 pub use project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
-    ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
-    ProjectOperation, ProjectSettingsAction, ProjectSettingsOperation,
+    ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles,
+    ProjectImportOperation, ProjectOperation, ProjectSettingsAction, ProjectSettingsOperation,
     ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
     ProjectTransactionUndoState, StreamGraphOperationOnAStream,

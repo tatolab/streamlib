@@ -43,10 +43,11 @@ use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_d
 use crate::project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
-    ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
-    ProjectOperation, ProjectSettingsAction, ProjectStreamDocumentOperation, ProjectTransaction,
-    ProjectTransactionAuthor, ProjectTransactionEnvelopeHeader, ProjectTransactionLineage,
-    ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
+    ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles,
+    ProjectImportOperation, ProjectOperation, ProjectSettingsAction,
+    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
+    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -391,7 +392,8 @@ impl ProjectRepository {
             )) => Ok(asset.clone()),
             Some(ProjectOperation::Asset(
                 ProjectAssetOperation::RelocateAsset { asset, .. }
-                | ProjectAssetOperation::SetAssetSettings { asset, .. },
+                | ProjectAssetOperation::SetAssetSettings { asset, .. }
+                | ProjectAssetOperation::ReplaceAssetContent { asset, .. },
             )) => self.asset(*asset),
             Some(ProjectOperation::StreamDocument(
                 ProjectStreamDocumentOperation::CreateStreamDocument { stream, .. }
@@ -2031,6 +2033,67 @@ impl ProjectRepository {
                     },
                 )))
             }
+            ProjectAssetAction::ReplaceAsset { asset, source } => {
+                let current = staged_assets
+                    .get(&asset)
+                    .ok_or(ProjectRepositoryRefusal::NoSuchAsset(asset))?;
+                if current.kind == ProjectAssetKind::Stream {
+                    return Err(ProjectRepositoryRefusal::StreamAssetsAreNotReplaced(asset));
+                }
+                self.refuse_a_path_through_a_symbolic_link(&current.path)?;
+                let (recorded, waiting) = match &source {
+                    ProjectAssetImportSource::FileOnThisMachine(source_path) => {
+                        if !source_path.is_absolute() {
+                            return Err(ProjectRepositoryRefusal::ImportSourceUnreadable {
+                                path: source_path.clone(),
+                                why: "a replacement's source is named by its absolute path"
+                                    .to_owned(),
+                            });
+                        }
+                        let (copy, recorded) = copy_the_file_into_the_uploads_hashing_it(
+                            &self.project_directory,
+                            source_path,
+                        )?;
+                        (
+                            recorded,
+                            AssetFileWaitingForItsImport {
+                                file: copy,
+                                removed_when_the_import_is_refused: true,
+                            },
+                        )
+                    }
+                    ProjectAssetImportSource::UploadedContent(content_sha256) => (
+                        self.the_bytes_recorded_of_the_upload(content_sha256)?,
+                        AssetFileWaitingForItsImport {
+                            file: the_upload_file_of(&self.project_directory, content_sha256),
+                            removed_when_the_import_is_refused: false,
+                        },
+                    ),
+                };
+                if recorded.content_sha256 == current.content_sha256 {
+                    if waiting.removed_when_the_import_is_refused {
+                        let _ = std::fs::remove_file(&waiting.file);
+                    }
+                    return Ok(None);
+                }
+                Ok(Some(StagedAssetChange {
+                    operation: ProjectOperation::Asset(
+                        ProjectAssetOperation::ReplaceAssetContent {
+                            asset,
+                            path: current.path.clone(),
+                            from: ProjectAssetContent {
+                                content_sha256: current.content_sha256.clone(),
+                                content_byte_len: current.content_byte_len,
+                            },
+                            to: ProjectAssetContent {
+                                content_sha256: recorded.content_sha256,
+                                content_byte_len: recorded.content_byte_len,
+                            },
+                        },
+                    ),
+                    asset_file_waiting_for_its_import: Some((asset, waiting)),
+                }))
+            }
             ProjectAssetAction::CreateStream { path, display_name } => {
                 let display_name = refuse_a_display_name_that_shows_nothing(display_name)?;
                 let path = ProjectRelativeAssetPath::parse(&path)?;
@@ -2247,7 +2310,55 @@ impl ProjectRepository {
                 write_file_whole(&sidecar_on_disk, &canonical_project_json_bytes(&sidecar)?)?;
                 Ok(PerformedAssetEffect::Operation(operation.clone()))
             }
+            ProjectAssetOperation::ReplaceAssetContent {
+                asset,
+                path,
+                from,
+                to,
+            } => {
+                self.swap_in_the_bytes_of_a_replacement(*asset, path, from, to)?;
+                let sidecar_on_disk = self.sidecar_on_disk(path);
+                let mut sidecar: ProjectAssetSidecar =
+                    serde_json::from_slice(&std::fs::read(&sidecar_on_disk)?)?;
+                sidecar.content_sha256 = to.content_sha256.clone();
+                sidecar.content_byte_len = to.content_byte_len;
+                write_file_whole(&sidecar_on_disk, &canonical_project_json_bytes(&sidecar)?)?;
+                Ok(PerformedAssetEffect::Operation(operation.clone()))
+            }
         }
+    }
+
+    /// Put the bytes `to` names at the asset's `path` — the file its replacement waits with, or
+    /// the upload of those bytes — keeping the bytes there now as the upload of `from`, so an
+    /// undo swaps them back. Bytes neither waits nor is uploaded leave the file as it is.
+    fn swap_in_the_bytes_of_a_replacement(
+        &self,
+        asset: Uuid,
+        path: &ProjectRelativeAssetPath,
+        from: &ProjectAssetContent,
+        to: &ProjectAssetContent,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let replacement = self
+            .asset_files_waiting_for_their_import
+            .get(&asset)
+            .map(|waiting| waiting.file.clone())
+            .filter(|waiting_file| waiting_file.is_file())
+            .unwrap_or_else(|| the_upload_file_of(&self.project_directory, &to.content_sha256));
+        if !replacement.is_file() {
+            return Ok(());
+        }
+        let destination = path.on_disk_under(&self.project_directory);
+        if destination.is_file() {
+            let kept_as_the_upload_of_the_earlier_bytes =
+                the_upload_file_of(&self.project_directory, &from.content_sha256);
+            if kept_as_the_upload_of_the_earlier_bytes.exists() {
+                std::fs::remove_file(&destination)?;
+            } else {
+                std::fs::rename(&destination, &kept_as_the_upload_of_the_earlier_bytes)?;
+            }
+        }
+        std::fs::rename(&replacement, &destination)?;
+        Ok(())
     }
 
     fn undo_performed_effects(&self, performed_effects: Vec<PerformedAssetEffect>) {
@@ -2595,6 +2706,12 @@ fn apply_operation_to_assets(
         ProjectAssetOperation::SetAssetSettings { asset, to, .. } => {
             if let Some(changed) = assets.get_mut(asset) {
                 changed.import_settings = to.clone();
+            }
+        }
+        ProjectAssetOperation::ReplaceAssetContent { asset, to, .. } => {
+            if let Some(replaced) = assets.get_mut(asset) {
+                replaced.content_sha256 = to.content_sha256.clone();
+                replaced.content_byte_len = to.content_byte_len;
             }
         }
     }
