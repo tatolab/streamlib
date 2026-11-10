@@ -447,7 +447,7 @@ jobs:
   # The runtime unit — `tatolabd`, `tatolab`, and the lend a processor
   # interpreter borrows `tatolab.runtime` from — and every suite that runs on
   # it: the wheel's own, the integration suite (one `tatolabd` per test, each
-  # fixture stream loaded with `tatolab run` and driven over its local API, on
+  # fixture stream loaded with `tatolab start` and driven over its local API, on
   # the lavapipe the unit carries) and a scaffolded stream; `main` and the
   # merge queue only.
   integration-test-linux:

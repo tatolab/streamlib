@@ -59,8 +59,8 @@ first run downloads MediaPipe's pose model (`pose_landmarker_lite.task`,
 the runtime compiles them when each node's `setup()` builds its kernel.
 
 `tatolab dev` follows the project's log and loads the project again on every
-saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
-and leaves the stream loaded; `tatolab stop <stream>` stops it.
+saved edit; `tatolab start` queues the load and returns, and `tatolab reload` re-reads a project that already runs. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop` stops it.
 
 ## The pieces
 

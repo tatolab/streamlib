@@ -114,8 +114,8 @@ builds `tatolab-camera` from this checkout, as an editable path dependency
 so the build needs a Rust toolchain. The runtime itself is not on pip.
 
 `tatolab dev` follows the project's log and loads the project again on every
-saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
-and leaves the stream loaded; `tatolab stop <stream>` stops it.
+saved edit; `tatolab start` queues the load and returns, and `tatolab reload` re-reads a project that already runs. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop` stops it.
 
 Then watch `grayscalecompute`'s `grayscale_frame_to_downstream` in Tato Studio's
 viewer — your camera, in black and white.
