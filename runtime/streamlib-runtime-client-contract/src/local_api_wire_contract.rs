@@ -706,6 +706,70 @@ pub struct ListDependenciesToolResult {
     pub dependencies: Vec<ListedProjectDependencyOnTheWire>,
 }
 
+/// The `list_project_views` tool's result: every Tato Studio view a project and its imports
+/// bring, read from each `views/<folder>/tatolab_view.json` without running anything.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListProjectViewsToolResult {
+    /// The project directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The project's UUID, from its `tatolab-project.json`.
+    pub project: String,
+    /// The project's name.
+    pub project_name: String,
+    /// The project's own views by folder, then each import's in the order its project file
+    /// records them.
+    pub views: Vec<ProjectViewListed>,
+}
+
+/// One folder of a `views/`: the view type it declares, and whether it opens.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectViewListed {
+    /// The view type's id, `<project name>:<view folder>`, which a `StudioView` node's
+    /// `view_type` names.
+    pub view_type: String,
+    /// The UUID of the project whose `views/` holds it.
+    pub project: String,
+    /// That project's name.
+    pub project_name: String,
+    /// That project's folder under `imports/`; `None` for the listed project's own view.
+    pub import_folder: Option<String>,
+    /// The view's folder, absolute.
+    pub folder: PathBuf,
+    /// Whether its manifest reads against the view contract this runtime reads.
+    pub opens: bool,
+    /// Why it does not open, in the runtime's own words; `None` when it opens.
+    pub not_opened_because: Option<String>,
+    /// The name the view-type menu lists; `None` when it does not open.
+    pub title: Option<String>,
+    /// What the view is for.
+    pub description: Option<String>,
+    /// Its icon, a path inside its folder.
+    pub icon: Option<String>,
+    /// Its preview picture, a path inside its folder.
+    pub preview: Option<String>,
+    /// `area` or `node`; `None` when it does not open.
+    pub placement: Option<String>,
+    /// The inputs a `node` view declares.
+    pub inputs: Vec<ProjectViewDeclaredPort>,
+    /// The outputs a `node` view declares.
+    pub outputs: Vec<ProjectViewDeclaredPort>,
+    /// Its `tatolab_view.json` as written, when it is JSON.
+    pub manifest: Option<serde_json::Value>,
+}
+
+/// An input or output a view declares, as a node declares a port.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectViewDeclaredPort {
+    /// The port's name.
+    pub name: String,
+    /// The port family's wire name.
+    pub family: String,
+    /// What the port carries.
+    pub description: Option<String>,
+    /// The lowest and highest value an Array port carries.
+    pub range: Option<[f64; 2]>,
+}
+
 /// The `list_project_node_types` tool's result: what a project and each source it draws node
 /// code from declares, read from source without running it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

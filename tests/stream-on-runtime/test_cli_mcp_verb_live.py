@@ -83,6 +83,7 @@ CONTROL_TOOL_NAMES = {
     "remove_dependency",
     "use_dependency_stream",
     "list_project_node_types",
+    "list_project_views",
 }
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"

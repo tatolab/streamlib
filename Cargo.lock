@@ -5310,6 +5310,7 @@ dependencies = [
  "git2",
  "libz-sys",
  "parking_lot",
+ "schemars 0.8.22",
  "schemars 1.2.2",
  "serde",
  "serde_json",
