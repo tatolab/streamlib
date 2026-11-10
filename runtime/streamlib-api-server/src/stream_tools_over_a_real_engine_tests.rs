@@ -1628,6 +1628,77 @@ exec sleep 30
     assert!(again.contains("is already cancelled"), "{again}");
 }
 
+/// A graph document deleted while its project's load makes the venv is left out when the load
+/// starts its streams: no record of its stream is written, and the project's other stream is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_document_deleted_while_its_load_makes_the_venv_never_records_its_stream() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project = ProjectWithGraphDocuments::with_no_venv();
+    project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
+    project.write_the_graph_document(the_graph_of_a_stream_named("screen"));
+    let uv_directory = tempfile::tempdir().expect("a directory for the runtime unit's uv");
+    let uv_released = uv_directory.path().join("released");
+    let uv_held_until_released = uv_directory.path().join("uv");
+    write_an_executable_script_from_a_child_process(
+        &uv_held_until_released,
+        &format!(
+            "#!/bin/sh
+while [ ! -e '{}' ]; do sleep 0.05; done
+exit 1
+",
+            uv_released.display()
+        ),
+    );
+    engine
+        .engine
+        .set_runtime_unit_uv_executable(uv_held_until_released)
+        .expect("the runtime is handed its uv");
+    let queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "start_project",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a run of a project is queued");
+    let action = queued["action"]
+        .as_str()
+        .expect("the action's id")
+        .to_string();
+    the_stream_action_once(operations_on_the_loaded_streams, &action, |described| {
+        described["step"] == "making_the_venv"
+    })
+    .await;
+
+    std::fs::remove_file(project.path().join("streams/screen.graph.json"))
+        .expect("the screen stream's graph document is deleted");
+    std::fs::write(&uv_released, "").expect("uv is released");
+    the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+
+    let listed = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "list_streams",
+            json!({}),
+        )
+        .await,
+    )
+    .expect("list_streams answers");
+    let listed_stream_ids: Vec<&str> = listed["streams"]
+        .as_array()
+        .expect("the streams listed")
+        .iter()
+        .map(|listed_stream| listed_stream["stream"].as_str().expect("a stream id"))
+        .collect();
+    assert_eq!(
+        listed_stream_ids,
+        vec![project.stream_id_of("camera").as_str()],
+        "{listed}"
+    );
+}
+
 /// An action the runtime never queued, and a relative project directory, are refused
 /// saying so.
 #[tokio::test(flavor = "multi_thread")]

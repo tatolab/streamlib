@@ -157,6 +157,14 @@ impl ProjectAsALoadReadsIt {
 
     /// The stream asset whose document is `stream_document`, read: its location, name and
     /// graph, or why the document gives none.
+    /// The UUID of each stream asset whose graph document the project holds.
+    fn stream_assets(&self) -> Vec<Uuid> {
+        self.stream_documents
+            .iter()
+            .map(|stream_document| stream_document.stream_asset(self.project_file.project))
+            .collect()
+    }
+
     fn stream_asset_read_from(&self, stream_document: &ProjectStreamDocument) -> StreamAssetRead {
         StreamAssetRead {
             stream_location: self.location_of(stream_document),
@@ -700,11 +708,6 @@ impl Runner {
         };
         report_the_step(StreamActionStep::ReadingTheGraphDocuments);
         let project = ProjectAsALoadReadsIt::read(&project_directory)?;
-        let stream_assets_the_project_holds: Vec<Uuid> = project
-            .stream_documents
-            .iter()
-            .map(|stream_document| stream_document.stream_asset(project.project_file.project))
-            .collect();
         let mut stream_assets: Vec<StreamAssetRead> = project
             .stream_documents
             .iter()
@@ -787,6 +790,12 @@ impl Runner {
 
         report_the_step(StreamActionStep::Starting);
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
+        let stream_assets_the_project_holds_as_it_starts =
+            ProjectAsALoadReadsIt::read(&project_directory)?.stream_assets();
+        stream_assets.retain(|stream_asset| {
+            stream_assets_the_project_holds_as_it_starts
+                .contains(&stream_asset.stream_location.stream_asset)
+        });
         let mut streams_loaded_or_failed = Vec::with_capacity(stream_assets.len());
         for stream_asset in stream_assets {
             if progress.is_some_and(StreamActionProgress::is_cancelled) {
@@ -810,7 +819,7 @@ impl Runner {
         self.forget_every_record_of_the_project_whose_stream_asset_is_gone(
             stream_records,
             &project,
-            &stream_assets_the_project_holds,
+            &stream_assets_the_project_holds_as_it_starts,
         );
         Ok(StreamRunOutcome {
             project_directory,
