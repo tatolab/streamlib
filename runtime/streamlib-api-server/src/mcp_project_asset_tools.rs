@@ -265,7 +265,7 @@ struct SetStreamDisplayNameToolArguments {
 #[tool_router(router = project_asset_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID and name and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
+        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID, `project_name`, `project_description`, `project_cover` — the UUID of the image asset it is shown by — and `project_last_edited_at`, when its history last changed in seconds since the Unix epoch, each `null` when it has none, and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
     )]
     async fn list_assets(
         &self,
@@ -291,6 +291,12 @@ impl LocalApiMcpServerHandler {
                         project_directory: project_repository.project_directory().to_path_buf(),
                         project: project_repository.project_file().project.to_string(),
                         project_name: project_repository.project_file().name.clone(),
+                        project_description: project_repository.project_file().description.clone(),
+                        project_cover: project_repository
+                            .project_file()
+                            .cover
+                            .map(|cover| cover.to_string()),
+                        project_last_edited_at: project_repository.last_edited_at_unix_seconds()?,
                         assets,
                         transactions_resource_uri: project_transactions_resource_uri(
                             project_repository.project_file().project,
@@ -312,7 +318,7 @@ impl LocalApiMcpServerHandler {
             asset,
         }): Parameters<DescribeAssetToolArguments>,
     ) -> ToolCallAnswer {
-        let asset = the_asset_a_call_names("describe_asset", &asset)?;
+        let asset = the_asset_a_call_names("describe_asset", "asset", &asset)?;
         let described = self
             .a_project_repository_call_off_the_async_runtime(
                 "describe_asset",
@@ -385,7 +391,7 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::RelocateAsset {
-                asset: the_asset_a_call_names("relocate_asset", &asset)?,
+                asset: the_asset_a_call_names("relocate_asset", "asset", &asset)?,
                 to_path,
             },
         )
@@ -411,7 +417,7 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::DeleteAsset {
-                asset: the_asset_a_call_names("delete_asset", &asset)?,
+                asset: the_asset_a_call_names("delete_asset", "asset", &asset)?,
             },
         )
         .await
@@ -437,7 +443,7 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::SetAssetSettings {
-                asset: the_asset_a_call_names("set_asset_settings", &asset)?,
+                asset: the_asset_a_call_names("set_asset_settings", "asset", &asset)?,
                 import_settings,
             },
         )
@@ -463,7 +469,7 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::ReplaceAsset {
-                asset: the_asset_a_call_names("replace_asset", &asset)?,
+                asset: the_asset_a_call_names("replace_asset", "asset", &asset)?,
                 source: ProjectAssetImportSource::try_from(source)
                     .map_err(|refusal| format!("replace_asset failed: {refusal}"))?,
             },
@@ -514,7 +520,11 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::DeleteStream {
-                stream_asset: the_asset_a_call_names("delete_stream", &stream_asset)?,
+                stream_asset: the_asset_a_call_names(
+                    "delete_stream",
+                    "stream_asset",
+                    &stream_asset,
+                )?,
             },
         )
         .await
@@ -540,7 +550,11 @@ impl LocalApiMcpServerHandler {
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetAction::SetStreamDisplayName {
-                stream_asset: the_asset_a_call_names("set_stream_display_name", &stream_asset)?,
+                stream_asset: the_asset_a_call_names(
+                    "set_stream_display_name",
+                    "stream_asset",
+                    &stream_asset,
+                )?,
                 display_name,
             },
         )
@@ -737,10 +751,15 @@ pub(crate) fn the_author_of_a_change(
     }
 }
 
-/// The asset UUID a call's `asset` spells.
-fn the_asset_a_call_names(tool_name: &str, asset: &str) -> Result<Uuid, String> {
-    Uuid::parse_str(asset)
-        .map_err(|_| format!("{tool_name} failed: `asset` must be an asset's UUID; got `{asset}`"))
+/// The asset UUID a call spells in its argument `argument_name`.
+fn the_asset_a_call_names(
+    tool_name: &str,
+    argument_name: &str,
+    asset: &str,
+) -> Result<Uuid, String> {
+    Uuid::parse_str(asset).map_err(|_| {
+        format!("{tool_name} failed: `{argument_name}` must be an asset's UUID; got `{asset}`")
+    })
 }
 
 /// `source` as an import reads it: an absolute path, or a content hash the store holds.

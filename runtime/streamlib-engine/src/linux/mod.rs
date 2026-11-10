@@ -6,6 +6,7 @@
 pub mod alsa_audio_device_backend;
 pub mod audio_clock;
 pub(crate) mod dma_buf_mapped_for_cpu_reads;
+pub(crate) mod folder_moved_to_the_freedesktop_trash;
 pub mod pipewire_audio_device_backend;
 pub mod pipewire_runtime_library;
 pub mod pipewire_video_source;

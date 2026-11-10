@@ -48,6 +48,18 @@ impl<'a> TraversalSourceMut<'a> {
             &spec.name,
         )?;
         node_types.refuse_a_node_this_stream_cannot_add(&name, &spec.name, &spec.config)?;
+        if node_types.is_a_view_type_of_this_streams_project(&spec.name)
+            && let Some(holder) = self
+                .graph
+                .node_weights()
+                .find(|node| node.processor_type == spec.name)
+        {
+            return Err(Error::GraphError(format!(
+                "node `{name}` cannot be of the view type `{}`: node `{}` ({}) of the stream \
+                 already holds it, and a stream holds one node of each view",
+                spec.name, holder.display_name, holder.node_uuid
+            )));
+        }
 
         if registry_miss {
             tracing::error!(

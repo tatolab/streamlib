@@ -20,6 +20,7 @@ mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod output_port_viewer;
 mod processor_interpreter_launch_record;
+mod project_folder_moved_to_the_trash;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
@@ -35,6 +36,7 @@ mod stream_environment;
 mod stream_graph_operation_applied_live;
 mod stream_location_and_id;
 mod stream_step_coordinator;
+mod view_node_output_written_by_a_panel;
 
 pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_source::{
     ImportedProjectPythonSources, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
