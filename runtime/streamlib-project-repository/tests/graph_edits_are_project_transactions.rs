@@ -7,7 +7,7 @@ use streamlib_project_repository::{
     ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
     ProjectTransactionLineage, ProjectTransactionUndoState, StreamGraphDocumentLink,
     StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
-    StreamGraphOperation, StreamGraphOperationOnAStream,
+    StreamGraphNodeStudioFields, StreamGraphOperation, StreamGraphOperationOnAStream,
     fragment_with_each_node_uuid_kept_by_its_name,
 };
 use uuid::Uuid;
@@ -124,7 +124,7 @@ fn a_node(name: &str, config: serde_json::Value) -> StreamGraphDocumentNode {
         config,
         pins: Map::new(),
         exposed_config_fields: Vec::new(),
-        studio: Map::new(),
+        studio: Default::default(),
         fragment: None,
     }
 }
@@ -243,11 +243,13 @@ fn each_authors_undo_reverses_only_that_authors_own_edits() {
             vec![
                 project.on_the_stream(StreamGraphOperation::SetStudioFields {
                     node: meter.id,
-                    from: Map::new(),
-                    to: json!({ "position": [120, 40] })
-                        .as_object()
-                        .unwrap()
-                        .clone(),
+                    from: Default::default(),
+                    to: Box::new(
+                        StreamGraphNodeStudioFields::try_from(
+                            json!({"position": [120, 40]}).as_object().unwrap().clone(),
+                        )
+                        .unwrap(),
+                    ),
                 }),
             ],
         )
@@ -260,7 +262,7 @@ fn each_authors_undo_reverses_only_that_authors_own_edits() {
         .unwrap();
     assert_eq!(document.node(source.id).unwrap().name, "source");
     assert_eq!(
-        document.node(meter.id).unwrap().studio["position"],
+        document.node(meter.id).unwrap().studio.to_map()["position"],
         json!([120, 40]),
         "the person's undo leaves the agent's edit"
     );

@@ -621,6 +621,15 @@ pub struct GraphTransactionAddedGroup {
     pub title: String,
 }
 
+/// A canvas note a graph transaction placed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphTransactionAddedNote {
+    /// The stream it was placed in, by stream id.
+    pub stream: String,
+    /// The UUID the runtime made for it.
+    pub note: String,
+}
+
 /// A link a graph transaction made, with the state the stream's graph reads it in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphTransactionConnectedLink {
@@ -660,6 +669,9 @@ pub struct GraphTransactionToolResult {
     /// Each labelled group it made.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub added_groups: Vec<GraphTransactionAddedGroup>,
+    /// Each canvas note it placed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_notes: Vec<GraphTransactionAddedNote>,
 }
 
 /// What a project's transactions resource holds: its newest transactions and the actions refused

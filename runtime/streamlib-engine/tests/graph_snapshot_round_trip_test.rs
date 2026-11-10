@@ -214,8 +214,9 @@ fn a_graph_carrying_exposed_is_refused_naming_the_keys_a_graph_has() {
 
     assert!(refusal.contains("the key `exposed`"), "{refusal}");
     assert!(
-        refusal
-            .contains("`asset`, `display_name`, `stream`, `clock`, `nodes`, `links` and `groups`"),
+        refusal.contains(
+            "`asset`, `display_name`, `stream`, `clock`, `nodes`, `links`, `groups` and `studio`"
+        ),
         "{refusal}"
     );
 }

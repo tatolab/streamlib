@@ -232,7 +232,7 @@ impl StreamGraphDocument {
             config: Value::Object(Map::new()),
             pins: Map::new(),
             exposed_config_fields: Vec::new(),
-            studio: Map::new(),
+            studio: Default::default(),
             fragment: Some(Box::new(
                 json!({ "nodes": fragment_nodes, "links": inner_links }),
             )),
