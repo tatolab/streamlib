@@ -43,7 +43,7 @@ sha256_of_standard_input() {
   # The runtime compiles the scaffold `tatolab new` writes, the wheel ships the
   # notices, and the unit carries its first-party modules; each sits under an
   # exclusion above.
-  git ls-files -s -- 'sdk/tatolab-stream/scaffold_template/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md' 'packages/tatolab-ops/**'
+  git ls-files -s -- 'sdk/tatolab-stream/scaffold_template/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md' 'packages/tatolab-ops/**' 'packages/tatolab-testpattern/**' 'packages/tatolab-compositor/**'
   rustc -Vv
   printf '%s\n' "$@"
 } | sha256_of_standard_input | cut -d ' ' -f 1

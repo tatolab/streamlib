@@ -130,22 +130,24 @@ pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
 pub const PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY: &str = ".tatolab/first-party-imports";
 
 /// A first-party module the runtime carries, as a project declares it: the distribution its
-/// `pyproject.toml` names and the folder its link has under
+/// wheel installs and the wheel file name its link has under
 /// [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FirstPartyModuleDeclaredByAProject {
-    /// The distribution name the module's own `pyproject.toml` declares.
+    /// The distribution name the module's wheel installs.
     pub distribution_name: String,
-    /// The name of the module's link inside [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`].
-    pub link_folder_name: String,
+    /// The module's wheel file name, which its link inside
+    /// [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`] keeps, since uv reads a wheel's tags from it.
+    pub link_file_name: String,
 }
 
 /// `pyproject_text` with each of `first_party_modules` named as a requirement and as a uv path
-/// source through its link, `{ path = ".tatolab/first-party-imports/<folder>" }`, which uv
-/// builds and installs so `uv sync` keeps the module and its requirements. A requirement or a
-/// source the manifest already holds for one is kept as written, and every source into the
-/// links folder that no module of `first_party_modules` holds now is taken out with its
-/// requirement. A manifest with no `[project]` table is left as it is.
+/// source through its link, `{ path = ".tatolab/first-party-imports/<wheel file name>" }`,
+/// which uv installs so `uv sync` keeps the module and its requirements. A requirement, or a
+/// source outside the links folder, the manifest already holds for one is kept as written; every
+/// source into the links folder is written again to the module's link now, since a wheel's file
+/// name changes with its version, and one no module of `first_party_modules` holds now is taken
+/// out with its requirement. A manifest with no `[project]` table is left as it is.
 pub fn pyproject_with_each_first_party_module_as_a_uv_path_source(
     pyproject_text: &str,
     project_directory: &Path,
@@ -181,7 +183,12 @@ pub fn pyproject_with_each_first_party_module_as_a_uv_path_source(
         })
         .map(|(name, _)| name.to_owned())
         .collect();
-    for name in &requirements_no_module_holds {
+    let sources_into_the_links_folder: Vec<String> = uv_sources
+        .iter()
+        .filter(|(_, source)| is_a_source_into_the_first_party_module_links_folder(source))
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    for name in &sources_into_the_links_folder {
         uv_sources.remove(name);
     }
     let names_with_a_source: Vec<String> = uv_sources
@@ -197,7 +204,7 @@ pub fn pyproject_with_each_first_party_module_as_a_uv_path_source(
             "path",
             Value::from(format!(
                 "{PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY}/{}",
-                module.link_folder_name
+                module.link_file_name
             )),
         );
         uv_sources.insert(
@@ -558,12 +565,12 @@ mod tests {
     fn tatolab_ops_as_a_first_party_module() -> FirstPartyModuleDeclaredByAProject {
         FirstPartyModuleDeclaredByAProject {
             distribution_name: "tatolab-ops".to_owned(),
-            link_folder_name: "tatolab-ops".to_owned(),
+            link_file_name: "tatolab_ops-0.68.51-py3-none-any.whl".to_owned(),
         }
     }
 
     #[test]
-    fn a_first_party_module_becomes_a_requirement_and_a_built_path_source_through_its_link() {
+    fn a_first_party_module_becomes_a_requirement_and_a_path_source_through_its_link() {
         let project = tempfile::tempdir().unwrap();
 
         let written = pyproject_with_each_first_party_module_as_a_uv_path_source(
@@ -580,8 +587,10 @@ mod tests {
         );
         assert_eq!(
             pyproject["tool"]["uv"]["sources"]["tatolab-ops"],
-            toml::from_str::<toml::Value>("path = \".tatolab/first-party-imports/tatolab-ops\"")
-                .unwrap()
+            toml::from_str::<toml::Value>(
+                "path = \".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl\""
+            )
+            .unwrap()
         );
         assert_eq!(
             pyproject_with_each_first_party_module_as_a_uv_path_source(
@@ -592,6 +601,31 @@ mod tests {
             .unwrap(),
             written,
             "a project that declares it already is left as it is"
+        );
+    }
+
+    #[test]
+    fn a_link_source_to_an_earlier_wheel_is_written_again_to_the_wheel_carried_now() {
+        let project = tempfile::tempdir().unwrap();
+        let pyproject = "[project]\nname = \"suite\"\ndependencies = [\"tatolab-ops\"]\n\n\
+            [tool.uv.sources]\n\
+            tatolab-ops = { path = \".tatolab/first-party-imports/tatolab-ops\" }\n";
+
+        let written = pyproject_with_each_first_party_module_as_a_uv_path_source(
+            pyproject,
+            project.path(),
+            &[tatolab_ops_as_a_first_party_module()],
+        )
+        .unwrap();
+
+        let pyproject: toml::Value = toml::from_str(&written).unwrap();
+        assert_eq!(
+            pyproject["project"]["dependencies"],
+            toml::Value::try_from(["tatolab-ops"]).unwrap()
+        );
+        assert_eq!(
+            pyproject["tool"]["uv"]["sources"]["tatolab-ops"]["path"].as_str(),
+            Some(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl")
         );
     }
 

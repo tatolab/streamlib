@@ -38,11 +38,6 @@ const PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER: &str = "name = \"tatolab-str
 /// a project depending on an older `tatolab-stream` is refused by the runtime that created it.
 const PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER: &str = "\"tatolab-stream>=0.54.2\"";
 
-/// The template's `tatolab-testpattern` requirement, raised on render to this runtime's own
-/// version, which the module is released at.
-const PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER: &str =
-    "\"tatolab-testpattern>=0.68.18\"";
-
 /// The distribution name a directory whose name casts to nothing is given.
 const FALLBACK_DISTRIBUTION_NAME: &str = "tatolab-stream-project";
 
@@ -138,10 +133,6 @@ pub(crate) fn render_scaffold_template_files(
         .replace(
             PYPROJECT_TOML_TATOLAB_STREAM_REQUIREMENT_PLACEHOLDER,
             &format!("\"tatolab-stream>={}\"", env!("CARGO_PKG_VERSION")),
-        )
-        .replace(
-            PYPROJECT_TOML_TATOLAB_TESTPATTERN_REQUIREMENT_PLACEHOLDER,
-            &format!("\"tatolab-testpattern>={}\"", env!("CARGO_PKG_VERSION")),
         );
 
     Ok(vec![
@@ -340,13 +331,12 @@ mod tests {
         let rendered_pyproject_toml = the_rendered_file_at(&rendered_files, "pyproject.toml");
         assert!(
             rendered_pyproject_toml.contains(&format!(
-                "dependencies = [\"tatolab-stream>={runtime_version}\", \
-                 \"tatolab-testpattern>={runtime_version}\"]",
-                runtime_version = env!("CARGO_PKG_VERSION")
+                "dependencies = [\"tatolab-stream>={}\"]",
+                env!("CARGO_PKG_VERSION")
             )),
-            "a new project floors tatolab-stream and tatolab-testpattern at the version of \
-             the runtime that created it; tatolab-ops is declared by the runtime when it makes \
-             the project's .venv, through a link to the copy it carries"
+            "a new project floors tatolab-stream at the version of the runtime that created \
+             it; each core first-party module, tatolab-testpattern among them, is declared by the \
+             runtime when it makes the project's .venv, through a link to the wheel it carries"
         );
         assert!(rendered_pyproject_toml.contains("name = \"probe-app\""));
         let rendered_pyproject: toml::Table = toml::from_str(rendered_pyproject_toml).unwrap();

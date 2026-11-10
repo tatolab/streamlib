@@ -96,10 +96,12 @@ for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.
 		exit 1
 	}
 done
-[ -f "$runtime_unit_root/lib/tatolab/imports/tatolab-ops/pyproject.toml" ] || {
-	echo "the runtime unit has no lib/tatolab/imports/tatolab-ops/pyproject.toml: a release ships its first-party modules" >&2
-	exit 1
-}
+for first_party_module in tatolab_ops tatolab_testpattern tatolab_compositor; do
+	compgen -G "$runtime_unit_root/lib/tatolab/imports/$first_party_module-*.whl" >/dev/null || {
+		echo "the runtime unit has no lib/tatolab/imports/$first_party_module-*.whl: a release ships every first-party module" >&2
+		exit 1
+	}
+done
 
 uv build --wheel --out-dir /tmp/tatolab-stream-dist sdk/tatolab-stream
 uv venv --python 3.12 /tmp/runtime-unit-gate-venv

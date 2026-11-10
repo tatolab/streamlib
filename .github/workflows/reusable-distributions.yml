@@ -3,8 +3,9 @@ name: Distributions
 # The release channel: release-please cuts a GitHub release, and this publishes
 # `tatolab-stream` to PyPI and every first-party module to Tatolab's own package
 # index, https://get.tatolab.com/simple/, at that release's version. A project
-# names that index, so a stream's venv resolves `tatolab-*` from it and
-# everything else from PyPI. The engine wheel is not published: a processor
+# names that index for the modules the runtime does not carry, takes its core
+# modules from the wheels the runtime unit carries, and everything else from
+# PyPI. The engine wheel is not published: a processor
 # interpreter borrows the runtime from the runtime unit's lend, so no stream's
 # venv installs it.
 #
@@ -16,7 +17,7 @@ name: Distributions
 # the runtime unit, for the Linux runtime tarball and for the credentials that
 # publish it, so nothing uploads unless everything built. The Linux runtime
 # publishes after both, because a stream it scaffolds locks the `tatolab-stream`
-# PyPI holds and the `tatolab-testpattern` and `tatolab-ops` the index holds. A failed publish is
+# PyPI holds; its core modules are wheels the tarball itself carries. A failed publish is
 # recovered by re-running the original run's failed job: PyPI and the index both
 # skip a file they hold byte for byte, and the Linux runtime overwrites a partial
 # upload.
@@ -215,19 +216,15 @@ jobs:
       tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
       extension_build_needs_the_slang_compiler: true
 
-  # A user's `uv sync` resolves `tatolab-stream` from PyPI, and
-  # `tatolab-testpattern` and `tatolab-ops` from the index the scaffold names, where every earlier
-  # release is a candidate. This run's distributions are in neither yet, so the
-  # `tatolab` index is pointed at an index tree built from this run's wheels the
-  # way the release builds the real one, `tatolab-stream` joins PyPI as
-  # find-links, and the scaffold must lock the ones just built — a scaffold that
-  # capped a version or named another index would lock something else.
+  # A user's `uv sync` resolves `tatolab-stream` from PyPI, where every earlier
+  # release is a candidate, and its core modules from the wheels the runtime
+  # unit carries. This run's `tatolab-stream` is not on PyPI yet, so it
+  # joins PyPI as find-links, and the scaffold must lock the one just built — a
+  # scaffold that capped its version would lock something else.
   lock-the-scaffold-against-this-runs-distributions:
-    name: A scaffolded stream locks the distributions this run built
+    name: A scaffolded stream locks the tatolab-stream this run built
     needs:
       - build-tatolab-stream-distribution
-      - build-tatolab-testpattern-distribution
-      - build-tatolab-ops-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -250,42 +247,31 @@ jobs:
       - name: The index tree is one uv resolves from
         run: python3 scripts/test_tatolab_package_index.py -v
 
-      - name: Collect the tatolab-stream, tatolab-testpattern and tatolab-ops this run built
+      - name: Collect the tatolab-stream this run built
         uses: actions/download-artifact@v7
         with:
-          pattern: release-distribution-tatolab-{stream,testpattern,ops}
-          path: /tmp/this-runs-distributions
-          merge-multiple: true
+          name: release-distribution-tatolab-stream
+          path: /tmp/this-runs-tatolab-stream
 
-      - name: The scaffold locks this run's tatolab-stream and tatolab-testpattern
+      - name: The scaffold locks this run's tatolab-stream
         run: |
           set -euo pipefail
-          mkdir /tmp/this-runs-tatolab-stream
-          mv /tmp/this-runs-distributions/tatolab_stream-* /tmp/this-runs-tatolab-stream/
-          python3 scripts/tatolab_package_index.py add-wheels /tmp/this-runs-index /tmp/this-runs-distributions/*.whl
-          python3 scripts/tatolab_package_index.py write-pages /tmp/this-runs-index
           cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
-          # A command-line index of the same name stands in for the one the
-          # project names.
-          (cd /tmp/scaffold-check && UV_FIND_LINKS=/tmp/this-runs-tatolab-stream \
-            uv lock --index "tatolab=file:///tmp/this-runs-index/simple/")
+          (cd /tmp/scaffold-check && UV_FIND_LINKS=/tmp/this-runs-tatolab-stream uv lock)
           built_version="$(python3 -c "
           import tomllib
           print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
           ")"
-          for distribution_name in tatolab-stream tatolab-testpattern; do
-            locked_version="$(python3 - "$distribution_name" <<'EOF'
-          import sys
+          locked_version="$(python3 <<'EOF'
           import tomllib
           lock = tomllib.load(open('/tmp/scaffold-check/uv.lock', 'rb'))
-          print(next(package['version'] for package in lock['package'] if package['name'] == sys.argv[1]))
+          print(next(package['version'] for package in lock['package'] if package['name'] == 'tatolab-stream'))
           EOF
-            )"
-            if [ "$locked_version" != "$built_version" ]; then
-              echo "::error::a scaffolded stream locks $distribution_name $locked_version, not the $built_version this run built"
-              exit 1
-            fi
-          done
+          )"
+          if [ "$locked_version" != "$built_version" ]; then
+            echo "::error::a scaffolded stream locks tatolab-stream $locked_version, not the $built_version this run built"
+            exit 1
+          fi
 
   # Linux and macOS: V4L2 and AVFoundation.
   build-tatolab-camera-distribution:
@@ -567,15 +553,12 @@ jobs:
     with:
       ref: ${{ inputs.tag_name }}
 
-  # The stream `tatolab new` scaffolds imports `tatolab.h264` and
-  # `tatolab.testpattern`, so the machines are given the distributions this run
-  # built, as a user's `uv sync` would.
+  # The stream `tatolab new` scaffolds imports `tatolab.testpattern`, a wheel
+  # the tarball carries.
   check-the-linux-runtime-tarball-on-machines-with-no-vulkan-driver:
     name: The Linux runtime tarball starts a stream on machines with no Vulkan driver
     needs:
       - build-linux-runtime-tarball
-      - build-tatolab-h264-distribution
-      - build-tatolab-testpattern-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -593,23 +576,10 @@ jobs:
           name: linux-runtime-tarball
           path: ${{ runner.temp }}/linux-runtime-tarball
 
-      - name: Collect the manylinux tatolab-h264 wheel this run built
-        uses: actions/download-artifact@v7
-        with:
-          name: release-distribution-tatolab-h264-manylinux
-          path: ${{ runner.temp }}/first-party-module-distributions
-
-      - name: Collect the tatolab-testpattern distribution this run built
-        uses: actions/download-artifact@v7
-        with:
-          name: release-distribution-tatolab-testpattern
-          path: ${{ runner.temp }}/first-party-module-distributions
-
       - name: The tarball starts a stream on machines with no Vulkan driver
         run: >-
           bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
-          "$RUNNER_TEMP/first-party-module-distributions"
 
   # Before PyPI or the index takes anything: an upload whose index and Linux
   # runtime could not then be published would leave the release half out.

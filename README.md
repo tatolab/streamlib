@@ -119,9 +119,12 @@ on PyPI:
 uv add tatolab-stream
 ```
 
-A new project's `pyproject.toml` depends on `tatolab-stream` and `tatolab-testpattern`, each at
-least as new as the runtime that created it, and names Tatolab's own package index,
-`https://get.tatolab.com/simple/`, which serves every first-party module.
+A new project's `pyproject.toml` depends on `tatolab-stream`, at least as new as the runtime that
+created it, and names Tatolab's own package index, `https://get.tatolab.com/simple/`, which serves
+the first-party modules the runtime does not carry. The runtime carries a wheel of its core
+modules — `tatolab-ops`, `tatolab-testpattern` and `tatolab-compositor` — at its own version, and
+each time it makes a project's `.venv` it links them into `.tatolab/first-party-imports/` and
+declares each as a uv path source, so they always match the runtime.
 The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
 does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
 setup step.
@@ -595,12 +598,12 @@ Other vendors are untested rather than validated.
 
 A stream on one machine — sources in, GPU work, your model, display or recording out — plus
 observation and live changes from the CLI or an agent. The runtime ships no media nodes; each is a
-package on PyPI:
+module, served from Tatolab's package index, and the core ones ride the runtime itself:
 
 | Module | |
 |---|---|
 | `tatolab-testpattern` | `TestPatternSource`: the sample animation, for a machine with no camera. |
-| `tatolab-ops` | The small function nodes (`Lfo`, `Remap`, `Clamp`, `Gate`, …), compiled to native code and run inside the node that reads them; every new project depends on it. |
+| `tatolab-ops` | The small function nodes (`Lfo`, `Remap`, `Clamp`, `Gate`, …), compiled to native code and run inside the node that reads them; the runtime installs it into every project. |
 | `tatolab-virtualcamera` | `VirtualCameraSink`, Linux only: a v4l2loopback camera any other application can select. |
 
 The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then
@@ -611,7 +614,7 @@ engine's audio backend, so no interpreter sits in the sample path either. The ca
 AVFoundation on macOS, each frame imported to the GPU with no CPU copy. So are the hardware
 video codecs: `pip install tatolab-h264 tatolab-h265`, then `from tatolab.h264 import H264Encoder,
 H264Decoder` and `from tatolab.h265 import H265Encoder, H265Decoder` — Vulkan Video on a device
-the helper owns on Linux, VideoToolbox on macOS. A scaffolded project depends on `tatolab-h264`.
+the helper owns on Linux, VideoToolbox on macOS.
 
 Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
 libopus linked statically into the wheel.

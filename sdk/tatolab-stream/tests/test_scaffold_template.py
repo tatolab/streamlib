@@ -100,15 +100,13 @@ def test_the_scaffold_pins_the_python_version_the_plan_names():
     assert template_text("python-version").strip() == "3.12"
 
 
-def test_the_scaffold_depends_on_tatolab_stream_and_the_testpattern_module_only():
-    """`new` raises the `tatolab-stream` and `tatolab-testpattern` floors to the
-    version of the runtime that writes it; the template's own floors keep PyPI's
-    0.0.0 placeholder out of a resolve of the tree. `tatolab-ops` rides the
-    runtime, which declares it when it makes the project's `.venv`."""
-    assert (
-        'dependencies = ["tatolab-stream>=0.54.2", "tatolab-testpattern>=0.68.18"]\n'
-        in template_text("pyproject.toml")
-    )
+def test_the_scaffold_depends_on_tatolab_stream_alone():
+    """`new` raises the `tatolab-stream` floor to the version of the runtime
+    that writes it; the template's own floor keeps PyPI's 0.0.0 placeholder out
+    of a resolve of the tree. The core first-party modules, `tatolab-testpattern`
+    among them, ride the runtime, which declares them when it makes the
+    project's `.venv`."""
+    assert 'dependencies = ["tatolab-stream>=0.54.2"]\n' in template_text("pyproject.toml")
 
 
 def test_the_scaffold_binds_to_no_floor():

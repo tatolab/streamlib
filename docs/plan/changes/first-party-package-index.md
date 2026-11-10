@@ -199,6 +199,39 @@ reshapes #3216.
    `gateway-nodes`' viewer read path, which the proof uses to read the starter's one port. Landing
    first would need a second reader in the proof alone, which nothing else wants.
 
+## Amended — a core rides the runtime, the rest become module projects (owner, 2026-11-10)
+
+> **The owner, 2026-11-10**, on the decision card "Split modules into a runtime core and
+> importable module projects?": "Core in runtime, rest as projects". And: "at some point we have
+> to accept as a trade off … those devs can also just package that stuff as wheels for their own
+> projects … so there are ways we can document people do it".
+
+This extends self-contained-project-imports Decided 10 from `tatolab-ops` to a core set, and
+reshapes how every other first-party module reaches a project:
+
+- **The core rides the runtime as wheels.** `cargo xtask build-runtime` builds `tatolab-ops`,
+  `tatolab-testpattern` and `tatolab-compositor` (`FIRST_PARTY_MODULE_PACKAGES_RELATIVE_TO_WORKSPACE`
+  in `xtask/src/stage_first_party_modules.rs`) into one wheel each in `lib/tatolab/imports/` with
+  `uv build --wheel`. A core module is pure Python, so the unit build compiles nothing more.
+- **A project declares each core wheel.** Each time the runtime makes, syncs or locks a
+  project's `.venv`, it links each wheel into `.tatolab/first-party-imports/<wheel file name>`
+  and declares it as a requirement and a uv path source through that link. The link keeps the
+  wheel's file name, since uv reads its tags from it, so a source into the links folder is
+  written again whenever the runtime's version changes; a source the project holds outside the
+  links folder is kept as written.
+- **The starter depends on `tatolab-stream` alone.** Its `TestPatternSource` comes from the
+  wheel the runtime declares. It still names Tatolab's index for the modules the runtime does not
+  carry, until those are module projects.
+- **Every other first-party module becomes a module project**, as self-contained-project-imports
+  makes every import: its project file, its streams, its Python package and, for a native module,
+  a prebuilt wheel for each platform it runs on, declared as a uv path source inside the project,
+  since a machine importing it has no Rust toolchain. The release publishes each as an archive on
+  `get.tatolab.com` with its SHA-256, and Get more copies one into `imports/<module>/`. This
+  reshapes #3216. A third party ships a native module the same way, prebuilt wheels inside its
+  project, and the docs show how.
+- **Assumed unless overruled: the index meanwhile.** The release keeps publishing every module to
+  `https://get.tatolab.com/simple/` until the module projects ship; the PyPI copies follow #3471.
+
 ## What this does not change
 
 - `tatolab-stream` and the Rust crate keep their channels, and the runtime unit still never goes

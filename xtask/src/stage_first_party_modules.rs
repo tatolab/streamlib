@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The first-party modules the runtime unit carries, each copied from its
-//! package in the workspace into the unit's `lib/tatolab/imports/<module>/`
+//! The core first-party modules the runtime unit carries, each built from its
+//! package in the workspace into one wheel in the unit's `lib/tatolab/imports/`
 //! beside the lend, from where the runtime installs it into every project's
 //! `.venv`.
 
@@ -11,22 +11,24 @@ use std::path::{Path, PathBuf};
 
 use crate::build_runtime::{
     first_party_modules_directory_beside_the_lend, runtime_unit_lend_directory_in_the_workspace,
+    the_one_wheel_in,
 };
 
-/// Each first-party module, as the workspace-relative package it is copied from.
-pub const FIRST_PARTY_MODULE_PACKAGES_RELATIVE_TO_WORKSPACE: [&str; 1] = ["packages/tatolab-ops"];
-
-/// What of a module's package the unit carries: what builds and installs it.
-pub const FIRST_PARTY_MODULE_ENTRIES_A_UNIT_CARRIES: [&str; 5] = [
-    "pyproject.toml",
-    "hatch_build.py",
-    "README.md",
-    "LICENSE",
-    "python",
+/// The core first-party modules the runtime unit carries, as the workspace-relative packages
+/// their wheels are built from. Each is pure Python; every other module is a project a project
+/// imports.
+pub const FIRST_PARTY_MODULE_PACKAGES_RELATIVE_TO_WORKSPACE: [&str; 3] = [
+    "packages/tatolab-compositor",
+    "packages/tatolab-ops",
+    "packages/tatolab-testpattern",
 ];
 
-/// The cache directory a module's sources never carry into the unit.
-const PYTHON_BYTECODE_CACHE_DIRECTORY_NAME: &str = "__pycache__";
+/// The build backend a native extension names, which no core module may use.
+const MATURIN_BUILD_BACKEND: &str = "maturin";
+
+/// Where each module's wheel is built before it is placed in the unit, relative to the workspace.
+const FIRST_PARTY_MODULE_WHEEL_BUILDS_RELATIVE_TO_WORKSPACE: &str =
+    "target/first-party-module-wheels";
 
 /// The first-party modules directory of the runtime unit in `workspace_root`.
 pub fn runtime_unit_first_party_modules_directory_in_the_workspace(
@@ -41,8 +43,8 @@ pub fn runtime_unit_first_party_modules_directory_in_the_workspace(
     })
 }
 
-/// Replace the runtime unit's first-party modules directory with a fresh copy
-/// of each first-party module in `workspace_root`.
+/// Replace the runtime unit's first-party modules directory with a freshly
+/// built wheel of each core first-party module.
 pub fn stage_the_first_party_modules(workspace_root: &Path) -> Result<()> {
     let modules_directory =
         runtime_unit_first_party_modules_directory_in_the_workspace(workspace_root)?;
@@ -50,112 +52,98 @@ pub fn stage_the_first_party_modules(workspace_root: &Path) -> Result<()> {
         std::fs::remove_dir_all(&modules_directory)
             .with_context(|| format!("removing {}", modules_directory.display()))?;
     }
+    std::fs::create_dir_all(&modules_directory)
+        .with_context(|| format!("creating {}", modules_directory.display()))?;
     for package in FIRST_PARTY_MODULE_PACKAGES_RELATIVE_TO_WORKSPACE {
-        let package_directory = workspace_root.join(package);
-        let module_folder_name = package_directory
+        let module_wheel =
+            build_a_first_party_module_wheel(workspace_root, &workspace_root.join(package))?;
+        let wheel_file_name = module_wheel
             .file_name()
-            .with_context(|| format!("{package} names no folder"))?;
-        copy_a_first_party_module(
-            &package_directory,
-            &modules_directory.join(module_folder_name),
+            .with_context(|| format!("{} names no file", module_wheel.display()))?;
+        std::fs::copy(&module_wheel, modules_directory.join(wheel_file_name)).with_context(
+            || {
+                format!(
+                    "copying {} into {}",
+                    module_wheel.display(),
+                    modules_directory.display()
+                )
+            },
         )?;
     }
     tracing::info!(
-        "build-runtime: first-party modules staged in {}",
+        "build-runtime: first-party module wheels staged in {}",
         modules_directory.display()
     );
     Ok(())
 }
 
-/// Copy what the unit carries of the module at `package_directory` into
-/// `module_folder`, each link copied as the file it points at.
-pub fn copy_a_first_party_module(package_directory: &Path, module_folder: &Path) -> Result<()> {
-    std::fs::create_dir_all(module_folder)
-        .with_context(|| format!("creating {}", module_folder.display()))?;
-    for entry in FIRST_PARTY_MODULE_ENTRIES_A_UNIT_CARRIES {
-        let source = package_directory.join(entry);
-        if !source.exists() {
-            continue;
-        }
-        copy_following_links(&source, &module_folder.join(entry))?;
-    }
-    Ok(())
+/// Whether the package whose `pyproject.toml` reads `pyproject_text` builds a native extension.
+pub fn builds_a_native_extension(pyproject_text: &str) -> Result<bool> {
+    let pyproject: toml::Table = pyproject_text.parse().context("parsing pyproject.toml")?;
+    let build_backend = pyproject
+        .get("build-system")
+        .and_then(|build_system| build_system.get("build-backend"))
+        .and_then(toml::Value::as_str)
+        .context("pyproject.toml names no [build-system].build-backend")?;
+    Ok(build_backend == MATURIN_BUILD_BACKEND)
 }
 
-fn copy_following_links(source: &Path, destination: &Path) -> Result<()> {
-    if !source.is_dir() {
-        std::fs::copy(source, destination).with_context(|| {
-            format!("copying {} to {}", source.display(), destination.display())
-        })?;
-        return Ok(());
+fn build_a_first_party_module_wheel(
+    workspace_root: &Path,
+    package_directory: &Path,
+) -> Result<PathBuf> {
+    let package_folder_name = package_directory
+        .file_name()
+        .with_context(|| format!("{} names no folder", package_directory.display()))?;
+    let wheel_directory = workspace_root
+        .join(FIRST_PARTY_MODULE_WHEEL_BUILDS_RELATIVE_TO_WORKSPACE)
+        .join(package_folder_name);
+    if wheel_directory.exists() {
+        std::fs::remove_dir_all(&wheel_directory)
+            .with_context(|| format!("clearing {}", wheel_directory.display()))?;
     }
-    std::fs::create_dir_all(destination)
-        .with_context(|| format!("creating {}", destination.display()))?;
-    for entry in
-        std::fs::read_dir(source).with_context(|| format!("reading {}", source.display()))?
-    {
-        let entry = entry.with_context(|| format!("reading {}", source.display()))?;
-        if entry.file_name() == PYTHON_BYTECODE_CACHE_DIRECTORY_NAME {
-            continue;
-        }
-        copy_following_links(&entry.path(), &destination.join(entry.file_name()))?;
-    }
-    Ok(())
+    let exit_status = std::process::Command::new("uv")
+        .args(["build", "--wheel", "--out-dir"])
+        .arg(&wheel_directory)
+        .arg(package_directory)
+        .status()
+        .context("failed to run `uv build --wheel` — is uv on PATH?")?;
+    anyhow::ensure!(
+        exit_status.success(),
+        "`uv build --wheel` of {} failed ({exit_status})",
+        package_directory.display()
+    );
+    the_one_wheel_in(&wheel_directory)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
-    fn a_module_is_copied_with_its_links_resolved_and_without_its_tests_or_bytecode() {
-        let scratch = tempfile::tempdir().unwrap();
-        let package = scratch.path().join("tatolab-ops");
-        std::fs::create_dir_all(package.join("python/tatolab/ops/__pycache__")).unwrap();
-        std::fs::create_dir_all(package.join("tests")).unwrap();
-        std::fs::write(
-            package.join("pyproject.toml"),
-            "[project]\nname = \"tatolab-ops\"\n",
-        )
-        .unwrap();
-        std::fs::write(package.join("python/tatolab/ops/__init__.py"), "").unwrap();
-        std::fs::write(package.join("python/tatolab/ops/__pycache__/x.pyc"), "").unwrap();
-        std::fs::write(package.join("tests/test_ops.py"), "").unwrap();
-        std::fs::write(scratch.path().join("LICENSE"), "licence text").unwrap();
-        std::os::unix::fs::symlink("../LICENSE", package.join("LICENSE")).unwrap();
-        let module_folder = scratch.path().join("unit/imports/tatolab-ops");
-
-        copy_a_first_party_module(&package, &module_folder).unwrap();
-
-        assert!(module_folder.join("pyproject.toml").is_file());
-        assert!(
-            module_folder
-                .join("python/tatolab/ops/__init__.py")
-                .is_file()
-        );
-        assert!(
-            !module_folder
-                .join("python/tatolab/ops/__pycache__")
-                .exists()
-        );
-        assert!(!module_folder.join("tests").exists());
-        let licence = module_folder.join("LICENSE");
-        assert!(!licence.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::read_to_string(licence).unwrap(), "licence text");
+    fn every_core_module_is_a_pure_python_package_in_the_workspace() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        for package in FIRST_PARTY_MODULE_PACKAGES_RELATIVE_TO_WORKSPACE {
+            let pyproject_text =
+                std::fs::read_to_string(workspace_root.join(package).join("pyproject.toml"))
+                    .unwrap();
+            assert!(
+                !builds_a_native_extension(&pyproject_text).unwrap(),
+                "{package} builds a native extension, which the unit cannot build for a machine \
+                 with no Rust toolchain"
+            );
+        }
     }
 
     #[test]
-    fn every_first_party_module_package_is_in_the_workspace() {
-        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        for package in FIRST_PARTY_MODULE_PACKAGES_RELATIVE_TO_WORKSPACE {
-            assert!(
-                workspace_root
-                    .join(package)
-                    .join("pyproject.toml")
-                    .is_file(),
-                "{package}"
-            );
-        }
+    fn a_maturin_backend_is_a_native_extension_and_hatchling_is_not() {
+        assert!(
+            !builds_a_native_extension("[build-system]\nbuild-backend = \"hatchling.build\"\n")
+                .unwrap()
+        );
+        assert!(
+            builds_a_native_extension("[build-system]\nbuild-backend = \"maturin\"\n").unwrap()
+        );
+        assert!(builds_a_native_extension("[project]\nname = \"x\"\n").is_err());
     }
 }

@@ -95,12 +95,11 @@ UV_SOURCES_TABLE_HEADER = "[tool.uv.sources]"
 
 
 def point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory: Path) -> None:
-    """Have uv take `tatolab-stream`, `tatolab-h264` and `tatolab-testpattern` from this checkout,
-    as the suite tests them, in the one `[tool.uv.sources]` table the project holds."""
+    """Have uv take `tatolab-stream` from this checkout, as the suite tests it, in the one
+    `[tool.uv.sources]` table the project holds; its core modules stay the wheels the runtime
+    unit carries."""
     checkout_path_of_each_distribution = {
         "tatolab-stream": str(REPOSITORY_ROOT / "sdk" / "tatolab-stream"),
-        "tatolab-h264": str(REPOSITORY_ROOT / "packages" / "streamlib-h264"),
-        "tatolab-testpattern": str(REPOSITORY_ROOT / "packages" / "tatolab-testpattern"),
     }
     pyproject_path = project_directory / "pyproject.toml"
     pyproject_lines = [
@@ -121,6 +120,27 @@ def point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory
         distribution: uv_sources[distribution]["path"]
         for distribution in checkout_path_of_each_distribution
     } == checkout_path_of_each_distribution, uv_sources
+
+
+FIRST_PARTY_MODULE_LINKS_DIRECTORY = ".tatolab/first-party-imports"
+
+
+def assert_every_core_module_came_from_the_runtime_unit(project_directory: Path) -> None:
+    """The project's core modules are path sources through links to the wheels the runtime unit
+    carries, installed in its `.venv`."""
+    pyproject = tomllib.loads((project_directory / "pyproject.toml").read_text(encoding="utf-8"))
+    uv_sources = pyproject["tool"]["uv"]["sources"]
+    site_packages = next((project_directory / ".venv" / "lib").glob("python3*/site-packages"))
+    for escaped_distribution_name in ("tatolab_testpattern", "tatolab_ops", "tatolab_compositor"):
+        source_path = uv_sources[escaped_distribution_name.replace("_", "-")]["path"]
+        assert source_path.startswith(
+            f"{FIRST_PARTY_MODULE_LINKS_DIRECTORY}/{escaped_distribution_name}-"
+        ), uv_sources
+        assert source_path.endswith(".whl"), uv_sources
+        assert (project_directory / source_path).resolve().is_file(), source_path
+        assert list(site_packages.glob(f"{escaped_distribution_name}-*.dist-info")), (
+            escaped_distribution_name
+        )
 
 
 def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_and_outlives_the_connection(
@@ -150,6 +170,7 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
         assert (project_directory / file_a_new_project_starts_with).is_file(), (
             file_a_new_project_starts_with
         )
+    assert_every_core_module_came_from_the_runtime_unit(project_directory)
 
     [listed] = local_api.list_streams()
     assert listed["stream"] == created["stream"], listed
