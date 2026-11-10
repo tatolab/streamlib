@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_asset::{DIRECTORIES_A_PROJECT_SCAN_SKIPS, PROJECT_IMPORTS_DIRECTORY};
-use crate::project_file::PROJECT_FILE_NAME;
+use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
 /// Where a project stages each import's files before a transaction moves them into place, and
@@ -94,6 +94,80 @@ pub(crate) fn stage_a_copy_of_the_project_source(
         let _ = std::fs::remove_dir_all(&staging_directory);
     }
     staged
+}
+
+/// Unpack the project the `.zip` at `source` holds, a GitHub archive's one top folder included,
+/// into `project_directory`, which must not exist yet, under a project UUID of its own. What is
+/// unpacked is what `add_dependency` copies from a zip; nothing is left behind when refused.
+pub(crate) fn unpack_a_project_archive_as_a_new_project(
+    project_directory: &Path,
+    source: &str,
+) -> Result<(), ProjectRepositoryRefusal> {
+    let source_path = Path::new(source);
+    if !source_path.is_absolute() {
+        return Err(ProjectRepositoryRefusal::ImportSourceNotAnAbsolutePath {
+            import_source: source.to_owned(),
+        });
+    }
+    if source_path.is_dir() {
+        return Err(ProjectRepositoryRefusal::ProjectArchiveIsAFolder {
+            import_source: source.to_owned(),
+        });
+    }
+    if !source_path.is_file() {
+        return Err(ProjectRepositoryRefusal::ImportSourceUnreadable {
+            path: source_path.to_path_buf(),
+            why: "no file is there".to_owned(),
+        });
+    }
+    let (Some(parent_directory), Some(folder_name)) =
+        (project_directory.parent(), project_directory.file_name())
+    else {
+        return Err(ProjectRepositoryRefusal::ProjectDirectoryAlreadyExists {
+            project_directory: project_directory.to_path_buf(),
+        });
+    };
+    if std::fs::symlink_metadata(project_directory).is_ok() {
+        return Err(ProjectRepositoryRefusal::ProjectDirectoryAlreadyExists {
+            project_directory: project_directory.to_path_buf(),
+        });
+    }
+    std::fs::create_dir_all(parent_directory)?;
+    let unpacking_directory = parent_directory.join(format!(
+        ".{}.unpacking-{}",
+        folder_name.to_string_lossy(),
+        Uuid::new_v4()
+    ));
+    let unpacked = extract_the_project_archive(source_path, &unpacking_directory)
+        .and_then(|()| the_project_a_staged_copy_holds(&unpacking_directory, source))
+        .and_then(|_| give_the_unpacked_project_a_uuid_of_its_own(&unpacking_directory))
+        .and_then(|()| {
+            std::fs::rename(&unpacking_directory, project_directory).map_err(|not_moved| {
+                if std::fs::symlink_metadata(project_directory).is_ok() {
+                    ProjectRepositoryRefusal::ProjectDirectoryAlreadyExists {
+                        project_directory: project_directory.to_path_buf(),
+                    }
+                } else {
+                    not_moved.into()
+                }
+            })
+        });
+    if unpacked.is_err() {
+        let _ = std::fs::remove_dir_all(&unpacking_directory);
+    }
+    unpacked
+}
+
+fn give_the_unpacked_project_a_uuid_of_its_own(
+    unpacked_directory: &Path,
+) -> Result<(), ProjectRepositoryRefusal> {
+    let mut project_file = TatolabProjectFile::read_from_project_directory(unpacked_directory)?;
+    project_file.project = Uuid::new_v4();
+    std::fs::write(
+        unpacked_directory.join(PROJECT_FILE_NAME),
+        project_file.canonical_bytes()?,
+    )?;
+    Ok(())
 }
 
 /// The SHA-256 of each file under `directory` an import carries, by its path inside it.

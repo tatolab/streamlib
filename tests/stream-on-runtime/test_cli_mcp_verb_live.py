@@ -59,6 +59,7 @@ CONTROL_TOOL_NAMES = {
     "redo",
     "run_project",
     "create_project",
+    "import_project",
     "describe_stream_action",
     "cancel_stream_action",
     "stop_project",

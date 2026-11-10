@@ -30,7 +30,8 @@ use crate::project_history_repository::{
 use crate::project_import_copy::{
     PROJECT_IMPORT_STAGING_DIRECTORY, files_an_import_carries, files_edited_since_the_copy,
     refuse_an_import_folder_name, sha256_of_each_file_under, stage_a_copy_of_the_project_source,
-    the_import_folder_in, the_import_folder_named_after, version_of_the_copied_files,
+    the_import_folder_in, the_import_folder_named_after, unpack_a_project_archive_as_a_new_project,
+    version_of_the_copied_files,
 };
 use crate::project_pyproject_import_sources::{
     PYPROJECT_FILE_NAME, pyproject_with_each_import_as_a_uv_path_source,
@@ -201,6 +202,35 @@ impl ProjectRepository {
         author: &ProjectTransactionAuthor,
     ) -> Result<Self, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        Self::commit_the_written_project_as_its_first(project_directory, author, "create_project")
+    }
+
+    /// Unpack the project the `.zip` at `source` holds into `project_directory`, which must not
+    /// exist yet, under a new project UUID, and commit its files as its first commit.
+    pub fn import_from_a_project_archive(
+        project_directory: &Path,
+        source: &str,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        refuse_a_relative_project_directory(project_directory)?;
+        refuse_an_author_without_a_name(author)?;
+        unpack_a_project_archive_as_a_new_project(project_directory, source)?;
+        let committed = Self::commit_the_written_project_as_its_first(
+            project_directory,
+            author,
+            "import_project",
+        );
+        if committed.is_err() {
+            let _ = std::fs::remove_dir_all(project_directory);
+        }
+        committed
+    }
+
+    fn commit_the_written_project_as_its_first(
+        project_directory: &Path,
+        author: &ProjectTransactionAuthor,
+        verb: &str,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
         let repository = Self::open(project_directory)?;
         if repository.history.head_commit()?.is_some() {
             return Err(ProjectRepositoryRefusal::ProjectAlreadyCommitted {
@@ -210,7 +240,7 @@ impl ProjectRepository {
         repository.history.commit_tracked_files(
             &repository.tracked_files(&repository.assets_by_uuid)?,
             author,
-            &format!("create_project {}", repository.project_file.name),
+            &format!("{verb} {}", repository.project_file.name),
         )?;
         Ok(repository)
     }

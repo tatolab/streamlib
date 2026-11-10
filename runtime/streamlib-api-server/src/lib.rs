@@ -9,6 +9,7 @@ mod local_api_served_for_an_engine;
 mod local_api_socket;
 mod loopback_http_listener;
 mod mcp;
+mod mcp_project_archive_tools;
 mod mcp_project_asset_tools;
 mod mcp_project_change_feed;
 mod mcp_project_dependency_tools;
