@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.52](https://github.com/tatolab/streamlib/compare/v0.68.51...v0.68.52) (2026-11-10)
+
+
+### Features
+
+* **scaffold:** a new project starts with one test pattern source ([6e93e44](https://github.com/tatolab/streamlib/commit/6e93e44e27ecbbc0c967218d604c94274edc525f))
+
 ## [0.68.51](https://github.com/tatolab/streamlib/compare/v0.68.50...v0.68.51) (2026-11-10)
 
 
