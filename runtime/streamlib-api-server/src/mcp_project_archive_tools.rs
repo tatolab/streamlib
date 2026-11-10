@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::schemars::JsonSchema;
-use rmcp::{Peer, RoleServer, tool, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use streamlib_project_repository::ProjectRepository;
 use streamlib_runtime_client_contract::local_api_wire_contract::ImportProjectToolResult;
@@ -40,14 +41,14 @@ impl LocalApiMcpServerHandler {
     )]
     async fn import_project(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(ImportProjectToolArguments {
             source,
             project_directory,
             author,
         }): Parameters<ImportProjectToolArguments>,
     ) -> ToolCallAnswer {
-        let author = the_author_of_a_change(author, &peer);
+        let author = the_author_of_a_change(author, &tool_call_request_context);
         let answered = tokio::task::spawn_blocking(move || {
             let imported = ProjectRepository::import_from_a_project_archive(
                 &project_directory,
