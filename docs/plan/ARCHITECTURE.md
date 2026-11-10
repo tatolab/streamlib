@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract, offline-new-projects; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -3758,7 +3758,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722; amended by
   runtime-lives-with-tato-studio: Tato Studio as the runtime's parent]
 
-## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, first-party-package-index; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
+## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, first-party-package-index, offline-new-projects; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
