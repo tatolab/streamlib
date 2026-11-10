@@ -100,6 +100,36 @@ pub fn a_port_free_for_udp_and_tcp_on(host: &str) -> u16 {
     panic!("no port free for both UDP and TCP on {host}");
 }
 
+/// The lowest port of the range [`a_machine_lock_port_free_on_loopback`] picks from.
+const MACHINE_LOCK_PORT_RANGE_START: u32 = 20_000;
+
+/// How many ports the range [`a_machine_lock_port_free_on_loopback`] picks from holds.
+const MACHINE_LOCK_PORT_RANGE_LENGTH: u32 = 20_000;
+
+/// A loopback port free for UDP and TCP that no other test root of this process is given,
+/// below the ephemeral range, so that no connection a test opens while a runtime restarts
+/// is given it as its local port.
+pub fn a_machine_lock_port_free_on_loopback() -> u16 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    /// A prime that shares no factor with the range's length, so successive picks visit every
+    /// port of the range once before repeating one.
+    const STEP_BETWEEN_PICKS: u32 = 7_919;
+    static MACHINE_LOCK_PORTS_GIVEN_IN_THIS_PROCESS: AtomicU32 = AtomicU32::new(0);
+    let offset_of_this_process = std::process::id() % MACHINE_LOCK_PORT_RANGE_LENGTH;
+    for _ in 0..MACHINE_LOCK_PORT_RANGE_LENGTH {
+        let given = MACHINE_LOCK_PORTS_GIVEN_IN_THIS_PROCESS.fetch_add(1, Ordering::Relaxed);
+        let port = MACHINE_LOCK_PORT_RANGE_START
+            + (offset_of_this_process
+                + given % MACHINE_LOCK_PORT_RANGE_LENGTH * STEP_BETWEEN_PICKS)
+                % MACHINE_LOCK_PORT_RANGE_LENGTH;
+        let port = u16::try_from(port).expect("the range lies below 65536");
+        if the_port_is_free_for_udp_and_tcp_on("127.0.0.1", port) {
+            return port;
+        }
+    }
+    panic!("no loopback port below the ephemeral range is free for a machine lock");
+}
+
 /// Whether both UDP and TCP bind `port` on `host`.
 pub fn the_port_is_free_for_udp_and_tcp_on(host: &str, port: u16) -> bool {
     std::net::TcpListener::bind(format!("{host}:{port}")).is_ok()
@@ -148,7 +178,7 @@ impl TatolabTestMachineRoot {
         Self {
             machine_root,
             loopback_http_port_on_macos: cfg!(target_os = "macos")
-                .then(|| a_port_free_for_udp_and_tcp_on("127.0.0.1")),
+                .then(a_machine_lock_port_free_on_loopback),
         }
     }
 

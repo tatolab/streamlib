@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::schemars::JsonSchema;
-use rmcp::{Peer, RoleServer, tool, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib_project_repository::{
@@ -285,7 +286,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn import_asset(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(ImportAssetToolArguments {
             project_directory,
             source,
@@ -305,7 +306,7 @@ impl LocalApiMcpServerHandler {
         self.one_asset_change_as_a_transaction(
             "import_asset",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             change,
         )
@@ -317,7 +318,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn rename_asset(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RenameAssetToolArguments {
             project_directory,
             asset,
@@ -329,7 +330,7 @@ impl LocalApiMcpServerHandler {
         self.one_asset_change_as_a_transaction(
             "rename_asset",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetChangeRequest::RenameAsset {
                 asset: the_asset_a_call_names("rename_asset", &asset)?,
@@ -344,7 +345,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn move_asset(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(MoveAssetToolArguments {
             project_directory,
             asset,
@@ -356,7 +357,7 @@ impl LocalApiMcpServerHandler {
         self.one_asset_change_as_a_transaction(
             "move_asset",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetChangeRequest::MoveAsset {
                 asset: the_asset_a_call_names("move_asset", &asset)?,
@@ -371,7 +372,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn delete_asset(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(DeleteAssetToolArguments {
             project_directory,
             asset,
@@ -383,7 +384,7 @@ impl LocalApiMcpServerHandler {
             .an_asset_change_applied_as_a_transaction(
                 "delete_asset",
                 project_directory,
-                the_author_of_a_change(author, &peer),
+                the_author_of_a_change(author, &tool_call_request_context),
                 idempotency_key,
                 ProjectAssetChangeRequest::DeleteAsset {
                     asset: the_asset_a_call_names("delete_asset", &asset)?,
@@ -414,7 +415,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_asset_settings(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetAssetSettingsToolArguments {
             project_directory,
             asset,
@@ -426,7 +427,7 @@ impl LocalApiMcpServerHandler {
         self.one_asset_change_as_a_transaction(
             "set_asset_settings",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             ProjectAssetChangeRequest::SetAssetSettings {
                 asset: the_asset_a_call_names("set_asset_settings", &asset)?,
@@ -554,10 +555,11 @@ impl LocalApiMcpServerHandler {
     }
 }
 
-/// The author a change names: the caller's own, or the agent its MCP client is.
+/// The author a change names: the caller's own, or the agent the request's MCP client names
+/// itself — in the request's `_meta` `clientInfo`, or else its `initialize` handshake.
 pub(crate) fn the_author_of_a_change(
     author: Option<ProjectTransactionAuthorToolArgument>,
-    peer: &Peer<RoleServer>,
+    tool_call_request_context: &RequestContext<RoleServer>,
 ) -> ProjectTransactionAuthor {
     match author {
         Some(ProjectTransactionAuthorToolArgument { kind, name }) => ProjectTransactionAuthor {
@@ -573,9 +575,9 @@ pub(crate) fn the_author_of_a_change(
         },
         None => ProjectTransactionAuthor {
             kind: ProjectTransactionAuthorKind::Agent,
-            name: peer
-                .peer_info()
-                .map(|client| client.client_info.name.clone())
+            name: tool_call_request_context
+                .client_info()
+                .map(|client| client.name)
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or_else(|| AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT.to_owned()),
         },

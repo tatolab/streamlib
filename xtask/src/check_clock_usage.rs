@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bans wall-clock reads outside the surfaces the plan permits them on: three
-//! observability surfaces (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`;
-//! rationale in `docs/decisions/one-monotonic-clock.md`).
+//! Bans wall-clock reads outside the surfaces the plan permits them on: the
+//! observability surfaces and a project change feed's `refused_at`
+//! (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`; rationale in
+//! `docs/decisions/one-monotonic-clock.md`).
 //!
 //! Monotonic is the only legal clock on the data plane. A wall-clock value and a
 //! media timestamp share a unit and are different quantities, so a subtraction
@@ -70,6 +71,7 @@ pub enum PermittedWallClockSurfaceKind {
     LogRecordHostTimestamp,
     LogRecordSourceTimestamp,
     LogFileName,
+    ProjectChangeFeedRefusedAt,
 }
 
 impl PermittedWallClockSurfaceKind {
@@ -77,6 +79,7 @@ impl PermittedWallClockSurfaceKind {
         PermittedWallClockSurfaceKind::LogRecordHostTimestamp,
         PermittedWallClockSurfaceKind::LogRecordSourceTimestamp,
         PermittedWallClockSurfaceKind::LogFileName,
+        PermittedWallClockSurfaceKind::ProjectChangeFeedRefusedAt,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -84,6 +87,9 @@ impl PermittedWallClockSurfaceKind {
             PermittedWallClockSurfaceKind::LogRecordHostTimestamp => "log record `host_ts`",
             PermittedWallClockSurfaceKind::LogRecordSourceTimestamp => "log record `source_ts`",
             PermittedWallClockSurfaceKind::LogFileName => "log file naming",
+            PermittedWallClockSurfaceKind::ProjectChangeFeedRefusedAt => {
+                "a project change feed's `refused_at`"
+            }
         }
     }
 }
@@ -116,6 +122,11 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         path: "runtime/streamlib-engine/src/core/logging/project_log_route.rs",
         surface: PermittedWallClockSurfaceKind::LogFileName,
         reason: "mints `started_at_millis`, which humans read off the runtime's own JSONL file name",
+    },
+    PermittedWallClockSurface {
+        path: "runtime/streamlib-api-server/src/mcp_project_change_feed.rs",
+        surface: PermittedWallClockSurfaceKind::ProjectChangeFeedRefusedAt,
+        reason: "stamps when an action was refused, in the same UTC a transaction's `applied_at` reads off its commit",
     },
 ];
 

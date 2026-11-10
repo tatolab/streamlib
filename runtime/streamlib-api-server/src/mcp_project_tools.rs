@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::schemars::JsonSchema;
-use rmcp::{Peer, RoleServer, tool, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use streamlib_project_repository::{
     AppliedProjectTransaction, ProjectOperation, ProjectRepository, ProjectRepositoryRefusal,
@@ -104,7 +105,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn rename_project(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RenameProjectToolArguments {
             project_directory,
             name,
@@ -115,7 +116,7 @@ impl LocalApiMcpServerHandler {
         self.one_project_settings_change_as_a_transaction(
             "rename_project",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             Box::new(
                 move |project_repository| ProjectSettingsOperation::SetProjectName {
@@ -132,7 +133,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_project_description(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetProjectDescriptionToolArguments {
             project_directory,
             description,
@@ -144,7 +145,7 @@ impl LocalApiMcpServerHandler {
         self.one_project_settings_change_as_a_transaction(
             "set_project_description",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             Box::new(
                 move |project_repository| ProjectSettingsOperation::SetProjectDescription {
@@ -161,7 +162,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_project_cover(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetProjectCoverToolArguments {
             project_directory,
             cover,
@@ -181,7 +182,7 @@ impl LocalApiMcpServerHandler {
         self.one_project_settings_change_as_a_transaction(
             "set_project_cover",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
             Box::new(
                 move |project_repository| ProjectSettingsOperation::SetProjectCover {
@@ -198,14 +199,14 @@ impl LocalApiMcpServerHandler {
     )]
     async fn duplicate_project(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(DuplicateProjectToolArguments {
             project_directory,
             into,
             author,
         }): Parameters<DuplicateProjectToolArguments>,
     ) -> ToolCallAnswer {
-        let author = the_author_of_a_change(author, &peer);
+        let author = the_author_of_a_change(author, &tool_call_request_context);
         let duplicated = self
             .a_project_repository_call_off_the_async_runtime(
                 "duplicate_project",

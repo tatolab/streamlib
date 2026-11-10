@@ -29,9 +29,13 @@
   stays loaded, its processors hold their state, and its graph edits compile on resume. Pause is
   live state and is not recorded, so a runtime restart re-loads the project running (session,
   2026-11-09: pause is not recorded because the plan records only what a restart must restore).
-  A `tatolab dev` reload of a paused project loads it paused, and it stays paused until it is
-  resumed (owner, 2026-11-10).
 - `list_streams` lists a paused stream as `paused`.
+- A stream a `run_project` starts while its project is paused starts paused, so a `tatolab dev`
+  re-load of a paused project stays paused; the project stays paused until `resume_project`,
+  `stop_project` or `remove_project` (owner, 2026-11-10). Pause and resume answer at once and
+  are not queued, so a pause lands while a long run is still making the venv.
+- `tatolab pause [--dir DIR]` and `tatolab resume [--dir DIR]` act on the working directory's
+  project, as `tatolab stop` does.
 
 ## MODIFIED
 

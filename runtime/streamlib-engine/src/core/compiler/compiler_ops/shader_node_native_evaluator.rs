@@ -1,30 +1,38 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The native evaluator of a shader node: its Slang function compiled into a
-//! compute kernel and run in this process on each frame its first Image input
-//! takes, writing one Image frame from the node's own output pool.
+//! The native evaluator of a shader node island: each kernel the split rule
+//! cuts the island into, compiled from its members' Slang and run in this
+//! process in one submission on each frame the island's leading Image input
+//! takes, writing one Image frame from the evaluating node's own output pool.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::shader_node_island::{
+    ShaderNodeIslandHostedHereComponent, pin_value_of_a_shader_node_input,
+};
+use super::shader_node_island_program::{
+    ShaderNodeIslandKernel, ShaderNodeIslandMemberInput, ShaderNodeIslandProgram,
+    ShaderNodeKernelImageArgument,
+};
 use super::shader_node_program::{
-    SHADER_NODE_KERNEL_ENTRY_POINT, SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE,
-    SHADER_NODE_OUTPUT_TEXTURE_FORMAT, ShaderNodeImageInputBacking, ShaderNodeImageInputExtent,
-    ShaderNodeProgram, a_shader_node_takes_an_image_of,
+    SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE, SHADER_NODE_OUTPUT_TEXTURE_FORMAT,
+    ShaderNodeImageInputBacking, ShaderNodeImageInputExtent, ShaderNodeProgram,
+    a_shader_node_takes_an_image_of,
 };
 use super::subprocess_escalate::publish_the_layouts_a_dispatch_left_its_bound_textures_in;
 use crate::core::context::surface_backing_resolution::ResolvedSurfaceBacking;
 use crate::core::context::{
     BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding, GpuContext,
-    ProcessorOutputPixelBufferPoolOfOneNativeNode, RuntimeContextFullAccess,
-    RuntimeContextLimitedAccess, SurfaceBoundKernelBindingResource,
+    NativeNodeOutputPixelBufferFrame, ProcessorOutputPixelBufferPoolOfOneNativeNode,
+    RuntimeContextFullAccess, RuntimeContextLimitedAccess, SurfaceBoundKernelBindingResource,
     SurfaceClaimedAgainstProducerReuse, TextureRegistration,
 };
 use crate::core::descriptors::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::ProcessorNode;
+use crate::core::graph::{GraphNodeWithComponents, ProcessorNode, ShaderNodeFusedGroupOfAnIsland};
 use crate::core::processors::DynGeneratedProcessor;
 use crate::core::rhi::{ShaderCompilationTargetStage, StorageBuffer, TextureFormat};
 use crate::iceoryx2::{
@@ -35,9 +43,9 @@ use streamlib_ipc_types::{
     DataChannelPayloadDescriptorKind, ImageFrameDescriptorBody,
 };
 
-/// The newest Image frame one Image input of a shader node has taken.
+/// The newest Image frame one input port of the evaluator has taken.
 #[derive(Clone, Copy)]
-struct ImageFrameTakenByAShaderNodeInput {
+struct ImageFrameTakenAtAnInputPort {
     image: ImageFrameDescriptorBody,
     timestamp_ns: i64,
     group_boundary: MessageGroupBoundary,
@@ -54,200 +62,238 @@ struct ImageInputResolvedForOneEvaluation {
     _claim_against_producer_reuse: SurfaceClaimedAgainstProducerReuse,
 }
 
-/// The processor a shader node runs as in this process.
+/// The processor a shader node island runs as in this process, on the node
+/// whose Image leaves the island.
 pub(crate) struct ShaderNodeNativeEvaluatorProcessor {
     node_name: String,
     descriptor: ProcessorDescriptor,
-    program: ShaderNodeProgram,
+    island: ShaderNodeIslandProgram,
+    fused_group: Option<Arc<ShaderNodeFusedGroupOfAnIsland>>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
     output_pixel_buffer_pool: Option<ProcessorOutputPixelBufferPoolOfOneNativeNode>,
-    kernels_by_image_input_backings:
-        HashMap<Vec<ShaderNodeImageInputBacking>, Arc<crate::vulkan::rhi::VulkanComputeKernel>>,
-    newest_image_frame_by_image_input: Vec<Option<ImageFrameTakenByAShaderNodeInput>>,
-    value_by_float_input: Vec<f32>,
+    stored_pixel_buffer_pool_by_member:
+        HashMap<usize, ProcessorOutputPixelBufferPoolOfOneNativeNode>,
+    kernels_by_slang_source: HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>,
+    newest_image_frame_by_input_port: HashMap<String, ImageFrameTakenAtAnInputPort>,
+    value_by_float_input_port: HashMap<String, f32>,
     refusal_last_logged: Option<String>,
 }
 
 impl ShaderNodeNativeEvaluatorProcessor {
-    /// The evaluator of shader node `node`, running `program`; each float input
-    /// starts at its pin value, else its declared default, else zero.
+    /// The evaluator of the island shader node `node` hosts, or of `node`
+    /// alone running `program` when it hosts none; each float input starts at
+    /// its pin value, else its declared default, else zero.
     pub(crate) fn for_the_node(
         node: &ProcessorNode,
         descriptor: ProcessorDescriptor,
         program: ShaderNodeProgram,
     ) -> Self {
-        let value_by_float_input = program
-            .float_input_ports()
-            .map(|port| {
-                node.pins
-                    .get(port)
-                    .or_else(|| {
-                        node.ports
-                            .inputs
-                            .iter()
-                            .find(|input| input.name == port)
-                            .and_then(|input| input.pin_default.as_ref())
-                    })
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0) as f32
+        let (island, fused_group) = match node.get::<ShaderNodeIslandHostedHereComponent>() {
+            Some(hosted) => (hosted.island.clone(), Some(Arc::clone(&hosted.fused_group))),
+            None => (
+                ShaderNodeIslandProgram::of_one_node(node.display_name.clone(), program, |port| {
+                    pin_value_of_a_shader_node_input(node, port)
+                }),
+                None,
+            ),
+        };
+        let value_by_float_input_port = island
+            .members()
+            .iter()
+            .flat_map(|member| &member.inputs)
+            .filter_map(|input| match input {
+                ShaderNodeIslandMemberInput::FloatReadAt {
+                    input_port,
+                    value_until_one_is_read,
+                } => Some((input_port.clone(), *value_until_one_is_read)),
+                _ => None,
             })
             .collect();
         Self {
             node_name: node.id.to_string(),
-            newest_image_frame_by_image_input: vec![None; program.image_input_ports().count()],
             descriptor,
-            program,
+            island,
+            fused_group,
             output_writer: None,
             input_mailboxes: None,
             output_pixel_buffer_pool: None,
-            kernels_by_image_input_backings: HashMap::new(),
-            value_by_float_input,
+            stored_pixel_buffer_pool_by_member: HashMap::new(),
+            kernels_by_slang_source: HashMap::new(),
+            newest_image_frame_by_input_port: HashMap::new(),
+            value_by_float_input_port,
             refusal_last_logged: None,
         }
     }
 
-    /// Take every message waiting at the inputs, answering whether the first
-    /// Image input took a new frame.
+    /// Each Image input port the island reads, with the member and its own
+    /// port reading it.
+    fn image_input_ports_read(&self) -> Vec<(String, String, String)> {
+        self.island
+            .members()
+            .iter()
+            .flat_map(|member| {
+                member.inputs.iter().zip(&member.program.inputs).filter_map(
+                    move |(input, signature_input)| match input {
+                        ShaderNodeIslandMemberInput::ImageReadAt(input_port) => Some((
+                            input_port.clone(),
+                            member.node_name.clone(),
+                            signature_input.port.clone(),
+                        )),
+                        _ => None,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Take every message waiting at the inputs, answering whether the input
+    /// port each evaluation waits on took a new frame.
     fn take_every_waiting_message(&mut self) -> Result<bool> {
         let Some(input_mailboxes) = self.input_mailboxes.as_ref() else {
             return Ok(false);
         };
-        let mut the_first_image_input_took_a_frame = false;
-        let image_input_ports: Vec<String> = self
-            .program
-            .image_input_ports()
-            .map(str::to_string)
-            .collect();
-        for (image_input_index, port) in image_input_ports.iter().enumerate() {
-            while let Some(message) = input_mailboxes.read_raw(port)? {
+        let the_input_port_each_evaluation_waits_on = self
+            .island
+            .the_input_port_each_evaluation_waits_on()
+            .to_string();
+        let mut the_waited_on_port_took_a_frame = false;
+        for (input_port, _, _) in self.image_input_ports_read() {
+            if !input_mailboxes.has_port(&input_port) {
+                continue;
+            }
+            while let Some(message) = input_mailboxes.read_raw(&input_port)? {
                 if message.payload_descriptor.kind
                     != DataChannelPayloadDescriptorKind::ImageFrame as u32
                 {
                     continue;
                 }
-                self.newest_image_frame_by_image_input[image_input_index] =
-                    Some(ImageFrameTakenByAShaderNodeInput {
+                self.newest_image_frame_by_input_port.insert(
+                    input_port.clone(),
+                    ImageFrameTakenAtAnInputPort {
                         image: ImageFrameDescriptorBody::from_descriptor_body(
                             &message.payload_descriptor.body,
                         ),
                         timestamp_ns: message.timestamp_ns,
                         group_boundary: message.group_boundary,
-                    });
-                the_first_image_input_took_a_frame |= image_input_index == 0;
+                    },
+                );
+                the_waited_on_port_took_a_frame |=
+                    input_port == the_input_port_each_evaluation_waits_on;
             }
         }
-        let float_input_ports: Vec<String> = self
-            .program
-            .float_input_ports()
-            .map(str::to_string)
-            .collect();
-        for (float_index, port) in float_input_ports.iter().enumerate() {
-            if !input_mailboxes.has_port(port) {
+        let float_input_ports: Vec<String> =
+            self.value_by_float_input_port.keys().cloned().collect();
+        for input_port in float_input_ports {
+            if !input_mailboxes.has_port(&input_port) {
                 continue;
             }
-            while let Some(message) = input_mailboxes.read_raw(port)? {
+            while let Some(message) = input_mailboxes.read_raw(&input_port)? {
                 if let Some(latest_value) = last_sample_of_the_first_channel(
                     message.payload_descriptor,
                     message.payload.bytes(),
                 ) {
-                    self.value_by_float_input[float_index] = latest_value as f32;
+                    self.value_by_float_input_port
+                        .insert(input_port.clone(), latest_value as f32);
                 }
             }
         }
-        Ok(the_first_image_input_took_a_frame)
+        Ok(the_waited_on_port_took_a_frame)
     }
 
-    /// Run the kernel over the newest frame of every Image input, writing one
-    /// Image frame stamped with the first input's frame.
+    /// Run every kernel of the island over the newest frame at each Image
+    /// input port in one submission, writing one Image frame stamped with the
+    /// frame each evaluation waits on.
     fn evaluate_the_newest_frames(&mut self, gpu: &GpuContext) -> Result<()> {
-        let image_frames: Vec<ImageFrameTakenByAShaderNodeInput> = match self
-            .newest_image_frame_by_image_input
-            .iter()
-            .copied()
-            .collect::<Option<Vec<_>>>()
-        {
-            Some(image_frames) => image_frames,
-            None => return Ok(()),
-        };
-        let image_input_ports: Vec<String> = self
-            .program
-            .image_input_ports()
-            .map(str::to_string)
-            .collect();
-        let resolved_inputs = image_frames
-            .iter()
-            .zip(&image_input_ports)
-            .map(|(image_frame, port)| {
-                resolve_one_image_input(gpu, &self.node_name, port, &image_frame.image)
+        let mut resolved_inputs: HashMap<String, ImageInputResolvedForOneEvaluation> =
+            HashMap::new();
+        for (input_port, member_name, member_port) in self.image_input_ports_read() {
+            let Some(image_frame) = self.newest_image_frame_by_input_port.get(&input_port) else {
+                return Ok(());
+            };
+            let resolved =
+                resolve_one_image_input(gpu, &member_name, &member_port, &image_frame.image)?;
+            resolved_inputs.insert(input_port, resolved);
+        }
+        let waited_on_frame = *self
+            .newest_image_frame_by_input_port
+            .get(self.island.the_input_port_each_evaluation_waits_on())
+            .ok_or_else(|| {
+                Error::Runtime(format!(
+                    "shader node `{}` evaluated with no frame",
+                    self.node_name
+                ))
+            })?;
+        let output_extent_of_each_member = self.island.output_extent_of_each_member(|input_port| {
+            resolved_inputs.get(input_port).map_or((0, 0), |resolved| {
+                (resolved.extent.width, resolved.extent.height)
             })
-            .collect::<Result<Vec<_>>>()?;
-        let image_input_backings: Vec<ShaderNodeImageInputBacking> =
-            resolved_inputs.iter().map(|input| input.backing).collect();
-        let kernel = self.kernel_for(gpu, &image_input_backings)?;
-
-        let first_image = image_frames[0].image;
-        let (output_width, output_height) = (first_image.width, first_image.height);
-        let output_pixel_buffer_pool = self.output_pixel_buffer_pool.as_mut().ok_or_else(|| {
-            Error::Runtime(format!(
-                "shader node `{}` ran before its setup",
-                self.node_name
-            ))
-        })?;
+        });
+        let kernels = self
+            .island
+            .kernels_under_the_split_rule(&output_extent_of_each_member);
         let output_pixel_format = SHADER_NODE_OUTPUT_TEXTURE_FORMAT
             .host_view_pixel_format()
             .ok_or_else(|| {
                 Error::Configuration("a shader node's output format has no pixel buffer".into())
             })?;
-        let output_frame = output_pixel_buffer_pool.acquire_the_next_output_pixel_buffer(
-            output_width,
-            output_height,
-            output_pixel_format,
-        )?;
-        let output_slot = output_frame.gpu_pool_slot_frame.ok_or_else(|| {
-            Error::GpuError(format!(
-                "shader node `{}`: output pixel buffer {} leases no claim-table row, so no reader \
-                 could claim it",
-                self.node_name, output_frame.published_frame_id
-            ))
-        })?;
 
-        let mut bindings = vec![BatchedComputeKernelDispatchBinding {
-            binding: 0,
-            surface_bound_resource: SurfaceBoundKernelBindingResource::StorageBuffer(
-                StorageBuffer::from_host_vulkan_buffer(Arc::clone(
-                    &output_frame.pixel_buffer.buffer_ref().inner,
-                )),
-            ),
-        }];
-        bindings.extend(
-            resolved_inputs
-                .iter()
-                .enumerate()
-                .map(
-                    |(image_input_index, input)| BatchedComputeKernelDispatchBinding {
-                        binding: image_input_index as u32 + 1,
-                        surface_bound_resource: input.surface_bound_resource.clone(),
-                    },
-                ),
-        );
-        let extents: Vec<ShaderNodeImageInputExtent> =
-            resolved_inputs.iter().map(|input| input.extent).collect();
-        let dispatch = BatchedComputeKernelDispatch {
-            kernel,
-            bindings,
-            push_constants: self.program.push_constants(
-                (output_width, output_height),
-                &extents,
-                &self.value_by_float_input,
-            ),
-            group_count_x: output_width.div_ceil(SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE),
-            group_count_y: output_height.div_ceil(SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE),
-            group_count_z: 1,
-        };
-        gpu.dispatch_compute_kernel_batch(std::slice::from_ref(&dispatch))?;
+        let island_output_member = self.island.members().len() - 1;
+        let mut written_pixel_buffer_by_member: HashMap<usize, NativeNodeOutputPixelBufferFrame> =
+            HashMap::new();
+        for kernel in &kernels {
+            let member = kernel.output_member();
+            let (width, height) = output_extent_of_each_member[member];
+            let pool = if member == island_output_member {
+                self.output_pixel_buffer_pool.as_mut().ok_or_else(|| {
+                    Error::Runtime(format!(
+                        "shader node `{}` ran before its setup",
+                        self.node_name
+                    ))
+                })?
+            } else {
+                let node_name = &self.node_name;
+                self.stored_pixel_buffer_pool_by_member
+                    .entry(member)
+                    .or_insert_with(|| {
+                        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node(&format!(
+                            "{node_name}-stored-member-{member}"
+                        ))
+                    })
+            };
+            let pixel_buffer =
+                pool.acquire_the_next_output_pixel_buffer(width, height, output_pixel_format)?;
+            written_pixel_buffer_by_member.insert(member, pixel_buffer);
+        }
+
+        let mut dispatches = Vec::with_capacity(kernels.len());
+        for (kernel_index, kernel) in kernels.iter().enumerate() {
+            dispatches.push(self.dispatch_of_one_kernel(
+                gpu,
+                kernel_index,
+                kernel,
+                &resolved_inputs,
+                &written_pixel_buffer_by_member,
+                &output_extent_of_each_member,
+            )?);
+        }
+        gpu.dispatch_compute_kernel_batch(&dispatches)?;
+        if let Some(fused_group) = &self.fused_group {
+            fused_group.note_an_evaluation_of_the_kernels(
+                kernels
+                    .iter()
+                    .map(|kernel| {
+                        kernel
+                            .members
+                            .iter()
+                            .map(|&member| self.island.members()[member].node_name.clone())
+                            .collect()
+                    })
+                    .collect(),
+            );
+        }
         let sampled_textures: Vec<(String, TextureRegistration)> = resolved_inputs
-            .iter()
+            .values()
             .filter_map(|input| match &input.surface_bound_resource {
                 SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
                     Some((input.surface_id.clone(), registration.clone()))
@@ -258,6 +304,22 @@ impl ShaderNodeNativeEvaluatorProcessor {
         publish_the_layouts_a_dispatch_left_its_bound_textures_in(gpu, &sampled_textures);
         drop(resolved_inputs);
 
+        let output_frame = written_pixel_buffer_by_member
+            .remove(&island_output_member)
+            .ok_or_else(|| {
+                Error::Runtime(format!(
+                    "shader node `{}`: no kernel wrote the island's output",
+                    self.node_name
+                ))
+            })?;
+        let output_slot = output_frame.gpu_pool_slot_frame.ok_or_else(|| {
+            Error::GpuError(format!(
+                "shader node `{}`: output pixel buffer {} leases no claim-table row, so no reader \
+                 could claim it",
+                self.node_name, output_frame.published_frame_id
+            ))
+        })?;
+        let (output_width, output_height) = output_extent_of_each_member[island_output_member];
         let output_writer = self.output_writer.as_ref().ok_or_else(|| {
             Error::Runtime(format!(
                 "shader node `{}` has no output writer",
@@ -265,55 +327,168 @@ impl ShaderNodeNativeEvaluatorProcessor {
             ))
         })?;
         output_writer.write_bytes_described_by(
-            &self.program.output_port,
+            &self.island.output_member().program.output_port,
             &[],
-            image_frames[0].timestamp_ns,
-            image_frames[0].group_boundary,
+            waited_on_frame.timestamp_ns,
+            waited_on_frame.group_boundary,
             DataChannelPayloadDescriptor::image_frame(ImageFrameDescriptorBody {
                 slot: output_slot,
                 width: output_width,
                 height: output_height,
                 format: SHADER_NODE_OUTPUT_TEXTURE_FORMAT as u32,
-                colour: first_image.colour,
+                colour: waited_on_frame.image.colour,
             }),
         )
+    }
+
+    fn dispatch_of_one_kernel(
+        &mut self,
+        gpu: &GpuContext,
+        kernel_index: usize,
+        kernel: &ShaderNodeIslandKernel,
+        resolved_inputs: &HashMap<String, ImageInputResolvedForOneEvaluation>,
+        written_pixel_buffer_by_member: &HashMap<usize, NativeNodeOutputPixelBufferFrame>,
+        output_extent_of_each_member: &[(u32, u32)],
+    ) -> Result<BatchedComputeKernelDispatch> {
+        let pixel_buffer_written_for = |member: usize| {
+            written_pixel_buffer_by_member.get(&member).ok_or_else(|| {
+                Error::Runtime(format!(
+                    "shader node `{}`: member {member} has no pixel buffer to write",
+                    self.node_name
+                ))
+            })
+        };
+        let mut backings = Vec::with_capacity(kernel.image_arguments.len());
+        let mut extents = Vec::with_capacity(kernel.image_arguments.len());
+        let mut bindings = vec![BatchedComputeKernelDispatchBinding {
+            binding: 0,
+            surface_bound_resource: SurfaceBoundKernelBindingResource::StorageBuffer(
+                StorageBuffer::from_host_vulkan_buffer(Arc::clone(
+                    &pixel_buffer_written_for(kernel.output_member())?
+                        .pixel_buffer
+                        .buffer_ref()
+                        .inner,
+                )),
+            ),
+        }];
+        for (image_argument_index, image_argument) in kernel.image_arguments.iter().enumerate() {
+            let (backing, extent, surface_bound_resource) = match image_argument {
+                ShaderNodeKernelImageArgument::ReadAt(input_port) => {
+                    let resolved = resolved_inputs.get(input_port).ok_or_else(|| {
+                        Error::Runtime(format!(
+                            "shader node `{}`: input port `{input_port}` has no frame",
+                            self.node_name
+                        ))
+                    })?;
+                    (
+                        resolved.backing,
+                        resolved.extent,
+                        resolved.surface_bound_resource.clone(),
+                    )
+                }
+                ShaderNodeKernelImageArgument::StoredOutputOf(member) => {
+                    let (width, height) = output_extent_of_each_member[*member];
+                    (
+                        ShaderNodeImageInputBacking::Rgba8PixelBuffer,
+                        ShaderNodeImageInputExtent {
+                            width,
+                            height,
+                            row_pitch_in_pixels: width,
+                        },
+                        SurfaceBoundKernelBindingResource::StorageBuffer(
+                            StorageBuffer::from_host_vulkan_buffer(Arc::clone(
+                                &pixel_buffer_written_for(*member)?
+                                    .pixel_buffer
+                                    .buffer_ref()
+                                    .inner,
+                            )),
+                        ),
+                    )
+                }
+            };
+            backings.push(backing);
+            extents.push(extent);
+            bindings.push(BatchedComputeKernelDispatchBinding {
+                binding: image_argument_index as u32 + 1,
+                surface_bound_resource,
+            });
+        }
+        let float_values: Vec<f32> = kernel
+            .float_arguments()
+            .iter()
+            .map(|float_argument| {
+                let input_port = self.island.members()[float_argument.member]
+                    .inputs
+                    .iter()
+                    .filter_map(|input| match input {
+                        ShaderNodeIslandMemberInput::FloatReadAt { input_port, .. } => {
+                            Some(input_port)
+                        }
+                        _ => None,
+                    })
+                    .nth(float_argument.float_index);
+                input_port
+                    .and_then(|input_port| self.value_by_float_input_port.get(input_port))
+                    .copied()
+                    .unwrap_or(0.0)
+            })
+            .collect();
+        let (output_width, output_height) = output_extent_of_each_member[kernel.output_member()];
+        Ok(BatchedComputeKernelDispatch {
+            kernel: self.kernel_for(gpu, kernel_index, kernel, &backings)?,
+            bindings,
+            push_constants: kernel.push_constants(
+                (output_width, output_height),
+                &extents,
+                &float_values,
+            ),
+            group_count_x: output_width.div_ceil(SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE),
+            group_count_y: output_height.div_ceil(SHADER_NODE_KERNEL_WORKGROUP_TILE_SIZE),
+            group_count_z: 1,
+        })
     }
 
     fn kernel_for(
         &mut self,
         gpu: &GpuContext,
-        image_input_backings: &[ShaderNodeImageInputBacking],
+        kernel_index: usize,
+        kernel: &ShaderNodeIslandKernel,
+        image_argument_backings: &[ShaderNodeImageInputBacking],
     ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
-        if let Some(kernel) = self
-            .kernels_by_image_input_backings
-            .get(image_input_backings)
-        {
-            return Ok(Arc::clone(kernel));
+        let slang_source =
+            kernel.compute_kernel_slang_source(&self.island, kernel_index, image_argument_backings);
+        if let Some(compiled) = self.kernels_by_slang_source.get(&slang_source) {
+            return Ok(Arc::clone(compiled));
         }
+        let entry_point = ShaderNodeIslandKernel::entry_point(kernel_index);
+        let member_names: Vec<&str> = kernel
+            .members
+            .iter()
+            .map(|&member| self.island.members()[member].node_name.as_str())
+            .collect();
         let spirv = gpu
             .compile_slang_shader_source_to_spirv(
-                &self
-                    .program
-                    .compute_kernel_slang_source(image_input_backings),
+                &slang_source,
                 ShaderCompilationTargetStage::Compute,
-                SHADER_NODE_KERNEL_ENTRY_POINT,
-                &self.program.function_name,
+                &entry_point,
+                &entry_point,
             )
             .map_err(|refusal| {
                 Error::GpuError(format!(
-                    "shader node `{}`: the Slang source of `{}` does not compile: {refusal}",
-                    self.node_name, self.program.function_name
+                    "shader node `{}`: the Slang source of {} does not compile: {refusal}",
+                    self.node_name,
+                    member_names.join(", ")
                 ))
             })?;
-        let (_, kernel) = gpu.create_or_reuse_compute_kernel(
+        let (_, compiled) = gpu.create_or_reuse_compute_kernel(
             &spirv,
-            self.program.push_constant_byte_len() as u32,
-            &ShaderNodeProgram::declared_bindings(image_input_backings),
-            SHADER_NODE_KERNEL_ENTRY_POINT,
+            kernel.push_constant_byte_len() as u32,
+            &ShaderNodeIslandKernel::declared_bindings(image_argument_backings),
+            &entry_point,
         )?;
-        self.kernels_by_image_input_backings
-            .insert(image_input_backings.to_vec(), Arc::clone(&kernel));
-        Ok(kernel)
+        self.kernels_by_slang_source
+            .insert(slang_source, Arc::clone(&compiled));
+        Ok(compiled)
     }
 
     fn log_a_refusal_once_until_it_changes(&mut self, refusal: &Error) {
@@ -448,7 +623,8 @@ impl DynGeneratedProcessor for ShaderNodeNativeEvaluatorProcessor {
 
     fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.output_pixel_buffer_pool = None;
-        self.kernels_by_image_input_backings.clear();
+        self.stored_pixel_buffer_pool_by_member.clear();
+        self.kernels_by_slang_source.clear();
         Ok(())
     }
 

@@ -307,6 +307,64 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
     runtime.interrupt_and_expect_a_clean_exit();
 }
 
+/// A project's run log is written under its `.tatolab/logs/`, `logs` reads it
+/// back, and nothing the runtime keeps for the project lands in a `.streamlib/`.
+#[test]
+fn a_projects_run_log_is_kept_under_its_tatolab_folder_and_no_streamlib_folder_is_made() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let front = a_stream_record(
+        "front",
+        a_native_only_stream_graph("front"),
+        &machine_root.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        false,
+    );
+    machine_root.stream_records().write(&front).unwrap();
+
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
+        machine_root.tatolabd_command_with_no_vulkan_driver(&runtime_unit.tatolabd),
+    );
+    let reloads_queued = the_reloads_queued_at_the_start(&runtime.standard_error());
+    assert_eq!(reloads_queued.len(), 1, "{}", runtime.standard_error());
+    the_stream_action_once_ended(&machine_root.local_api_socket_path(), &reloads_queued[0]);
+    let logged = call_a_tool_over_the_local_api(
+        &machine_root.local_api_socket_path(),
+        "logs",
+        serde_json::json!({"project_directory": machine_root.project_directory()}),
+    )
+    .json();
+    runtime.interrupt_and_expect_a_clean_exit();
+
+    let project_log = machine_root
+        .project_directory()
+        .join(".tatolab")
+        .join("logs")
+        .join("project.jsonl");
+    assert!(
+        project_log.is_file(),
+        "{} was not written",
+        project_log.display()
+    );
+    let logged_records = logged["records"]
+        .as_array()
+        .expect("`logs` answers records");
+    assert!(
+        logged_records
+            .iter()
+            .any(|record| record["stream"] == front.stream_id.as_str()),
+        "{logged}"
+    );
+    assert!(
+        !machine_root.project_directory().join(".streamlib").exists(),
+        "the runtime made {}",
+        machine_root
+            .project_directory()
+            .join(".streamlib")
+            .display()
+    );
+}
+
 /// A recorded stream's record round-trips through the runtime: it stays
 /// owner-only through a runtime, is read again by the next runtime on the
 /// machine, and `remove_project` forgets it.

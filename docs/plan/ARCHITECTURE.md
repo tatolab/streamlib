@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract, project-run-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -162,8 +162,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   function as `module:function`), its display name, the interpreter, `stopped` or `failed` and
   why, its crash count, the owner's exposure rulings and the pending mark of a queued stop,
   remove or start — and, under `logs/`, the runtime's own log, which belongs to no project. A
-  project's log and its streams' pipeline cache stay under the project's `.streamlib/`. Owner,
-  2026-10-02 and 2026-10-24.
+  project's log and its streams' pipeline cache stay under the project's `.tatolab/`. Owner,
+  2026-10-02, 2026-10-24 and 2026-11-09.
   [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator — SHIPPED #2929;
   stream-identity-and-persistence — SHIPPED #2960, #2962]
   Rejected: a lock file on macOS — root-owned behind a first-launch administrator prompt, or
@@ -264,9 +264,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   reads one and `cancel_stream_action` ends one. `logs {project_directory, stream?, action?,
   after}` pages a project's log, `after` a record position. The tools: `list_project_streams` (a
   project's `@stream` functions), `stop_project` (unload every stream of the project; record
-  each `stopped`), `remove_project` (unload and forget every stream of the project),
-  `rename_stream` (the display name), `list_streams` (id, display name, location, running /
-  preparing / stopping / stopped / failed and why, node count, and each capture device whose
+  each `stopped`), `pause_project` and `resume_project` (pause and resume every loaded stream
+  of the project at once, unqueued), `remove_project` (unload and forget every stream of the
+  project), `rename_stream` (the display name), `list_streams` (id, display name, location,
+  running / paused / preparing / stopping / stopped / failed and why, node count, and each capture device whose
   access a loaded stream waits on because nobody has asked for it) and `expose_port
   {stream, node, port, level}`, `level` one of `internal`, `private`, `public`, which sets the
   port's level live, cutting at once every reader the level no longer allows, and records the
@@ -276,7 +277,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; create-project — SHIPPED
-  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; amended by project-level-run-controls: `stop_project` replaces `stop_stream` and `start_stream`, and `run_project` is the start]
+  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #3439]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -392,7 +393,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   does not run. It removes a `.venv` whose interpreter does not run first, and never touches
   one whose interpreter runs. A failed sync records the stream `failed` in uv's own words.
   A project has one log, and the project is its only key: its segments under
-  `<project>/.streamlib/logs/` hold every record the project's stream actions and streams
+  `<project>/.tatolab/logs/` hold every record the project's stream actions and streams
   write, whether or not any stream of it is loaded or recorded. A record carries the action's
   id in `action`, and the stream id in `stream` when a stream wrote it; these are attributes of
   a record, never where it is kept. The venv's making and the compile write records with no
@@ -421,8 +422,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   - **`stop` stops the whole project.** `tatolab stop [--dir]` and `stop_project
     {project_directory}` unload every loaded stream of the project and record each recorded
     one `stopped`, so the runtime leaves the project stopped across its restarts; `run` /
-    `run_project` runs it again and retries its failed streams. No tool stops or starts one
-    stream (owner, 2026-11-09).
+    `run_project` runs it again and retries its failed streams; `tatolab start [--dir]` is the
+    same run as `tatolab run` (owner, 2026-11-10). No tool stops or starts one stream (owner,
+    2026-11-09).
+  - **`pause` pauses the whole project, at once.** `tatolab pause [--dir]` and `pause_project
+    {project_directory}` pause every loaded stream of the project without queuing behind its
+    actions: each processor holds its state and processes nothing, and `list_streams` shows
+    each stream `paused`. A graph edit made meanwhile compiles on `tatolab resume` /
+    `resume_project`, which resumes them all. The project stays paused until its resume, stop
+    or removal, and a stream a run starts meanwhile starts paused, so a `tatolab dev` re-load
+    of a paused project stays paused (owner, 2026-11-10). Pause is live state and never
+    recorded, so a runtime restart re-loads the project running (session, 2026-11-09).
+    Projects, not streams, are paused (owner, 2026-11-09).
   - **`rm` removes the whole project.** `tatolab rm [--dir]` and `remove_project
     {project_directory}` unload every loaded stream of the project and forget every record of
     it, deleting no file; no tool removes one stream — a `@stream` in `stream.py` runs, and
@@ -2453,7 +2464,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts, project-run-controls; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -2659,19 +2670,24 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly five surfaces and nowhere else: log record `host_ts`
-  and `source_ts`, log file naming, the local relay certificate's validity — its UTC
-  `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
-  (owner, 2026-10-17) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro
-  JWTs the moq.pro adapter and the live proof's subscribe minter sign (owner, 2026-10-20) —
-  their job is correlating with the outside world, which monotonic time cannot do. A wall-clock value never enters the data plane and is never compared
-  against a media timestamp; another surface is a plan change, not a judgement call. The
-  list is mechanically enforced, with no per-line pragma and no opt-out attribute: the
-  permitted surfaces are a closed set in the gate, so a sixth is a source change that
-  surfaces in review rather than a line quietly appended, and an
-  entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
-  allowlist is per-file, which is why a data-plane file never joins it — a machine-global
-  unique name comes from the engine's unique-name primitive, never from reading a clock.
+  Wall clock is permitted on exactly six surfaces and nowhere else: log record `host_ts`
+  and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an action
+  was refused, beside the `applied_at` a transaction reads off its commit (owner,
+  2026-11-10) — the local relay certificate's validity — its UTC `notBefore` / `notAfter`,
+  issued and aged by the one file that writes the certificate (owner, 2026-10-17) — and a
+  relay token's expiry — the UTC `iat` / `exp` of the moq.pro JWTs the moq.pro adapter and
+  the live proof's subscribe minter sign (owner, 2026-10-20) — their job is correlating with
+  the outside world, which monotonic time cannot do. A wall-clock value never enters the
+  data plane and is never compared against a media timestamp; another surface is a plan
+  change, not a judgement call. The gate enforces the list in the tree it scans — `runtime`,
+  `sdk`, `adapters`, `xtask` and `packages/test-fixtures` — with no per-line pragma and no
+  opt-out attribute: the surfaces read there are a closed set of kinds in the gate, so
+  another is a source change that surfaces in review rather than a line quietly appended,
+  and an entry whose file stops reading a wall clock is a licence the gate makes you hand
+  back. The relay certificate and token surfaces are read outside its scan, a relay token in
+  `packages/tatolab-moq`. The allowlist is per-file, which is why a data-plane file never joins it — a
+  machine-global unique name comes from the engine's unique-name primitive, never from
+  reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
   SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158]
 - **DECIDED** — Audio backend: one chain per platform, probed once per process and logged
@@ -3917,7 +3933,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, project-run-controls, studio-view-nodes)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3932,9 +3948,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   The served MCP tool set is exactly the observation verbs `graph`, `logs` and
   `describe_runtime` (the runtime's version, build id, monotonic uptime and its own log's
   folder), the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
-  `disconnect` — the ten stream actions — `run_project`, `create_project`,
+  `disconnect` — the twelve stream actions — `run_project`, `create_project`,
   `describe_stream_action`, `cancel_stream_action`, `list_project_streams`, `stop_project`,
-  `remove_project`, `rename_stream`, `list_streams` and `expose_port`
+  `pause_project`, `resume_project`, `remove_project`, `rename_stream`, `list_streams` and `expose_port`
   (§Product) — and the four relay verbs —
   `add_relay`, `configure_relay`, `remove_relay` and `list_relays` (§Networking, the
   adapters); `health` is a REST route, not a tool. The MCP handshake's server version is the
@@ -4027,7 +4043,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
   with nothing set, and `tatolab` resolves it through `streamlib-runtime-client-contract`, the
   code the runtime resolves it with. What a runtime *keeps* sits elsewhere: a project's log
-  and caches under its `.streamlib/`, and the stream records and the runtime's own
+  and caches under its `.tatolab/`, and the stream records and the runtime's own
   log in the state directory (§Product). There is no registry to discover a runtime by: one
   runtime per machine serves one socket at a fixed path. Owner, 2026-09-14.
   [control-plane-one-surface; local-transport-hardening — SHIPPED #2261; local-api — SHIPPED

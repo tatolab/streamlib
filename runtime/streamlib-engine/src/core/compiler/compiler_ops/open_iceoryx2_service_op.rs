@@ -71,7 +71,61 @@ pub fn open_iceoryx2_service(
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    open_iceoryx2_service_read_at(graph, link_id, iceoryx2_node)
+    let to_port = graph
+        .traversal()
+        .e(link_id)
+        .first()
+        .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found in graph", link_id)))?
+        .to_port()
+        .clone();
+    open_iceoryx2_service_read_at(graph, link_id, &to_port, iceoryx2_node)
+}
+
+/// Open the channel of `link_id`, into a shader node fused into the island of
+/// another, at `host_input_port` of the node evaluating that island, under the
+/// delivery profile of the fused node's own input port.
+pub(crate) fn open_iceoryx2_service_into_the_host_of_a_shader_node_island(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    host_input_port: &InputLinkPortRef,
+    iceoryx2_node: &Iceoryx2Node,
+) -> Result<()> {
+    open_iceoryx2_service_read_at(graph, link_id, host_input_port, iceoryx2_node)
+}
+
+/// Close the channel of `link_id` the node evaluating its shader node island
+/// reads at `host_input_port`.
+pub(crate) fn close_iceoryx2_service_into_the_host_of_a_shader_node_island(
+    graph: &mut Graph,
+    link_id: &LinkUniqueId,
+    host_input_port: &InputLinkPortRef,
+) -> Result<()> {
+    let Some(source) = graph
+        .traversal()
+        .e(link_id)
+        .first()
+        .map(|link| link.source().clone())
+    else {
+        return Ok(());
+    };
+    release_the_source_side_of_a_link(graph, source.processor_id(), source.port_name(), link_id);
+    release_the_destination_side_of_a_link(
+        graph,
+        host_input_port.processor_id(),
+        host_input_port.port_name(),
+        link_id,
+    );
+    if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+        link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
+        link.remove::<OutOfProcessLinkWireRepliesComponent>();
+        link.insert(LinkStateComponent(LinkState::Disconnected));
+    }
+    tracing::info!(
+        "Closed iceoryx2 service: {} at {} (state: Disconnected)",
+        link_id,
+        host_input_port
+    );
+    Ok(())
 }
 
 /// The identity the read of `link_id` by the reader of `island_link_id` is
@@ -260,6 +314,7 @@ fn release_both_sides_of_a_read_by_the_reader_of_an_island(
 fn open_iceoryx2_service_read_at(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
+    read_at: &InputLinkPortRef,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
     let (from_port, to_port) = {
@@ -270,7 +325,7 @@ fn open_iceoryx2_service_read_at(
         (link.source().clone(), link.to_port().clone())
     };
 
-    let destination = read_the_destination_of_a_link(graph, &to_port, &to_port, link_id)?;
+    let destination = read_the_destination_of_a_link(graph, read_at, &to_port, link_id)?;
     let opened_source_side =
         open_the_source_side_of_a_link(graph, &from_port, link_id, &destination, iceoryx2_node)?;
     let wire_reply_awaited_from_the_destination =
