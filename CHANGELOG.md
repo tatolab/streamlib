@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.55](https://github.com/tatolab/streamlib/compare/v0.68.54...v0.68.55) (2026-11-10)
+
+
+### Bug Fixes
+
+* **project-repository:** refuse a canvas note key the studio contract does not take ([03cfeeb](https://github.com/tatolab/streamlib/commit/03cfeeb816b5ac889724e45c64471f30e6ff6415))
+
 ## [0.68.54](https://github.com/tatolab/streamlib/compare/v0.68.53...v0.68.54) (2026-11-10)
 
 
