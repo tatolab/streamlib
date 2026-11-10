@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.58](https://github.com/tatolab/streamlib/compare/v0.68.57...v0.68.58) (2026-11-10)
+
+
+### Features
+
+* **runtime:** the runtime unit carries tatolab-stream as a wheel, so a new project never waits on PyPI for it ([e91a0df](https://github.com/tatolab/streamlib/commit/e91a0dfe1040d5375cd404a7192c301ab7cf843e))
+
 ## [0.68.57](https://github.com/tatolab/streamlib/compare/v0.68.56...v0.68.57) (2026-11-10)
 
 
