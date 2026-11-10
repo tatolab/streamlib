@@ -190,7 +190,7 @@ pub(crate) fn project_transaction_on_the_wire(
 }
 
 /// `unix_seconds` as RFC 3339 in UTC to the second, `YYYY-MM-DDTHH:MM:SSZ`.
-fn rfc_3339_utc_of_unix_seconds(unix_seconds: i64) -> String {
+pub(crate) fn rfc_3339_utc_of_unix_seconds(unix_seconds: i64) -> String {
     let days_since_the_epoch = unix_seconds.div_euclid(86_400);
     let second_of_the_day = unix_seconds.rem_euclid(86_400);
     let (year, month, day) = civil_date_of_days_since_the_unix_epoch(days_since_the_epoch);

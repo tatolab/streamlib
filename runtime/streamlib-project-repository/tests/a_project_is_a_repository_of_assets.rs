@@ -95,17 +95,20 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
     let video_asset = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     let scene_asset = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&scene, "models/arm.usda")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     let fmu_asset = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&fmu, "data/arm.fmu")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     assert_eq!(
         repository.asset(video_asset).unwrap().kind,
@@ -133,7 +136,8 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
                 file_name: "opening.mp4".to_owned(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     repository
         .apply_asset_changes(
             &agent(),
@@ -143,14 +147,16 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
                 into_directory: "archive/2026".to_owned(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     repository
         .apply_asset_changes(
             &agent(),
             None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset: fmu_asset }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     let moved = repository.asset(video_asset).unwrap();
     assert_eq!(moved.path.as_str(), "archive/2026/opening.mp4");
@@ -211,7 +217,8 @@ fn stock_git_clones_the_history_and_finds_sidecars_but_never_the_content() {
     let video = fixture.import_source("intro.mp4", b"BYTES THAT MUST NOT ENTER HISTORY");
     repository
         .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     let clone_directory = tempfile::tempdir().unwrap();
     let clone = clone_directory.path().join("clone");
@@ -337,7 +344,8 @@ fn a_transaction_records_its_author_parent_and_inverse() {
 
     let applied = repository
         .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let video_asset = imported_asset(&applied);
     let settings = json!({"color_space": "rec709"})
         .as_object()
@@ -352,7 +360,8 @@ fn a_transaction_records_its_author_parent_and_inverse() {
                 import_settings: settings.clone(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     let recorded = transactions_in_history(&repository);
     assert_eq!(recorded[0], set.transaction);
@@ -384,7 +393,8 @@ fn an_asset_a_graph_document_references_cannot_be_deleted() {
     let image_asset = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     std::fs::create_dir_all(fixture.project_directory.join("streams")).unwrap();
     std::fs::write(
@@ -428,7 +438,8 @@ fn a_file_already_in_the_project_is_imported_in_place() {
             None,
             vec![import_from(&in_place, "media/dropped.wav")],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     assert_eq!(
         repository
             .asset(imported_asset(&applied))
@@ -448,7 +459,8 @@ fn a_path_another_asset_or_another_file_holds_is_refused() {
     let second = fixture.import_source("b.png", b"b");
     repository
         .apply_asset_changes(&agent(), None, vec![import_from(&first, "images/logo.png")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
@@ -498,7 +510,8 @@ fn an_upload_is_moved_to_its_assets_path_by_its_hash_and_leaves_the_uploads() {
                 "models/weights.safetensors",
             )],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     assert_eq!(
         repository
@@ -544,7 +557,8 @@ fn an_import_copies_the_file_once_to_its_path_and_nothing_into_the_project_besid
 
     repository
         .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     assert!(!fixture.project_directory.join(".tatolab/content").exists());
     let uploads = fixture.project_directory.join(PROJECT_UPLOADS_DIRECTORY);
@@ -591,7 +605,8 @@ fn a_file_replaced_at_its_path_is_what_its_asset_reads_and_history_grows_by_no_b
     let video = fixture.import_source("intro.mp4", b"take one");
     let applied = repository
         .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let asset = imported_asset(&applied);
     let file = fixture.project_directory.join("media/intro.mp4");
     let large_take = vec![7u8; 4 << 20];
@@ -606,7 +621,8 @@ fn a_file_replaced_at_its_path_is_what_its_asset_reads_and_history_grows_by_no_b
                 file_name: "intro-take-two.mp4".to_owned(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     let renamed = the_file_of_an_asset(&fixture.project_directory, asset).unwrap();
     assert_eq!(std::fs::read(&renamed).unwrap(), large_take);
@@ -625,7 +641,8 @@ fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_it
     let asset = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&lut, "looks/grade.cube")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     repository
         .apply_asset_changes(
@@ -633,14 +650,16 @@ fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_it
             None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let file = fixture.project_directory.join("looks/grade.cube");
     assert!(!file.exists());
 
     let reversal = repository.undo_by(&agent()).unwrap();
     repository
         .apply_project_operations(&agent(), None, reversal.operations, reversal.lineage)
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     assert_eq!(
         repository.asset(asset).unwrap().path.as_str(),
@@ -695,7 +714,8 @@ fn a_path_differing_only_in_case_from_another_assets_is_refused() {
     let second = fixture.import_source("b.png", b"b");
     repository
         .apply_asset_changes(&agent(), None, vec![import_from(&first, "images/Logo.png")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
@@ -728,7 +748,8 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
     let asset = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&data, "data/table.json")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     repository
         .apply_asset_changes(
@@ -739,7 +760,8 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
                 into_directory: "streams".to_owned(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
@@ -784,7 +806,8 @@ fn an_unreadable_graph_document_refuses_every_delete() {
     let image_asset = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     std::fs::create_dir_all(fixture.project_directory.join("streams")).unwrap();
     std::fs::write(
@@ -821,7 +844,8 @@ fn an_asset_whose_file_ends_like_a_graph_document_never_enters_history() {
     let data = fixture.import_source("table.json", b"{\"secret\": 1}");
     repository
         .apply_asset_changes(&agent(), None, vec![import_from(&data, "data/table.json")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     drop(repository);
     let data_directory = fixture.project_directory.join("data");
     std::fs::rename(
@@ -839,7 +863,8 @@ fn an_asset_whose_file_ends_like_a_graph_document_never_enters_history() {
     let image = fixture.import_source("logo.png", b"png");
     repository
         .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let files_at_head = repository.history().files_at_head().unwrap();
     assert!(files_at_head.contains_key("data/table.graph.json.asset.json"));
     assert!(!files_at_head.contains_key("data/table.graph.json"));
@@ -855,7 +880,8 @@ fn an_in_place_import_of_a_file_that_is_another_assets_file_is_refused() {
     let holder = imported_asset(
         &repository
             .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
-            .unwrap(),
+            .unwrap()
+            .into_applied_transaction(),
     );
     let alias = fixture.project_directory.join("images/alias.png");
     std::os::unix::fs::symlink(fixture.project_directory.join("images/logo.png"), &alias).unwrap();
@@ -954,7 +980,8 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
                 into_directory: "streams/cell".to_owned(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let moved = repository.asset(stream_asset).unwrap();
     assert_eq!(moved.path.as_str(), "streams/cell/arm-control.graph.json");
     let files_at_head = repository.history().files_at_head().unwrap();
@@ -997,7 +1024,8 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
                 asset: stream_asset,
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     assert!(
         !fixture
             .project_directory
@@ -1137,7 +1165,8 @@ fn the_history_records_the_whole_project_but_what_is_generated_hidden_or_an_asse
                 "media/dropped.wav",
             )],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     let files_at_head = repository.history().files_at_head().unwrap();
     assert_eq!(
@@ -1163,7 +1192,8 @@ fn an_assets_file_is_the_file_at_its_path_and_an_unknown_or_missing_asset_is_ref
     let lut = fixture.import_source("grade.cube", b"LUT_3D_SIZE 2");
     let applied = repository
         .apply_asset_changes(&agent(), None, vec![import_from(&lut, "looks/grade.cube")])
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let asset = imported_asset(&applied);
 
     let file = the_file_of_an_asset(&fixture.project_directory, asset).unwrap();

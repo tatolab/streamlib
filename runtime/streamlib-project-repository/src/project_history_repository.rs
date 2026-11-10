@@ -31,6 +31,15 @@ pub struct ProjectHistoryCommit {
     pub committed_at_unix_seconds: i64,
 }
 
+/// A commit just written to a project's history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectHistoryCommitWritten {
+    /// The commit's id, lowercase hex.
+    pub commit: String,
+    /// When it was made, in whole seconds since the Unix epoch.
+    pub committed_at_unix_seconds: i64,
+}
+
 /// A project's history, a local Git repository written through libgit2 with one branch and no
 /// remote; the one place the crate touches Git.
 pub struct ProjectHistoryRepository {
@@ -83,7 +92,7 @@ impl ProjectHistoryRepository {
         tracked_files: &BTreeMap<String, Vec<u8>>,
         author: &ProjectTransactionAuthor,
         message: &str,
-    ) -> Result<String, ProjectRepositoryRefusal> {
+    ) -> Result<ProjectHistoryCommitWritten, ProjectRepositoryRefusal> {
         let tree_oid = self.write_tree(tracked_files)?;
         let tree = self.repository.find_tree(tree_oid)?;
         let signature = Signature::now(&author.name, &author.commit_email())?;
@@ -100,16 +109,10 @@ impl ProjectHistoryRepository {
             &tree,
             &parents,
         )?;
-        Ok(commit_oid.to_string())
-    }
-
-    /// When the commit `commit` was made, in whole seconds since the Unix epoch.
-    pub fn committed_at_unix_seconds(&self, commit: &str) -> Result<i64, ProjectRepositoryRefusal> {
-        Ok(self
-            .repository
-            .find_commit(Oid::from_str(commit)?)?
-            .time()
-            .seconds())
+        Ok(ProjectHistoryCommitWritten {
+            commit: commit_oid.to_string(),
+            committed_at_unix_seconds: signature.when().seconds(),
+        })
     }
 
     /// Every commit on `main`, newest first.
@@ -282,11 +285,13 @@ mod tests {
         );
         let first = history
             .commit_tracked_files(&tracked_files, &agent(), "first")
-            .unwrap();
+            .unwrap()
+            .commit;
         tracked_files.remove("media/a/intro.mp4.asset.json");
         let second = history
             .commit_tracked_files(&tracked_files, &agent(), "second")
-            .unwrap();
+            .unwrap()
+            .commit;
 
         assert_eq!(history.head_commit().unwrap(), Some(second.clone()));
         let commits = history.commits_newest_first().unwrap();

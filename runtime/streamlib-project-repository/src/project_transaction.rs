@@ -363,17 +363,28 @@ pub struct ProjectTransactionReversal {
 /// The transaction format this runtime writes; it reads and undoes every older one.
 pub const PROJECT_TRANSACTION_FORMAT_VERSION: u32 = 2;
 
-/// The format of a transaction recorded before a transaction carried its format version.
-const PROJECT_TRANSACTION_FORMAT_VERSION_BEFORE_IT_WAS_RECORDED: u32 = 1;
-
 fn project_transaction_format_version_before_it_was_recorded() -> u32 {
-    PROJECT_TRANSACTION_FORMAT_VERSION_BEFORE_IT_WAS_RECORDED
+    1
 }
 
 /// A key the caller mints once per user gesture, so an action it sends again applies once.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(into = "String", try_from = "String")]
 pub struct ProjectActionIdempotencyKey(String);
+
+impl TryFrom<String> for ProjectActionIdempotencyKey {
+    type Error = ProjectRepositoryRefusal;
+
+    fn try_from(key: String) -> Result<Self, Self::Error> {
+        Self::from_caller(key)
+    }
+}
+
+impl From<ProjectActionIdempotencyKey> for String {
+    fn from(key: ProjectActionIdempotencyKey) -> Self {
+        key.0
+    }
+}
 
 impl ProjectActionIdempotencyKey {
     /// The key `key` names, refused when it is blank.
@@ -395,6 +406,17 @@ impl std::fmt::Display for ProjectActionIdempotencyKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.0)
     }
+}
+
+/// The part of a recorded transaction every format shares, read before the rest so a record
+/// in a newer format is refused by name rather than by what it holds.
+#[derive(Deserialize)]
+pub(crate) struct ProjectTransactionEnvelopeHeader {
+    #[serde(default = "project_transaction_format_version_before_it_was_recorded")]
+    pub(crate) format_version: u32,
+    pub(crate) transaction: Uuid,
+    #[serde(default)]
+    pub(crate) idempotency_key: Option<ProjectActionIdempotencyKey>,
 }
 
 /// A batch of operations applied whole: the unit of undo and of history.
@@ -431,6 +453,36 @@ impl ProjectTransaction {
             (Some(undone), _) => ProjectTransactionLineage::UndoOf(undone),
             (None, Some(redone)) => ProjectTransactionLineage::RedoOf(redone),
             (None, None) => ProjectTransactionLineage::NewEdit,
+        }
+    }
+}
+
+/// What applying an action did: applied it now, or found it applied before under its key.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProjectActionApplyOutcome {
+    /// Applied and committed by this call.
+    AppliedNow(AppliedProjectTransaction),
+    /// Applied by an earlier call under the same idempotency key; this call changed nothing.
+    AppliedBeforeUnderItsKey(AppliedProjectTransaction),
+}
+
+impl ProjectActionApplyOutcome {
+    /// Whether this call applied the transaction, rather than an earlier one under its key.
+    pub fn was_applied_now(&self) -> bool {
+        matches!(self, Self::AppliedNow(_))
+    }
+
+    /// The transaction, whichever call applied it.
+    pub fn applied_transaction(&self) -> &AppliedProjectTransaction {
+        match self {
+            Self::AppliedNow(applied) | Self::AppliedBeforeUnderItsKey(applied) => applied,
+        }
+    }
+
+    /// The transaction, whichever call applied it.
+    pub fn into_applied_transaction(self) -> AppliedProjectTransaction {
+        match self {
+            Self::AppliedNow(applied) | Self::AppliedBeforeUnderItsKey(applied) => applied,
         }
     }
 }

@@ -2642,6 +2642,7 @@ impl ProjectWithGraphDocuments {
                 streamlib_project_repository::ProjectTransactionLineage::NewEdit,
             )
             .expect("the sink is committed")
+            .into_applied_transaction()
             .commit
     }
 }

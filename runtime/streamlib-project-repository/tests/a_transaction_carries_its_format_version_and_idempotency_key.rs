@@ -4,9 +4,9 @@
 use serde_json::{Map, Value, json};
 use streamlib_project_repository::{
     PROJECT_TRANSACTION_COMMIT_TRAILER, PROJECT_TRANSACTION_FORMAT_VERSION,
-    ProjectActionIdempotencyKey, ProjectOperation, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
-    StreamGraphDocument, StreamGraphDocumentNode, StreamGraphOperation,
+    ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectOperation, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionLineage, StreamGraphDocument, StreamGraphDocumentNode, StreamGraphOperation,
     StreamGraphOperationOnAStream,
 };
 use uuid::Uuid;
@@ -19,6 +19,10 @@ struct ProjectHoldingOneStream {
 
 impl ProjectHoldingOneStream {
     fn new() -> Self {
+        Self::holding_the_stream(Uuid::new_v4())
+    }
+
+    fn holding_the_stream(stream: Uuid) -> Self {
         let root = tempfile::tempdir().unwrap();
         let project_directory = root.path().join("arm");
         ProjectRepository::create(
@@ -27,7 +31,6 @@ impl ProjectHoldingOneStream {
             &ProjectTransactionAuthor::the_runtime(),
         )
         .unwrap();
-        let stream = Uuid::new_v4();
         std::fs::create_dir_all(project_directory.join("streams")).unwrap();
         std::fs::write(
             project_directory.join("streams/main.graph.json"),
@@ -108,7 +111,8 @@ fn a_new_transaction_records_the_format_version_and_the_callers_idempotency_key(
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     let trailer = project.newest_trailer_json();
     assert_eq!(
@@ -142,7 +146,8 @@ fn an_action_sent_again_under_its_key_applies_once_and_answers_the_first_transac
             vec![operation.clone()],
             ProjectTransactionLineage::NewEdit,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let commits_after_the_first = project.repository.history().commits_newest_first().unwrap();
 
     let retried = project
@@ -155,7 +160,10 @@ fn an_action_sent_again_under_its_key_applies_once_and_answers_the_first_transac
         )
         .unwrap();
 
-    assert_eq!(retried, first);
+    assert_eq!(
+        retried,
+        ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(first)
+    );
     assert_eq!(
         project.repository.history().commits_newest_first().unwrap(),
         commits_after_the_first
@@ -176,7 +184,8 @@ fn an_action_sent_without_a_key_applies_each_time() {
                 vec![operation],
                 ProjectTransactionLineage::NewEdit,
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
     }
     assert_eq!(project.node_names_in_the_stream(), vec!["grade", "blur"]);
     assert!(
@@ -195,24 +204,31 @@ fn a_blank_idempotency_key_is_refused() {
     ));
 }
 
-/// Commit, as a runtime before format versions did, an edit adding `node`: the graph document
-/// written with it and a trailer in that runtime's envelope, which named no format version and
-/// no idempotency key.
-fn commit_an_edit_in_the_format_before_versions(
-    project: &ProjectHoldingOneStream,
-    node: &StreamGraphDocumentNode,
-) -> Uuid {
+const STREAM_OF_THE_RECORD_BEFORE_FORMAT_VERSIONS: &str = "0b9f8e7d-6c5b-4a39-8281-706f5e4d3c2b";
+const TRANSACTION_OF_THE_RECORD_BEFORE_FORMAT_VERSIONS: &str =
+    "5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d";
+
+/// A trailer as a runtime before format versions recorded an `add_node` of `grade`, with
+/// `{parent_commit}` standing for the commit history was at.
+const TRAILER_RECORDED_BEFORE_FORMAT_VERSIONS: &str = r#"{"transaction":"5a4b3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d","author":{"kind":"person","name":"Ada"},"parent_commit":"{parent_commit}","operations":[{"stream":"0b9f8e7d-6c5b-4a39-8281-706f5e4d3c2b","operation":"add_node","node":{"id":"6f1c2a3b-4d5e-4f60-8a71-92b3c4d5e6f7","name":"grade","type":"nodes.grade:Node","config":{}}}],"inverse_operations":[{"stream":"0b9f8e7d-6c5b-4a39-8281-706f5e4d3c2b","operation":"remove_node","node":{"id":"6f1c2a3b-4d5e-4f60-8a71-92b3c4d5e6f7","name":"grade","type":"nodes.grade:Node","config":{}}}]}"#;
+
+/// Commit, as a runtime before format versions did, the edit the recorded trailer names: the
+/// graph document written with `grade` added and the trailer as that runtime wrote it.
+fn commit_the_edit_recorded_before_format_versions(project: &ProjectHoldingOneStream) {
     let stream_document_path = "streams/main.graph.json";
     let on_disk = project
         .repository
         .project_directory()
         .join(stream_document_path);
     let mut document = StreamGraphDocument::from_bytes(&std::fs::read(&on_disk).unwrap()).unwrap();
-    let add_node = StreamGraphOperation::AddNode {
-        node: node.clone(),
-        links: Vec::new(),
-    };
-    document.apply(&add_node).unwrap();
+    let mut grade = a_node("grade");
+    grade.id = Uuid::parse_str("6f1c2a3b-4d5e-4f60-8a71-92b3c4d5e6f7").unwrap();
+    document
+        .apply(&StreamGraphOperation::AddNode {
+            node: grade,
+            links: Vec::new(),
+        })
+        .unwrap();
     let document_bytes = document.canonical_bytes().unwrap();
     std::fs::write(&on_disk, &document_bytes).unwrap();
 
@@ -220,33 +236,25 @@ fn commit_an_edit_in_the_format_before_versions(
     let parent_commit = history.head_commit().unwrap().unwrap();
     let mut tracked_files = history.files_at_head().unwrap();
     tracked_files.insert(stream_document_path.to_owned(), document_bytes);
-    let operation = project.add_node_operation(node);
-    let inverse_operation = operation.inverse_at(&parent_commit);
-    let transaction = Uuid::new_v4();
-    let envelope_before_format_versions = json!({
-        "transaction": transaction,
-        "author": { "kind": "person", "name": "Ada" },
-        "parent_commit": parent_commit,
-        "operations": [operation],
-        "inverse_operations": [inverse_operation],
-    });
+    let trailer =
+        TRAILER_RECORDED_BEFORE_FORMAT_VERSIONS.replace("{parent_commit}", &parent_commit);
     history
         .commit_tracked_files(
             &tracked_files,
             &a_person(),
-            &format!(
-                "add_node {}\n\n{PROJECT_TRANSACTION_COMMIT_TRAILER}: {envelope_before_format_versions}\n",
-                node.name
-            ),
+            &format!("add_node grade\n\n{PROJECT_TRANSACTION_COMMIT_TRAILER}: {trailer}\n"),
         )
         .unwrap();
-    transaction
 }
 
 #[test]
 fn a_transaction_recorded_before_format_versions_still_reads_undoes_and_redoes() {
-    let mut project = ProjectHoldingOneStream::new();
-    let recorded_before = commit_an_edit_in_the_format_before_versions(&project, &a_node("grade"));
+    let mut project = ProjectHoldingOneStream::holding_the_stream(
+        Uuid::parse_str(STREAM_OF_THE_RECORD_BEFORE_FORMAT_VERSIONS).unwrap(),
+    );
+    commit_the_edit_recorded_before_format_versions(&project);
+    let recorded_before =
+        Uuid::parse_str(TRANSACTION_OF_THE_RECORD_BEFORE_FORMAT_VERSIONS).unwrap();
 
     let read_back = &project
         .repository
@@ -255,6 +263,11 @@ fn a_transaction_recorded_before_format_versions_still_reads_undoes_and_redoes()
     assert_eq!(read_back.transaction.transaction, recorded_before);
     assert_eq!(read_back.transaction.format_version, 1);
     assert_eq!(read_back.transaction.idempotency_key, None);
+    assert_eq!(
+        read_back.applied_at_unix_seconds,
+        project.repository.history().commits_newest_first().unwrap()[0].committed_at_unix_seconds,
+        "a record with no time of its own reads its commit's"
+    );
 
     let undo = project.repository.undo_by(&a_person()).unwrap();
     assert_eq!(
@@ -287,11 +300,15 @@ fn a_transaction_in_a_format_newer_than_this_runtime_is_refused_by_name() {
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let history = project.repository.history();
     let mut newer = project.newest_trailer_json();
     newer["format_version"] = json!(PROJECT_TRANSACTION_FORMAT_VERSION + 1);
     newer["transaction"] = json!(Uuid::new_v4());
+    newer["operations"] = json!([
+        { "operation": "an_operation_this_runtime_does_not_know", "path": "nodes/grade.py" }
+    ]);
     history
         .commit_tracked_files(
             &history.files_at_head().unwrap(),
@@ -326,7 +343,8 @@ fn an_applied_transaction_carries_when_its_commit_was_made() {
             vec![operation],
             ProjectTransactionLineage::NewEdit,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let after = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -340,4 +358,39 @@ fn an_applied_transaction_carries_when_its_commit_was_made() {
             .applied_at_unix_seconds,
         applied.applied_at_unix_seconds
     );
+}
+
+#[test]
+fn a_key_recorded_before_the_project_was_reopened_still_answers_its_transaction() {
+    let mut project = ProjectHoldingOneStream::new();
+    let idempotency_key =
+        ProjectActionIdempotencyKey::from_caller("gesture-before-restart").unwrap();
+    let operation = project.add_node_operation(&a_node("grade"));
+    let first = project
+        .repository
+        .apply_project_operations(
+            &a_person(),
+            Some(&idempotency_key),
+            vec![operation.clone()],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap()
+        .into_applied_transaction();
+
+    project.repository = ProjectRepository::open(project.repository.project_directory()).unwrap();
+    let retried = project
+        .repository
+        .apply_project_operations(
+            &a_person(),
+            Some(&idempotency_key),
+            vec![operation],
+            ProjectTransactionLineage::NewEdit,
+        )
+        .unwrap();
+
+    assert_eq!(
+        retried,
+        ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(first)
+    );
+    assert_eq!(project.node_names_in_the_stream(), vec!["grade"]);
 }

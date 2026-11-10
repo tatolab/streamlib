@@ -12,8 +12,9 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{Peer, RoleServer, tool, tool_router};
 use serde::Deserialize;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectImport, ProjectRepositoriesOpenInThisRuntime,
-    ProjectRepositoryOneWriterAtATime,
+    AppliedProjectTransaction, ProjectImport, ProjectImportOperation, ProjectOperation,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
+    ProjectRepositoryRefusal,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DependencyTransactionToolResult, ListDependenciesToolResult, ListedProjectDependencyOnTheWire,
@@ -146,25 +147,17 @@ impl LocalApiMcpServerHandler {
             let mut project_repository_held = project_repository.lock();
             let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)
                 .map_err(|refusal| refusal.to_string())?;
-            let applied = match project_repository_held
-                .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())
-                .map_err(|refusal| refusal.to_string())?
-            {
-                Some(applied_before) => applied_before,
-                None => {
-                    let applied = project_repository_held
-                        .add_dependency(
-                            &author,
-                            idempotency_key.as_ref(),
-                            &source,
-                            folder.as_deref(),
-                        )
-                        .map_err(|refusal| refusal.to_string())?;
-                    project_repositories
-                        .announce_applied_transaction(&project_repository_held, applied.clone());
-                    applied
-                }
-            };
+            let outcome = project_repository_held
+                .add_dependency(
+                    &author,
+                    idempotency_key.as_ref(),
+                    &source,
+                    folder.as_deref(),
+                )
+                .map_err(|refusal| refusal.to_string())?;
+            project_repositories
+                .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
+            let applied = outcome.into_applied_transaction();
             let added = the_import_the_transaction_placed(&applied)?;
             Ok::<_, String>(DependencyTransactionToolResult {
                 dependency: the_dependency_on_the_wire(&added),
@@ -208,59 +201,57 @@ impl LocalApiMcpServerHandler {
             let mut project_repository_held = project_repository.lock();
             let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)
                 .map_err(|refusal| refusal.to_string())?;
-            if let Some(applied_before) = project_repository_held
-                .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())
-                .map_err(|refusal| refusal.to_string())?
-            {
-                return Ok(UpdateDependencyToolResult {
-                    dependency: the_dependency_on_the_wire(&the_import_the_transaction_placed(
-                        &applied_before,
-                    )?),
-                    edited_files: Vec::new(),
-                    overwrite_confirmation_needed: false,
-                    transaction: Some(applied_before.transaction.transaction.to_string()),
-                    commit: Some(applied_before.commit),
-                });
-            }
-            let held = project_repository_held
-                .import(project)
-                .map_err(|refusal| refusal.to_string())?;
-            let edited_files = project_repository_held
-                .files_edited_in_the_import(&held)
-                .map_err(|refusal| refusal.to_string())?;
-            if !edited_files.is_empty() && !overwrite_edited_files {
-                return Ok::<_, String>(UpdateDependencyToolResult {
-                    dependency: the_dependency_on_the_wire(&held),
-                    edited_files,
-                    overwrite_confirmation_needed: true,
-                    transaction: None,
-                    commit: None,
-                });
-            }
-            let applied = project_repository_held
-                .update_dependency(
-                    &author,
-                    idempotency_key.as_ref(),
-                    project,
-                    source.as_deref(),
-                    overwrite_edited_files,
-                )
-                .map_err(|refusal| refusal.to_string())?;
+            let files_the_update_overwrites = match project_repository_held.import(project) {
+                Ok(held) if overwrite_edited_files => project_repository_held
+                    .files_edited_in_the_import(&held)
+                    .map_err(|refusal| refusal.to_string())?,
+                _ => Vec::new(),
+            };
+            let outcome = match project_repository_held.update_dependency(
+                &author,
+                idempotency_key.as_ref(),
+                project,
+                source.as_deref(),
+                overwrite_edited_files,
+            ) {
+                Ok(outcome) => outcome,
+                Err(ProjectRepositoryRefusal::ImportEditedSinceItsCopy {
+                    edited_files, ..
+                }) => {
+                    let held = project_repository_held
+                        .import(project)
+                        .map_err(|refusal| refusal.to_string())?;
+                    return Ok::<_, String>(UpdateDependencyToolResult {
+                        dependency: the_dependency_on_the_wire(&held),
+                        edited_files,
+                        overwrite_confirmation_needed: true,
+                        transaction: None,
+                        commit: None,
+                    });
+                }
+                Err(refusal) => return Err(refusal.to_string()),
+            };
+            project_repositories
+                .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
+            let applied_now = outcome.was_applied_now();
+            let applied = outcome.into_applied_transaction();
             let updated = the_import_the_transaction_placed(&applied)?;
             let importing_project_directory =
                 project_repository_held.project_directory().to_path_buf();
-            project_repositories
-                .announce_applied_transaction(&project_repository_held, applied.clone());
             drop(project_repository_held);
-            GraphTransactionInFlight {
-                operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
-                project_repositories: &project_repositories,
-                async_runtime: &async_runtime,
+            if applied_now {
+                GraphTransactionInFlight {
+                    operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
+                    project_repositories: &project_repositories,
+                    async_runtime: &async_runtime,
+                }
+                .reconcile_each_loaded_stream_holding_a_stream_fragment(
+                    &importing_project_directory,
+                );
             }
-            .reconcile_each_loaded_stream_holding_a_stream_fragment(&importing_project_directory);
             Ok(UpdateDependencyToolResult {
                 dependency: the_dependency_on_the_wire(&updated),
-                edited_files,
+                edited_files: files_the_update_overwrites,
                 overwrite_confirmation_needed: false,
                 transaction: Some(applied.transaction.transaction.to_string()),
                 commit: Some(applied.commit),
@@ -353,26 +344,13 @@ impl LocalApiMcpServerHandler {
             let mut project_repository_held = project_repository.lock();
             let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)
                 .map_err(|refusal| refusal.to_string())?;
-            let (removed, applied) = match project_repository_held
-                .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())
-                .map_err(|refusal| refusal.to_string())?
-            {
-                Some(applied_before) => (
-                    the_import_the_transaction_removed(&applied_before)?,
-                    applied_before,
-                ),
-                None => {
-                    let removed = project_repository_held
-                        .import(project)
-                        .map_err(|refusal| refusal.to_string())?;
-                    let applied = project_repository_held
-                        .remove_dependency(&author, idempotency_key.as_ref(), project)
-                        .map_err(|refusal| refusal.to_string())?;
-                    project_repositories
-                        .announce_applied_transaction(&project_repository_held, applied.clone());
-                    (removed, applied)
-                }
-            };
+            let outcome = project_repository_held
+                .remove_dependency(&author, idempotency_key.as_ref(), project)
+                .map_err(|refusal| refusal.to_string())?;
+            project_repositories
+                .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
+            let applied = outcome.into_applied_transaction();
+            let removed = the_import_the_transaction_removed(&applied)?;
             Ok::<_, String>(DependencyTransactionToolResult {
                 dependency: the_dependency_on_the_wire(&removed),
                 transaction: applied.transaction.transaction.to_string(),
@@ -450,11 +428,9 @@ fn the_import_the_transaction_placed(
         .operations
         .iter()
         .find_map(|operation| match operation {
-            streamlib_project_repository::ProjectOperation::Import(
-                streamlib_project_repository::ProjectImportOperation::PlaceImport {
-                    import, ..
-                },
-            ) => Some(import.clone()),
+            ProjectOperation::Import(ProjectImportOperation::PlaceImport { import, .. }) => {
+                Some(import.clone())
+            }
             _ => None,
         })
         .ok_or_else(|| "the transaction recorded no import".to_owned())
@@ -468,9 +444,9 @@ fn the_import_the_transaction_removed(
         .operations
         .iter()
         .find_map(|operation| match operation {
-            streamlib_project_repository::ProjectOperation::Import(
-                streamlib_project_repository::ProjectImportOperation::RemoveImport { import },
-            ) => Some(import.clone()),
+            ProjectOperation::Import(ProjectImportOperation::RemoveImport { import }) => {
+                Some(import.clone())
+            }
             _ => None,
         })
         .ok_or_else(|| "the transaction recorded no import it removed".to_owned())

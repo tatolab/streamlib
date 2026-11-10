@@ -403,6 +403,7 @@ async fn a_listen_over_mcp_stdio_is_told_of_each_transaction_and_reads_it_from_t
     );
 
     let source = served.a_file_outside_the_project("intro.mp4", b"video");
+    let applied_no_earlier_than = the_wall_clock_now_in_rfc_3339_utc();
     let imported = served
         .answered(
             "import_asset",
@@ -437,6 +438,16 @@ async fn a_listen_over_mcp_stdio_is_told_of_each_transaction_and_reads_it_from_t
     assert_eq!(newest["author_name"], "Jonathan");
     assert_eq!(newest["operations"][0]["operation"], "import_asset");
     assert_eq!(newest["inverse_operations"][0]["operation"], "delete_asset");
+    assert_eq!(newest["format_version"], 2);
+    assert!(newest.get("idempotency_key").is_none(), "{newest}");
+    let applied_at = newest["applied_at"]
+        .as_str()
+        .expect("applied_at is a string");
+    assert!(
+        applied_no_earlier_than.as_str() <= applied_at
+            && applied_at <= the_wall_clock_now_in_rfc_3339_utc().as_str(),
+        "{applied_at} falls outside the call"
+    );
 }
 
 #[tokio::test]
@@ -451,4 +462,14 @@ async fn the_feed_of_a_project_no_tool_has_opened_is_refused_naming_how_to_open_
         .await
         .expect_err("a project no tool opened has no feed to read");
     assert!(refused.to_string().contains("list_assets"), "{refused}");
+}
+
+fn the_wall_clock_now_in_rfc_3339_utc() -> String {
+    let unix_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after 1970")
+        .as_secs();
+    crate::mcp_project_change_feed::rfc_3339_utc_of_unix_seconds(
+        i64::try_from(unix_seconds).expect("the clock fits an i64"),
+    )
 }

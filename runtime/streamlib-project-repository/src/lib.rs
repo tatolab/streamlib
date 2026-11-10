@@ -39,7 +39,7 @@ pub use project_file::{
 #[cfg(feature = "history")]
 pub use project_history_repository::{
     PROJECT_HISTORY_BRANCH, PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER,
-    ProjectHistoryCommit, ProjectHistoryRepository,
+    ProjectHistoryCommit, ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
 #[cfg(feature = "history")]
@@ -56,11 +56,12 @@ pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
 };
 pub use project_transaction::{
-    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionIdempotencyKey,
-    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles,
-    ProjectImportOperation, ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionLineage,
-    ProjectTransactionReversal, StreamGraphOperationOnAStream,
+    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionApplyOutcome,
+    ProjectActionIdempotencyKey, ProjectAssetChangeRequest, ProjectAssetImportSource,
+    ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
+    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
+    StreamGraphOperationOnAStream,
 };
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,

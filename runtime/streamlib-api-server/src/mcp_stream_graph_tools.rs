@@ -5,7 +5,6 @@
 //! document and the project's history or applied live to the running stream alone, its nodes
 //! by UUID, and each author's undo and redo.
 
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,8 +19,9 @@ use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamLocation,
 };
 use streamlib_project_repository::{
-    ProjectActionIdempotencyKey, ProjectAssetKind, ProjectAssetOperation, ProjectOperation,
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectStreamDocumentOperation,
+    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectAssetKind,
+    ProjectAssetOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
+    ProjectRepository, ProjectRepositoryRefusal, ProjectStreamDocumentOperation,
     ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
     StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
@@ -1201,17 +1201,10 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let author = the_author_of_a_change(author, peer);
         let mode = mode.unwrap_or_default();
-        let what_each_operation_names: Vec<WhatAGraphOperationNames> = operations
-            .iter()
-            .map(StreamGraphOperationToolArgument::what_it_names)
-            .collect();
         let idempotency_key = match the_idempotency_key_a_caller_sent(idempotency_key) {
             Ok(idempotency_key) => idempotency_key,
             Err(refusal) => {
-                return Ok(
-                    GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
-                        .into_a_tool_result(tool_name, &what_each_operation_names),
-                );
+                return Ok(GraphTransactionRefusal::from(refusal).into_a_tool_result(tool_name));
             }
         };
         let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
@@ -1231,7 +1224,7 @@ impl LocalApiMcpServerHandler {
         })?;
         match applied {
             Ok(applied) => serialized_tool_result(tool_name, &applied),
-            Err(refusal) => Ok(refusal.into_a_tool_result(tool_name, &what_each_operation_names)),
+            Err(refusal) => Ok(refusal.into_a_tool_result(tool_name)),
         }
     }
 
@@ -1278,7 +1271,7 @@ impl LocalApiMcpServerHandler {
         match applied {
             Ok(applied) => serialized_tool_result(tool_name, &applied),
             Err(refusal) => Ok(GraphTransactionRefusal::of_the_whole_transaction(refusal)
-                .into_a_tool_result(tool_name, &[])),
+                .into_a_tool_result(tool_name)),
         }
     }
 }
@@ -1292,7 +1285,7 @@ struct StreamATransactionEdits {
 }
 
 /// The node, link and field one operation of a graph action names, as its caller named them.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct WhatAGraphOperationNames {
     node: Option<String>,
     link: Option<RefusedGraphLinkOnTheWire>,
@@ -1303,13 +1296,19 @@ pub(crate) struct WhatAGraphOperationNames {
 /// was refused when one was.
 pub(crate) struct GraphTransactionRefusal {
     refused_operation_index: Option<usize>,
+    what_the_refused_operation_names: WhatAGraphOperationNames,
     runtime_words: String,
 }
 
 impl GraphTransactionRefusal {
-    fn of_the_operation(refused_operation_index: usize, runtime_words: String) -> Self {
+    fn of_the_operation(
+        refused_operation_index: usize,
+        what_the_refused_operation_names: WhatAGraphOperationNames,
+        runtime_words: String,
+    ) -> Self {
         Self {
             refused_operation_index: Some(refused_operation_index),
+            what_the_refused_operation_names,
             runtime_words,
         }
     }
@@ -1317,6 +1316,7 @@ impl GraphTransactionRefusal {
     fn of_the_whole_transaction(runtime_words: String) -> Self {
         Self {
             refused_operation_index: None,
+            what_the_refused_operation_names: WhatAGraphOperationNames::default(),
             runtime_words,
         }
     }
@@ -1324,16 +1324,8 @@ impl GraphTransactionRefusal {
     /// The refusal as the tool `tool_name` answers it: an error result whose text is the
     /// runtime's words and whose `structuredContent` holds them under `refusal` with what the
     /// refused operation names.
-    fn into_a_tool_result(
-        self,
-        tool_name: &str,
-        what_each_operation_names: &[WhatAGraphOperationNames],
-    ) -> CallToolResult {
-        let what_the_refused_operation_names = self
-            .refused_operation_index
-            .and_then(|index| what_each_operation_names.get(index))
-            .cloned()
-            .unwrap_or_default();
+    fn into_a_tool_result(self, tool_name: &str) -> CallToolResult {
+        let what_the_refused_operation_names = self.what_the_refused_operation_names;
         let text = format!("{tool_name} failed: {}", self.runtime_words);
         let refusal = ProjectActionRefusalOnTheWire {
             action: tool_name.to_owned(),
@@ -1349,9 +1341,9 @@ impl GraphTransactionRefusal {
     }
 }
 
-impl From<String> for GraphTransactionRefusal {
-    fn from(runtime_words: String) -> Self {
-        Self::of_the_whole_transaction(runtime_words)
+impl From<ProjectRepositoryRefusal> for GraphTransactionRefusal {
+    fn from(refusal: ProjectRepositoryRefusal) -> Self {
+        Self::of_the_whole_transaction(refusal.to_string())
     }
 }
 
@@ -1374,9 +1366,9 @@ impl GraphTransactionInFlight<'_> {
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
     ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
         if requests.is_empty() {
-            return Err("a transaction holds at least one operation"
-                .to_owned()
-                .into());
+            return Err(GraphTransactionRefusal::of_the_whole_transaction(
+                "a transaction holds at least one operation".to_owned(),
+            ));
         }
         let stream_locations = self.the_location_of_each_loaded_stream();
         let mut stream_ids_in_order: Vec<String> = Vec::new();
@@ -1388,19 +1380,17 @@ impl GraphTransactionInFlight<'_> {
                 stream_ids_in_order.push(request.stream().to_owned());
             }
         }
-        let project_repository =
-            match mode {
-                GraphEditMode::Live => None,
-                GraphEditMode::Commit => Some(self.the_one_project_the_streams_belong_to(
-                    &stream_ids_in_order,
-                    &stream_locations,
-                )?),
-            };
+        let project_repository = match mode {
+            GraphEditMode::Live => None,
+            GraphEditMode::Commit => Some(
+                self.the_one_project_the_streams_belong_to(&stream_ids_in_order, &stream_locations)
+                    .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
+            ),
+        };
         let mut project_repository_held = project_repository.as_ref().map(|held| held.lock());
         if let Some(project_repository_held) = project_repository_held.as_deref()
             && let Some(applied_before) = project_repository_held
-                .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)
-                .map_err(|refusal| refusal.to_string())?
+                .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
         {
             return Ok(self.the_answer_of_a_graph_transaction_applied_before(
                 project_repository_held.project_file().project,
@@ -1524,28 +1514,30 @@ impl GraphTransactionInFlight<'_> {
             let stream_operations = self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(stream_id)
-                .map_err(|refusal| refusal.to_string())?;
+                .map_err(|refusal| {
+                    GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
+                })?;
             let stream_location = stream_locations.get(stream_id).cloned().flatten();
             let staged_graph = match (&project_repository_held, &stream_location) {
                 (Some(project_repository), Some(stream_location)) => {
                     if stream_location.project != project_repository.project_file().project {
-                        return Err(format!(
+                        return Err(GraphTransactionRefusal::of_the_whole_transaction(format!(
                             "a transaction edits the streams of one project, and `{stream_id}` \
                              is of the project {}, not {}",
                             stream_location.project,
                             project_repository.project_file().project
-                        )
-                        .into());
+                        )));
                     }
-                    project_repository
-                        .stream_graph_document(stream_location.stream_asset)
-                        .map_err(|refusal| refusal.to_string())?
+                    project_repository.stream_graph_document(stream_location.stream_asset)?
                 }
                 _ => StreamGraphDocument::from_value(
                     self.async_runtime
                         .block_on(stream_operations.to_json_async())
-                        .map_err(|refusal| refusal.to_string())?,
-                )?,
+                        .map_err(|refusal| {
+                            GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
+                        })?,
+                )
+                .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             };
             streams.insert(
                 stream_id.clone(),
@@ -1563,6 +1555,7 @@ impl GraphTransactionInFlight<'_> {
         let project_repository_read_during_the_requests = project_repository_held.as_deref();
         for (request_index, request) in requests.into_iter().enumerate() {
             let stream_id = request.stream().to_owned();
+            let what_the_request_names = request.what_it_names();
             let applied = streams
                 .get_mut(&stream_id)
                 .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))
@@ -1632,19 +1625,25 @@ impl GraphTransactionInFlight<'_> {
                     self.reverse_what_was_applied_live(&streams, applied_live);
                     return Err(GraphTransactionRefusal::of_the_operation(
                         request_index,
+                        what_the_request_names,
                         refusal,
                     ));
                 }
             };
-            let stream = streams
-                .get_mut(&stream_id)
-                .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
+            let Some(stream) = streams.get_mut(&stream_id) else {
+                return Err(GraphTransactionRefusal::of_the_operation(
+                    request_index,
+                    what_the_request_names,
+                    format!("stream `{stream_id}` is not loaded"),
+                ));
+            };
             let staged = stream.staged_graph.apply(&applied);
             applied_live.push((stream_id.clone(), applied));
             if let Err(why) = staged {
                 self.reverse_what_was_applied_live(&streams, applied_live);
                 return Err(GraphTransactionRefusal::of_the_operation(
                     request_index,
+                    what_the_request_names,
                     format!(
                         "stream `{stream_id}`'s graph document does not hold what its running \
                          graph does: {why}"
@@ -1674,9 +1673,10 @@ impl GraphTransactionInFlight<'_> {
                     project_operations,
                     ProjectTransactionLineage::NewEdit,
                 ) {
-                    Ok(applied) => {
+                    Ok(outcome) => {
                         self.project_repositories
-                            .announce_applied_transaction(project_repository, applied.clone());
+                            .announce_the_transaction_if_applied_now(project_repository, &outcome);
+                        let applied = outcome.into_applied_transaction();
                         (
                             Some(applied.transaction.transaction.to_string()),
                             Some(applied.commit),
@@ -1684,7 +1684,7 @@ impl GraphTransactionInFlight<'_> {
                     }
                     Err(refusal) => {
                         self.reverse_what_was_applied_live(&streams, applied_live);
-                        return Err(refusal.to_string().into());
+                        return Err(refusal.into());
                     }
                 }
             }
@@ -1694,7 +1694,11 @@ impl GraphTransactionInFlight<'_> {
             mode,
             transaction,
             commit,
-            &streams,
+            &|stream_id| {
+                streams
+                    .get(stream_id)
+                    .map(|stream| Arc::clone(&stream.stream_operations))
+            },
             applied_live,
             &labels_of_added_nodes,
         ))
@@ -1839,9 +1843,10 @@ impl GraphTransactionInFlight<'_> {
             reversal.operations,
             reversal.lineage,
         ) {
-            Ok(applied) => {
+            Ok(outcome) => {
                 self.project_repositories
-                    .announce_applied_transaction(&project_repository, applied.clone());
+                    .announce_the_transaction_if_applied_now(&project_repository, &outcome);
+                let applied = outcome.into_applied_transaction();
                 let edited_project_directory = project_repository.project_directory().to_path_buf();
                 drop(project_repository);
                 self.forget_the_stream_of_each_stream_asset_taken_out(project, &applied)?;
@@ -1919,11 +1924,10 @@ impl GraphTransactionInFlight<'_> {
     fn the_answer_of_a_graph_transaction_applied_before(
         &self,
         project: Uuid,
-        applied_before: streamlib_project_repository::AppliedProjectTransaction,
+        applied_before: AppliedProjectTransaction,
     ) -> GraphTransactionToolResult {
         let stream_id_of_each_stream_asset =
             self.the_stream_id_of_each_loaded_stream_asset(project);
-        let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
         for operation in applied_before.transaction.operations {
             let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
@@ -1937,25 +1941,17 @@ impl GraphTransactionInFlight<'_> {
                 .get(&stream)
                 .cloned()
                 .unwrap_or_else(|| stream.to_string());
-            if let (Entry::Vacant(unheld), Ok(stream_operations), Ok(empty_graph)) = (
-                streams.entry(stream_id.clone()),
-                self.operations_on_the_loaded_streams
-                    .runtime_operations_of_the_stream_a_call_names(&stream_id),
-                StreamGraphDocument::from_value(Value::Object(Map::new())),
-            ) {
-                unheld.insert(StreamATransactionEdits {
-                    stream_operations,
-                    stream_location: None,
-                    staged_graph: empty_graph,
-                });
-            }
             applied_live.push((stream_id, graph_operation));
         }
         self.the_answer_of_a_graph_transaction(
             GraphEditMode::Commit,
             Some(applied_before.transaction.transaction.to_string()),
             Some(applied_before.commit),
-            &streams,
+            &|stream_id| {
+                self.operations_on_the_loaded_streams
+                    .runtime_operations_of_the_stream_a_call_names(stream_id)
+                    .ok()
+            },
             applied_live,
             &HashMap::new(),
         )
@@ -1966,7 +1962,7 @@ impl GraphTransactionInFlight<'_> {
         mode: GraphEditMode,
         transaction: Option<String>,
         commit: Option<String>,
-        streams: &BTreeMap<String, StreamATransactionEdits>,
+        stream_operations_of: &dyn Fn(&str) -> Option<Arc<dyn RuntimeOperations>>,
         applied_live: Vec<(String, StreamGraphOperation)>,
         labels_of_added_nodes: &HashMap<Uuid, String>,
     ) -> GraphTransactionToolResult {
@@ -1996,10 +1992,10 @@ impl GraphTransactionInFlight<'_> {
                     let graph_render = graph_render_of_each_stream
                         .entry(stream_id.clone())
                         .or_insert_with(|| {
-                            let stream = streams.get(&stream_id)?;
+                            let stream_operations = stream_operations_of(&stream_id)?;
                             match self
                                 .async_runtime
-                                .block_on(stream.stream_operations.to_json_async())
+                                .block_on(stream_operations.to_json_async())
                             {
                                 Ok(graph_render) => Some(graph_render),
                                 Err(unreadable) => {

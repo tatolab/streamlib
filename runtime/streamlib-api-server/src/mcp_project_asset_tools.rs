@@ -373,7 +373,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<DeleteAssetToolArguments>,
     ) -> ToolCallAnswer {
-        let (deleted, project) = self
+        let (deleted, project, applied_now) = self
             .an_asset_change_applied_as_a_transaction(
                 "delete_asset",
                 project_directory,
@@ -384,7 +384,9 @@ impl LocalApiMcpServerHandler {
                 },
             )
             .await?;
-        if deleted.asset.kind == project_asset_kind_on_the_wire(ProjectAssetKind::Stream) {
+        if applied_now
+            && deleted.asset.kind == project_asset_kind_on_the_wire(ProjectAssetKind::Stream)
+        {
             let stream_asset = the_asset_a_call_names("delete_asset", &deleted.asset.asset)?;
             self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
                 operations_on_the_loaded_streams
@@ -470,7 +472,7 @@ impl LocalApiMcpServerHandler {
         idempotency_key: Option<String>,
         change: ProjectAssetChangeRequest,
     ) -> ToolCallAnswer {
-        let (answered, _project) = self
+        let (answered, _project, _applied_now) = self
             .an_asset_change_applied_as_a_transaction(
                 tool_name,
                 project_directory,
@@ -483,8 +485,8 @@ impl LocalApiMcpServerHandler {
     }
 
     /// Apply `change` by `author` to the project as one transaction, answering the asset it
-    /// changed and the project's UUID; sent again under `idempotency_key`, it answers the
-    /// transaction that key first applied.
+    /// changed, the project's UUID and whether this call applied it; sent again under
+    /// `idempotency_key`, it answers the transaction that key first applied.
     async fn an_asset_change_applied_as_a_transaction(
         &self,
         tool_name: &'static str,
@@ -492,33 +494,26 @@ impl LocalApiMcpServerHandler {
         author: ProjectTransactionAuthor,
         idempotency_key: Option<String>,
         change: ProjectAssetChangeRequest,
-    ) -> Result<(AssetTransactionToolResult, Uuid), String> {
+    ) -> Result<(AssetTransactionToolResult, Uuid, bool), String> {
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
         self.a_project_repository_call_off_the_async_runtime(
             tool_name,
             project_directory,
             move |project_repository| {
                 let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
-                let applied = match project_repository
-                    .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())?
-                {
-                    Some(applied_before) => applied_before,
-                    None => {
-                        let applied = project_repository.apply_asset_changes(
-                            &author,
-                            idempotency_key.as_ref(),
-                            vec![change],
-                        )?;
-                        project_repositories
-                            .announce_applied_transaction(project_repository, applied.clone());
-                        applied
-                    }
-                };
+                let outcome = project_repository.apply_asset_changes(
+                    &author,
+                    idempotency_key.as_ref(),
+                    vec![change],
+                )?;
+                project_repositories
+                    .announce_the_transaction_if_applied_now(project_repository, &outcome);
+                let applied_now = outcome.was_applied_now();
                 let AppliedProjectTransaction {
                     transaction,
                     commit,
                     ..
-                } = applied;
+                } = outcome.into_applied_transaction();
                 let changed_asset = match transaction.operations.first() {
                     Some(ProjectOperation::Asset(
                         ProjectAssetOperation::ImportAsset { asset }
@@ -544,6 +539,7 @@ impl LocalApiMcpServerHandler {
                         commit,
                     },
                     project_repository.project_file().project,
+                    applied_now,
                 ))
             },
         )

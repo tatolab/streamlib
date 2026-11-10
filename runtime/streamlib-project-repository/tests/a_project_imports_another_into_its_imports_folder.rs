@@ -85,7 +85,8 @@ impl ProjectWithOneStream {
                 )],
                 ProjectTransactionLineage::NewEdit,
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
         node
     }
 
@@ -104,7 +105,8 @@ impl ProjectWithOneStream {
                     import_settings: Map::new(),
                 }],
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
         self.repository
             .assets()
             .unwrap()
@@ -118,14 +120,16 @@ impl ProjectWithOneStream {
         let reversal = self.repository.undo_by(&a_person()).unwrap();
         self.repository
             .apply_project_operations(&a_person(), None, reversal.operations, reversal.lineage)
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
     }
 
     fn redo(&mut self) {
         let reversal = self.repository.redo_by(&a_person()).unwrap();
         self.repository
             .apply_project_operations(&a_person(), None, reversal.operations, reversal.lineage)
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
     }
 
     fn main_document(&self) -> Value {
@@ -202,7 +206,8 @@ impl CellImportingArm {
         self.cell
             .repository
             .add_dependency(&a_person(), None, &source, None)
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
     }
 
     fn place_the_arms_stream_as_a_fragment(&mut self) -> Uuid {
@@ -302,7 +307,8 @@ fn a_zip_and_a_github_archive_of_a_module_are_imported_like_its_folder() {
             .cell
             .repository
             .add_dependency(&a_person(), None, &archive.display().to_string(), None)
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
 
         let import_folder = imports.cell.directory().join("imports/robot-arm");
         assert!(
@@ -488,7 +494,8 @@ fn an_import_is_removed_only_once_nothing_references_it_and_undo_puts_it_back() 
         .cell
         .repository
         .remove_dependency(&a_person(), None, arm)
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let import_folder = imports.cell.directory().join("imports/robot-arm");
     assert!(!import_folder.exists());
     assert!(imports.cell.repository.import(arm).is_err());
@@ -554,7 +561,8 @@ fn an_update_over_edited_files_answers_them_and_overwrites_once_confirmed() {
         .cell
         .repository
         .update_dependency(&a_person(), None, arm, None, true)
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let updated: Value =
         serde_json::from_slice(&std::fs::read(&edited_in_the_cell).unwrap()).unwrap();
     assert_eq!(updated["nodes"][1]["name"], "tint");
@@ -679,7 +687,8 @@ fn a_transaction_in_an_import_opened_as_its_own_project_commits_on_the_enclosing
             )],
             ProjectTransactionLineage::NewEdit,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     open_in_this_runtime.announce_applied_transaction(&module, applied);
 
     assert!(module.history().commits_newest_first().unwrap().len() >= 2);
@@ -810,7 +819,8 @@ fn a_zipped_module_holding_pyvenv_cfg_at_its_root_is_still_copied() {
         .cell
         .repository
         .add_dependency(&a_person(), None, &archive.display().to_string(), None)
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
 
     assert!(
         imports
@@ -836,7 +846,8 @@ fn an_asset_only_a_nested_copy_of_an_import_holds_resolves_to_that_copy() {
                 &imported.directory().display().to_string(),
                 None,
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
     };
     add(&mut cell, &gripper);
     let lut_only_the_newer_gripper_holds = gripper.import_a_lut(b"LUT 2");
@@ -918,7 +929,8 @@ fn a_node_type_an_imports_own_code_defines_is_led_by_its_folder_at_every_depth()
             &gripper.directory().display().to_string(),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     arm.add_a_node(
         "claw",
         STREAM_FRAGMENT_NODE_TYPE,
@@ -934,7 +946,8 @@ fn a_node_type_an_imports_own_code_defines_is_led_by_its_folder_at_every_depth()
             &arm.directory().display().to_string(),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     cell.add_a_node(
         "arm",
         STREAM_FRAGMENT_NODE_TYPE,

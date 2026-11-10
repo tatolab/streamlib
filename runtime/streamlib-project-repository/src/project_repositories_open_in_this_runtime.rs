@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::project_file::PROJECT_FILE_NAME;
 use crate::project_repository::{ProjectPythonRequirementsLock, ProjectRepository};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
-use crate::project_transaction::AppliedProjectTransaction;
+use crate::project_transaction::{AppliedProjectTransaction, ProjectActionApplyOutcome};
 
 /// How many announcements a slow listener may fall behind before it is told it lagged.
 const PROJECT_TRANSACTION_FEED_CAPACITY: usize = 256;
@@ -130,6 +130,18 @@ impl ProjectRepositoriesOpenInThisRuntime {
         }
     }
 
+    /// Announce `outcome`'s transaction as [`Self::announce_applied_transaction`] does when this
+    /// call applied it; one an earlier call applied under its key was announced by that call.
+    pub fn announce_the_transaction_if_applied_now(
+        &self,
+        project_repository: &ProjectRepository,
+        outcome: &ProjectActionApplyOutcome,
+    ) {
+        if let ProjectActionApplyOutcome::AppliedNow(applied) = outcome {
+            self.announce_applied_transaction(project_repository, applied.clone());
+        }
+    }
+
     /// A receiver of every transaction announced from now on, across every open project.
     pub fn subscribe_to_the_change_feed(
         &self,
@@ -223,7 +235,8 @@ mod tests {
                     import_settings: serde_json::Map::new(),
                 }],
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
         open.announce_applied_transaction(&project_repository, applied.clone());
         let announced = change_feed.try_recv().unwrap();
         assert_eq!(announced.applied, applied);

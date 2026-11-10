@@ -366,7 +366,8 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
                 import_settings: Map::new(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let ProjectOperation::Asset(streamlib_project_repository::ProjectAssetOperation::ImportAsset {
         asset: image,
     }) = &imported.transaction.operations[0]
@@ -478,7 +479,8 @@ fn an_imported_asset(
                 import_settings: Map::new(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let ProjectOperation::Asset(streamlib_project_repository::ProjectAssetOperation::ImportAsset {
         asset,
     }) = &imported.transaction.operations[0]
