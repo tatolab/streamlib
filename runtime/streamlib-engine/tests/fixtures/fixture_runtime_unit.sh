@@ -25,7 +25,7 @@
 # runtime without touching it. The devices are the machine's
 # either way: an exclusive one (a camera, a microphone, a speaker) still takes
 # one run at a time. It writes each stream it runs as a project
-# of one stream, loads it with `tatolab run --dir`, addresses it by the stream
+# of one stream, loads it with `tatolab start --dir`, addresses it by the stream
 # id the runtime gives it, and removes the project and then stops the runtime.
 #
 # The fixture venv is `<this directory>/.venv`, which a fixture project's
@@ -309,7 +309,7 @@ FIXTURE_RUNTIME_EXIT_STATUS=""
 # records among it — in <log file>, and returns once its local API answers.
 # Every setting a fixture node reads from the environment while it runs goes
 # here: the runtime starts its processor interpreters with its own environment,
-# never `tatolab run`'s. A setting its graph generator reads goes to
+# never `tatolab start`'s. A setting its graph generator reads goes to
 # `write_a_one_stream_fixture_project` instead.
 #
 # Its state directory sits under <state home>: XDG_STATE_HOME names it on
@@ -605,7 +605,7 @@ FIXTURE_PROJECT_DIRECTORIES=()
 FIXTURE_PROJECT_STREAM_IDS=()
 FIXTURE_PROJECT_REMOVAL_TIMED_OUT=0
 
-# Queues a load of the project at <project directory> with `tatolab run --dir`,
+# Queues a load of the project at <project directory> with `tatolab start --dir`,
 # its output in <run log>, and returns once the runtime lists its stream and
 # that stream runs, the stream id the runtime gave it in FIXTURE_PROJECT_STREAM_ID;
 # 1 when the load is refused or the stream has not run within 60 s, with the
@@ -615,7 +615,7 @@ start_the_fixture_project() {
     FIXTURE_PROJECT_STREAM_ID=""
     FIXTURE_PROJECT_DIRECTORIES+=("$project_directory")
     if stream_asset="$(stream_asset_of_the_fixture_project "$project_directory")" \
-        && "$TATOLAB_EXECUTABLE" run --dir "$project_directory" >"$run_log_file" 2>&1; then
+        && "$TATOLAB_EXECUTABLE" start --dir "$project_directory" >"$run_log_file" 2>&1; then
         for _ in $(seq 1 120); do
             FIXTURE_PROJECT_STREAM_ID="$(stream_id_the_runtime_gave_the_stream_asset "$stream_asset")" \
                 && break

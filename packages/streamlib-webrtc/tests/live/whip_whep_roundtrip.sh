@@ -40,7 +40,7 @@
 # range swap clips straight back to them.
 #
 # The streams (`whip_whep_roundtrip_stream.py`) are loaded each as a project of
-# its own with `tatolab run --dir`, each graph built in this package's own
+# its own with `tatolab start --dir`, each graph built in this package's own
 # `.venv`, which each project's `.venv` links to — `tatolab-stream` and a current
 # `maturin develop` of this wheel, and no engine — on a `tatolabd` this script
 # starts and stops itself. The runtime unit, its `tatolab` verbs and the
@@ -184,7 +184,7 @@ mkdir -p "$OUTPUT_DIR"
 ENCODED_TRACK_DIR="$OUTPUT_DIR/encoded_track"
 MEASURED_DIR="$OUTPUT_DIR/measured"
 # The runtime's output — the engine's log mirror, every stream's records among
-# it — with each `tatolab run`'s beside it.
+# it — with each `tatolab start`'s beside it.
 LOG_FILE="$OUTPUT_DIR/runtime.log"
 SENDER_RUN_LOG_FILE="$OUTPUT_DIR/sender_run.log"
 RECEIVER_RUN_LOG_FILE="$OUTPUT_DIR/receiver_run.log"
