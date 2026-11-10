@@ -13,7 +13,8 @@ use crate::project_repository_refusal::ProjectRepositoryRefusal;
 /// The project file's name at the root of every project.
 pub const PROJECT_FILE_NAME: &str = "tatolab-project.json";
 
-/// What `tatolab-project.json` holds: the project's identity and the modules it imports.
+/// What `tatolab-project.json` holds: the project's identity, how people see it, and the modules
+/// it imports.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TatolabProjectFile {
@@ -21,6 +22,12 @@ pub struct TatolabProjectFile {
     pub project: Uuid,
     /// The project's name as people see it; a label, never an identity.
     pub name: String,
+    /// What the project is, in the words of whoever described it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The image asset the project is shown by, by its UUID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<Uuid>,
     /// The version of the runtime that created the project: a record, never a lock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_with_runtime: Option<String>,
@@ -54,6 +61,8 @@ impl TatolabProjectFile {
         Self {
             project: Uuid::new_v4(),
             name: name.to_owned(),
+            description: None,
+            cover: None,
             created_with_runtime: Some(THIS_RUNTIME_VERSION.to_owned()),
             dependencies: Vec::new(),
         }

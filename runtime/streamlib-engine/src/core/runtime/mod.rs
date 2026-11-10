@@ -20,6 +20,7 @@ mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod output_port_viewer;
 mod processor_interpreter_launch_record;
+mod project_folder_moved_to_the_trash;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;

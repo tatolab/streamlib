@@ -25,13 +25,14 @@ use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
 use crate::project_history_repository::{
-    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit, ProjectHistoryCommitWritten,
-    ProjectHistoryRepository,
+    PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit,
+    ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 use crate::project_import_copy::{
-    PROJECT_IMPORT_STAGING_DIRECTORY, files_an_import_carries, files_edited_since_the_copy,
-    refuse_an_import_folder_name, sha256_of_each_file_under, stage_a_copy_of_the_project_source,
-    the_import_folder_in, the_import_folder_named_after, unpack_a_project_archive_as_a_new_project,
+    PROJECT_IMPORT_STAGING_DIRECTORY, copy_the_files_a_project_copy_carries,
+    files_an_import_carries, files_edited_since_the_copy, refuse_an_import_folder_name,
+    sha256_of_each_file_under, stage_a_copy_of_the_project_source, the_import_folder_in,
+    the_import_folder_named_after, unpack_a_project_archive_as_a_new_project,
     version_of_the_copied_files,
 };
 use crate::project_pyproject_import_sources::{
@@ -43,9 +44,9 @@ use crate::project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
     ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
-    ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
-    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
+    ProjectOperation, ProjectSettingsAction, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionEnvelopeHeader, ProjectTransactionLineage,
+    ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -276,6 +277,75 @@ impl ProjectRepository {
         })
     }
 
+    /// Duplicate the project into `into`, a path that must not exist yet, as a project of its
+    /// own: every file a copy of it carries and its whole history, under a new UUID and the name
+    /// `<name> copy`, the duplicate committed on that history by `author`. Its `.venv` and the
+    /// rest of its runtime folder stay behind. Refused, nothing left at `into`, for a relative
+    /// `into`, one that exists, and one inside this project.
+    pub fn duplicate_into(
+        &self,
+        into: &Path,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        refuse_a_relative_project_directory(into)?;
+        refuse_an_author_without_a_name(author)?;
+        if into.symlink_metadata().is_ok() {
+            return Err(ProjectRepositoryRefusal::DuplicateIntoAnExistingPath {
+                into: into.to_path_buf(),
+            });
+        }
+        let this_project_resolved = std::fs::canonicalize(&self.project_directory)?;
+        if the_nearest_existing_ancestor_resolved(into)?.starts_with(&this_project_resolved) {
+            return Err(ProjectRepositoryRefusal::DuplicateIntoTheProjectItself {
+                into: into.to_path_buf(),
+            });
+        }
+        let duplicated = self.write_the_duplicate_into(into, author);
+        if duplicated.is_err() {
+            let _ = std::fs::remove_dir_all(into);
+        }
+        duplicated
+    }
+
+    fn write_the_duplicate_into(
+        &self,
+        into: &Path,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        copy_the_files_a_project_copy_carries(&self.project_directory, into, |not_copied| {
+            ProjectRepositoryRefusal::Io(not_copied)
+        })?;
+        copy_a_folder_whole(
+            self.history.history_directory(),
+            &into.join(PROJECT_HISTORY_DIRECTORY),
+        )?;
+        let duplicate_project_file = TatolabProjectFile {
+            project: Uuid::new_v4(),
+            name: format!("{} copy", self.project_file.name),
+            ..self.project_file.clone()
+        };
+        write_file_whole(
+            &into.join(PROJECT_FILE_NAME),
+            &duplicate_project_file.canonical_bytes()?,
+        )?;
+        let duplicate = Self::open(into)?;
+        duplicate.history.commit_tracked_files(
+            &duplicate.tracked_files(&duplicate.assets_by_uuid)?,
+            author,
+            &format!(
+                "duplicate_project {} from {}",
+                duplicate_project_file.name, self.project_file.project
+            ),
+        )?;
+        Ok(duplicate)
+    }
+
+    /// When the project last changed: the time of the newest commit on its history, an undo, a
+    /// redo and its duplicate included and a run never, `None` before its first commit.
+    pub fn last_edited_at_unix_seconds(&self) -> Result<Option<i64>, ProjectRepositoryRefusal> {
+        self.history.head_committed_at_unix_seconds()
+    }
+
     /// Lock the project's Python requirements with `python_requirements_lock` each time an
     /// import change rewrites its `pyproject.toml`, refusing the change when they cannot be
     /// resolved; a project never handed one leaves them to be resolved when it loads.
@@ -439,6 +509,25 @@ impl ProjectRepository {
         applied.map(ProjectActionApplyOutcome::AppliedNow)
     }
 
+    /// Apply the settings change `action` by `author` as one transaction and commit it; sent
+    /// again under the same `idempotency_key`, it answers the first transaction.
+    pub fn apply_project_settings_action(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        action: ProjectSettingsAction,
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        let operation =
+            ProjectOperation::ProjectSettings(action.operation_against(&self.project_file));
+        self.apply_project_operations(
+            author,
+            idempotency_key,
+            vec![ProjectAction::Settings(action)],
+            vec![operation],
+            ProjectTransactionLineage::NewEdit,
+        )
+    }
+
     fn operations_for_changes(
         &mut self,
         changes: Vec<ProjectAssetAction>,
@@ -558,8 +647,16 @@ impl ProjectRepository {
                         import_operation,
                     )?;
                 }
+                ProjectOperation::ProjectSettings(project_settings_operation) => {
+                    project_settings_operation.write_into(&mut staged_project_file);
+                }
                 ProjectOperation::Asset(asset_operation) => {
                     if let ProjectAssetOperation::DeleteAsset { asset } = asset_operation {
+                        if staged_project_file.cover == Some(asset.asset) {
+                            return Err(ProjectRepositoryRefusal::AssetIsTheProjectCover(
+                                asset.asset,
+                            ));
+                        }
                         self.refuse_deleting_an_asset_a_graph_references(
                             asset,
                             &staged_assets,
@@ -606,6 +703,7 @@ impl ProjectRepository {
                 )?;
             }
         }
+        refuse_project_settings_the_project_cannot_hold(&staged_project_file, &staged_assets)?;
         let (undoes, redoes) = match lineage {
             ProjectTransactionLineage::NewEdit => (None, None),
             ProjectTransactionLineage::UndoOf(undone) => (Some(undone), None),
@@ -2268,6 +2366,73 @@ fn transaction_commit_message(
         "{summary}\n\n{PROJECT_TRANSACTION_COMMIT_TRAILER}: {}\n",
         serde_json::to_string(transaction)?
     ))
+}
+
+/// `path` resolved through its nearest ancestor that exists, the rest appended as written.
+fn the_nearest_existing_ancestor_resolved(
+    path: &Path,
+) -> Result<PathBuf, ProjectRepositoryRefusal> {
+    let mut not_yet_existing = Vec::new();
+    let mut ancestor = path;
+    loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(resolved) => {
+                return Ok(not_yet_existing
+                    .into_iter()
+                    .rev()
+                    .fold(resolved, |resolved, name| resolved.join(name)));
+            }
+            Err(_) => {
+                let (Some(parent), Some(name)) = (ancestor.parent(), ancestor.file_name()) else {
+                    return Ok(path.to_path_buf());
+                };
+                not_yet_existing.push(name.to_owned());
+                ancestor = parent;
+            }
+        }
+    }
+}
+
+/// Copy the folder `source` and everything under it to `destination`, which must not exist.
+fn copy_a_folder_whole(source: &Path, destination: &Path) -> Result<(), ProjectRepositoryRefusal> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let copied_to = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_a_folder_whole(&entry.path(), &copied_to)?;
+        } else {
+            std::fs::copy(entry.path(), copied_to)?;
+        }
+    }
+    Ok(())
+}
+
+fn refuse_project_settings_the_project_cannot_hold(
+    project_file: &TatolabProjectFile,
+    assets: &BTreeMap<Uuid, ProjectAsset>,
+) -> Result<(), ProjectRepositoryRefusal> {
+    if project_file.name.trim().is_empty() {
+        return Err(ProjectRepositoryRefusal::BlankProjectName);
+    }
+    let Some(cover) = project_file.cover else {
+        return Ok(());
+    };
+    let cover_asset = assets
+        .get(&cover)
+        .ok_or(ProjectRepositoryRefusal::NoSuchAsset(cover))?;
+    if cover_asset.kind != ProjectAssetKind::Media {
+        return Err(ProjectRepositoryRefusal::CoverIsNotAMediaAsset {
+            asset: cover,
+            kind: match cover_asset.kind {
+                ProjectAssetKind::Media => "media",
+                ProjectAssetKind::Scene => "scene",
+                ProjectAssetKind::Data => "data",
+                ProjectAssetKind::Stream => "stream",
+            },
+        });
+    }
+    Ok(())
 }
 
 fn apply_operation_to_assets(
