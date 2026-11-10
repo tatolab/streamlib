@@ -456,7 +456,7 @@ jobs:
     # Pinned, as the macOS jobs are: the Rust cache restored under `shared-key` was
     # built on this image, and cargo cannot see which libpython a cached artifact links.
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: write
@@ -472,8 +472,8 @@ jobs:
         id: digest
         run: echo "digest=$(bash scripts/ci/runtime_unit_input_digest.sh "$ImageOS" debug)" >> "$GITHUB_OUTPUT"
 
-      # Restored when nothing it is built from changed: a change to a suite or
-      # the stream package runs on the unit `main` built.
+      # Restored when nothing it is built from changed: a change to an
+      # extension, a suite or the stream package runs on the unit `main` built.
       - name: Restore the runtime unit
         id: restore
         uses: actions/cache/restore@v5
@@ -484,10 +484,8 @@ jobs:
           key: runtime-unit-linux-${{ env.RUNTIME_UNIT_CACHE_GENERATION }}-${{ steps.digest.outputs.digest }}
 
       # The Linux engine links Vulkan and iceoryx2's PAL crates run bindgen;
-      # cmake and ninja build aws-lc-sys's C; the unit's tatolab-rive wheel
-      # builds rive-runtime with git, clang, make, the GLSL tools and libuuid's
-      # headers. `timeout-minutes` is the backstop the composite action cannot
-      # declare itself.
+      # cmake and ninja build aws-lc-sys's C. `timeout-minutes` is the backstop
+      # the composite action cannot declare itself.
       - name: Install system dependencies
         timeout-minutes: 15
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -501,12 +499,6 @@ jobs:
             cmake
             ninja-build
             python3-dev
-            clang
-            git
-            make
-            glslang-tools
-            spirv-tools
-            uuid-dev
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -654,8 +646,8 @@ jobs:
 
       # The runtime syncs each scaffolded project's venv, which requires this
       # checkout's `tatolab-stream`; once `main`'s version is ahead of PyPI's,
-      # only this run's build has it. Its first-party modules are the wheels the
-      # unit carries.
+      # only this run's build has it. Its core modules are the wheels the unit
+      # carries.
       - name: Integration suite (all but rig-only)
         working-directory: tests/stream-on-runtime
         env:
@@ -897,7 +889,7 @@ jobs:
     name: Integration test (macOS)
     if: github.event_name != 'pull_request'
     runs-on: macos-26
-    timeout-minutes: 120
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: write
@@ -925,8 +917,8 @@ jobs:
         id: digest
         run: echo "digest=$(bash scripts/ci/runtime_unit_input_digest.sh "$ImageOS" debug)" >> "$GITHUB_OUTPUT"
 
-      # Restored when nothing it is built from changed: a change to a suite or
-      # the stream package runs on the unit `main` built.
+      # Restored when nothing it is built from changed: a change to an
+      # extension, a suite or the stream package runs on the unit `main` built.
       - name: Restore the runtime unit
         id: restore
         uses: actions/cache/restore@v5
@@ -1132,8 +1124,8 @@ jobs:
 
       # The runtime syncs each scaffolded project's venv, which requires this
       # checkout's `tatolab-stream`; once `main`'s version is ahead of PyPI's,
-      # only this run's build has it. Its first-party modules are the wheels the
-      # unit carries.
+      # only this run's build has it. Its core modules are the wheels the unit
+      # carries.
       - name: Integration suite (GPU-free half)
         env:
           UV_FIND_LINKS: ${{ runner.temp }}/tatolab-stream-dist

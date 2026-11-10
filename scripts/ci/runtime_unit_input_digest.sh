@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # Prints one digest of everything a runtime unit is built from, for `ci.yml` to
-# key the unit's cache on. A pull request that changes none of it — the
-# integration suite, the stream package — runs on the unit `main` already
+# key the unit's cache on. A pull request that changes none of it — an extension,
+# the integration suite, the stream package — runs on the unit `main` already
 # built instead of compiling the engine again.
 #
 # The digest reads the git index (`git ls-files -s`: each file's blob id), so it
@@ -34,14 +34,16 @@ sha256_of_standard_input() {
     ':(exclude)docker/**' \
     ':(exclude)installer/**' \
     ':(exclude)tests/**' \
+    ':(exclude)packages/**' \
     ':(exclude)sdk/tatolab-pypi-placeholder/**' \
     ':(exclude)sdk/tatolab-stream/**' \
     ':(exclude).github/ISSUE_TEMPLATE/**' \
     ':(exclude)*.md' \
     ':(exclude)LICENSES/**'
-  # The runtime compiles the scaffold `tatolab new` writes and the wheel ships
-  # the notices; each sits under an exclusion above.
-  git ls-files -s -- 'sdk/tatolab-stream/scaffold_template/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md'
+  # The runtime compiles the scaffold `tatolab new` writes, the wheel ships the
+  # notices, and the unit carries its first-party modules; each sits under an
+  # exclusion above.
+  git ls-files -s -- 'sdk/tatolab-stream/scaffold_template/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md' 'packages/tatolab-ops/**' 'packages/tatolab-testpattern/**' 'packages/tatolab-compositor/**'
   rustc -Vv
   printf '%s\n' "$@"
 } | sha256_of_standard_input | cut -d ' ' -f 1

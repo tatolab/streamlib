@@ -232,7 +232,7 @@ pub fn run(
     );
 
     stage_the_browser_host(workspace_root)?;
-    stage_the_first_party_modules(workspace_root, build_profile)?;
+    stage_the_first_party_modules(workspace_root)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
     let mut built_binaries = build_runtime_unit_binaries(

@@ -31,8 +31,7 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
   `frame.cpu()`.
 - **Media nodes are modules, built the way you would build one.** The camera, microphone,
   speaker, H.264 / H.265 and Opus codecs, the test pattern and the Linux virtual camera are
-  ordinary Python packages the runtime carries as wheels and installs into every project; the
-  ones with deadlines move their frames and samples on native threads.
+  packages on PyPI; the ones with deadlines move their frames and samples on native threads.
 - **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
   sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
   the stream runs — the same operations the `tatolab` CLI uses.
@@ -121,10 +120,11 @@ uv add tatolab-stream
 ```
 
 A new project's `pyproject.toml` depends on `tatolab-stream`, at least as new as the runtime that
-created it. Every first-party module rides the runtime: it carries a wheel of each, built for this
-machine at its own version, and each time it makes a project's `.venv` it links them into
-`.tatolab/first-party-imports/` and declares each as a uv path source, so a project's modules
-always match its runtime and no index is involved.
+created it, and names Tatolab's own package index, `https://get.tatolab.com/simple/`, which serves
+the first-party modules the runtime does not carry. The runtime carries a wheel of its core
+modules — `tatolab-ops`, `tatolab-testpattern` and `tatolab-compositor` — at its own version, and
+each time it makes a project's `.venv` it links them into `.tatolab/first-party-imports/` and
+declares each as a uv path source, so they always match the runtime.
 The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
 does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
 setup step.
@@ -221,12 +221,13 @@ describe its ports, so a module's import-time code runs at every load.
 
 The one source is the starting point: open its `video` in Tato Studio's viewer, then add nodes
 and link them. Swap `tatolab.testpattern:TestPatternSource` for `tatolab.camera:CameraSource`
-(which the runtime already installs), which publishes on the same `video` port, to start from
+(`uv add tatolab-camera` in the project), which publishes on the same `video` port, to start from
 your camera. `examples/test-pattern-halftone-lens` is a project of this shape grown by two nodes of
 its own: a Slang compute kernel that keeps the pixels on the GPU, and a meter that reads each frame
 back on the CPU.
 
-To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes: a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
+To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes
+(`uv add tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
 declares a track of it, and a `MoqTrackSend` writes a port's messages to that track. Another
 stream, on this machine or another, reads the track through a `MoqTrackReceive` node naming a
 gateway on the same relay; a link's two ends are always in one stream.
@@ -492,10 +493,11 @@ write, with the same isolation, the same clock and the same observability as eve
 Native code comes in the same door. A third-party driver — closed-source included — ships as an
 ordinary Python package that exposes handles (file descriptors, exportable allocations, buffers)
 and is wrapped by a node you write. It never links the runtime, and the CPython ABI is the only
-binary boundary. First-party optional capabilities take that same door: `tatolab-webrtc` is an
-ordinary package with Rust inside and two nodes for WHIP publish and WHEP play, `WhipPublisher` and
-`WhepPlayer`, whose native code runs in those nodes' own processes; `tatolab-opus` carries libopus
-the same way, as `OpusEncoder` and `OpusDecoder`. The runtime carries both as wheels.
+binary boundary. First-party optional capabilities take that same door: `tatolab-webrtc`
+(`uv add tatolab-webrtc`) is an ordinary package with Rust inside and two nodes for WHIP publish and
+WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nodes' own processes;
+`tatolab-opus` (`uv add tatolab-opus`) carries libopus the same way, as `OpusEncoder` and
+`OpusDecoder`.
 No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
 an ordinary `pyproject.toml`.
 
@@ -594,28 +596,27 @@ Other vendors are untested rather than validated.
 ## What ships today
 
 A stream on one machine — sources in, GPU work, your model, display or recording out — plus
-observation and live changes from the CLI or an agent. The runtime has no built-in media nodes;
-each is a module, an ordinary Python package the runtime carries as a wheel and installs into every
-project:
+observation and live changes from the CLI or an agent. The runtime ships no media nodes; each is a
+module, served from Tatolab's package index, and the core ones ride the runtime itself:
 
 | Module | |
 |---|---|
 | `tatolab-testpattern` | `TestPatternSource`: the sample animation, for a machine with no camera. |
-| `tatolab-ops` | The small function nodes (`Lfo`, `Remap`, `Clamp`, `Gate`, …), compiled to native code and run inside the node that reads them. |
+| `tatolab-ops` | The small function nodes (`Lfo`, `Remap`, `Clamp`, `Gate`, …), compiled to native code and run inside the node that reads them; the runtime installs it into every project. |
 | `tatolab-virtualcamera` | `VirtualCameraSink`, Linux only: a v4l2loopback camera any other application can select. |
 
-The microphone and speaker are modules: `from tatolab.microphone import MicrophoneSource` and
-`from tatolab.speaker import SpeakerSink`.
+The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then
+`from tatolab.microphone import MicrophoneSource` and `from tatolab.speaker import SpeakerSink`.
 Each runs in its own helper process and moves its samples on a native thread over the
 engine's audio backend, so no interpreter sits in the sample path either. The camera is one too:
-`from tatolab.camera import CameraSource` — V4L2 on Linux and
+`pip install tatolab-camera`, then `from tatolab.camera import CameraSource` — V4L2 on Linux and
 AVFoundation on macOS, each frame imported to the GPU with no CPU copy. So are the hardware
-video codecs: `from tatolab.h264 import H264Encoder, H264Decoder` and
-`from tatolab.h265 import H265Encoder, H265Decoder` — Vulkan Video on a device the helper owns on
-Linux, VideoToolbox on macOS.
+video codecs: `pip install tatolab-h264 tatolab-h265`, then `from tatolab.h264 import H264Encoder,
+H264Decoder` and `from tatolab.h265 import H265Encoder, H265Decoder` — Vulkan Video on a device
+the helper owns on Linux, VideoToolbox on macOS.
 
-Opus is a module too: `tatolab.opus.OpusEncoder` and `OpusDecoder`, libopus linked statically
-into the wheel.
+Opus is a package: `uv add tatolab-opus` gives `tatolab.opus.OpusEncoder` and `OpusDecoder`,
+libopus linked statically into the wheel.
 
 From Python you also get compute, graphics and ray-tracing kernels written in Slang, a
 model-input tensor kernel, and the stream clock every node reads as `ctx.time`.

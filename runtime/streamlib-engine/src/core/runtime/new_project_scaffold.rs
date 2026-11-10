@@ -335,14 +335,26 @@ mod tests {
                 env!("CARGO_PKG_VERSION")
             )),
             "a new project floors tatolab-stream at the version of the runtime that created \
-             it; every first-party module, tatolab-testpattern among them, is declared by the \
+             it; each core first-party module, tatolab-testpattern among them, is declared by the \
              runtime when it makes the project's .venv, through a link to the wheel it carries"
         );
         assert!(rendered_pyproject_toml.contains("name = \"probe-app\""));
         let rendered_pyproject: toml::Table = toml::from_str(rendered_pyproject_toml).unwrap();
-        assert!(
-            rendered_pyproject.get("tool").is_none(),
-            "a new project names no index: its first-party modules come from the runtime"
+        let named_indexes = rendered_pyproject["tool"]["uv"]["index"]
+            .as_array()
+            .unwrap();
+        assert_eq!(named_indexes.len(), 1);
+        assert_eq!(named_indexes[0]["name"].as_str(), Some("tatolab"));
+        assert_eq!(
+            named_indexes[0]["url"].as_str(),
+            Some("https://get.tatolab.com/simple/")
+        );
+        assert_eq!(
+            named_indexes[0]
+                .get("explicit")
+                .and_then(toml::Value::as_bool),
+            None,
+            "a non-explicit index is what lets a transitive first-party module resolve from it"
         );
     }
 

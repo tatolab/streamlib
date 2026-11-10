@@ -3,8 +3,9 @@ name: Distributions
 # The release channel: release-please cuts a GitHub release, and this publishes
 # `tatolab-stream` to PyPI and every first-party module to Tatolab's own package
 # index, https://get.tatolab.com/simple/, at that release's version. A project
-# the runtime makes takes its first-party modules from the wheels the runtime
-# unit carries instead, and everything else from PyPI. The engine wheel is not published: a processor
+# names that index for the modules the runtime does not carry, takes its core
+# modules from the wheels the runtime unit carries, and everything else from
+# PyPI. The engine wheel is not published: a processor
 # interpreter borrows the runtime from the runtime unit's lend, so no stream's
 # venv installs it.
 #
@@ -16,7 +17,7 @@ name: Distributions
 # the runtime unit, for the Linux runtime tarball and for the credentials that
 # publish it, so nothing uploads unless everything built. The Linux runtime
 # publishes after both, because a stream it scaffolds locks the `tatolab-stream`
-# PyPI holds; its first-party modules are wheels the tarball itself carries. A failed publish is
+# PyPI holds; its core modules are wheels the tarball itself carries. A failed publish is
 # recovered by re-running the original run's failed job: PyPI and the index both
 # skip a file they hold byte for byte, and the Linux runtime overwrites a partial
 # upload.
@@ -216,8 +217,8 @@ jobs:
       extension_build_needs_the_slang_compiler: true
 
   # A user's `uv sync` resolves `tatolab-stream` from PyPI, where every earlier
-  # release is a candidate, and every first-party module from the wheels the
-  # runtime unit carries. This run's `tatolab-stream` is not on PyPI yet, so it
+  # release is a candidate, and its core modules from the wheels the runtime
+  # unit carries. This run's `tatolab-stream` is not on PyPI yet, so it
   # joins PyPI as find-links, and the scaffold must lock the one just built — a
   # scaffold that capped its version would lock something else.
   lock-the-scaffold-against-this-runs-distributions:

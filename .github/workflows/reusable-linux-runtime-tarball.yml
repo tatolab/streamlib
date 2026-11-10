@@ -19,8 +19,8 @@ jobs:
   build-linux-runtime-tarball:
     name: x86_64 Linux runtime tarball (manylinux_2_28)
     runs-on: ubuntu-latest
-    # A release build of the engine and every first-party module from cold.
-    timeout-minutes: 240
+    # A release build of the engine from cold.
+    timeout-minutes: 120
     permissions:
       contents: read
 
