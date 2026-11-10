@@ -1075,6 +1075,82 @@ async fn the_stream_tools_name_delete_and_create_a_projects_streams_in_their_gra
     );
 }
 
+/// An undo of `set_stream_display_name` shows the loaded stream under its former name again,
+/// and an undo of `create_stream` unloads and forgets the stream the creation loaded.
+#[tokio::test(flavor = "multi_thread")]
+async fn undoing_a_stream_tool_brings_the_loaded_streams_back_in_line() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+        }
+    };
+    let listed_stream_ids_and_names = || async {
+        let listed = call("list_streams", json!({})).await.unwrap();
+        listed["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|listed| {
+                (
+                    listed["stream"].as_str().unwrap().to_owned(),
+                    listed["display_name"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let undo = || call("undo", json!({ "project_directory": project.path() }));
+
+    call(
+        "set_stream_display_name",
+        json!({
+            "project_directory": project.path(),
+            "stream_asset": project.stream_asset_of("live"),
+            "display_name": "Desk mic",
+        }),
+    )
+    .await
+    .unwrap();
+    undo().await.expect("the display name change undoes");
+    assert_eq!(
+        listed_stream_ids_and_names().await,
+        vec![(live.clone(), "live".to_owned())]
+    );
+
+    let created = call(
+        "create_stream",
+        json!({
+            "project_directory": project.path(),
+            "path": "streams/preview.graph.json",
+            "display_name": "Preview",
+        }),
+    )
+    .await
+    .unwrap();
+    the_stream_action_once_finished(
+        &engine.operations_on_the_loaded_streams(),
+        created["action"]
+            .as_str()
+            .expect("the creation queues a load"),
+    )
+    .await;
+    assert_eq!(
+        listed_stream_ids_and_names().await.len(),
+        2,
+        "the created stream is listed once its load ran"
+    );
+    undo().await.expect("the creation undoes");
+    assert_eq!(
+        listed_stream_ids_and_names().await,
+        vec![(live, "live".to_owned())]
+    );
+}
+
 /// A record an earlier runtime wrote is listed failed, keyed by its file
 /// name, with why and how to run its stream again, until `remove_project` of
 /// the project it names forgets it.
