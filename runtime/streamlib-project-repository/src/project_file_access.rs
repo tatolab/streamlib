@@ -47,7 +47,9 @@ impl ProjectRelativeFilePath {
                 "it holds `.`, `..` or a root, which could lead outside the project",
             ));
         }
-        if path.split('/').next() == Some(PROJECT_RUNTIME_DIRECTORY) {
+        if path.split('/').next().is_some_and(|first_segment| {
+            first_segment.eq_ignore_ascii_case(PROJECT_RUNTIME_DIRECTORY)
+        }) {
             return Err(refuse("it is inside `.tatolab/`, which the runtime keeps"));
         }
         Ok(Self(path.to_owned()))
