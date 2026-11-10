@@ -2109,10 +2109,21 @@ impl Runner {
                 lock_the_projects_python_requirements_with_the_runtime_unit_uv(
                     project_directory,
                     runtime_unit_uv,
+                    &self.first_party_module_folders_this_runtime_carries(),
                 )
             }
             None => Ok(()),
         }
+    }
+
+    /// Each first-party module folder beside this runtime's lend, none when it was handed no lend.
+    fn first_party_module_folders_this_runtime_carries(&self) -> Vec<PathBuf> {
+        self.engine_resources_shared_by_every_stream
+            .processor_interpreter_lend_directory
+            .get()
+            .and_then(first_party_modules_directory_beside_the_lend)
+            .map(|directory| every_first_party_module_folder_in(&directory))
+            .unwrap_or_default()
     }
 
     /// Make the `.venv` of the project in `project_directory` current with the
@@ -2122,19 +2133,12 @@ impl Runner {
         project_directory: &Path,
         is_interrupted: &dyn Fn() -> bool,
     ) -> std::result::Result<(), ProjectVenvNotMade> {
-        let first_party_module_folders = self
-            .engine_resources_shared_by_every_stream
-            .processor_interpreter_lend_directory
-            .get()
-            .and_then(first_party_modules_directory_beside_the_lend)
-            .map(|directory| every_first_party_module_folder_in(&directory))
-            .unwrap_or_default();
         make_the_projects_venv_current_with_the_runtime_unit_uv(
             project_directory,
             self.engine_resources_shared_by_every_stream
                 .runtime_unit_uv_executable
                 .get(),
-            &first_party_module_folders,
+            &self.first_party_module_folders_this_runtime_carries(),
             is_interrupted,
         )
     }
