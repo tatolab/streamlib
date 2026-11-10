@@ -115,7 +115,7 @@ pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
     CreateProjectRequest, LoadedStreamHolding, ProjectCreationQueued, ProjectPausedOrResumed,
-    RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, RunProjectRequest, StreamListing,
+    ProjectStartOrReloadRequest, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, StreamListing,
     StreamListingState, StreamReloadAtTheStart, StreamRenameOutcome,
 };
 pub use stream_environment::StreamEnvironment;

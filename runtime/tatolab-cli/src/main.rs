@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `rename`,
+//! `tatolab`: `new` writes a stream project; `start`, `reload`, `dev`, `stop`, `pause`, `resume`, `rm`, `rename`,
 //! `streams` and `clock` load and manage the streams the machine's runtime holds; and `graph`, `logs` and
 //! `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's
@@ -43,7 +43,9 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
 
-use crate::stream_actions_on_the_runtime::{STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP};
+use crate::stream_actions_on_the_runtime::{
+    STREAM_ARGUMENT_HELP, STREAM_ARGUMENT_LONG_HELP, StreamActionTool,
+};
 use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
@@ -114,32 +116,49 @@ enum TatolabVerb {
         /// Where to create the project (default: a new folder under ~/streams).
         directory: Option<PathBuf>,
     },
-    /// Queue a load of this project's streams on the runtime, print the action, and return.
+    /// Start this project: queue the first load of its streams, print the action, and return.
     #[command(
-        long_about = "Queue a load of the project on its stream action queue and return at once: \
+        long_about = "Queue a start of the project on its stream action queue and return at once: \
                       once the project's earlier actions have run, the runtime makes its .venv \
                       when it does not run, reads every graph document in the project outside its hidden folders, and \
                       loads each as its own stream, recorded so it runs across the runtime's restarts \
-                      until `tatolab stop` or `tatolab rm`. Loading the project again replaces \
-                      each stream under the same id. A stream whose graph document fails to \
+                      until `tatolab stop` or `tatolab rm`. A stream whose graph document fails to \
                       read or load is recorded failed, with why in the project's log, until a \
-                      load of the fixed document replaces it; a load of a stopped project runs it again. Prints `<action> queued: \
+                      load of the fixed document replaces it. A stopped project starts again. \
+                      Refused when the project already runs (`tatolab reload` re-reads it) or is \
+                      paused (`tatolab resume` resumes it). Prints `<action> queued: \
                       load of <project>` and how to follow it with `tatolab logs -f`; \
                       `tatolab streams` shows each stream `preparing` until the load has run. \
                       Exits 0 once queued, and 1 only when the request is refused or no runtime \
                       answers."
     )]
-    Run {
+    Start {
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
+    },
+    /// Reload this project: queue a re-read of its streams from disk, keeping it paused if it is.
+    #[command(
+        long_about = "Queue a reload of the project on its stream action queue and return at \
+                      once: the runtime reads every graph document again and replaces each \
+                      stream under the same id, and retries a failed one. A paused project \
+                      stays paused. Refused when the project was never started or is stopped \
+                      (`tatolab start` starts it). Prints `<action> queued: load of <project>` \
+                      and how to follow it with `tatolab logs -f`."
+    )]
+    Reload {
         /// The project's directory (default: the working directory).
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
     /// Queue a load of this project, follow its log, and queue another on every saved edit.
     #[command(
-        long_about = "`run`, then the project's log followed — each record under the project's \
+        long_about = "`start` — or `reload`, when the project already runs — then the \
+                      project's log followed — each record under the project's \
                       folder name — plus a watch on the project's .py files, graph documents, \
-                      tatolab-project.json and pyproject.toml: each settled save queues another \
-                      load, which replaces each stream; a saved .py file first refreshes \
+                      tatolab-project.json and pyproject.toml: each settled save queues a \
+                      reload, which replaces each stream and keeps a paused project paused, and \
+                      is refused once the project is stopped; a saved .py file first refreshes \
                       every fragment whose graph generator its module defines. A save whose \
                       stream fails to load \
                       records it failed, with why in the log, until a save that loads. Ctrl-C ends dev and leaves the streams loaded. When the runtime \
@@ -151,24 +170,12 @@ enum TatolabVerb {
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
-    /// Start this project: the run `tatolab run` queues.
-    #[command(
-        long_about = "Queue a run of the whole project, exactly as `tatolab run` does: every \
-                      stream of it is loaded and started, a stopped project runs again and its \
-                      failed streams are retried. Prints `<action> queued: load of <project>` \
-                      and exits 0 once queued."
-    )]
-    Start {
-        /// The project's directory (default: the working directory).
-        #[arg(long = "dir", value_name = "DIR")]
-        project_directory: Option<PathBuf>,
-    },
     /// Stop this project: queue the unload of every stream of it, kept stopped across restarts.
     #[command(
         long_about = "Queue a stop of the whole project on its stream action queue: once the \
                       project's earlier actions have run, every stream of it is unloaded and \
                       recorded stopped, so the runtime leaves the project stopped across its \
-                      restarts until `tatolab run` runs it again. A project runs and stops as a \
+                      restarts until `tatolab start` starts it again. A project runs and stops as a \
                       whole; no verb stops one stream of it. Prints `<action> queued: stop of \
                       <project>` and exits 0 once queued; `tatolab streams` shows the project's \
                       streams `stopping` until it is done."
@@ -183,8 +190,8 @@ enum TatolabVerb {
         long_about = "Pause the whole project at once, never waiting behind its queued \
                       actions: every processor of each loaded stream holds its state and \
                       processes nothing, and a graph edit made meanwhile compiles on `tatolab \
-                      resume`. A stream `tatolab run` or `tatolab dev` loads meanwhile starts \
-                      paused. Pause is never recorded, so a runtime restart runs the project. \
+                      resume`. A stream `tatolab reload` or `tatolab dev` loads meanwhile \
+                      starts paused. Pause is never recorded, so a runtime restart runs the project. \
                       Prints `paused <project>: <streams>`; `tatolab streams` shows them `paused`."
     )]
     Pause {
@@ -218,7 +225,7 @@ enum TatolabVerb {
     },
     /// Cancel a stream action: drop a queued one, or stop a running load at its step.
     #[command(
-        long_about = "Cancel the stream action ACTION, the id `run`, `dev`, `stop` or `rm` \
+        long_about = "Cancel the stream action ACTION, the id `start`, `reload`, `dev`, `stop` or `rm` \
                       printed. A queued action is dropped and its streams' records stay as \
                       they were; prints `<action> cancelled`. A running load stops at \
                       the step it is on — a running uv sync is killed and a half-made \
@@ -363,9 +370,19 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
                 )
             })
         }
-        TatolabVerb::Run { project_directory } | TatolabVerb::Start { project_directory } => {
+        TatolabVerb::Start { project_directory } => {
             caller_working_directory().and_then(|caller_working_directory| {
-                stream_actions_on_the_runtime::run_project(
+                stream_actions_on_the_runtime::start_or_reload_project(
+                    StreamActionTool::StartProject,
+                    &caller_working_directory,
+                    project_directory.as_deref(),
+                )
+            })
+        }
+        TatolabVerb::Reload { project_directory } => {
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_actions_on_the_runtime::start_or_reload_project(
+                    StreamActionTool::ReloadProject,
                     &caller_working_directory,
                     project_directory.as_deref(),
                 )

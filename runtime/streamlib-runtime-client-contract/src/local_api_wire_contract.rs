@@ -117,7 +117,7 @@ pub struct ListStreamsToolResultStream {
     pub failed_because: Option<String>,
     /// Each capture device a node of the loaded stream refused because nobody has asked the user
     /// for its access — the runtime re-loaded it on its own at its start — once each; a
-    /// `stop_project` then `run_project` of its project asks. Empty when it is not loaded.
+    /// `stop_project` then `start_project` of its project asks. Empty when it is not loaded.
     pub capture_devices_whose_access_was_never_asked_for: Vec<CaptureDeviceOnTheWire>,
     /// The stream action preparing it, as `describe_stream_action` takes it; `null` unless it
     /// is `preparing`.
@@ -154,11 +154,11 @@ pub enum ListedStreamState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
     /// start.
     Running,
-    /// Stopped with its project, and left unloaded until `run_project`.
+    /// Stopped with its project, and left unloaded until `start_project`.
     Stopped,
     /// Loaded with its project paused: its processors process nothing until `resume_project`.
     Paused,
-    /// Skipped at the runtime's start until a `run_project` of its project retries it.
+    /// Skipped at the runtime's start until a `reload_project` of its project retries it.
     Failed,
     /// A stream action of its project that loads it is queued or under way on it.
     Preparing,
@@ -186,9 +186,9 @@ impl std::fmt::Display for ListedStreamState {
     }
 }
 
-/// The `run_project` tool's result: the stream action it queued.
+/// The `start_project` or `reload_project` tool's result: the load it queued.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunProjectToolResult {
+pub struct StartOrReloadProjectToolResult {
     /// The queued action's id, which `describe_stream_action` and `logs` take.
     pub action: String,
     /// The project whose queue holds it, symlinks resolved.
@@ -902,7 +902,7 @@ mod tests {
             r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","project":"00000000-0000-0000-0000-000000000001","stream_asset":"00000000-0000-0000-0000-000000000002"},"state":"running","node_count":4,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":["camera","microphone"],"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","capture_devices_whose_access_was_never_asked_for":[],"action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","project":"00000000-0000-0000-0000-000000000003","stream_asset":"00000000-0000-0000-0000-000000000004"},"state":"preparing","node_count":null,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":[],"action":"Rabc-3","step":"making_the_venv"}]}"#
         );
         assert_eq!(
-            wire_text(&RunProjectToolResult {
+            wire_text(&StartOrReloadProjectToolResult {
                 action: "Rabc-3".to_owned(),
                 project_directory: PathBuf::from("/srv/desk"),
             }),

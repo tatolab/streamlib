@@ -98,7 +98,7 @@ failure isolation (`:1629-1648`) are DECIDED and SHIPPED.
   and whether to give up. [helper-process-restart]
 - **ADDED (§Processor model & scheduling, DECIDED):** A node past its crash-loop limit reads `Error`
   with the last death's reason and stays down; the rest of its stream keeps running. Re-running the
-  stream (`tatolab run`) starts it with a fresh count. A restart
+  stream (`tatolab reload`) starts it with a fresh count. A restart
   whose `setup()` refuses, or whose helper refuses the engine's build id, counts as one death in a
   row, and its refusal is the reason the node carries. [helper-process-restart]
 - **ADDED (§Control plane & observability):** A helper-placed node's `components.state` in `graph`

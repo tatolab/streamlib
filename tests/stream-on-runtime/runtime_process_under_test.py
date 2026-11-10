@@ -12,7 +12,7 @@ line lists, so neither pipe can fill and wedge the runtime while a test waits.
 output, every loaded stream's records included. A node reports with
 `log.info("MARKER:<NAME> <json>")`; the line reaches `tatolabd`'s standard error
 through the helper log drain, wrapped in a log record, and is matched anywhere
-in the line. `tatolab run` prints the line naming the stream it loaded on
+in the line. `tatolab start` prints the line naming the stream it loaded on
 standard output and its refusal on standard error, and `tatolab dev` follows the
 stream's records on standard output, so the marker waits read `tatolabd`'s
 standard error.
