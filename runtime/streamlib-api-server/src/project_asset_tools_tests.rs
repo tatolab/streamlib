@@ -715,6 +715,61 @@ async fn a_project_file_written_over_the_socket_is_read_back_listed_and_undone()
     );
 }
 
+/// `create_node_file` writes the runtime's node template, its class named after the file, as
+/// one commit that `undo` takes out, and refuses a path that already holds a file or names no
+/// importable module.
+#[tokio::test]
+async fn a_node_file_created_from_the_template_names_its_node_type_and_undoes() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+
+    let created = served
+        .answered("create_node_file", json!({ "path": "nodes/edge_glow.py" }))
+        .await;
+
+    assert_eq!(created["path"], "nodes/edge_glow.py", "{created}");
+    assert_eq!(
+        created["node_type"], "nodes.edge_glow:EdgeGlow",
+        "{created}"
+    );
+    assert_eq!(
+        served.history_subjects_newest_first()[0],
+        "write_project_file nodes/edge_glow.py"
+    );
+    let node_file = served.project_directory().join("nodes/edge_glow.py");
+    let content = std::fs::read_to_string(&node_file).unwrap();
+    assert!(content.contains("@node.process("), "{content}");
+    assert!(content.contains("class EdgeGlow:\n"), "{content}");
+
+    let refused_over_a_file = the_error_text_of(
+        &served
+            .tool_call("create_node_file", json!({ "path": "nodes/edge_glow.py" }))
+            .await,
+    );
+    assert!(
+        refused_over_a_file.starts_with("create_node_file failed: ")
+            && refused_over_a_file.contains("already holds `nodes/edge_glow.py`"),
+        "{refused_over_a_file}"
+    );
+    assert_eq!(std::fs::read_to_string(&node_file).unwrap(), content);
+    let refused_as_no_module = the_error_text_of(
+        &served
+            .tool_call("create_node_file", json!({ "path": "nodes/edge-glow.py" }))
+            .await,
+    );
+    assert!(
+        refused_as_no_module.starts_with("create_node_file failed: "),
+        "{refused_as_no_module}"
+    );
+    assert!(!exists_under(
+        &served.project_directory(),
+        "nodes/edge-glow.py"
+    ));
+
+    served.answered("undo", json!({})).await;
+
+    assert!(!node_file.exists());
+}
+
 #[tokio::test]
 async fn a_project_is_renamed_described_and_covered_and_list_assets_serves_each() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;

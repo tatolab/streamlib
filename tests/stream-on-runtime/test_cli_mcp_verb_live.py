@@ -90,6 +90,7 @@ CONTROL_TOOL_NAMES = {
     "list_project_files",
     "read_project_file",
     "write_project_file",
+    "create_node_file",
     "add_dependency",
     "update_dependency",
     "list_dependencies",
