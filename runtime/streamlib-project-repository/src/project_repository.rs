@@ -690,6 +690,8 @@ impl ProjectRepository {
         let mut staged_documents: BTreeMap<Uuid, StreamGraphDocument> = BTreeMap::new();
         let mut staged_project_file = self.project_file.clone();
         let mut stream_documents_taken_out: BTreeSet<ProjectRelativeAssetPath> = BTreeSet::new();
+        let files_a_reversal_finds_on_disk =
+            self.files_a_reversal_finds_on_disk(lineage, &operations)?;
         for operation in &operations {
             match operation {
                 ProjectOperation::StreamDocument(stream_document_operation) => {
@@ -711,6 +713,7 @@ impl ProjectRepository {
                     self.refuse_a_file_operation_on_a_file_as_it_is_now(
                         &staged_assets,
                         file_operation,
+                        files_a_reversal_finds_on_disk.as_ref(),
                     )?;
                 }
                 ProjectOperation::ProjectSettings(project_settings_operation) => {
@@ -1739,9 +1742,15 @@ impl ProjectRepository {
         self.refuse_a_file_another_action_writes(&self.every_asset()?, &path)?;
         let on_disk = path.on_disk_under(&self.project_directory);
         let replaced_a_file = on_disk.is_file();
-        if replaced_a_file && std::fs::read(&on_disk)? == content {
+        let bytes_on_disk_now = if replaced_a_file {
+            Some(std::fs::read(&on_disk)?)
+        } else {
+            None
+        };
+        if bytes_on_disk_now.as_deref() == Some(content) {
             return Err(ProjectRepositoryRefusal::EmptyTransaction);
         }
+        self.record_the_file_when_history_holds_other_bytes(&path, bytes_on_disk_now.as_deref())?;
         let staged_at = format!("{PROJECT_FILE_WRITE_STAGING_DIRECTORY}/{}", Uuid::new_v4());
         let staged_copy = self.project_directory.join(&staged_at);
         write_file_whole(&staged_copy, content)?;
@@ -1764,8 +1773,67 @@ impl ProjectRepository {
         applied.map(ProjectActionApplyOutcome::AppliedNow)
     }
 
+    /// Commit the project's files as they are now when history holds other bytes at `path`
+    /// than `bytes_on_disk_now`, so a write's inverse puts back what the write replaced.
+    fn record_the_file_when_history_holds_other_bytes(
+        &self,
+        path: &ProjectRelativeFilePath,
+        bytes_on_disk_now: Option<&[u8]>,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let head = self.commit_the_files_when_history_holds_none()?;
+        let bytes_history_holds = self.history.files_at_commit(&head)?.remove(path.as_str());
+        if bytes_history_holds.as_deref() == bytes_on_disk_now {
+            return Ok(());
+        }
+        self.history.commit_tracked_files(
+            &self.tracked_files(&self.assets_by_uuid)?,
+            &ProjectTransactionAuthor::the_runtime(),
+            &format!("record {path} as it was before write_project_file"),
+        )?;
+        Ok(())
+    }
+
+    /// The files an undo or a redo with file operations expects on disk: what the undone
+    /// transaction left, or what stood before the redone one; `None` for a new edit.
+    fn files_a_reversal_finds_on_disk(
+        &self,
+        lineage: ProjectTransactionLineage,
+        operations: &[ProjectOperation],
+    ) -> Result<Option<BTreeMap<String, Vec<u8>>>, ProjectRepositoryRefusal> {
+        let reversed = match lineage {
+            ProjectTransactionLineage::NewEdit => return Ok(None),
+            ProjectTransactionLineage::UndoOf(reversed)
+            | ProjectTransactionLineage::RedoOf(reversed) => reversed,
+        };
+        if !operations
+            .iter()
+            .any(|operation| matches!(operation, ProjectOperation::File(_)))
+        {
+            return Ok(None);
+        }
+        let Some(applied) = self
+            .each_applied_transaction_newest_first()?
+            .find(|applied| {
+                applied
+                    .as_ref()
+                    .map_or(true, |applied| applied.transaction.transaction == reversed)
+            })
+            .transpose()?
+        else {
+            return Ok(None);
+        };
+        let commit = match lineage {
+            ProjectTransactionLineage::UndoOf(_) => Some(applied.commit),
+            _ => applied.transaction.parent_commit,
+        };
+        commit
+            .map(|commit| self.history.files_at_commit(&commit))
+            .transpose()
+    }
+
     /// Refuse a path the file verbs never write: what another action changes, or a file the
-    /// project's history does not record, whose write could not be undone.
+    /// project's history does not record, whose write could not be undone. Paths compare
+    /// without regard to case, as macOS's default filesystem resolves them.
     fn refuse_a_file_another_action_writes(
         &self,
         assets: &BTreeMap<Uuid, ProjectAsset>,
@@ -1776,7 +1844,8 @@ impl ProjectRepository {
                 path: path.to_string(),
                 why,
             };
-        let spelled = path.as_str();
+        let spelled_in_lowercase = path.as_str().to_lowercase();
+        let spelled = spelled_in_lowercase.as_str();
         if spelled.ends_with(GRAPH_DOCUMENT_FILE_SUFFIX) {
             return Err(refuse(
                 "a graph document is changed by graph edits and the stream verbs",
@@ -1795,10 +1864,9 @@ impl ProjectRepository {
                 "an import's files are edited by opening `imports/<folder>/` as a project of its own",
             ));
         }
-        if assets
-            .values()
-            .any(|asset| asset.kind != ProjectAssetKind::Stream && asset.path.as_str() == spelled)
-        {
+        if assets.values().any(|asset| {
+            asset.kind != ProjectAssetKind::Stream && asset.path.as_str().to_lowercase() == spelled
+        }) {
             return Err(refuse("an asset's bytes are replaced with replace_asset"));
         }
         let mut folder = self.project_directory.clone();
@@ -1818,15 +1886,32 @@ impl ProjectRepository {
     }
 
     /// Refuse `file_operation` unless the file is as it expects: there for a write over it or
-    /// a removal, absent for a new file.
+    /// a removal, absent for a new file, and for an undo or a redo holding the bytes
+    /// `files_a_reversal_finds_on_disk` records.
     fn refuse_a_file_operation_on_a_file_as_it_is_now(
         &self,
         assets: &BTreeMap<Uuid, ProjectAsset>,
         file_operation: &ProjectFileOperation,
+        files_a_reversal_finds_on_disk: Option<&BTreeMap<String, Vec<u8>>>,
     ) -> Result<(), ProjectRepositoryRefusal> {
         let path = file_operation.path();
         self.refuse_a_file_another_action_writes(assets, path)?;
-        let is_there = path.on_disk_under(&self.project_directory).is_file();
+        let on_disk = path.on_disk_under(&self.project_directory);
+        let is_there = on_disk.is_file();
+        if let Some(files_a_reversal_finds_on_disk) = files_a_reversal_finds_on_disk {
+            let bytes_on_disk_now = if is_there {
+                Some(std::fs::read(&on_disk)?)
+            } else {
+                None
+            };
+            if files_a_reversal_finds_on_disk.get(path.as_str()) != bytes_on_disk_now.as_ref() {
+                return Err(
+                    ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRecorded {
+                        path: path.to_string(),
+                    },
+                );
+            }
+        }
         let expected_there = match file_operation {
             ProjectFileOperation::WriteProjectFile {
                 replaced_a_file, ..

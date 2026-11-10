@@ -7,6 +7,7 @@ use serde_json::Map;
 use streamlib_project_repository::{
     ProjectActionApplyOutcome, ProjectAssetAction, ProjectAssetImportSource, ProjectRepository,
     ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionReversal,
 };
 
 const A_PNG_HEADER_AND_HIGH_BYTES: &[u8] = &[
@@ -145,6 +146,90 @@ fn an_undo_puts_back_what_a_file_held_or_takes_a_new_file_out_and_a_redo_writes_
 }
 
 #[test]
+fn an_undo_puts_back_what_the_file_held_on_disk_when_it_was_written_over() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"first\n").unwrap();
+    std::fs::write(
+        project.project_directory.join("nodes/camera.py"),
+        b"edited by hand\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.project_directory.join("nodes/made_by_hand.py"),
+        b"by hand\n",
+    )
+    .unwrap();
+
+    project.write("nodes/camera.py", b"second\n").unwrap();
+    project.undo();
+    assert_eq!(
+        project.on_disk("nodes/camera.py").unwrap(),
+        b"edited by hand\n"
+    );
+
+    project
+        .write("nodes/made_by_hand.py", b"written\n")
+        .unwrap();
+    project.undo();
+    assert_eq!(
+        project.on_disk("nodes/made_by_hand.py").unwrap(),
+        b"by hand\n"
+    );
+}
+
+#[test]
+fn an_undo_or_a_redo_is_refused_once_the_file_changed_after_it_was_recorded() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"first\n").unwrap();
+    project
+        .repository
+        .write_project_file(&an_agent(), None, "nodes/camera.py", b"by the agent\n")
+        .unwrap();
+    let undo = project.repository.undo_by(&a_person());
+    assert_the_reversal_is_refused(&mut project, undo);
+
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"first\n").unwrap();
+    project.write("nodes/camera.py", b"second\n").unwrap();
+    project.undo();
+    std::fs::write(
+        project.project_directory.join("nodes/camera.py"),
+        b"edited by hand\n",
+    )
+    .unwrap();
+    let redo = project.repository.redo_by(&a_person());
+    assert_the_reversal_is_refused(&mut project, redo);
+    assert_eq!(
+        project.on_disk("nodes/camera.py").unwrap(),
+        b"edited by hand\n"
+    );
+}
+
+fn assert_the_reversal_is_refused(
+    project: &mut AProjectWithNodeCode,
+    reversal: Result<ProjectTransactionReversal, ProjectRepositoryRefusal>,
+) {
+    let reversal = reversal.unwrap();
+    assert!(matches!(
+        project.repository.apply_project_operations(
+            &a_person(),
+            None,
+            Vec::new(),
+            reversal.operations,
+            reversal.lineage,
+        ),
+        Err(ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRecorded { .. })
+    ));
+}
+
+fn an_agent() -> ProjectTransactionAuthor {
+    ProjectTransactionAuthor {
+        kind: ProjectTransactionAuthorKind::Agent,
+        name: "an agent".to_owned(),
+    }
+}
+
+#[test]
 fn the_same_content_is_an_empty_transaction() {
     let mut project = AProjectWithNodeCode::new();
     project.write("stream.py", b"same\n").unwrap();
@@ -187,6 +272,7 @@ fn a_path_outside_the_project_or_through_a_link_is_refused_for_every_verb() {
         "/etc/passwd",
         "linked/secret.txt",
         ".tatolab/history.git/HEAD",
+        ".TATOLAB/history.git/HEAD",
     ] {
         assert!(
             matches!(
@@ -242,7 +328,11 @@ fn a_file_another_verb_changes_or_history_does_not_record_is_never_written() {
         "media/intro.mp4.asset.json",
         "media/intro.mp4",
         "tatolab-project.json",
+        "Tatolab-Project.json",
+        "Media/Intro.mp4",
+        "Streams/Main.Graph.json",
         "imports/other/stream.py",
+        "Imports/other/stream.py",
         ".venv/lib/site.py",
         "nodes/__pycache__/camera.pyc",
         "views/panel/node_modules/left-pad/index.js",
