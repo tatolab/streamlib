@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rmcp::RoleClient;
-use rmcp::model::{CallToolRequestParams, ProtocolVersion};
+use rmcp::model::{
+    CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, ProtocolVersion,
+    ReadResourceRequestParams,
+};
 use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService};
 use serde_json::{Value, json};
 use streamlib_project_repository::{
@@ -20,6 +23,7 @@ use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
 use crate::mcp::tests::{
     ControlPlaneMcpDispatchStubRuntime, first_text_block_json, mcp_transport_to,
 };
+use crate::mcp_stdio_upgrade::tests::upgraded_mcp_stdio_stream;
 
 struct AssetToolsServedOverAProject {
     project_parent_directory: tempfile::TempDir,
@@ -451,4 +455,84 @@ async fn the_feed_of_a_project_no_tool_has_opened_is_refused_naming_how_to_open_
         .await
         .expect_err("a project no tool opened has no feed to read");
     assert!(refused.to_string().contains("list_assets"), "{refused}");
+}
+
+#[tokio::test]
+async fn an_authorless_edit_over_mcp_and_mcp_stdio_is_recorded_under_the_requests_client_info_name()
+{
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let transactions_resource_uri =
+        served.answered("list_assets", json!({})).await["transactions_resource_uri"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let claude_code_client_config = ClientConfig::new(
+        ClientCapabilities::default(),
+        Implementation::new("claude-code", "2.1.0"),
+    );
+    let discover_the_latest_revision = || ClientLifecycleMode::Discover {
+        preferred_versions: vec![ProtocolVersion::LATEST],
+    };
+    let clients_by_transport = [
+        (
+            "/mcp",
+            claude_code_client_config
+                .clone()
+                .serve_with_lifecycle(
+                    mcp_transport_to(&served.served),
+                    discover_the_latest_revision(),
+                )
+                .await
+                .unwrap(),
+        ),
+        (
+            "/mcp/stdio",
+            claude_code_client_config
+                .clone()
+                .serve_with_lifecycle(
+                    upgraded_mcp_stdio_stream(&served.served).await,
+                    discover_the_latest_revision(),
+                )
+                .await
+                .unwrap(),
+        ),
+    ];
+
+    for (transport, client) in clients_by_transport {
+        let source = served.a_file_outside_the_project("intro.mp4", transport.as_bytes());
+        let request = CallToolRequestParams::new("import_asset").with_arguments(
+            json!({
+                "project_directory": served.project_directory(),
+                "source": source,
+                "asset_path": format!("media/intro-over-{}.mp4", transport.replace('/', "-")),
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+        );
+        let imported = first_text_block_json(
+            &serde_json::to_value(client.call_tool(request).await.unwrap()).unwrap(),
+        );
+
+        let read = client
+            .read_resource(ReadResourceRequestParams::new(
+                transactions_resource_uri.clone(),
+            ))
+            .await
+            .unwrap();
+        let read = serde_json::to_value(read).unwrap();
+        let feed: Value =
+            serde_json::from_str(read["contents"][0]["text"].as_str().unwrap()).unwrap();
+        let recorded = feed["transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|transaction| transaction["transaction"] == imported["transaction"])
+            .unwrap_or_else(|| panic!("{transport}: the import is on the feed: {feed}"));
+        assert_eq!(recorded["author_kind"], "agent", "{transport}: {recorded}");
+        assert_eq!(
+            recorded["author_name"], "claude-code",
+            "{transport}: {recorded}"
+        );
+    }
 }

@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::schemars::JsonSchema;
-use rmcp::{Peer, RoleServer, tool, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use streamlib::sdk::runtime::{
@@ -583,15 +584,21 @@ impl LocalApiMcpServerHandler {
     )]
     async fn transact(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(TransactToolArguments {
             operations,
             mode,
             author,
         }): Parameters<TransactToolArguments>,
     ) -> ToolCallAnswer {
-        self.one_graph_transaction("transact", operations, mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "transact",
+            operations,
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -599,7 +606,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn import_graph_generator(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(ImportGraphGeneratorToolArguments {
             stream,
             generator,
@@ -621,7 +628,7 @@ impl LocalApiMcpServerHandler {
             vec![operation],
             mode,
             author,
-            &peer,
+            &tool_call_request_context,
         )
         .await
     }
@@ -631,7 +638,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn add_node(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(AddNodeToolArguments {
             stream,
             node_type,
@@ -654,8 +661,14 @@ impl LocalApiMcpServerHandler {
             studio,
             label: None,
         };
-        self.one_graph_transaction("add_node", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "add_node",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -663,7 +676,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn remove_node(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(OneNodeToolArguments {
             stream,
             node,
@@ -672,8 +685,14 @@ impl LocalApiMcpServerHandler {
         }): Parameters<OneNodeToolArguments>,
     ) -> ToolCallAnswer {
         let operation = StreamGraphOperationToolArgument::RemoveNode { stream, node };
-        self.one_graph_transaction("remove_node", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "remove_node",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -681,7 +700,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn connect(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(OneLinkToolArguments {
             stream,
             source,
@@ -695,8 +714,14 @@ impl LocalApiMcpServerHandler {
             source,
             target,
         };
-        self.one_graph_transaction("connect", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "connect",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -704,7 +729,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn disconnect(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(OneLinkToolArguments {
             stream,
             source,
@@ -718,8 +743,14 @@ impl LocalApiMcpServerHandler {
             source,
             target,
         };
-        self.one_graph_transaction("disconnect", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "disconnect",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -727,7 +758,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_node_config(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetNodeConfigToolArguments {
             stream,
             node,
@@ -741,8 +772,14 @@ impl LocalApiMcpServerHandler {
             node,
             config,
         };
-        self.one_graph_transaction("set_node_config", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "set_node_config",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -750,7 +787,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_pin_value(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetPinValueToolArguments {
             stream,
             node,
@@ -766,8 +803,14 @@ impl LocalApiMcpServerHandler {
             input,
             value,
         };
-        self.one_graph_transaction("set_pin_value", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "set_pin_value",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -775,7 +818,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn rename_node(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RenameNodeToolArguments {
             stream,
             node,
@@ -785,8 +828,14 @@ impl LocalApiMcpServerHandler {
         }): Parameters<RenameNodeToolArguments>,
     ) -> ToolCallAnswer {
         let operation = StreamGraphOperationToolArgument::RenameNode { stream, node, name };
-        self.one_graph_transaction("rename_node", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "rename_node",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -794,7 +843,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_studio_fields(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetStudioFieldsToolArguments {
             stream,
             node,
@@ -808,8 +857,14 @@ impl LocalApiMcpServerHandler {
             node,
             studio,
         };
-        self.one_graph_transaction("set_studio_fields", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "set_studio_fields",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -817,7 +872,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_exposed_config_fields(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetExposedConfigFieldsToolArguments {
             stream,
             node,
@@ -836,7 +891,7 @@ impl LocalApiMcpServerHandler {
             vec![operation],
             mode,
             author,
-            &peer,
+            &tool_call_request_context,
         )
         .await
     }
@@ -846,7 +901,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn add_group(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(AddGroupToolArguments {
             stream,
             title,
@@ -864,8 +919,14 @@ impl LocalApiMcpServerHandler {
             colour,
             nodes,
         };
-        self.one_graph_transaction("add_group", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "add_group",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -873,7 +934,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn set_group_fields(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetGroupFieldsToolArguments {
             stream,
             group,
@@ -891,8 +952,14 @@ impl LocalApiMcpServerHandler {
             description,
             colour,
         };
-        self.one_graph_transaction("set_group_fields", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "set_group_fields",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -900,7 +967,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn remove_group(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RemoveGroupToolArguments {
             stream,
             group,
@@ -909,8 +976,14 @@ impl LocalApiMcpServerHandler {
         }): Parameters<RemoveGroupToolArguments>,
     ) -> ToolCallAnswer {
         let operation = StreamGraphOperationToolArgument::RemoveGroup { stream, group };
-        self.one_graph_transaction("remove_group", vec![operation], mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "remove_group",
+            vec![operation],
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -918,7 +991,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn refresh_fragments(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RefreshFragmentsToolArguments {
             project_directory,
             changed_files,
@@ -961,8 +1034,14 @@ impl LocalApiMcpServerHandler {
                 },
             );
         }
-        self.one_graph_transaction("refresh_fragments", refreshes, mode, author, &peer)
-            .await
+        self.one_graph_transaction(
+            "refresh_fragments",
+            refreshes,
+            mode,
+            author,
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -970,7 +1049,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn undo(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(UndoOrRedoToolArguments {
             project_directory,
             author,
@@ -979,7 +1058,7 @@ impl LocalApiMcpServerHandler {
         self.an_undo_or_redo(
             "undo",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             ProjectRepository::undo_by,
         )
         .await
@@ -990,7 +1069,7 @@ impl LocalApiMcpServerHandler {
     )]
     async fn redo(
         &self,
-        peer: Peer<RoleServer>,
+        tool_call_request_context: RequestContext<RoleServer>,
         Parameters(UndoOrRedoToolArguments {
             project_directory,
             author,
@@ -999,7 +1078,7 @@ impl LocalApiMcpServerHandler {
         self.an_undo_or_redo(
             "redo",
             project_directory,
-            the_author_of_a_change(author, &peer),
+            the_author_of_a_change(author, &tool_call_request_context),
             ProjectRepository::redo_by,
         )
         .await
@@ -1013,9 +1092,9 @@ impl LocalApiMcpServerHandler {
         operations: Vec<StreamGraphOperationToolArgument>,
         mode: Option<GraphEditMode>,
         author: Option<ProjectTransactionAuthorToolArgument>,
-        peer: &Peer<RoleServer>,
+        tool_call_request_context: &RequestContext<RoleServer>,
     ) -> ToolCallAnswer {
-        let author = the_author_of_a_change(author, peer);
+        let author = the_author_of_a_change(author, tool_call_request_context);
         let mode = mode.unwrap_or_default();
         let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
