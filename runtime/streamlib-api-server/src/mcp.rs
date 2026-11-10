@@ -182,6 +182,7 @@ impl LocalApiMcpServerHandler {
             project_repositories_open_in_this_runtime,
             tool_router: Arc::new(
                 Self::tool_router()
+                    + Self::project_archive_tool_router()
                     + Self::project_asset_tool_router()
                     + Self::project_dependency_tool_router()
                     + Self::project_node_type_tool_router()
@@ -1143,6 +1144,7 @@ pub(crate) mod tests {
         "redo",
         "run_project",
         "create_project",
+        "import_project",
         "describe_stream_action",
         "cancel_stream_action",
         "stop_project",

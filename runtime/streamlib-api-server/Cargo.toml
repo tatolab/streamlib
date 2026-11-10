@@ -79,3 +79,5 @@ toml.workspace = true
 # The request-trace level test drives a request under a real `EnvFilter` and
 # captures what reached the subscriber.
 tracing-subscriber.workspace = true
+# The project archive tests zip a project to import it.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
