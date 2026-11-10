@@ -367,7 +367,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
             }
             client.call_tool(tool_name, {"stream": stream_the_step_names, **ends, "mode": "live"})
             if tool_name == "connect":
-                graph_now = client.call_tool("graph", {"stream": stream_the_step_names})
+                graph_now = client.call_tool("graph", {"stream": stream_id})
                 name_of = {node["id"]: node["name"] for node in graph_now["nodes"]}
                 returned_link_ids.append(
                     next(

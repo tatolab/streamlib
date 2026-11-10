@@ -607,3 +607,94 @@ async fn an_authorless_edit_over_mcp_and_mcp_stdio_is_recorded_under_the_request
         );
     }
 }
+
+#[tokio::test]
+async fn a_project_is_renamed_described_and_covered_and_list_assets_serves_each() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let listed_before = served.answered("list_assets", json!({})).await;
+    assert_eq!(listed_before["project_description"], Value::Null);
+    assert_eq!(listed_before["project_cover"], Value::Null);
+    let created_at = listed_before["project_last_edited_at"].as_i64().unwrap();
+
+    let renamed = served
+        .answered("rename_project", json!({ "name": "Arm control" }))
+        .await;
+    assert_eq!(renamed["project_name"], "Arm control");
+    assert_eq!(renamed["project"], listed_before["project"]);
+    let described = served
+        .answered(
+            "set_project_description",
+            json!({ "description": "Two arms and a camera" }),
+        )
+        .await;
+    assert_eq!(described["project_description"], "Two arms and a camera");
+    let image = served.a_file_outside_the_project("cover.png", b"png");
+    let imported = served
+        .answered(
+            "import_asset",
+            json!({ "source": image, "asset_path": "assets/cover.png" }),
+        )
+        .await;
+    let cover = imported["asset"]["asset"].as_str().unwrap().to_owned();
+    let covered = served
+        .answered("set_project_cover", json!({ "cover": cover }))
+        .await;
+    assert_eq!(covered["project_cover"], cover.as_str());
+
+    let listed = served.answered("list_assets", json!({})).await;
+    assert_eq!(listed["project_name"], "Arm control");
+    assert_eq!(listed["project_description"], "Two arms and a camera");
+    assert_eq!(listed["project_cover"], cover.as_str());
+    assert!(listed["project_last_edited_at"].as_i64().unwrap() >= created_at);
+    let subjects = served.history_subjects_newest_first();
+    assert_eq!(
+        &subjects[..4],
+        [
+            "set_project_cover",
+            "import_asset assets/cover.png",
+            "set_project_description",
+            "rename_project Arm control"
+        ],
+        "{subjects:?}"
+    );
+
+    let blank = served
+        .tool_call("rename_project", json!({ "name": " " }))
+        .await;
+    assert!(the_error_text_of(&blank).contains("cannot be blank"));
+    let deleted_cover = served
+        .tool_call("delete_asset", json!({ "asset": cover }))
+        .await;
+    assert!(the_error_text_of(&deleted_cover).contains("the project's cover"));
+}
+
+#[tokio::test]
+async fn a_project_is_duplicated_with_its_history_under_a_new_uuid() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let original = served.answered("list_assets", json!({})).await;
+    let into = served
+        .project_parent_directory
+        .path()
+        .join("arm-control-copy");
+
+    let duplicated = served
+        .answered("duplicate_project", json!({ "into": into }))
+        .await;
+
+    assert_ne!(duplicated["project"], original["project"]);
+    assert_eq!(duplicated["project_name"], "arm-control copy");
+    assert_eq!(duplicated["commit"].as_str().unwrap().len(), 40);
+    assert!(into.join(PROJECT_HISTORY_DIRECTORY).is_dir());
+    let again = served
+        .tool_call("duplicate_project", json!({ "into": into }))
+        .await;
+    assert!(the_error_text_of(&again).contains("already exists"));
+}
+
+#[tokio::test]
+async fn a_delete_project_is_queued_on_the_runtime_that_runs_the_stream_actions() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let refused = served.tool_call("delete_project", json!({})).await;
+    assert!(the_error_text_of(&refused).contains("delete_project"));
+    assert!(served.project_directory().exists());
+}

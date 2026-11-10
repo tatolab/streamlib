@@ -93,7 +93,25 @@ on-disk transaction format.
   `tatolab-project.json`. `duplicate_project {project_directory, into}` and
   `delete_project {project_directory}` are verbs, not transactions, because they act on the
   project and its history whole. Delete stops the project first, and #3406 builds both
-  (owner, 2026-11-09). Renaming a project rewrites, in the same transaction, the `type` of
+  (owner, 2026-11-09).
+
+  Owner, 2026-11-10: a rename changes the name alone, never the folder, which open windows,
+  recents and terminals hold. A duplicate carries the project's whole history, as a copied
+  repository does, under a new project UUID and the name `<name> copy`, the duplicate recorded
+  as a commit on that history; its `.venv` and the rest of `.tatolab/` stay behind. A delete
+  forgets the project's streams as `remove_project` does and then moves the folder to the
+  platform's Trash (`NSFileManager` on macOS, the freedesktop.org home Trash on Linux), so it
+  can be put back by hand.
+- **How a project is shown.** A project's `description` and `cover` are fields of
+  `tatolab-project.json`, so they travel with the project, and the cover names an image the
+  project holds as a media asset, by its UUID; a frame taken from a Viewer is imported as an
+  asset first. `set_project_description {project_directory, description}` and
+  `set_project_cover {project_directory, cover}` are recorded actions, as `rename_project` is,
+  and a cover asset cannot be deleted while it is the cover. When a project was last edited is
+  the time of the newest commit on its history, a run never counting, a reading of history and
+  no field anyone sets. `list_assets` serves the three beside the name, as `project_description`,
+  `project_cover` and `project_last_edited_at` (owner, 2026-11-10; #3423).
+  Renaming a project rewrites, in the same transaction, the `type` of
   every node of a view type the project brings, so one undo restores both
   (owner, 2026-11-10).
   `import_project {source, project_directory}` is a verb, not a transaction: it unpacks the

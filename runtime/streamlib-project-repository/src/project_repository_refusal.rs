@@ -52,6 +52,16 @@ pub enum ProjectRepositoryRefusal {
         asset: Uuid,
         referencing_documents: Vec<String>,
     },
+    #[error("a project's name cannot be blank")]
+    BlankProjectName,
+    #[error("the cover must be a media asset, and {asset} is a {kind} asset")]
+    CoverIsNotAMediaAsset { asset: Uuid, kind: &'static str },
+    #[error("the asset {0} cannot be deleted while it is the project's cover")]
+    AssetIsTheProjectCover(Uuid),
+    #[error("{into} already exists, so the project was not duplicated into it")]
+    DuplicateIntoAnExistingPath { into: PathBuf },
+    #[error("a project cannot be duplicated into {into}, which is inside the project itself")]
+    DuplicateIntoTheProjectItself { into: PathBuf },
     #[error("the project holds no stream asset {0}")]
     NoSuchStream(Uuid),
     #[error("{0:?} cannot be a stream's display name: it shows nothing")]

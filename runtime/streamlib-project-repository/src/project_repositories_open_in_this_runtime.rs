@@ -166,6 +166,16 @@ impl ProjectRepositoriesOpenInThisRuntime {
         self.project_change_feed.subscribe()
     }
 
+    /// Close the project at `project_directory` if this runtime holds it open, so the next call
+    /// naming the folder opens what is there then.
+    pub fn close_the_project_repository_at(&self, project_directory: &Path) {
+        let resolved_project_directory = std::fs::canonicalize(project_directory)
+            .unwrap_or_else(|_| project_directory.to_path_buf());
+        self.project_repository_by_resolved_directory
+            .lock()
+            .remove(&resolved_project_directory);
+    }
+
     /// The project at the absolute `project_directory`, opened the first time it is asked for.
     pub fn the_project_repository_at(
         &self,

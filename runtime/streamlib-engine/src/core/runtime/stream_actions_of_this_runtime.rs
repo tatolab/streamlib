@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use super::new_project_name_drawing::draw_new_project_directory_under_the_streams_root;
 use super::new_project_scaffold::{NewProjectScaffold, write_the_new_project_scaffold_into};
+use super::project_folder_moved_to_the_trash::move_the_project_folder_to_the_trash;
 use super::project_stream_action_queue::{
     StreamAction, StreamActionCancelOutcome, StreamActionKind, StreamActionProgress,
     StreamActionQueueOfEachProject, StreamActionQueued, StreamActionState, StreamActionStep,
@@ -966,22 +967,66 @@ impl Runner {
     /// for a directory not named by its absolute path, and for a project the
     /// runtime holds no stream of.
     pub fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
-        if !project_directory.is_absolute() {
-            return Err(Error::Configuration(format!(
-                "`project_directory` must be an absolute path; got `{}`",
+        let project_directory = the_absolute_project_directory_resolved(project_directory)?;
+        let action_id = self.next_stream_action_id();
+        let streams = self
+            .every_stream_of_the_project_marked_for_its_removal(&action_id, &project_directory)?;
+        if streams.is_empty() {
+            return Err(Error::NotFound(format!(
+                "this runtime holds no stream of the project in {}, so there is none to remove. \
+                 Loaded: {}. Recorded: {}",
+                project_directory.display(),
+                self.loaded_stream_ids_listed_for_a_refusal(),
+                self.recorded_stream_ids_listed_for_a_refusal()
+            )));
+        }
+        Ok(self.queue_the_removal_of_the_project(
+            action_id,
+            project_directory,
+            StreamActionKind::Remove,
+            streams,
+        ))
+    }
+
+    /// Queue the deletion of the whole project in `project_directory` on its
+    /// queue, and answer the action: it unloads every loaded stream of the
+    /// project and forgets every record of it, as a removal does, then moves the
+    /// project's folder to this machine's Trash. Refused for a directory not
+    /// named by its absolute path, and for one that holds no project.
+    pub fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        let project_directory = the_absolute_project_directory_resolved(project_directory)?;
+        if !project_directory.join(PROJECT_FILE_NAME).is_file() {
+            return Err(Error::NotFound(format!(
+                "{} holds no project: it has no {PROJECT_FILE_NAME}, so there is none to delete",
                 project_directory.display()
             )));
         }
-        let project_directory = std::fs::canonicalize(project_directory)
-            .unwrap_or_else(|_| project_directory.to_path_buf());
         let action_id = self.next_stream_action_id();
+        let streams = self
+            .every_stream_of_the_project_marked_for_its_removal(&action_id, &project_directory)?;
+        Ok(self.queue_the_removal_of_the_project(
+            action_id,
+            project_directory,
+            StreamActionKind::Delete,
+            streams,
+        ))
+    }
+
+    /// Every stream of the project in `project_directory`, recorded or loaded,
+    /// each record marked with the pending removal `action_id`; a record that
+    /// cannot be marked refuses the whole, every mark already made taken off.
+    fn every_stream_of_the_project_marked_for_its_removal(
+        &self,
+        action_id: &str,
+        project_directory: &Path,
+    ) -> Result<Vec<StreamOfAStreamAction>> {
         let mut streams: Vec<StreamOfAStreamAction> = Vec::new();
-        for stream_id in self.ids_of_every_record_of_the_project(&project_directory) {
+        for stream_id in self.ids_of_every_record_of_the_project(project_directory) {
             let marked = match self.stream_records() {
                 Some(stream_records) => {
                     match stream_records.change_the_record(&stream_id, |record| {
                         record.queue_the_pending_stream_action(
-                            &action_id,
+                            action_id,
                             PendingStreamActionKind::Remove,
                         );
                     }) {
@@ -990,7 +1035,7 @@ impl Runner {
                             for stream_marked_already in &streams {
                                 self.finish_the_pending_stream_action_on_the_record(
                                     &stream_marked_already.stream_id,
-                                    &action_id,
+                                    action_id,
                                 );
                             }
                             return Err(not_marked);
@@ -1010,7 +1055,7 @@ impl Runner {
             });
         }
         for loaded in self.every_loaded_stream() {
-            if the_same_directory(loaded.project_directory(), &project_directory)
+            if the_same_directory(loaded.project_directory(), project_directory)
                 && !streams
                     .iter()
                     .any(|stream| stream.stream_id == loaded.stream_id())
@@ -1023,35 +1068,40 @@ impl Runner {
                 });
             }
         }
-        if streams.is_empty() {
-            return Err(Error::NotFound(format!(
-                "this runtime holds no stream of the project in {}, so there is none to remove. \
-                 Loaded: {}. Recorded: {}",
-                project_directory.display(),
-                self.loaded_stream_ids_listed_for_a_refusal(),
-                self.recorded_stream_ids_listed_for_a_refusal()
-            )));
-        }
+        Ok(streams)
+    }
+
+    /// Queue the removal `action_id` of the project in `project_directory`, a
+    /// `Remove` or a `Delete`, over `streams`.
+    fn queue_the_removal_of_the_project(
+        &self,
+        action_id: String,
+        project_directory: PathBuf,
+        kind: StreamActionKind,
+        streams: Vec<StreamOfAStreamAction>,
+    ) -> StreamActionQueued {
         self.forget_that_the_project_is_paused(&project_directory);
         let action = StreamAction {
             action_id: action_id.clone(),
             project_directory: project_directory.clone(),
-            kind: StreamActionKind::Remove,
+            kind,
             state: StreamActionState::Queued,
             step: None,
             streams,
             failed_because: None,
         };
-        Ok(self
-            .stream_actions
+        self.stream_actions
             .stream_action_queue_of_each_project
             .queue_the_stream_action(
                 action,
-                Box::new(move |runner: &Runner| {
-                    runner.remove_the_project_for_its_stream_action(&action_id, &project_directory);
+                Box::new(move |runner: &Runner| match kind {
+                    StreamActionKind::Delete => runner
+                        .delete_the_project_for_its_stream_action(&action_id, &project_directory),
+                    _ => runner
+                        .remove_the_project_for_its_stream_action(&action_id, &project_directory),
                 }),
                 &self.tokio_handle(),
-            ))
+            )
     }
 
     /// Pause every loaded stream of the project in `project_directory` now, never waiting
@@ -1281,6 +1331,49 @@ impl Runner {
     fn remove_the_project_for_its_stream_action(&self, action_id: &str, project_directory: &Path) {
         let progress = self.progress_of_the_stream_action(action_id);
         progress.is_on(StreamActionStep::Stopping);
+        let not_forgotten = self.unload_and_forget_every_stream_of_the_project(project_directory);
+        progress.finish(if not_forgotten.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(the_records_not_forgotten(&not_forgotten))
+        });
+    }
+
+    /// Run the deletion the stream action `action_id` queued of the project in
+    /// `project_directory`: unload and forget every stream of it as a removal
+    /// does, then move its folder to the Trash, and finish the action. A record
+    /// left unforgotten leaves the folder where it is.
+    fn delete_the_project_for_its_stream_action(&self, action_id: &str, project_directory: &Path) {
+        let progress = self.progress_of_the_stream_action(action_id);
+        progress.is_on(StreamActionStep::Stopping);
+        let not_forgotten = self.unload_and_forget_every_stream_of_the_project(project_directory);
+        if !not_forgotten.is_empty() {
+            progress.finish(Err(format!(
+                "{}, so the project's folder is left where it is",
+                the_records_not_forgotten(&not_forgotten)
+            )));
+            return;
+        }
+        progress.finish(
+            move_the_project_folder_to_the_trash(project_directory)
+                .map(|()| Vec::new())
+                .map_err(|not_moved| {
+                    format!(
+                        "the project's streams are unloaded and forgotten, and its folder {} \
+                         was not moved to the Trash: {not_moved}",
+                        project_directory.display()
+                    )
+                }),
+        );
+    }
+
+    /// Unload every loaded stream of the project in `project_directory` and
+    /// forget every record of it, answering why each record that was not
+    /// forgotten was not.
+    fn unload_and_forget_every_stream_of_the_project(
+        &self,
+        project_directory: &Path,
+    ) -> Vec<String> {
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let loaded_of_the_project: Vec<Arc<LoadedStreamInThisRuntime>> = self
             .every_loaded_stream()
@@ -1304,15 +1397,7 @@ impl Runner {
         for stream_id in ids_of_the_records_forgotten {
             self.forget_the_function_node_states_of_the_stream(&stream_id);
         }
-        progress.finish(if not_forgotten.is_empty() {
-            Ok(Vec::new())
-        } else {
-            Err(format!(
-                "the project's streams are unloaded, and these records were not forgotten, so \
-                 they stay listed: {}",
-                not_forgotten.join("; ")
-            ))
-        });
+        not_forgotten
     }
 
     /// How the running stream action `action_id` reports its progress, it
@@ -3152,6 +3237,15 @@ fn record_a_refused_load_failed(
     Ok(StreamStateAfterItsRun::Failed { failed_because })
 }
 
+/// Why a removal finished failed: the records in `not_forgotten`, each with why.
+fn the_records_not_forgotten(not_forgotten: &[String]) -> String {
+    format!(
+        "the project's streams are unloaded, and these records were not forgotten, so \
+         they stay listed: {}",
+        not_forgotten.join("; ")
+    )
+}
+
 /// Refuse a stop of `stream_id`, whose record is `record`, once a removal of
 /// its project is queued.
 fn refuse_a_stream_whose_project_removal_is_queued(
@@ -3499,6 +3593,8 @@ mod tests {
             let project_file = TatolabProjectFile {
                 project,
                 name: TEST_PROJECT_NAME.to_string(),
+                description: None,
+                cover: None,
                 created_with_runtime: None,
                 dependencies: Vec::new(),
             };
@@ -7076,6 +7172,39 @@ mod tests {
                 .contains("holds no stream of the project")
         );
         assert!(refusal_of(runner.remove_project(Path::new("relative"))).contains("absolute"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[serial]
+    fn a_delete_project_forgets_every_stream_of_the_project_and_moves_its_folder_to_the_trash() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let data_home = tempfile::tempdir().unwrap();
+        // SAFETY: the test is serial, so no other thread reads the environment meanwhile.
+        unsafe { std::env::set_var("XDG_DATA_HOME", data_home.path()) };
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        std::fs::write(project.path().join(PROJECT_FILE_NAME), "{}").unwrap();
+        let camera = a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera"),
+        );
+        let folder_name = project.path().file_name().unwrap().to_owned();
+
+        let deletion = runner.delete_project(project.path()).unwrap();
+        let deleted = the_stream_action_once_finished(&runner, &deletion.action_id);
+        unsafe { std::env::remove_var("XDG_DATA_HOME") };
+
+        assert_eq!(deleted.kind, StreamActionKind::Delete);
+        assert_eq!(deleted.state, StreamActionState::Done, "{deleted:?}");
+        assert!(camera.has_ended());
+        assert!(the_current_record_in(state_directory.path(), camera.stream_id()).is_none());
+        assert!(!project.path().exists());
+        let trashed = data_home.path().join("Trash/files").join(&folder_name);
+        assert!(trashed.join(PROJECT_FILE_NAME).is_file());
+        assert!(refusal_of(runner.delete_project(project.path())).contains("holds no project"));
+        assert!(refusal_of(runner.delete_project(Path::new("relative"))).contains("absolute"));
     }
 
     #[test]

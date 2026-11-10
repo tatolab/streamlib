@@ -111,6 +111,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::remove_project`].
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
+    /// [`Runner::delete_project`].
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
+
     /// [`Runner::pause_project`].
     fn pause_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
 
@@ -278,6 +281,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         stream_asset: Uuid,
     ) -> Option<StreamActionQueued> {
         Runner::load_the_stream_of_a_created_stream_asset(self, project_directory, stream_asset)
+    }
+
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::delete_project(self, project_directory)
     }
 
     fn list_streams(&self) -> Vec<StreamListing> {

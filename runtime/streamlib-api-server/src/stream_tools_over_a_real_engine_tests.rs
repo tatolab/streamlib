@@ -509,6 +509,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::delete_project(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
     fn show_the_stream_of_a_stream_asset_under(
         &self,
         project: uuid::Uuid,
