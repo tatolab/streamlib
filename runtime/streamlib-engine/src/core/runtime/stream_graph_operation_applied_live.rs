@@ -108,7 +108,9 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }
             | StreamGraphOperation::SetGroupFields { .. }
-            | StreamGraphOperation::RemoveGroup { .. } => {
+            | StreamGraphOperation::RemoveGroup { .. }
+            | StreamGraphOperation::FoldIntoFragment { .. }
+            | StreamGraphOperation::UnfoldFragment { .. } => {
                 self.apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                     .await
             }
@@ -139,7 +141,9 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }
             | StreamGraphOperation::SetGroupFields { .. }
-            | StreamGraphOperation::RemoveGroup { .. } => true,
+            | StreamGraphOperation::RemoveGroup { .. }
+            | StreamGraphOperation::FoldIntoFragment { .. }
+            | StreamGraphOperation::UnfoldFragment { .. } => true,
             other => other.node().is_some_and(no_processor_runs_as),
         }
     }

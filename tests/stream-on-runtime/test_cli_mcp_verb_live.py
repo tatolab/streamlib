@@ -54,6 +54,8 @@ CONTROL_TOOL_NAMES = {
     "add_group",
     "set_group_fields",
     "remove_group",
+    "collapse_selection_into_subgraph",
+    "unlock_generator_fragment",
     "transact",
     "undo",
     "redo",
