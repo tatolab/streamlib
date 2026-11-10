@@ -41,7 +41,7 @@ early. A project's actions form one serial queue. `rename_stream` sets an
 attribute of the record and is not an action. _Avoid_: "job", "task", "load" for a stop or a
 remove.
 
-**Project log** _(user)_: a project's one log under `<project>/.streamlib/logs/`, keyed by the
+**Project log** _(user)_: a project's one log under `<project>/.tatolab/logs/`, keyed by the
 project alone, each record carrying its stream action's id and, when a stream wrote it, the
 stream id as attributes; `logs` reads it by project, narrowed to a stream or an action. _Avoid_: "stream log" (a project defines many streams, and its venv
 and compile belong to none of them).
