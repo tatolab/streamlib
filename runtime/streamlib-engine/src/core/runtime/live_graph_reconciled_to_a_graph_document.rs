@@ -75,12 +75,11 @@ impl LoadedStreamInThisRuntime {
         &self,
         mut graph_document: Value,
     ) -> Result<()> {
-        if let (Some(stream_location), Value::Object(document)) =
-            (self.stream_location(), &mut graph_document)
-        {
+        if let Value::Object(document) = &mut graph_document {
+            let stream_asset = self.stream_location().stream_asset;
             document
                 .entry(STREAM_DOCUMENT_ASSET_KEY)
-                .or_insert_with(|| Value::String(stream_location.stream_asset.to_string()));
+                .or_insert_with(|| Value::String(stream_asset.to_string()));
         }
         let graph_document =
             streamlib_project_repository::graph_document_with_each_stream_fragment_reference_resolved(
@@ -421,12 +420,16 @@ impl LoadedStreamInThisRuntime {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::runtime::a_project_on_disk_for_a_test::{
+        options_loading_a_stream_of_the_test_project_at,
+        options_loading_a_stream_of_the_test_project_in,
+    };
     use serde_json::json;
     use serial_test::serial;
 
     use super::*;
     use crate::core::compiler::PendingOperation;
-    use crate::core::runtime::{OptionsForLoadingOneStream, Runner};
+    use crate::core::runtime::Runner;
     use crate::core::test_support::{
         MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor,
         ensure_test_mocks_registered,
@@ -511,8 +514,7 @@ mod tests {
         runner
             .load_stream_from_graph_snapshot(
                 &GraphSnapshot::from_graph_document(graph_document).expect("the document reads"),
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_at(project_directory.path(), "main"),
             )
             .expect("the stream loads")
     }
@@ -704,8 +706,7 @@ mod tests {
                     "nodes": [{ "id": NODE_A, "name": "kept", "type": kept_type.as_str() }],
                 }))
                 .expect("the document reads"),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
             )
             .expect("the stream loads");
 

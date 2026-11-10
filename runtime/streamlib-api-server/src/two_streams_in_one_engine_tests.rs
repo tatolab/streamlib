@@ -65,19 +65,14 @@ impl AnEngineLoadingTwoStreams {
         ]
         .map(|(stream_id, project, stream_asset)| {
             let stream = engine
-                .load_an_empty_stream(
-                    OptionsForLoadingOneStream::in_project_directory(
-                        project_directories[project].path(),
-                    )
-                    .at_stream_location(
-                        stream_id.to_owned(),
-                        StreamLocation {
-                            project_directory: project_directories[project].path().to_path_buf(),
-                            project: Uuid::new_v4(),
-                            stream_asset,
-                        },
-                    ),
-                )
+                .load_an_empty_stream(OptionsForLoadingOneStream::at_stream_location(
+                    stream_id.to_owned(),
+                    StreamLocation {
+                        project_directory: project_directories[project].path().to_path_buf(),
+                        project: Uuid::new_v4(),
+                        stream_asset,
+                    },
+                ))
                 .expect("the stream loads");
             let mut idle_node = ProcessorSpec::new(
                 TwoStreamsTestIdleNode::processor_class_import_path(),

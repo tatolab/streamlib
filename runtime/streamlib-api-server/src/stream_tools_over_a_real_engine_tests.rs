@@ -17,6 +17,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use rmcp::RoleClient;
 use rmcp::model::CallToolRequestParams;
@@ -289,9 +290,12 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             .load_stream_from_graph_snapshot(
                 &GraphSnapshot::from_graph_document(the_graph_of_a_stream_named(stream_name))
                     .expect("the graph parses"),
-                OptionsForLoadingOneStream::in_stream_environment(project.stream_environment())
-                    .with_display_name(stream_name)
-                    .at_stream_location(stream_id.clone(), project.location_of(stream_name)),
+                OptionsForLoadingOneStream::at_stream_location(
+                    stream_id.clone(),
+                    project.location_of(stream_name),
+                )
+                .in_stream_environment(project.stream_environment())
+                .with_display_name(stream_name),
             )
             .expect("the host loads its stream");
         stream_id
@@ -442,10 +446,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             .expect("the test names a project folder")
             .to_string_lossy()
             .into_owned();
-        self.engine.load_an_empty_stream(
-            OptionsForLoadingOneStream::in_project_directory(self.project_directory.path())
-                .with_stream_id(&stream_id),
-        )?;
+        self.engine
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                self.project_directory.path(),
+                &stream_id,
+            ))?;
         Ok(StreamActionQueued {
             action_id: ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS.to_string(),
             project_directory: request.project_directory,
@@ -640,10 +645,10 @@ async fn logs_reads_a_projects_records_by_stream_paged_by_its_cursor() {
     let engine = Runner::new().expect("the engine builds");
     for stream_id in ["paged", "other"] {
         let stream = engine
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id(stream_id),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory.path(),
+                stream_id,
+            ))
             .expect("the stream loads");
         stream.log_route().run_entered(|| {
             for token_index in 0..3 {
@@ -1910,9 +1915,9 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
                     .expect("each stream fragment of the graph document resolves"),
                 )
                 .expect("the graph document parses"),
-                OptionsForLoadingOneStream::in_stream_environment(project.stream_environment())
-                    .with_display_name(stream_name)
-                    .at_stream_location(stream_id.clone(), stream_location),
+                OptionsForLoadingOneStream::at_stream_location(stream_id.clone(), stream_location)
+.in_stream_environment(project.stream_environment())
+                    .with_display_name(stream_name),
             )
             .expect("the stream loads");
         stream_id

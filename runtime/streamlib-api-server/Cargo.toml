@@ -70,6 +70,8 @@ rmcp = { version = "3.5.1", features = ["server", "macros", "transport-streamabl
 tokio-util = "0.7"
 
 [dev-dependencies]
+# The real-engine tests load their streams from a project on disk.
+streamlib = { path = "../../sdk/streamlib-sdk", features = ["test-support"] }
 # The MCP wire tests drive the real router over its socket with rmcp's own client.
 rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"

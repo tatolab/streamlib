@@ -34,4 +34,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The app tests load their stream from a project on disk.
+streamlib-engine = { path = "../../runtime/streamlib-engine", features = ["test-support"] }
 tempfile = { workspace = true }

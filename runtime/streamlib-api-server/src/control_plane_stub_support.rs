@@ -320,7 +320,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 )?;
                 Err(::streamlib::sdk::error::Error::Configuration(format!(
                     "graph generator `{generator}` did not run: the stub runtime's stream \
-                     belongs to no project"
+                     runs no interpreter"
                 )))
             }
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {

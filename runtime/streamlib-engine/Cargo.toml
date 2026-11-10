@@ -179,7 +179,7 @@ v4l = "0.14"
 # `#[streamlib::processor(...)]` resolve macro-emitted `::streamlib::*`
 # paths through the SDK (which transitively re-exports engine items).
 # Dev-dep cycles are permitted by Cargo because they don't propagate.
-streamlib = { path = "../../sdk/streamlib-sdk" }
+streamlib = { path = "../../sdk/streamlib-sdk", features = ["test-support"] }
 # PNG encoding for the camera test that writes what it captured.
 png = "0.17"
 tokio = { workspace = true, features = ["full"] }
