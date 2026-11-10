@@ -1,12 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab_view.json`, view contract 1.0, mirroring the view SDK's Zod schema
-//! (`tatolabViewManifestSchema` in tatolab-app's `tato-app-view-sdk`), which stays the guarantee.
+//! `tatolab_view.json`, view contract 1.0, read as the view SDK's Zod schema
+//! (`tatolabViewManifestSchema` in tatolab-app's `tato-app-view-sdk`) reads it. That schema is the
+//! contract; `view-contract/tatolab_view_contract_examples.json` holds both to the same answers.
 
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use streamlib_processor_schema::PortFamily;
 
@@ -17,7 +19,6 @@ pub const VIEW_CONTRACT_READ_MINOR: u64 = 0;
 
 /// What `tatolab_view.json` declares, defaults filled in.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TatolabViewManifest {
     /// The view contract the view was built for, as `"1.0"`.
@@ -25,10 +26,13 @@ pub struct TatolabViewManifest {
     /// The name the view-type menu lists.
     pub title: String,
     /// What the view is for.
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub description: Option<String>,
     /// An SVG or PNG inside the view's folder.
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub icon: Option<String>,
     /// A picture of the view inside its folder, for a listing of views.
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub preview: Option<String>,
     /// The HTML file the view's frame opens on, inside its folder.
     pub entry: String,
@@ -44,6 +48,7 @@ pub struct TatolabViewManifest {
     #[serde(default)]
     pub accepts: TatolabViewAcceptedFiles,
     /// The JSON Schema of what a view's area remembers, every property giving its `default`.
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub settings: Option<Value>,
     /// Whether the view runs on an opaque origin, served only its `capabilities` and `network`.
     #[serde(default)]
@@ -58,7 +63,6 @@ pub struct TatolabViewManifest {
 
 /// Where a view is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TatolabViewPlacement {
     /// A panel with no node, opened from any area.
@@ -79,21 +83,21 @@ impl TatolabViewPlacement {
 
 /// An input or output a `node` view declares.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct TatolabViewDeclaredPort {
     /// The port's name: lower-case letters, digits and underscores.
     pub name: String,
     /// The one family the port carries.
     pub family: PortFamily,
     /// What the port carries.
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub description: Option<String>,
     /// The lowest and highest value an Array port carries, lowest first.
+    #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub range: Option<[f64; 2]>,
 }
 
 /// The files a view takes, by extension.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct TatolabViewAcceptedFiles {
     /// Each extension, lower case with its dot, as `.glb`.
@@ -103,7 +107,6 @@ pub struct TatolabViewAcceptedFiles {
 
 /// A part of the view contract a sandboxed view may ask for beyond what every view gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum TatolabViewCapability {
     #[serde(rename = "read.selection")]
     ReadSelection,
@@ -125,6 +128,49 @@ pub enum TatolabViewCapability {
     Microphone,
 }
 
+/// The field a refusal names, as the view SDK names it: a missing field by its own path, a field
+/// the contract does not have by the object holding it, the whole manifest as `tatolab_view.json`.
+fn the_field_a_serde_refusal_names(
+    not_the_contract: &serde_path_to_error::Error<serde_json::Error>,
+) -> String {
+    let why = not_the_contract.inner().to_string();
+    let mut steps: Vec<String> = not_the_contract
+        .path()
+        .iter()
+        .filter_map(|segment| match segment {
+            serde_path_to_error::Segment::Map { key } => Some(format!(".{key}")),
+            serde_path_to_error::Segment::Seq { index } => Some(format!("[{index}]")),
+            _ => None,
+        })
+        .collect();
+    if why.starts_with("unknown field ") {
+        steps.pop();
+    }
+    if let Some((missing_field, _)) = why
+        .strip_prefix("missing field `")
+        .and_then(|after_the_quote| after_the_quote.split_once('`'))
+    {
+        steps.push(format!(".{missing_field}"));
+    }
+    let field_path = steps.concat();
+    match field_path.strip_prefix('.') {
+        Some(field_path) => field_path.to_owned(),
+        None if field_path.is_empty() => "tatolab_view.json".to_owned(),
+        None => field_path,
+    }
+}
+
+/// An optional field present in the manifest, which the view contract refuses as `null`.
+fn a_value_never_written_as_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)?
+        .map(Some)
+        .ok_or_else(|| D::Error::custom("it is left out, never written as null"))
+}
+
 /// One way a manifest falls short of the view contract: the field it names and why.
 struct TatolabViewManifestIssue {
     field_path: String,
@@ -134,8 +180,11 @@ struct TatolabViewManifestIssue {
 /// `manifest_json`, a view's `tatolab_view.json` as parsed, read against view contract 1.0, or
 /// every way it falls short, each as "`field`: why.", as the view SDK words them.
 pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewManifest, String> {
-    let mut manifest: TatolabViewManifest = serde_json::from_value(manifest_json.clone())
-        .map_err(|not_the_contract| format!("`tatolab_view.json`: {not_the_contract}."))?;
+    let mut manifest: TatolabViewManifest = serde_path_to_error::deserialize(manifest_json.clone())
+        .map_err(|not_the_contract| {
+            let field_path = the_field_a_serde_refusal_names(&not_the_contract);
+            format!("`{field_path}`: {}.", not_the_contract.into_inner())
+        })?;
     let issues = every_issue_of_a_manifest(&manifest);
     if !issues.is_empty() {
         return Err(issues
@@ -144,6 +193,7 @@ pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewMa
             .collect::<Vec<_>>()
             .join(" "));
     }
+    manifest.title = manifest.title.trim().to_owned();
     let mut capabilities_seen = BTreeSet::new();
     manifest
         .capabilities

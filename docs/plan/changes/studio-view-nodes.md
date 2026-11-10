@@ -62,9 +62,11 @@ This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folde
   2026-11-09).
 
 - **Reading a view's manifest.** The runtime reads a view's manifest file itself, with a serde
-  type mirroring the view SDK's Zod schema. A CI gate checks that type against the schema the view
-  SDK generates, so a drift fails the build. The Zod schema stays the guarantee, and the generated
-  JSON Schema serves only the drift check. Owner, 2026-11-09: "runtime owns it".
+  type mirroring the view SDK's Zod schema. The Zod schema stays the guarantee. A CI gate holds the
+  serde type to the view SDK's example manifests, good and bad: the runtime opens and refuses each
+  one as Zod does, naming the same field. Owner, 2026-11-09: "runtime owns it".
+  Rejected: checking the serde type against the JSON Schema the view SDK generates — a schema
+  copy is not the contract, and the examples test the behaviour itself (owner, 2026-11-10).
   Rejected: Studio telling the runtime a view's ports when it places the node — the graph would
   depend on Studio being open, and an agent-built graph would have no ports (owner, 2026-11-09).
 - **Studio's Frame is a group.** The runtime's labelled group, a title, a description and a colour
