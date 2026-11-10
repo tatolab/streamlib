@@ -361,6 +361,18 @@ pub struct CloseViewerToolResult {
     pub viewer: String,
 }
 
+/// The `write_studio_view_output` tool's result: the output of the view node the value was handed
+/// to, which published it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteStudioViewOutputToolResult {
+    /// The stream id.
+    pub stream: String,
+    /// The view node's UUID, as `graph` lists it under `id`.
+    pub node: String,
+    /// The output port the value was published on.
+    pub port: String,
+}
+
 /// The `set_stream_clock_scale` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetStreamClockScaleToolResult {
@@ -720,8 +732,7 @@ pub struct ListProjectViewsToolResult {
 /// One folder of a `views/`: the view type it declares, and whether it opens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectViewListed {
-    /// The view type's id, `<project name>:<view folder>`, which a `StudioView` node's
-    /// `view_type` names.
+    /// The view type's id, `<project name>:<view folder>`, the node type a node of the view is.
     pub view_type: String,
     /// The UUID of the project whose `views/` holds it.
     pub project: String,

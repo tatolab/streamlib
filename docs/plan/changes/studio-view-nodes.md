@@ -1,8 +1,8 @@
 # studio-view-nodes
 
-> **Decided by the owner, 2026-11-09.** A view on the canvas is a real graph node,
-> `tatolab.studio:StudioView`, with `config.view_type` naming the view (the Node-RED proxy
-> pattern). The runtime reads the view's declared ports and their families from the view contract
+> **Decided by the owner, 2026-11-09.** A view on the canvas is a real graph node, and
+> its type is the view: each view a project or one of its imports brings is a node type of its
+> own, named `<project name>:<view folder>` (owner, 2026-11-10). The runtime reads the view's declared ports and their families from the view contract
 > and reports them like any node's, so the canvas and Properties treat it first-class. The view's
 > `settings` are the node's config, changed with `set_node_config`. Panels read the node's inputs
 > through the viewer path, with Image zero-copy and one GPU copy allowed for an inbound Image.
@@ -17,7 +17,7 @@
 > convenience, never the guarantee. The app-side record is tatolab-app `docs/engine-guarantee.md`
 > (tatolab/tatolab-app#201).
 
-This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folders).
+This change reshapes #3306 (view nodes) and #3307 (listing `views/` folders).
 
 ## Current state (recon, `main` `a4574c2`)
 
@@ -34,12 +34,19 @@ This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folde
 
 ## ADDED
 
-- **The `StudioView` built-in.** A native built-in, `tatolab.studio:StudioView`, takes
-  `view_type` (the view's id, `<project name>:<view folder>`, as `list_project_views` lists it) and the view's settings as
-  its config. At load the runtime reads that view's manifest and gives the node one input per
-  declared input and one output per declared output, each of its declared family. A view that is
-  missing or does not open fails the node by name, the way an unregistered `type` is refused.
-- **Panel reads.** A panel reads a `StudioView` node's inputs through `open_viewer` on the port
+- **A view is a node type.** Each view a stream's project or one of its imports brings resolves
+  as a node type of that stream, named by its view type (`<project name>:<view folder>`, as
+  `list_project_views` lists it, such as `acme-dj:deck`), the same way a project's Python node
+  classes resolve as types. The type's ports are the manifest's declared inputs and outputs, each
+  of its declared family, and its description and port descriptions are the manifest's, so the
+  node-type catalog reports them like any node's. A node of the type takes the view's settings as
+  its config. A view that does not open is no type, so a node naming it is refused the way an
+  unregistered `type` is. One node of a view per stream: adding a second node of the same view
+  type to one stream is refused, naming the node that already holds it.
+  Rejected: one `tatolab.studio:StudioView` type with `config.view_type` naming the view — one
+  node type whose ports change with its config, where every user-defined thing elsewhere is a type
+  of its own (owner, 2026-11-10).
+- **Panel reads.** A panel reads a view node's inputs through `open_viewer` on the port
   linked into it, and an Image stays zero-copy. The runtime gives one viewer per port per
   connection, so Tato Studio's main process holds that one viewer and fans it out to every panel
   showing the port, and the runtime does not change for it (owner, 2026-11-10).
@@ -76,8 +83,8 @@ This change reshapes #3306 (a StudioView node) and #3307 (listing `views/` folde
 
 ## MODIFIED
 
-- §Processor model: a new entry for the `StudioView` built-in, its ports read from its view's
-  manifest, and the panel write path.
+- §Processor model: a project's views resolve as node types beside its Python node classes, each
+  type's ports read from its view's manifest, and the panel write path.
 - §Packages & extension model: a project's `views/` folder joins the project layout beside node
   code, and the view SDK's contract is the guarantee for a view, as `tatolab.stream` is for a node.
 - §Control plane: `list_project_views` and `write_studio_view_output` join the tools.
