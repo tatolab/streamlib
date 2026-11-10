@@ -477,6 +477,11 @@ pub struct ProjectTransactionOnTheWire {
     /// an undo, a redo, or a change the runtime made itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<serde_json::Value>,
+    /// Where an edit or a redo stands with its author's undo and redo now: `applied`,
+    /// `undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;
+    /// absent for an undo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_state: Option<String>,
     /// When the runtime applied it, RFC 3339 in UTC to the second, for display only.
     pub applied_at: String,
 }

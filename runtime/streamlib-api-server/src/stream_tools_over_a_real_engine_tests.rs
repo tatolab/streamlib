@@ -2167,16 +2167,18 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-renamed", "source"]
     );
-    call("undo", undo_by("alice")).await;
+    let alice_undo = call("undo", undo_by("alice")).await;
     assert_eq!(
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-first", "source"]
     );
-    call("redo", undo_by("alice")).await;
+    assert_eq!(alice_undo.get("undo_state"), None, "{alice_undo}");
+    let alice_redo = call("redo", undo_by("alice")).await;
     assert_eq!(
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-renamed", "source"]
     );
+    assert_eq!(alice_redo["undo_state"], "applied", "{alice_redo}");
     assert_eq!(
         sorted_node_names_in(&engine.the_live_graph_of(&stream_id)),
         ["alice-renamed", "source"],

@@ -1682,7 +1682,13 @@ impl GraphTransactionInFlight<'_> {
             .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())
             .map_err(|refusal| refusal.to_string())?
         {
-            return Ok(project_transaction_on_the_wire(applied_before));
+            let undo_state_of_each_transaction = project_repository
+                .the_undo_state_of_each_transaction()
+                .map_err(|refusal| refusal.to_string())?;
+            return Ok(project_transaction_on_the_wire(
+                applied_before,
+                &undo_state_of_each_transaction,
+            ));
         }
         let reversal =
             reversal_of(&project_repository, author).map_err(|refusal| refusal.to_string())?;
@@ -1751,13 +1757,19 @@ impl GraphTransactionInFlight<'_> {
                 self.project_repositories
                     .announce_the_transaction_if_applied_now(&project_repository, &outcome);
                 let applied = outcome.into_applied_transaction();
+                let undo_state_of_each_transaction = project_repository
+                    .the_undo_state_of_each_transaction()
+                    .map_err(|refusal| refusal.to_string())?;
                 let edited_project_directory = project_repository.project_directory().to_path_buf();
                 drop(project_repository);
                 self.forget_the_stream_of_each_stream_asset_taken_out(project, &applied)?;
                 self.reconcile_each_loaded_stream_holding_a_stream_fragment(
                     &edited_project_directory,
                 );
-                Ok(project_transaction_on_the_wire(applied))
+                Ok(project_transaction_on_the_wire(
+                    applied,
+                    &undo_state_of_each_transaction,
+                ))
             }
             Err(refusal) => {
                 self.reverse_what_was_applied_live(&streams, applied_live);
