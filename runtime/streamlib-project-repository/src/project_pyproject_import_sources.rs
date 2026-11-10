@@ -605,6 +605,35 @@ mod tests {
     }
 
     #[test]
+    fn the_stream_package_the_runtime_carries_keeps_the_scaffolds_floor_and_gains_a_link_source() {
+        let project = tempfile::tempdir().unwrap();
+        let tatolab_stream_as_a_first_party_package = FirstPartyModuleDeclaredByAProject {
+            distribution_name: "tatolab-stream".to_owned(),
+            link_file_name: "tatolab_stream-0.68.56-py3-none-any.whl".to_owned(),
+        };
+
+        let written = pyproject_with_each_first_party_module_as_a_uv_path_source(
+            SCAFFOLDED_PYPROJECT,
+            project.path(),
+            &[
+                tatolab_stream_as_a_first_party_package,
+                tatolab_ops_as_a_first_party_module(),
+            ],
+        )
+        .unwrap();
+
+        let pyproject: toml::Value = toml::from_str(&written).unwrap();
+        assert_eq!(
+            pyproject["project"]["dependencies"],
+            toml::Value::try_from(["tatolab-stream>=0.68", "numpy>=2.1", "tatolab-ops"]).unwrap()
+        );
+        assert_eq!(
+            pyproject["tool"]["uv"]["sources"]["tatolab-stream"]["path"].as_str(),
+            Some(".tatolab/first-party-imports/tatolab_stream-0.68.56-py3-none-any.whl")
+        );
+    }
+
+    #[test]
     fn a_link_source_to_an_earlier_wheel_is_written_again_to_the_wheel_carried_now() {
         let project = tempfile::tempdir().unwrap();
         let pyproject = "[project]\nname = \"suite\"\ndependencies = [\"tatolab-ops\"]\n\n\

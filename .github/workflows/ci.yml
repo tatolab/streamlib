@@ -473,7 +473,8 @@ jobs:
         run: echo "digest=$(bash scripts/ci/runtime_unit_input_digest.sh "$ImageOS" debug)" >> "$GITHUB_OUTPUT"
 
       # Restored when nothing it is built from changed: a change to an
-      # extension, a suite or the stream package runs on the unit `main` built.
+      # extension, a suite or the stream package's tests runs on the unit `main`
+      # built.
       - name: Restore the runtime unit
         id: restore
         uses: actions/cache/restore@v5
@@ -918,7 +919,8 @@ jobs:
         run: echo "digest=$(bash scripts/ci/runtime_unit_input_digest.sh "$ImageOS" debug)" >> "$GITHUB_OUTPUT"
 
       # Restored when nothing it is built from changed: a change to an
-      # extension, a suite or the stream package runs on the unit `main` built.
+      # extension, a suite or the stream package's tests runs on the unit `main`
+      # built.
       - name: Restore the runtime unit
         id: restore
         uses: actions/cache/restore@v5

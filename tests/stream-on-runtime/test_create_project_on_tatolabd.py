@@ -125,13 +125,18 @@ def point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory
 FIRST_PARTY_MODULE_LINKS_DIRECTORY = ".tatolab/first-party-imports"
 
 
-def assert_every_core_module_came_from_the_runtime_unit(project_directory: Path) -> None:
-    """The project's core modules are path sources through links to the wheels the runtime unit
-    carries, installed in its `.venv`."""
+def assert_every_first_party_package_came_from_the_runtime_unit(project_directory: Path) -> None:
+    """The project's `tatolab-stream` and core modules are path sources through links to the
+    wheels the runtime unit carries, installed in its `.venv`."""
     pyproject = tomllib.loads((project_directory / "pyproject.toml").read_text(encoding="utf-8"))
     uv_sources = pyproject["tool"]["uv"]["sources"]
     site_packages = next((project_directory / ".venv" / "lib").glob("python3*/site-packages"))
-    for escaped_distribution_name in ("tatolab_testpattern", "tatolab_ops", "tatolab_compositor"):
+    for escaped_distribution_name in (
+        "tatolab_stream",
+        "tatolab_testpattern",
+        "tatolab_ops",
+        "tatolab_compositor",
+    ):
         source_path = uv_sources[escaped_distribution_name.replace("_", "-")]["path"]
         assert source_path.startswith(
             f"{FIRST_PARTY_MODULE_LINKS_DIRECTORY}/{escaped_distribution_name}-"
@@ -170,7 +175,7 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
         assert (project_directory / file_a_new_project_starts_with).is_file(), (
             file_a_new_project_starts_with
         )
-    assert_every_core_module_came_from_the_runtime_unit(project_directory)
+    assert_every_first_party_package_came_from_the_runtime_unit(project_directory)
 
     [listed] = local_api.list_streams()
     assert listed["stream"] == created["stream"], listed

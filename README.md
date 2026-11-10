@@ -121,10 +121,11 @@ uv add tatolab-stream
 
 A new project's `pyproject.toml` depends on `tatolab-stream`, at least as new as the runtime that
 created it, and names Tatolab's own package index, `https://get.tatolab.com/simple/`, which serves
-the first-party modules the runtime does not carry. The runtime carries a wheel of its core
-modules — `tatolab-ops`, `tatolab-testpattern` and `tatolab-compositor` — at its own version, and
-each time it makes a project's `.venv` it links them into `.tatolab/first-party-imports/` and
-declares each as a uv path source, so they always match the runtime.
+the first-party modules the runtime does not carry. The runtime carries a wheel of `tatolab-stream`
+and of its core modules — `tatolab-ops`, `tatolab-testpattern` and `tatolab-compositor` — built at
+its own commit, and each time it makes a project's `.venv` it links them into
+`.tatolab/first-party-imports/` and declares each as a uv path source, so they always match the
+runtime and a project never waits on PyPI for them.
 The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
 does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
 setup step.
