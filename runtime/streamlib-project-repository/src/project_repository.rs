@@ -12,9 +12,10 @@ use uuid::Uuid;
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::project_asset::{
-    GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset, ProjectAssetKind,
-    ProjectAssetSidecar, ProjectRelativeAssetPath, project_files_ending_with,
-    project_files_the_history_records, read_every_asset_sidecar,
+    ASSET_SIDECAR_FILE_SUFFIX, DIRECTORIES_A_PROJECT_SCAN_SKIPS, GRAPH_DOCUMENT_FILE_SUFFIX,
+    PROJECT_IMPORTS_DIRECTORY, ProjectAsset, ProjectAssetKind, ProjectAssetSidecar,
+    ProjectRelativeAssetPath, project_files_ending_with, project_files_the_history_records,
+    read_every_asset_sidecar,
 };
 use crate::project_asset_file_bytes::{
     AssetFileBytesRecorded, PROJECT_UPLOADS_DIRECTORY, content_sha256_of,
@@ -23,6 +24,9 @@ use crate::project_asset_file_bytes::{
 };
 use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
+};
+use crate::project_file_access::{
+    ProjectFileListed, ProjectRelativeFilePath, project_files_a_listing_shows,
 };
 use crate::project_history_repository::{
     PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit,
@@ -43,11 +47,11 @@ use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_d
 use crate::project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
-    ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles,
-    ProjectImportOperation, ProjectOperation, ProjectSettingsAction,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
-    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
+    ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectFileContent,
+    ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
+    ProjectSettingsAction, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionEnvelopeHeader, ProjectTransactionLineage,
+    ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -65,6 +69,10 @@ pub struct ProjectImportListed {
 
 /// The file uv locks a project's Python requirements in, beside its `pyproject.toml`.
 const UV_LOCK_FILE_NAME: &str = "uv.lock";
+
+/// Where a file write's bytes wait, relative to the project, until its transaction moves them
+/// into place.
+const PROJECT_FILE_WRITE_STAGING_DIRECTORY: &str = ".tatolab/staged-file-writes";
 
 /// What the host hands a project to lock the Python requirements of the project in a
 /// directory with, refused in the resolver's own words when they cannot be resolved.
@@ -144,9 +152,9 @@ fn remove_what_asset_effects_set_aside(performed_effects: Vec<PerformedAssetEffe
     }
 }
 
-/// A graph document's path and the bytes it held before a transaction wrote it, `None` when
-/// it did not exist.
-type GraphDocumentAsItWasBeforeAWrite = (PathBuf, Option<Vec<u8>>);
+/// A file's path — a graph document's or another of the project's — and the bytes it held
+/// before a transaction wrote it, `None` when it did not exist.
+type ProjectFileAsItWasBeforeAWrite = (PathBuf, Option<Vec<u8>>);
 
 impl ProjectRepository {
     /// Create a project named `name` in `project_directory`, made when missing, with its first commit.
@@ -424,6 +432,7 @@ impl ProjectRepository {
             Some(
                 ProjectOperation::StreamGraph(_)
                 | ProjectOperation::Import(_)
+                | ProjectOperation::File(_)
                 | ProjectOperation::ProjectSettings(_),
             )
             | None => Err(ProjectRepositoryRefusal::EmptyTransaction),
@@ -698,6 +707,12 @@ impl ProjectRepository {
                         import_operation,
                     )?;
                 }
+                ProjectOperation::File(file_operation) => {
+                    self.refuse_a_file_operation_on_a_file_as_it_is_now(
+                        &staged_assets,
+                        file_operation,
+                    )?;
+                }
                 ProjectOperation::ProjectSettings(project_settings_operation) => {
                     project_settings_operation.write_into(&mut staged_project_file);
                 }
@@ -811,6 +826,18 @@ impl ProjectRepository {
                 match self.take_out_stream_documents(&stream_documents_taken_out) {
                     Ok(taken_out) => {
                         written_documents.extend(taken_out);
+                        Ok(written_documents)
+                    }
+                    Err(refusal) => {
+                        self.restore_written_documents(written_documents);
+                        Err(refusal)
+                    }
+                }
+            })
+            .and_then(|mut written_documents| {
+                match self.perform_file_operations(&transaction.operations) {
+                    Ok(written_files) => {
+                        written_documents.extend(written_files);
                         Ok(written_documents)
                     }
                     Err(refusal) => {
@@ -1542,6 +1569,17 @@ impl ProjectRepository {
                             commit: redone.commit.clone(),
                         },
                     }),
+                    ProjectOperation::File(ProjectFileOperation::WriteProjectFile {
+                        path,
+                        content: ProjectFileContent::StagedCopy { .. },
+                        replaced_a_file,
+                    }) => ProjectOperation::File(ProjectFileOperation::WriteProjectFile {
+                        path: path.clone(),
+                        content: ProjectFileContent::RecordedAtCommit {
+                            commit: redone.commit.clone(),
+                        },
+                        replaced_a_file: *replaced_a_file,
+                    }),
                     operation => operation.clone(),
                 })
                 .collect(),
@@ -1657,11 +1695,203 @@ impl ProjectRepository {
 
     /// Write each staged graph document at the path its stream asset holds once the
     /// transaction applies, answering what each held before so a refusal can restore it.
+    /// Every file of the project under `under`, or the whole project, as a listing shows it.
+    pub fn list_project_files(
+        &self,
+        under: Option<&str>,
+    ) -> Result<Vec<ProjectFileListed>, ProjectRepositoryRefusal> {
+        let under = under.map(ProjectRelativeFilePath::parse).transpose()?;
+        project_files_a_listing_shows(&self.project_directory, under.as_ref())
+    }
+
+    /// The bytes of the project's file at `path`, as they are on disk now.
+    pub fn read_project_file(&self, path: &str) -> Result<Vec<u8>, ProjectRepositoryRefusal> {
+        let path = ProjectRelativeFilePath::parse(path)?;
+        path.refuse_a_symbolic_link_on_the_way_under(&self.project_directory)?;
+        let on_disk = path.on_disk_under(&self.project_directory);
+        if !on_disk.is_file() {
+            return Err(ProjectRepositoryRefusal::NoSuchProjectFile(
+                path.to_string(),
+            ));
+        }
+        Ok(std::fs::read(on_disk)?)
+    }
+
+    /// Write `content` to the project's file at `path` by `author` as one transaction, whose
+    /// inverse puts back what the file held or takes a new file out; sent again under the same
+    /// `idempotency_key`, it answers the first transaction.
+    pub fn write_project_file(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        path: &str,
+        content: &[u8],
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        refuse_an_author_without_a_name(author)?;
+        if let Some(applied_before) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(
+                applied_before,
+            ));
+        }
+        let path = ProjectRelativeFilePath::parse(path)?;
+        self.refuse_a_file_another_action_writes(&self.every_asset()?, &path)?;
+        let on_disk = path.on_disk_under(&self.project_directory);
+        let replaced_a_file = on_disk.is_file();
+        if replaced_a_file && std::fs::read(&on_disk)? == content {
+            return Err(ProjectRepositoryRefusal::EmptyTransaction);
+        }
+        let staged_at = format!("{PROJECT_FILE_WRITE_STAGING_DIRECTORY}/{}", Uuid::new_v4());
+        let staged_copy = self.project_directory.join(&staged_at);
+        write_file_whole(&staged_copy, content)?;
+        let applied = self.apply_and_commit_project_operations(
+            author,
+            idempotency_key,
+            Vec::new(),
+            vec![ProjectOperation::File(
+                ProjectFileOperation::WriteProjectFile {
+                    path,
+                    content: ProjectFileContent::StagedCopy { staged_at },
+                    replaced_a_file,
+                },
+            )],
+            ProjectTransactionLineage::NewEdit,
+        );
+        if staged_copy.exists() {
+            let _ = std::fs::remove_file(&staged_copy);
+        }
+        applied.map(ProjectActionApplyOutcome::AppliedNow)
+    }
+
+    /// Refuse a path the file verbs never write: what another action changes, or a file the
+    /// project's history does not record, whose write could not be undone.
+    fn refuse_a_file_another_action_writes(
+        &self,
+        assets: &BTreeMap<Uuid, ProjectAsset>,
+        path: &ProjectRelativeFilePath,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let refuse =
+            |why: &'static str| ProjectRepositoryRefusal::ProjectFileWrittenByAnotherAction {
+                path: path.to_string(),
+                why,
+            };
+        let spelled = path.as_str();
+        if spelled.ends_with(GRAPH_DOCUMENT_FILE_SUFFIX) {
+            return Err(refuse(
+                "a graph document is changed by graph edits and the stream verbs",
+            ));
+        }
+        if spelled.ends_with(ASSET_SIDECAR_FILE_SUFFIX) {
+            return Err(refuse("an asset's sidecar is changed by the asset verbs"));
+        }
+        if spelled == PROJECT_FILE_NAME {
+            return Err(refuse(
+                "the project file is changed by the project and dependency verbs",
+            ));
+        }
+        if spelled.split('/').next() == Some(PROJECT_IMPORTS_DIRECTORY) {
+            return Err(refuse(
+                "an import's files are edited by opening `imports/<folder>/` as a project of its own",
+            ));
+        }
+        if assets
+            .values()
+            .any(|asset| asset.kind != ProjectAssetKind::Stream && asset.path.as_str() == spelled)
+        {
+            return Err(refuse("an asset's bytes are replaced with replace_asset"));
+        }
+        let mut folder = self.project_directory.clone();
+        for segment in path.folders() {
+            folder.push(segment);
+            if segment.starts_with('.')
+                || DIRECTORIES_A_PROJECT_SCAN_SKIPS.contains(&segment)
+                || folder.join("pyvenv.cfg").exists()
+            {
+                return Err(refuse(
+                    "it is inside a folder the project's history does not record, so its write \
+                     could not be undone",
+                ));
+            }
+        }
+        path.refuse_a_symbolic_link_on_the_way_under(&self.project_directory)
+    }
+
+    /// Refuse `file_operation` unless the file is as it expects: there for a write over it or
+    /// a removal, absent for a new file.
+    fn refuse_a_file_operation_on_a_file_as_it_is_now(
+        &self,
+        assets: &BTreeMap<Uuid, ProjectAsset>,
+        file_operation: &ProjectFileOperation,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let path = file_operation.path();
+        self.refuse_a_file_another_action_writes(assets, path)?;
+        let is_there = path.on_disk_under(&self.project_directory).is_file();
+        let expected_there = match file_operation {
+            ProjectFileOperation::WriteProjectFile {
+                replaced_a_file, ..
+            } => *replaced_a_file,
+            ProjectFileOperation::RemoveProjectFile { .. } => true,
+        };
+        if is_there != expected_there {
+            return Err(
+                ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRecorded {
+                    path: path.to_string(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// Write or take out each file `operations` names, answering what each held so a refusal
+    /// can restore it.
+    fn perform_file_operations(
+        &self,
+        operations: &[ProjectOperation],
+    ) -> Result<Vec<ProjectFileAsItWasBeforeAWrite>, ProjectRepositoryRefusal> {
+        let mut written_files = Vec::new();
+        for operation in operations {
+            let ProjectOperation::File(file_operation) = operation else {
+                continue;
+            };
+            let on_disk = file_operation.path().on_disk_under(&self.project_directory);
+            let bytes_before = std::fs::read(&on_disk).ok();
+            let performed = match file_operation {
+                ProjectFileOperation::WriteProjectFile {
+                    path,
+                    content: ProjectFileContent::StagedCopy { staged_at },
+                    ..
+                } => std::fs::read(self.project_directory.join(staged_at))
+                    .map_err(|_| ProjectRepositoryRefusal::NoSuchProjectFile(path.to_string()))
+                    .and_then(|bytes| write_file_whole(&on_disk, &bytes)),
+                ProjectFileOperation::WriteProjectFile {
+                    path,
+                    content: ProjectFileContent::RecordedAtCommit { commit },
+                    ..
+                } => self.history.files_at_commit(commit).and_then(|mut files| {
+                    let bytes = files.remove(path.as_str()).ok_or_else(|| {
+                        ProjectRepositoryRefusal::NoSuchProjectFile(path.to_string())
+                    })?;
+                    write_file_whole(&on_disk, &bytes)
+                }),
+                ProjectFileOperation::RemoveProjectFile { .. } => {
+                    std::fs::remove_file(&on_disk).map_err(ProjectRepositoryRefusal::from)
+                }
+            };
+            if let Err(refusal) = performed {
+                self.restore_written_documents(written_files);
+                return Err(refusal);
+            }
+            written_files.push((on_disk, bytes_before));
+        }
+        Ok(written_files)
+    }
+
     fn write_staged_documents(
         &self,
         staged_assets: &BTreeMap<Uuid, ProjectAsset>,
         staged_documents: &BTreeMap<Uuid, StreamGraphDocument>,
-    ) -> Result<Vec<GraphDocumentAsItWasBeforeAWrite>, ProjectRepositoryRefusal> {
+    ) -> Result<Vec<ProjectFileAsItWasBeforeAWrite>, ProjectRepositoryRefusal> {
         let mut written_documents = Vec::with_capacity(staged_documents.len());
         for (stream, staged_document) in staged_documents {
             let Some(stream_asset) = staged_assets.get(stream) else {
@@ -1687,7 +1917,7 @@ impl ProjectRepository {
     fn take_out_stream_documents(
         &self,
         paths: &BTreeSet<ProjectRelativeAssetPath>,
-    ) -> Result<Vec<GraphDocumentAsItWasBeforeAWrite>, ProjectRepositoryRefusal> {
+    ) -> Result<Vec<ProjectFileAsItWasBeforeAWrite>, ProjectRepositoryRefusal> {
         let mut taken_out = Vec::with_capacity(paths.len());
         for path in paths {
             let on_disk = path.on_disk_under(&self.project_directory);
@@ -1844,7 +2074,7 @@ impl ProjectRepository {
         Ok(())
     }
 
-    fn restore_written_documents(&self, written_documents: Vec<GraphDocumentAsItWasBeforeAWrite>) {
+    fn restore_written_documents(&self, written_documents: Vec<ProjectFileAsItWasBeforeAWrite>) {
         for (on_disk, bytes_before) in written_documents.into_iter().rev() {
             let restored = match bytes_before {
                 Some(bytes) => write_file_whole(&on_disk, &bytes),

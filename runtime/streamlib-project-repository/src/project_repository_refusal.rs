@@ -45,6 +45,16 @@ pub enum ProjectRepositoryRefusal {
     AssetPathHoldsAnotherFile { path: String },
     #[error("a stream asset is a graph document the stream verbs create; it is never imported")]
     StreamAssetsAreNotImported,
+    #[error("the file path `{path}` is refused: {why}")]
+    ProjectFilePathRefused { path: String, why: &'static str },
+    #[error("the project holds no file at `{0}`")]
+    NoSuchProjectFile(String),
+    #[error("the project holds no folder at `{0}`")]
+    NoSuchProjectFolder(String),
+    #[error("the file `{path}` is not written with write_project_file: {why}")]
+    ProjectFileWrittenByAnotherAction { path: String, why: &'static str },
+    #[error("the file `{path}` changed since its transaction was recorded")]
+    ProjectFileChangedSinceItWasRecorded { path: String },
     #[error(
         "the stream asset {0} is a graph document, which graph edits change; its bytes are never replaced"
     )]

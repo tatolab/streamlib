@@ -698,6 +698,44 @@ pub struct AssetTransactionToolResult {
     pub action: Option<String>,
 }
 
+/// One file of a project as `list_project_files` answers it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectFileOnTheWire {
+    /// Where the file sits in the project, `/`-separated.
+    pub path: String,
+    /// The file's length in bytes.
+    pub byte_len: u64,
+}
+
+/// The `list_project_files` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListProjectFilesToolResult {
+    /// Each file listed, sorted by path.
+    pub files: Vec<ProjectFileOnTheWire>,
+}
+
+/// The `read_project_file` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReadProjectFileToolResult {
+    /// The file read, as the call named it.
+    pub path: String,
+    /// The file's length in bytes.
+    pub byte_len: u64,
+    /// The file's bytes, standard base64 with padding.
+    pub content_base64: String,
+}
+
+/// The `write_project_file` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectFileTransactionToolResult {
+    /// The file written.
+    pub path: String,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+}
+
 /// A project this one imports, as a dependency tool answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectDependencyOnTheWire {

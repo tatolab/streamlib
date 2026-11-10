@@ -8,6 +8,7 @@ mod project_asset;
 #[cfg(feature = "history")]
 mod project_asset_file_bytes;
 mod project_file;
+mod project_file_access;
 #[cfg(feature = "history")]
 mod project_history_repository;
 #[cfg(feature = "history")]
@@ -38,6 +39,9 @@ pub use project_asset_file_bytes::{PROJECT_UPLOADS_DIRECTORY, the_upload_file_of
 pub use project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
+pub use project_file_access::{
+    ProjectFileListed, ProjectRelativeFilePath, project_files_a_listing_shows,
+};
 #[cfg(feature = "history")]
 pub use project_history_repository::{
     PROJECT_HISTORY_BRANCH, PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER,
@@ -65,11 +69,12 @@ pub use project_stream_document::{
 pub use project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
-    ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles,
-    ProjectImportOperation, ProjectOperation, ProjectSettingsAction, ProjectSettingsOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
-    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
+    ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectFileContent,
+    ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
+    ProjectSettingsAction, ProjectSettingsOperation, ProjectStreamDocumentOperation,
+    ProjectTransaction, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionLineage, ProjectTransactionReversal, ProjectTransactionUndoState,
+    StreamGraphOperationOnAStream,
 };
 pub use project_views::{
     PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,

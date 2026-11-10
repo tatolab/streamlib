@@ -5086,6 +5086,7 @@ name = "streamlib-api-server"
 version = "0.68.51"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "futures-util",
  "hyper",
  "hyper-util",

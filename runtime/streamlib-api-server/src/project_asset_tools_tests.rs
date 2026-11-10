@@ -653,6 +653,68 @@ async fn a_replaced_asset_keeps_its_uuid_and_its_undo_restores_the_earlier_take(
     assert_eq!(std::fs::read(&file).unwrap(), b"take one");
 }
 
+/// `write_project_file` writes a file of the project as one commit that `undo` reverses,
+/// `read_project_file` answers its bytes whole, and a path outside the project is refused.
+#[tokio::test]
+async fn a_project_file_written_over_the_socket_is_read_back_listed_and_undone() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+
+    let written = served
+        .answered(
+            "write_project_file",
+            json!({ "path": "views/panel/logo.png", "content_base64": "iVBORw0KGgoA//6A" }),
+        )
+        .await;
+    assert_eq!(written["path"], "views/panel/logo.png");
+    assert_eq!(
+        served.history_subjects_newest_first()[0],
+        "write_project_file views/panel/logo.png"
+    );
+    let read = served
+        .answered(
+            "read_project_file",
+            json!({ "path": "views/panel/logo.png" }),
+        )
+        .await;
+    assert_eq!(read["content_base64"], "iVBORw0KGgoA//6A");
+    assert_eq!(read["byte_len"], 12);
+    let listed = served
+        .answered("list_project_files", json!({ "under": "views" }))
+        .await;
+    assert_eq!(
+        listed["files"],
+        json!([{ "path": "views/panel/logo.png", "byte_len": 12 }])
+    );
+
+    served.answered("undo", json!({})).await;
+
+    assert!(
+        !served
+            .project_directory()
+            .join("views/panel/logo.png")
+            .exists()
+    );
+    let refused = the_error_text_of(
+        &served
+            .tool_call(
+                "write_project_file",
+                json!({ "path": "../outside.py", "content": "x" }),
+            )
+            .await,
+    );
+    assert!(
+        refused.starts_with("write_project_file failed: "),
+        "{refused}"
+    );
+    assert!(
+        !served
+            .project_parent_directory
+            .path()
+            .join("outside.py")
+            .exists()
+    );
+}
+
 #[tokio::test]
 async fn a_project_is_renamed_described_and_covered_and_list_assets_serves_each() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;

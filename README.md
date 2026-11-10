@@ -410,7 +410,8 @@ each answering at once with an action `describe_stream_action` follows and `canc
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
 same way, and `list_assets`, `describe_asset`, `import_asset`, `relocate_asset`, `replace_asset`,
 `set_asset_settings` and `delete_asset` over the project's assets, and `create_stream`, `delete_stream` and
-`set_stream_display_name` over its streams; `stop_project`, which stops a whole project until
+`set_stream_display_name` over its streams, and `list_project_files`, `read_project_file` and
+`write_project_file` over its other files; `stop_project`, which stops a whole project until
 `start_project` starts it again, `pause_project` and `resume_project`, which pause and resume a
 whole project at once, `remove_project`, `set_stream_clock_scale` and
 `list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
