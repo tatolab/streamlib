@@ -67,7 +67,7 @@ pub use project_transaction::{
     ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
     ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphOperationOnAStream,
+    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 pub use project_views::{
     PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,

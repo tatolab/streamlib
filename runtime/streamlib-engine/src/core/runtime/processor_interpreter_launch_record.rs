@@ -24,6 +24,7 @@ use super::StreamEnvironment;
 /// helper processes belong to, and whether its host interrupted its describes.
 pub(crate) struct ProcessorInterpreterLaunchRecordOfOneStream {
     stream_identity: LoadedStreamIdentity,
+    project_directory: Arc<Path>,
     stream_environment: Option<StreamEnvironment>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
     the_stream_its_helpers_belong_to: LoadedStreamAHelperProcessBelongsTo,
@@ -33,17 +34,45 @@ pub(crate) struct ProcessorInterpreterLaunchRecordOfOneStream {
 impl ProcessorInterpreterLaunchRecordOfOneStream {
     pub(crate) fn new(
         stream_identity: LoadedStreamIdentity,
+        project_directory: Arc<Path>,
         stream_environment: Option<StreamEnvironment>,
         node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
         the_stream_its_helpers_belong_to: LoadedStreamAHelperProcessBelongsTo,
     ) -> Self {
-        Self {
+        let launch_record = Self {
             stream_identity,
+            project_directory,
             stream_environment,
             node_types_this_stream_resolves,
             the_stream_its_helpers_belong_to,
             describes_interrupted_by_the_host: AtomicBool::new(false),
-        }
+        };
+        launch_record.resolve_the_views_the_streams_project_brings_as_they_are_on_disk();
+        launch_record
+    }
+
+    /// Resolve each view the stream's project and its imports bring, as their `views/` are on
+    /// disk now, as a node type of this stream. A stream whose directory holds no project brings
+    /// none; one whose views cannot be listed is warned about and brings none.
+    pub(crate) fn resolve_the_views_the_streams_project_brings_as_they_are_on_disk(&self) {
+        let views = match streamlib_project_repository::every_view_a_project_and_its_imports_bring(
+            &self.project_directory,
+        ) {
+            Ok(views) => views,
+            Err(streamlib_project_repository::ProjectRepositoryRefusal::NotAProject { .. }) => {
+                Vec::new()
+            }
+            Err(refusal) => {
+                tracing::warn!(
+                    project_directory = %self.project_directory.display(),
+                    %refusal,
+                    "the stream's project views are no node types: they could not be listed"
+                );
+                Vec::new()
+            }
+        };
+        self.node_types_this_stream_resolves
+            .replace_the_view_types_this_streams_project_brings(&views);
     }
 
     /// The node types this stream resolves, which a live add checks its
@@ -69,12 +98,16 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
         node_types: impl IntoIterator<Item = &'a ProcessorClassImportPath>,
         lend_directory: Option<&Path>,
     ) -> Result<()> {
+        self.resolve_the_views_the_streams_project_brings_as_they_are_on_disk();
         let mut node_types_to_describe: Vec<ProcessorClassImportPath> = Vec::new();
         for node_type in node_types {
             if a_processor_interpreter_describes(node_type)
                 && !self
                     .node_types_this_stream_resolves
                     .is_a_natively_compiled_node_type(node_type)
+                && !self
+                    .node_types_this_stream_resolves
+                    .is_a_view_type_of_this_streams_project(node_type)
                 && !node_types_to_describe.contains(node_type)
             {
                 node_types_to_describe.push(node_type.clone());
@@ -84,13 +117,21 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
     }
 
     /// Whether a live add of `node_type` has to describe it first: a type a
-    /// processor interpreter describes that this stream does not resolve yet.
+    /// processor interpreter describes that this stream does not resolve yet, even once the
+    /// views its project brings are read again.
     pub(crate) fn a_live_add_must_describe(&self, node_type: &ProcessorClassImportPath) -> bool {
-        a_processor_interpreter_describes(node_type)
-            && self
+        if !a_processor_interpreter_describes(node_type)
+            || self
                 .node_types_this_stream_resolves
                 .descriptor(node_type)
-                .is_none()
+                .is_some()
+        {
+            return false;
+        }
+        self.resolve_the_views_the_streams_project_brings_as_they_are_on_disk();
+        self.node_types_this_stream_resolves
+            .descriptor(node_type)
+            .is_none()
     }
 
     /// Describe and register `node_type` into this stream for a live add.
@@ -160,6 +201,19 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
     ) -> Result<()> {
         if node_types.is_empty() {
             return Ok(());
+        }
+        let views_no_node_takes: Vec<String> = node_types
+            .iter()
+            .filter_map(|node_type| {
+                self.node_types_this_stream_resolves
+                    .why_no_node_takes_the_view(node_type)
+            })
+            .collect();
+        if !views_no_node_takes.is_empty() {
+            return Err(Error::NodeTypesNotDescribed {
+                node_types: node_types.to_vec(),
+                refusal: views_no_node_takes.join(" "),
+            });
         }
         let Some(stream_environment) = self.stream_environment.as_ref() else {
             return Err(Error::NodeTypesNotDescribed {

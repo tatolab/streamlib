@@ -360,6 +360,18 @@ pub struct CloseViewerToolResult {
     pub viewer: String,
 }
 
+/// The `write_studio_view_output` tool's result: the output of the view node the value was handed
+/// to, which published it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteStudioViewOutputToolResult {
+    /// The stream id.
+    pub stream: String,
+    /// The view node's UUID, as `graph` lists it under `id`.
+    pub node: String,
+    /// The output port the value was published on.
+    pub port: String,
+}
+
 /// The `set_stream_clock_scale` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetStreamClockScaleToolResult {
@@ -464,6 +476,11 @@ pub struct ProjectTransactionOnTheWire {
     /// an undo, a redo, or a change the runtime made itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<serde_json::Value>,
+    /// Where an edit or a redo stands with its author's undo and redo now: `applied`,
+    /// `undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;
+    /// absent for an undo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_state: Option<String>,
     /// When the runtime applied it, RFC 3339 in UTC to the second, for display only.
     pub applied_at: String,
 }
@@ -723,8 +740,7 @@ pub struct ListProjectViewsToolResult {
 /// One folder of a `views/`: the view type it declares, and whether it opens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectViewListed {
-    /// The view type's id, `<project name>:<view folder>`, which a `StudioView` node's
-    /// `view_type` names.
+    /// The view type's id, `<project name>:<view folder>`, the node type a node of the view is.
     pub view_type: String,
     /// The UUID of the project whose `views/` holds it.
     pub project: String,
@@ -732,8 +748,9 @@ pub struct ProjectViewListed {
     pub project_name: String,
     /// That project's folder under `imports/`; `None` for the listed project's own view.
     pub import_folder: Option<String>,
-    /// The view's folder, absolute.
-    pub folder: PathBuf,
+    /// The view's folder relative to the listed project, as `views/deck` or
+    /// `imports/levels/views/meter`: the path a project file read names its files under.
+    pub view_folder_in_the_project: String,
     /// Whether its manifest reads against the view contract this runtime reads.
     pub opens: bool,
     /// Why it does not open, in the runtime's own words; `None` when it opens.

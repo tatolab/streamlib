@@ -14,10 +14,10 @@
 mod common;
 
 use common::{
-    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_native_only_stream_graph,
-    a_stream_record, an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
-    the_local_apis_answer_to_get, the_location_of_the_stream, the_mode_of,
-    the_reloads_queued_at_the_start, the_stream_action_once_ended,
+    A_RUNTIME_STARTS_SERVING_WITHIN, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
+    a_native_only_stream_graph, a_stream_record, an_executable_standing_in_for_the_interpreter,
+    call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_location_of_the_stream,
+    the_mode_of, the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
@@ -182,6 +182,21 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
         (&"reload_at_start".into(), &"done".into()),
         "{reload_once_ended}"
     );
+    for each_streams_last_reload_line in [
+        format!(
+            "the stream `{}` was not re-loaded, and is re-loaded at the runtime's next start",
+            front.stream_id
+        ),
+        format!(
+            "the stream `{}` did not re-load, and is failed",
+            orphan.stream_id
+        ),
+    ] {
+        runtime.wait_until_standard_error_carries(
+            &each_streams_last_reload_line,
+            A_RUNTIME_STARTS_SERVING_WITHIN,
+        );
+    }
 
     let standard_error = runtime.standard_error();
     assert!(
