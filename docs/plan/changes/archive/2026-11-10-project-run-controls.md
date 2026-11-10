@@ -32,7 +32,7 @@
 - `list_streams` lists a paused stream as `paused`.
 - A stream a `run_project` starts while its project is paused starts paused, so a `tatolab dev`
   re-load of a paused project stays paused; the project stays paused until `resume_project`,
-  `stop_project` or `remove_project` (session, 2026-11-10). Pause and resume answer at once and
+  `stop_project` or `remove_project` (owner, 2026-11-10). Pause and resume answer at once and
   are not queued, so a pause lands while a long run is still making the venv.
 - `tatolab pause [--dir DIR]` and `tatolab resume [--dir DIR]` act on the working directory's
   project, as `tatolab stop` does.
@@ -43,6 +43,8 @@
   `stop_project` and `remove_project`. The project is the unit a person starts and stops.
 - §Media I/O, access nobody asked for: re-asking is a `stop_project` then a `run_project`.
 - §Control plane: the server instructions name the project verbs.
+- §Control plane, the CLI: `tatolab stop` stops the working directory's project, and
+  `tatolab start` runs it as `run_project` does (owner, 2026-11-10).
 
 ## REMOVED
 

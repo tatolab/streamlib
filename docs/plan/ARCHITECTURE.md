@@ -422,15 +422,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   - **`stop` stops the whole project.** `tatolab stop [--dir]` and `stop_project
     {project_directory}` unload every loaded stream of the project and record each recorded
     one `stopped`, so the runtime leaves the project stopped across its restarts; `run` /
-    `run_project` runs it again and retries its failed streams. No tool stops or starts one
-    stream (owner, 2026-11-09).
+    `run_project` runs it again and retries its failed streams; `tatolab start [--dir]` is the
+    same run as `tatolab run` (owner, 2026-11-10). No tool stops or starts one stream (owner,
+    2026-11-09).
   - **`pause` pauses the whole project, at once.** `tatolab pause [--dir]` and `pause_project
     {project_directory}` pause every loaded stream of the project without queuing behind its
     actions: each processor holds its state and processes nothing, and `list_streams` shows
     each stream `paused`. A graph edit made meanwhile compiles on `tatolab resume` /
     `resume_project`, which resumes them all. The project stays paused until its resume, stop
     or removal, and a stream a run starts meanwhile starts paused, so a `tatolab dev` re-load
-    of a paused project stays paused (session, 2026-11-10). Pause is live state and never
+    of a paused project stays paused (owner, 2026-11-10). Pause is live state and never
     recorded, so a runtime restart re-loads the project running (session, 2026-11-09).
     Projects, not streams, are paused (owner, 2026-11-09).
   - **`rm` removes the whole project.** `tatolab rm [--dir]` and `remove_project

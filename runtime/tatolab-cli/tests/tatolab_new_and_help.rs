@@ -83,6 +83,7 @@ fn help_lists_exactly_the_served_verbs() {
             "new",
             "run",
             "dev",
+            "start",
             "stop",
             "pause",
             "resume",

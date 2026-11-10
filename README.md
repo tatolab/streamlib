@@ -413,6 +413,7 @@ tatolab run [--dir DIR]
 tatolab dev [--dir DIR]
 
 tatolab streams
+tatolab start [--dir DIR]
 tatolab stop [--dir DIR]
 tatolab pause [--dir DIR]
 tatolab resume [--dir DIR]
