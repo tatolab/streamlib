@@ -27,13 +27,17 @@ RAISES_AT_IMPORT = 'raise RuntimeError("this module ran")\n'
 PROJECT_NODE_SOURCE = (
     '''
 from dataclasses import dataclass
+from typing import Annotated
 
-from tatolab.stream import Image, Input, Output, State, Stateful, Time, node
+from tatolab.stream import Description, Image, Input, Output, State, Stateful, Time, node
 
 
-@node.process(execution="continuous", category="Robot")
+INVERSE_KINEMATICS_DESCRIPTION = "Solves joint angles for a target pose."
+
+
+@node.process(execution="continuous", category="Robot", description=INVERSE_KINEMATICS_DESCRIPTION)
 class InverseKinematics:
-    """Solves joint angles for a target pose."""
+    """A docstring, which the listing never reads."""
 
     target = Input(Image, delivery="newest", description="The target pose.")
     Joint_Angles = Output(family_named("joints"))
@@ -44,7 +48,7 @@ class InverseKinematics:
 
 @dataclass(frozen=True)
 class Split:
-    low: float
+    low: Annotated[float, Description("What falls under `threshold`.")]
     high: float | None
 
 
@@ -54,12 +58,17 @@ class Phase:
 
 
 @node.function(description="Splits a value at a threshold.")
-def split(x: float, threshold: float = 0.5, config: "SplitConfig" = None, now: Time = 0) -> Split:
+def split(
+    x: "Annotated[float, Description(INVERSE_KINEMATICS_DESCRIPTION)] | None",
+    threshold: float = 0.5,
+    config: "SplitConfig" = None,
+    now: Time = 0,
+) -> Split:
     return Split(x, None)
 
 
 @node.function
-def ramp(rate: float, previous: State[Phase]) -> Stateful[float, Phase]:
+def ramp(rate: float, previous: State[Phase]) -> Stateful[Annotated[float, Description("The ramp.")], Phase]:
     """A ramp at `rate`."""
     return previous.phase, previous
 
@@ -212,24 +221,41 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         "inputs": [{"name": "target", "family": "image", "description": "The target pose.", "annotation": None}],
         "outputs": [{"name": "joint_angles", "family": None, "description": "", "annotation": None}],
         "path": "nodes/inverse_kinematics.py",
-        "line": 8,
+        "line": 12,
     }
     split = node_types["nodes.inverse_kinematics:split"]
     assert split["kind"] == "function"
     assert split["description"] == "Splits a value at a threshold."
     assert split["category"] == "nodes.inverse_kinematics"
     assert split["inputs"] == [
-        {"name": "x", "family": "channels", "description": "", "annotation": "float"},
+        {
+            "name": "x",
+            "family": "channels",
+            "description": "Solves joint angles for a target pose.",
+            "annotation": "'Annotated[float, Description(INVERSE_KINEMATICS_DESCRIPTION)] | None'",
+        },
         {"name": "threshold", "family": "channels", "description": "", "annotation": "float", "pin_default": 0.5},
     ]
     assert split["outputs"] == [
-        {"name": "low", "family": "channels", "description": "", "annotation": "float"},
+        {
+            "name": "low",
+            "family": "channels",
+            "description": "What falls under `threshold`.",
+            "annotation": "Annotated[float, Description('What falls under `threshold`.')]",
+        },
         {"name": "high", "family": "channels", "description": "", "annotation": "float | None"},
     ]
     ramp = node_types["nodes.inverse_kinematics:ramp"]
-    assert ramp["description"] == "A ramp at `rate`."
+    assert ramp["description"] == ""
     assert ramp["inputs"] == [{"name": "rate", "family": "channels", "description": "", "annotation": "float"}]
-    assert ramp["outputs"] == [{"name": "result", "family": "channels", "description": "", "annotation": "float"}]
+    assert ramp["outputs"] == [
+        {
+            "name": "result",
+            "family": "channels",
+            "description": "The ramp.",
+            "annotation": "Annotated[float, Description('The ramp.')]",
+        }
+    ]
     tint = node_types["nodes.inverse_kinematics:tint"]
     assert tint["kind"] == "shader"
     assert [port["family"] for port in tint["inputs"]] == ["image", "channels"]

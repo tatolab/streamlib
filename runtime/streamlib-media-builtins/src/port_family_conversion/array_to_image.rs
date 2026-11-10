@@ -28,15 +28,16 @@ const ARRAY_INPUT_PORT: &str = "array";
 const IMAGE_OUTPUT_PORT: &str = "image";
 
 /// Configuration for [`ArrayToImage`].
+#[streamlib::sdk::processor_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
 pub struct ArrayToImageConfig {
-    /// The attribute of each Array frame read as the image.
     #[serde(default = "default_image_attribute_name")]
+    #[description = "The attribute of each Array frame read as the image."]
     pub attribute: String,
-    /// The texture format each Image frame states, by its wire name.
     #[serde(default = "default_image_format_wire_name")]
+    #[description = "The texture format each Image frame states, by its wire name."]
     pub format: String,
 }
 

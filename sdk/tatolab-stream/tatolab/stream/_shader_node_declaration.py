@@ -19,6 +19,7 @@ import re
 from collections.abc import Callable
 from typing import Any, NoReturn, ParamSpec, TypeVar
 
+from ._description import refuse_a_description_that_is_not_a_string
 from ._function_node_declaration import FunctionNode, _FunctionNodeSignatureReading
 
 __all__ = ["ShaderNode"]
@@ -73,7 +74,9 @@ def declare_shader_node(
         declaration_stamps["kind"]: SHADER_NODE_KIND,
         declaration_stamps["config_class"]: None,
         declaration_stamps["config_schema"]: _json_schema_for_a_shader_node(),
-        declaration_stamps["description"]: description or inspect.getdoc(function) or "",
+        declaration_stamps["description"]: refuse_a_description_that_is_not_a_string(
+            description, f"@node.shader on {name}"
+        ),
         declaration_stamps["category"]: category or function.__module__,
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,

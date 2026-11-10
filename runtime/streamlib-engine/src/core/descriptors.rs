@@ -8,7 +8,14 @@
 //! re-exports them here so every `crate::core::descriptors::*` path resolves
 //! unchanged.
 
-pub use streamlib_processor_schema::config_schema_document::ProcessorConfigJsonSchema;
+pub use streamlib_processor_schema::config_schema_document::{
+    ProcessorConfigJsonSchema, ProcessorConfigKeyDescribedBy, ProcessorConfigKeyDescription,
+    schema_carrying_the_declared_description,
+};
+pub use streamlib_processor_schema::description_lint::{
+    DescribedDeclaration, DescriptionLintFinding, DescriptionLintProblem,
+    lint_the_descriptions_of_a_node_type,
+};
 pub use streamlib_processor_schema::descriptors::{
     CodeExamples, PortDescriptor, ProcessorDescriptor, ProcessorRuntime,
 };

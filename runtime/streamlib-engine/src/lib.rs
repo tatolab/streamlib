@@ -34,7 +34,7 @@ pub mod logging {
 // Re-export the attribute macro for processor syntax:
 // #[streamlib::processor(execution = …, …)] - execution + ports in code; a
 // processor's identity is the import path of its type, captured by the macro
-pub use streamlib_macros::processor;
+pub use streamlib_macros::{processor, processor_config};
 
 /// The `#[processor]` attribute accepts no authored identity, in any spelling.
 ///
@@ -307,7 +307,7 @@ pub mod sdk {
     pub use crate::schemars;
     pub use crate::serde_json;
 
-    pub use streamlib_macros::processor;
+    pub use streamlib_macros::{processor, processor_config};
 
     pub mod permissions {
         pub use crate::{request_audio_permission, request_camera_permission};
