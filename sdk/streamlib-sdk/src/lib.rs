@@ -151,6 +151,10 @@ pub mod sdk {
     /// which the macro captures at its expansion site.
     pub use streamlib_engine::processor;
 
+    /// `#[streamlib::sdk::processor_config]` attribute macro — each config
+    /// key's `#[description = …]` is the description its schema serves.
+    pub use streamlib_engine::processor_config;
+
     // ---- Permission helpers ----
 
     pub mod permissions {

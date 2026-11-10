@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal, NotRequired, Optional, Required, Typ
 import pydantic
 import pytest
 
-from tatolab.stream import node
+from tatolab.stream import Description, node
 
 # ---------------------------------------------------------------------------
 # The config classes the cases below are declared against
@@ -26,7 +26,7 @@ class BlurConfigTypedDict(TypedDict):
     """Admits anything at run time — the loosest dial an author can pick."""
 
     width: int
-    label: Annotated[str, "What to call this blur."]
+    label: Annotated[str, Description("What to call this blur.")]
 
 
 class PartialConfigTypedDict(TypedDict, total=False):
@@ -415,7 +415,7 @@ def test_a_requiredness_qualifier_does_not_hide_the_type_it_wraps():
     swallow the key's type — the one thing the catalog exists to publish."""
 
     class QualifiedConfig(TypedDict, total=False):
-        width: Required[Annotated[int, "How wide."]]
+        width: Required[Annotated[int, Description("How wide.")]]
         label: NotRequired[str]
 
     document = schema_of(QualifiedConfig)
@@ -619,3 +619,42 @@ def test_a_key_holding_a_typed_node_reference_carries_the_type_it_names() -> Non
     assert document["properties"]["anything"] == {
         "anyOf": [{**node_object, "x-tatolab-node-reference": {}}, {"type": "null"}]
     }
+
+
+# ---------------------------------------------------------------------------
+# Key descriptions: `Annotated[T, Description("...")]`
+# ---------------------------------------------------------------------------
+
+LABEL_KEY_DESCRIPTION = "What to call the node, *in Markdown*."
+
+
+@dataclasses.dataclass
+class DescribedKeysConfig:
+    label: Annotated[str, Description(LABEL_KEY_DESCRIPTION)] = "blur"
+    radius: Annotated[Optional[int], Description("The radius in pixels.")] = None
+    width: Annotated[int, "A bare string, which is not a description."] = 1
+    """An attribute docstring, which is not a description either."""
+
+
+def test_a_described_key_carries_its_description_as_written():
+    properties = schema_of(DescribedKeysConfig)["properties"]
+    assert properties["label"]["description"] == LABEL_KEY_DESCRIPTION
+    assert properties["radius"]["description"] == "The radius in pixels."
+
+
+def test_neither_a_bare_string_nor_an_attribute_docstring_is_a_description():
+    assert "description" not in schema_of(DescribedKeysConfig)["properties"]["width"]
+
+
+def test_a_key_described_twice_is_refused():
+    @dataclasses.dataclass
+    class DescribedTwiceConfig:
+        width: Annotated[int, Description("One."), Description("Two.")] = 1
+
+    with pytest.raises(TypeError, match="it takes one"):
+        schema_of(DescribedTwiceConfig)
+
+
+def test_a_description_that_is_not_a_string_is_refused():
+    with pytest.raises(TypeError, match="takes its description as a str"):
+        Description(42)  # type: ignore[arg-type]

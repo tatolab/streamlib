@@ -39,6 +39,7 @@ use streamlib_processor_schema::{
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
+use syn::spanned::Spanned;
 use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
 
@@ -78,6 +79,65 @@ impl PortDirection {
     }
 }
 
+/// A `description = …` value: CommonMark, stored and served exactly as written.
+pub enum DeclaredDescription {
+    /// `description = "…"`.
+    Literal(LitStr),
+    /// `description = SOME_CONST`, the path of a `const` `&str`.
+    Constant(Path),
+}
+
+impl DeclaredDescription {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(LitStr) {
+            return Ok(DeclaredDescription::Literal(input.parse()?));
+        }
+        let fork = input.fork();
+        if fork.parse::<Path>().is_ok() && (fork.is_empty() || fork.peek(Token![,])) {
+            return Ok(DeclaredDescription::Constant(input.parse()?));
+        }
+        Err(syn::Error::new(
+            input.span(),
+            "`description` takes a string literal or the path of a `const` holding one — \
+             `description = \"…\"` or `description = MY_NODE_DESCRIPTION`",
+        ))
+    }
+
+    /// The literal's text; `None` for a `const`, whose value only rustc knows.
+    pub fn literal_text(&self) -> Option<String> {
+        match self {
+            DeclaredDescription::Literal(literal) => Some(literal.value()),
+            DeclaredDescription::Constant(_) => None,
+        }
+    }
+
+    /// The `&'static str` expression the descriptor is built from. A constant
+    /// is bound to a `const` first, so a `static` or a non-`&str` is refused
+    /// where it is named.
+    pub fn to_str_expression(&self) -> proc_macro2::TokenStream {
+        match self {
+            DeclaredDescription::Literal(literal) => quote::quote! { #literal },
+            DeclaredDescription::Constant(path) => quote::quote_spanned! { path.span() =>
+                {
+                    const DECLARED_DESCRIPTION: &str = #path;
+                    DECLARED_DESCRIPTION
+                }
+            },
+        }
+    }
+}
+
+/// The `&'static str` a declaration's optional description builds into; `""`
+/// where none is declared.
+pub fn declared_description_str_expression(
+    description: Option<&DeclaredDescription>,
+) -> proc_macro2::TokenStream {
+    match description {
+        Some(description) => description.to_str_expression(),
+        None => quote::quote! { "" },
+    }
+}
+
 /// A parsed input/output port declaration.
 pub struct ParsedPort {
     /// The name as the author wrote it, spanned at the declaration — the
@@ -86,7 +146,7 @@ pub struct ParsedPort {
     /// The declared name as every exposed name is cast — what the
     /// descriptor and the marker's `PORT_NAME` carry.
     pub cast_name: String,
-    pub description: Option<String>,
+    pub description: Option<DeclaredDescription>,
     /// Always `Some` on an input and always `None` on an output — the grammar
     /// requires it on the one and rejects it on the other.
     pub delivery_profile: Option<String>,
@@ -106,7 +166,7 @@ pub struct ParsedPort {
 pub struct ParsedProcessorAttr {
     /// The author's type name — what an instance's display name defaults to.
     pub processor_class_short_name: String,
-    pub description: Option<String>,
+    pub description: Option<DeclaredDescription>,
     pub execution: ProcessorSchemaExecution,
     pub scheduling: Option<ThreadPriority>,
     pub unsafe_send: bool,
@@ -132,11 +192,15 @@ impl ParsedProcessorAttr {
     /// only language a source scan of a Rust crate can produce). `config` stays
     /// `None`: the attribute binds a config *type*, not a resolved manifest
     /// schema; the consuming layer projects the config-schema id to a
-    /// release-core catalog entry.
+    /// release-core catalog entry. A description declared as a `const` has no
+    /// value until rustc evaluates it, so it projects as `None`.
     pub fn to_processor_schema(&self) -> ProcessorSchema {
         let to_port = |p: &ParsedPort| ProcessorPortSchema {
             name: p.cast_name.clone(),
-            description: p.description.clone(),
+            description: p
+                .description
+                .as_ref()
+                .and_then(DeclaredDescription::literal_text),
             delivery_profile: p.delivery_profile.clone(),
             borrow_quota: p.borrow_quota,
             audio_window: p.audio_window.clone(),
@@ -145,7 +209,10 @@ impl ParsedProcessorAttr {
 
         ProcessorSchema {
             name: self.processor_class_short_name.clone(),
-            description: self.description.clone(),
+            description: self
+                .description
+                .as_ref()
+                .and_then(DeclaredDescription::literal_text),
             runtime: RuntimeConfig {
                 language: Default::default(),
                 options: RuntimeOptions {
@@ -189,7 +256,7 @@ pub fn parse2(
 }
 
 fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedProcessorAttr> {
-    let mut description: Option<String> = None;
+    let mut description: Option<DeclaredDescription> = None;
     let mut execution: Option<ProcessorSchemaExecution> = None;
     let mut scheduling: Option<ThreadPriority> = None;
     let mut unsafe_send = false;
@@ -211,8 +278,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
             "paced_by_real_time" => paced_by_real_time = true,
             "description" => {
                 input.parse::<Token![=]>()?;
-                let lit: LitStr = input.parse()?;
-                description = Some(lit.value());
+                description = Some(DeclaredDescription::parse(input)?);
             }
             "execution" => {
                 input.parse::<Token![=]>()?;
@@ -442,8 +508,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         content.parse::<Token![=]>()?;
         match key.to_string().as_str() {
             "description" => {
-                let lit: LitStr = content.parse()?;
-                description = Some(lit.value());
+                description = Some(DeclaredDescription::parse(&content)?);
             }
             "delivery_profile" => {
                 let lit: LitStr = content.parse()?;
@@ -1013,9 +1078,6 @@ mod tests {
 
     #[test]
     fn processor_and_port_descriptions_parse() {
-        // The descriptor's introspection description surface (#1409): both the
-        // processor description and each port description are carried by the
-        // attribute and reach the ParsedProcessorAttr.
         let parsed = parse_ok(quote! {
             description = "Captures video from cameras",
             execution = manual,
@@ -1027,17 +1089,53 @@ mod tests {
             ),
             output("video", family = Image, description = "Live video frames"),
         });
+        let literal_text_of = |description: &Option<DeclaredDescription>| {
+            description
+                .as_ref()
+                .and_then(DeclaredDescription::literal_text)
+        };
         assert_eq!(
-            parsed.description.as_deref(),
+            literal_text_of(&parsed.description).as_deref(),
             Some("Captures video from cameras")
         );
         assert_eq!(
-            parsed.inputs[0].description.as_deref(),
+            literal_text_of(&parsed.inputs[0].description).as_deref(),
             Some("Frames to convert")
         );
         assert_eq!(
-            parsed.outputs[0].description.as_deref(),
+            literal_text_of(&parsed.outputs[0].description).as_deref(),
             Some("Live video frames")
+        );
+    }
+
+    #[test]
+    fn a_description_may_name_a_const_on_the_node_and_on_a_port() {
+        let parsed = parse_ok(quote! {
+            description = crate::descriptions::CAMERA_NODE_DESCRIPTION,
+            execution = manual,
+            output("video", family = Image, description = VIDEO_PORT_DESCRIPTION),
+        });
+        assert!(matches!(
+            &parsed.description,
+            Some(DeclaredDescription::Constant(path))
+                if quote!(#path).to_string() == "crate :: descriptions :: CAMERA_NODE_DESCRIPTION"
+        ));
+        assert!(matches!(
+            &parsed.outputs[0].description,
+            Some(DeclaredDescription::Constant(path)) if path.is_ident("VIDEO_PORT_DESCRIPTION")
+        ));
+        assert_eq!(parsed.to_processor_schema().description, None);
+    }
+
+    #[test]
+    fn a_description_that_is_neither_a_literal_nor_a_const_path_is_refused() {
+        let msg = parse_err(quote! {
+            description = include_str!("README.md"),
+            execution = manual,
+        });
+        assert!(
+            msg.contains("string literal or the path of a `const`"),
+            "got: {msg}"
         );
     }
 

@@ -632,30 +632,44 @@ def test_a_contract_is_frozen_after_declaration():
         contract.window_size = 1024  # type: ignore[misc]
 
 
-def test_a_node_with_no_description_is_described_by_its_docstring():
-    """The text an author already wrote, rather than a second place to write it."""
+def test_a_docstring_never_stands_in_for_a_description():
+    """A docstring is the code's own reading; only `description=` reaches the catalog."""
 
     @node.process(execution="manual")
     class DescribedByItsDocstringAlone:
-        """What a node with no description= keyword falls back to."""
+        """Read by whoever reads the code, never by the catalog."""
 
-    assert (
-        DescribedByItsDocstringAlone.__tatolab_node_description__
-        == "What a node with no description= keyword falls back to."
-    )
+    assert DescribedByItsDocstringAlone.__tatolab_node_description__ == ""
 
 
-def test_an_explicit_description_outranks_the_docstring():
-    """The keyword is the deliberate one; the docstring is the fallback."""
+def test_the_description_keyword_is_served_exactly_as_written():
+    markdown = "Blurs `video`.\n\n- **radius**: in pixels"
 
-    @node.process(execution="manual", description="The keyword wins")
-    class DescribedByBothKeywordAndDocstring:
-        """The docstring the keyword outranks."""
+    @node.process(execution="manual", description=markdown)
+    class DescribedInMarkdown:
+        """The docstring, which the catalog never reads."""
 
-    assert (
-        DescribedByBothKeywordAndDocstring.__tatolab_node_description__
-        == "The keyword wins"
-    )
+    assert DescribedInMarkdown.__tatolab_node_description__ == markdown
+
+
+def test_a_description_held_in_a_variable_is_served():
+    blur_node_description = "Blurs each frame."
+
+    @node.process(execution="manual", description=blur_node_description)
+    class DescribedByAVariable:
+        pass
+
+    assert DescribedByAVariable.__tatolab_node_description__ == "Blurs each frame."
+
+
+def test_a_description_that_is_not_a_string_is_refused():
+    import pathlib
+
+    with pytest.raises(TypeError, match="never a path to read it from"):
+
+        @node.process(execution="manual", description=pathlib.Path("README.md"))  # type: ignore[arg-type]
+        class DescribedByAPath:
+            pass
 
 
 def test_a_node_with_neither_is_described_by_the_empty_string():

@@ -9,9 +9,12 @@
 //!   [`grammar`] for the full grammar. It declares no identity — a processor is
 //!   named by the import path of the class it is, which the macro captures from
 //!   its expansion site.
+//! - `#[streamlib::sdk::processor_config]` — a config type whose keys'
+//!   `#[description = …]` attributes are the descriptions its schema serves.
 
 mod codegen;
 mod grammar;
+mod processor_config;
 
 use grammar as attribute_grammar;
 
@@ -52,6 +55,18 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
         &parsed,
         sdk_root(),
     ))
+}
+
+/// Describe a processor config type's keys: each field's `#[description = …]`,
+/// a string literal or the path of a `const`, is its key's description. Goes
+/// above `#[derive(JsonSchema)]`.
+#[proc_macro_attribute]
+pub fn processor_config(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let item_struct = parse_macro_input!(item as ItemStruct);
+    match processor_config::expand_processor_config(attr.into(), item_struct, sdk_root()) {
+        Ok(expanded) => expanded.into(),
+        Err(refusal) => refusal.to_compile_error().into(),
+    }
 }
 
 /// Resolve the path to the `sdk` module the emitted code authors against.

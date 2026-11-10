@@ -120,15 +120,22 @@ fn a_processor_declaring_no_config_publishes_an_empty_object_schema() {
 
 /// Configuration for [`ConfiguredProbeProcessor`] — the shape the emitted
 /// document is read back from.
+#[streamlib::sdk::processor_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 pub struct ConfiguredProbeProcessorConfig {
-    /// Frame width in pixels.
+    #[description = PROBE_WIDTH_DESCRIPTION]
     #[serde(default = "default_probe_width")]
     pub width: u32,
-    /// Where the recording is written.
+    /// Where the recording is written, read by rustdoc and never by the catalog.
     pub path: String,
+    #[description = "The recording's **label**."]
+    #[serde(default)]
+    pub label: Option<String>,
 }
+
+const PROBE_WIDTH_DESCRIPTION: &str = "Frame width in pixels.";
+const PROBE_NODE_DESCRIPTION: &str = "Records `video_out` to `path`.";
 
 fn default_probe_width() -> u32 {
     1280
@@ -139,14 +146,16 @@ impl Default for ConfiguredProbeProcessorConfig {
         Self {
             width: default_probe_width(),
             path: String::new(),
+            label: None,
         }
     }
 }
 
 #[streamlib::sdk::processor(
     execution = manual,
+    description = PROBE_NODE_DESCRIPTION,
     config = crate::ConfiguredProbeProcessorConfig,
-    output("video_out", family = Image),
+    output("video_out", family = Image, description = "Frames as *recorded*."),
 )]
 pub struct ConfiguredProbeProcessor;
 
@@ -169,6 +178,14 @@ fn the_descriptor_carries_the_config_types_schema_rather_than_its_name() {
         "Frame width in pixels."
     );
     assert_eq!(config_schema["properties"]["width"]["default"], 1280);
+    assert_eq!(
+        config_schema["properties"]["label"]["description"],
+        "The recording's **label**."
+    );
+    assert!(
+        config_schema["properties"]["path"].get("description").is_none(),
+        "a doc comment never reaches the document"
+    );
     assert_eq!(
         config_schema["required"],
         serde_json::json!(["path"]),
@@ -509,4 +526,18 @@ fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
     );
     assert_eq!(telemetry.dtype, Some(ChannelsOutputPortSampleType::F64));
     assert_eq!(descriptor.outputs[1].family.codec.as_deref(), Some("h264"));
+}
+
+#[test]
+fn a_node_and_a_port_description_reach_the_descriptor_as_written_from_a_const_or_a_literal() {
+    let descriptor = ConfiguredProbeProcessor::Processor::descriptor().expect("a descriptor");
+    assert_eq!(descriptor.description, PROBE_NODE_DESCRIPTION);
+    assert_eq!(descriptor.outputs[0].description, "Frames as *recorded*.");
+}
+
+#[test]
+fn a_node_declaring_no_description_carries_the_empty_string() {
+    let descriptor = TestProcessor::Processor::descriptor().expect("a descriptor");
+    assert_eq!(descriptor.description, "");
+    assert_eq!(descriptor.inputs[0].description, "");
 }

@@ -38,6 +38,8 @@ import types
 import typing
 from typing import Any
 
+from ._description import description_and_annotation_without_it
+
 __all__ = [
     "derive_config_class_json_schema",
     "json_schema_for_a_node_declaring_no_config",
@@ -317,7 +319,7 @@ def _json_schema_for_annotation(
     metadata = getattr(annotation, "__metadata__", None)
     if metadata is not None:
         described = _json_schema_for_annotation(typing.get_args(annotation)[0], ancestry)
-        description = next((entry for entry in metadata if isinstance(entry, str)), None)
+        description, _ = description_and_annotation_without_it(annotation, "a config key")
         if description is not None:
             described["description"] = description
         return described

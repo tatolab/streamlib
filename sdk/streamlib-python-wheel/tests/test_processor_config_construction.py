@@ -16,7 +16,7 @@ from typing import Annotated, Any, Literal, Optional, TypedDict
 import pydantic
 import pytest
 
-from tatolab.stream import NodeReference, node
+from tatolab.stream import Description, NodeReference, node
 from tatolab.runtime._processor_hosting import (
     apply_configuration,
     construct_processor_instance,
@@ -31,7 +31,7 @@ class BlurConfigTypedDict(TypedDict):
     """Admits anything at run time — the loosest dial an author can pick."""
 
     width: int
-    label: Annotated[str, "What to call this blur."]
+    label: Annotated[str, Description("What to call this blur.")]
 
 
 @dataclasses.dataclass
