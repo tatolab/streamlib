@@ -321,6 +321,7 @@ mod tests {
     //! A viewer against a loaded stream read as running without the GPU
     //! context a real start takes: the source node holds the processor
     //! instance a start leaves it with, and nothing compiles.
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
     use std::time::{Duration, Instant};
 
@@ -332,7 +333,7 @@ mod tests {
     use super::*;
     use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
     use crate::core::processors::{ProcessorInstance, ProcessorSpec};
-    use crate::core::runtime::{OptionsForLoadingOneStream, Runner, RuntimeOperations};
+    use crate::core::runtime::{Runner, RuntimeOperations};
     use crate::core::test_support::{
         MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
         ensure_test_mocks_registered,
@@ -360,10 +361,10 @@ mod tests {
             let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
             let runner = Runner::new().expect("the engine builds");
             let stream = runner
-                .load_an_empty_stream(
-                    OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                        .with_stream_id("a"),
-                )
+                .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                    project_directory.path(),
+                    "a",
+                ))
                 .expect("the stream loads");
             let camera_id = stream
                 .add_processor(

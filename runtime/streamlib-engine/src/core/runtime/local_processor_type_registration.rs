@@ -45,7 +45,8 @@ impl LoadedStreamInThisRuntime {
 mod tests {
     use crate::core::error::Error;
     use crate::core::processors::ProcessorSpec;
-    use crate::core::runtime::{OptionsForLoadingOneStream, Runner};
+    use crate::core::runtime::Runner;
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
     /// The one setting [`AddLocalSourceTakingOneSetting`] takes.
     #[derive(
@@ -81,10 +82,10 @@ mod tests {
         let project_directory = tempfile::tempdir().expect("a project directory");
         let runner = Runner::new().unwrap();
         let stream = runner
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("main"),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory.path(),
+                "main",
+            ))
             .unwrap();
         let source_type = stream
             .add_local::<AddLocalSourceTakingOneSetting::Processor>(serde_json::json!({}))

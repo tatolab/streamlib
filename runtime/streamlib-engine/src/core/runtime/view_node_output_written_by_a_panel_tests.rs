@@ -20,7 +20,8 @@ use super::*;
 use crate::core::descriptors::{PortFamily, ProcessorClassImportPath};
 use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
 use crate::core::processors::ProcessorSpec;
-use crate::core::runtime::{OptionsForLoadingOneStream, Runner, RuntimeOperations};
+use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
+use crate::core::runtime::{Runner, RuntimeOperations};
 use crate::core::test_support::{
     MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
 };
@@ -81,10 +82,10 @@ impl AStreamOfAProjectBringingViews {
         );
         let runner = Runner::new().expect("the engine builds");
         let stream = runner
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
-                    .with_stream_id("a"),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory.path(),
+                "a",
+            ))
             .expect("the stream loads");
         Self {
             _runner: runner,
