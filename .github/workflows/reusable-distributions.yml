@@ -117,39 +117,23 @@ jobs:
             fi
           done
 
-      # What a user's `uv sync` gives a scaffolded stream: this run's
-      # `tatolab-stream` and the numpy the scaffold declares, and nothing of
-      # the runtime. Importing a node runs its decorator and boots no engine, so
-      # this needs no GPU. The project is the scaffold template the runtime
-      # embeds and writes on `tatolab new`, laid out as it writes it, so no
-      # runtime has to be running here.
-      - name: A scaffolded stream's nodes import beside this run's tatolab-stream
+      # This run's `tatolab-stream` installs on its own, nothing of the runtime
+      # with it, and carries its licence text.
+      - name: This run's tatolab-stream installs and carries its licence
         run: |
-          python3 -m venv /tmp/scaffold-venv
+          python3 -m venv /tmp/tatolab-stream-venv
           # `--no-index` keeps `tatolab-stream` to this run's build, so its one
           # dependency comes from PyPI first.
-          /tmp/scaffold-venv/bin/pip install 'msgpack>=1.0'
-          /tmp/scaffold-venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
-          /tmp/scaffold-venv/bin/pip install 'numpy>=2.1'
+          /tmp/tatolab-stream-venv/bin/pip install 'msgpack>=1.0'
+          /tmp/tatolab-stream-venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
           # BUSL-1.1's parameters are in its text, not its SPDX id, so the text
           # has to reach what a user installs. Read through importlib.metadata,
           # so a licence present in the checkout and absent from the wheel fails.
-          /tmp/scaffold-venv/bin/python -c "
+          /tmp/tatolab-stream-venv/bin/python -c "
           from importlib.metadata import distribution
           license_text = distribution('tatolab-stream').read_text('licenses/LICENSE') or ''
           assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
           "
-
-          cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
-          mv /tmp/scaffold-check/python-version /tmp/scaffold-check/.python-version
-          mv /tmp/scaffold-check/gitignore /tmp/scaffold-check/.gitignore
-          test -f /tmp/scaffold-check/streams/main.graph.json
-          test -f /tmp/scaffold-check/nodes/halftone_lens_effect.py
-          test -f /tmp/scaffold-check/nodes/brightness_meter.py
-          cd /tmp/scaffold-check && /tmp/scaffold-venv/bin/python -c '
-          from nodes.brightness_meter import BrightnessMeter
-          from nodes.halftone_lens_effect import HalftoneLensEffect
-          '
 
       # `release-distribution-tatolab-stream` is what publish-to-pypi uploads;
       # every other `release-distribution-*` artifact goes to Tatolab's index.

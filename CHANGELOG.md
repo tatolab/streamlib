@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.51](https://github.com/tatolab/streamlib/compare/v0.68.50...v0.68.51) (2026-11-10)
+
+
+### Features
+
+* **project:** create, delete and name streams as project transactions ([acca57e](https://github.com/tatolab/streamlib/commit/acca57e584c30677ef4ea63abc16e9de27f85254))
+
 ## [0.68.50](https://github.com/tatolab/streamlib/compare/v0.68.49...v0.68.50) (2026-11-10)
 
 
