@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod a_project_on_disk_for_a_test;
 pub(crate) mod address_chunk;
 mod end_the_process_at_once;
 mod engine_teardown_watchdog;
@@ -91,7 +93,7 @@ pub use project_stream_action_queue::{
 pub(crate) use runtime::what_interrupted_a_load;
 pub use runtime::{
     CreatedProjectFirstCommit, EveryStreamEndedDuringTheWait, OptionsForLoadingOneStream, Runner,
-    RunnerConstructionOptions, StreamLoadObservingInterrupts, WhatALoadedStreamIsKeyedBy,
+    RunnerConstructionOptions, StreamLoadObservingInterrupts,
 };
 pub use runtime_crash_pinned_on_a_stream::{
     CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, RuntimeRunInProgressRecord,

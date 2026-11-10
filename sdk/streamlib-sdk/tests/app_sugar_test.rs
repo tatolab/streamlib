@@ -16,6 +16,10 @@
 //! rather than a masking `InvalidLink`.
 
 use std::collections::HashMap;
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::{
+    options_loading_a_stream_of_the_test_project_at,
+    the_location_of_a_stream_of_the_test_project_at,
+};
 
 use streamlib::sdk::App;
 use streamlib::sdk::context::RuntimeContextFullAccess;
@@ -66,10 +70,10 @@ fn an_engine_loading_one_empty_stream(
 ) {
     let runner = Runner::new().expect("runner runtime");
     let stream = runner
-        .load_an_empty_stream(
-            OptionsForLoadingOneStream::in_project_directory(project_directory)
-                .with_stream_id(streamlib::sdk::THE_STREAM_ID_AN_APP_LOADS),
-        )
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory,
+            THE_STREAM_ID_AN_APP_LOADS,
+        ))
         .expect("the empty stream loads");
     (runner, stream)
 }
@@ -118,7 +122,11 @@ fn app_add_matches_the_streams_add_processor_snapshot() {
     let config = serde_json::json!({});
 
     // App-built graph.
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
     app.add(alpha_ref.clone(), config.clone(), None)
         .expect("app add alpha");
     app.add(beta_ref.clone(), config.clone(), None)
@@ -152,7 +160,11 @@ fn app_connect_is_a_faithful_passthrough_of_the_streams_connect() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
     let node = app
         .add_local::<PassthroughNode::Processor>(serde_json::json!({}), None)
         .expect("add_local returns a connectable processor");
@@ -217,7 +229,11 @@ fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
     let source_ref = register_ported_type("AppConnectOkSource", "_unused_in", "video");
     let sink_ref = register_ported_type("AppConnectOkSink", "video_in", "_unused_out");
 
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
     let source = app
         .add(source_ref, serde_json::json!({}), None)
         .expect("app add source");
@@ -245,7 +261,11 @@ fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
 #[test]
 fn add_local_hello_world_materializes_a_real_node() {
     let project_directory = tempfile::tempdir().expect("a project directory");
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
 
     let node = app
         .add_local::<MaterializeNode::Processor>(serde_json::json!({}), None)
@@ -280,7 +300,11 @@ fn add_rejects_a_non_serializable_config() {
     // path works — the serialization error must fire first.
     let reference = ProcessorClassImportPath::new("app_sugar_test::Whatever").unwrap();
 
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
     // A compound (tuple) map key cannot become a JSON object key — `to_value`
     // errors rather than coercing (unlike an integer key, which stringifies).
     let mut unserializable: HashMap<(i32, i32), i32> = HashMap::new();
@@ -301,7 +325,11 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     use streamlib::sdk::error::PortDirection;
 
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
     let node = app
         .add_local::<IgnoredConnectNode::Processor>(serde_json::json!({}), None)
         .expect("add_local returns a connectable processor");
@@ -331,7 +359,11 @@ fn the_handle_reports_the_display_name_the_engine_assigned() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let reference = register_ported_type("AppDisplayNameDefault", "_unused_in", "_unused_out");
 
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
     let first = app
         .add(reference.clone(), serde_json::json!({}), None)
         .expect("app add first");
@@ -350,7 +382,11 @@ fn a_requested_display_name_is_cast_and_a_duplicate_is_refused() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let reference = register_ported_type("AppDisplayNameRequested", "_unused_in", "_unused_out");
 
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
     let first = app
         .add(
             reference.clone(),
@@ -375,7 +411,11 @@ fn a_requested_display_name_is_cast_and_a_duplicate_is_refused() {
 #[test]
 fn add_local_reaches_the_display_name_surface_too() {
     let project_directory = tempfile::tempdir().expect("a project directory");
-    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
+    let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
+        project_directory.path(),
+        THE_STREAM_ID_AN_APP_LOADS,
+    ))
+    .expect("App::new");
 
     let node = app
         .add_local::<DisplayNamedNode::Processor>(serde_json::json!({}), Some("Blur"))

@@ -13,12 +13,13 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
+use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner};
 use streamlib_engine::core::{
     Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamClockSpec,
 };
@@ -191,7 +192,7 @@ fn load(
 ) -> Result<Arc<LoadedStreamInThisRuntime>> {
     runner.load_stream_from_graph_snapshot(
         &GraphSnapshot::from_graph_document(graph_document).expect("a graph document is a graph"),
-        OptionsForLoadingOneStream::in_project_directory(project_directory),
+        options_loading_a_stream_of_the_test_project_at(project_directory, "main"),
     )
 }
 

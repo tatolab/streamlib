@@ -10,6 +10,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use sha2::{Digest, Sha256};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
@@ -94,7 +95,7 @@ fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Resul
         .expect("a runtime constructs")
         .load_stream_from_graph_snapshot(
             graph,
-            OptionsForLoadingOneStream::in_project_directory(project_directory.path()),
+            options_loading_a_stream_of_the_test_project_at(project_directory.path(), "main"),
         )
         .map(drop)
 }

@@ -272,6 +272,10 @@ mod tests {
     use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
     use crate::core::graph_snapshot::GraphSnapshot;
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::runtime::a_project_on_disk_for_a_test::{
+        options_loading_a_stream_of_the_test_project_at,
+        options_loading_a_stream_of_the_test_project_in,
+    };
     use crate::core::runtime::{
         LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner,
         StreamLoadObservingInterrupts, TheMachinesShutdownEscalationClearedOnDrop,
@@ -371,7 +375,7 @@ mod tests {
     /// A stream named `main` whose project is `project_directory` and which
     /// starts no processor interpreter.
     fn a_stream_with_no_environment(project_directory: &Path) -> OptionsForLoadingOneStream {
-        OptionsForLoadingOneStream::in_project_directory(project_directory).with_stream_id("main")
+        options_loading_a_stream_of_the_test_project_at(project_directory, "main")
     }
 
     /// A project directory holding a stand-in venv interpreter that answers
@@ -482,8 +486,7 @@ mod tests {
         let stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&rust_type]),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment.clone())
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_in(stream_environment.clone(), "main"),
             )
             .expect("a graph of Rust types loads");
 
@@ -493,12 +496,10 @@ mod tests {
             stream_environment.project_directory
         );
         let stream_with_no_environment = runner
-            .load_an_empty_stream(
-                OptionsForLoadingOneStream::in_project_directory(
-                    project_directory_of_the_stream_with_no_environment.path(),
-                )
-                .with_stream_id("no-environment"),
-            )
+            .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+                project_directory_of_the_stream_with_no_environment.path(),
+                "no-environment",
+            ))
             .expect("an empty stream loads");
         assert_eq!(stream_with_no_environment.stream_environment(), None);
     }
@@ -571,8 +572,7 @@ mod tests {
         let load_outcome = runner
             .load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
                 &a_graph_of(&[&python_type]),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
             )
             .expect("a load a machine shutdown cut short is abandoned without a refusal");
         interrupter.join().unwrap();
@@ -613,8 +613,7 @@ mod tests {
             let interrupted = runner
                 .load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
                     &a_graph_of(&[&interrupted_type]),
-                    OptionsForLoadingOneStream::in_stream_environment(hanging_environment)
-                        .with_stream_id("main"),
+                    options_loading_a_stream_of_the_test_project_in(hanging_environment, "main"),
                 )
                 .expect("the interrupted load is abandoned");
             interrupter.join().unwrap();
@@ -630,8 +629,7 @@ mod tests {
         let stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&later_type]),
-                OptionsForLoadingOneStream::in_stream_environment(later_environment)
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_in(later_environment, "main"),
             )
             .expect("a later load describes its types");
 
@@ -651,8 +649,7 @@ mod tests {
         let refusal = the_refusal_of(
             Runner::new().unwrap().load_stream_from_graph_snapshot(
                 &a_graph_of(&[&python_type]),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
             ),
             "a type to describe needs a lend directory",
         );
@@ -708,15 +705,13 @@ mod tests {
         let first_stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&loaded_type]),
-                OptionsForLoadingOneStream::in_stream_environment(first_environment)
-                    .with_stream_id("first"),
+                options_loading_a_stream_of_the_test_project_in(first_environment, "first"),
             )
             .expect("the first stream describes the type");
         let second_stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&loaded_type]),
-                OptionsForLoadingOneStream::in_stream_environment(second_environment)
-                    .with_stream_id("second"),
+                options_loading_a_stream_of_the_test_project_in(second_environment, "second"),
             )
             .expect("the second stream describes the type");
 
@@ -844,8 +839,7 @@ mod tests {
                     }]
                 }))
                 .expect("the test graph reads"),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
             ),
             "the engine refuses the link",
         );
@@ -932,8 +926,7 @@ mod tests {
         let stream = runner
             .load_stream_from_graph_snapshot(
                 &a_graph_of(&[&rust_type]),
-                OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                    .with_stream_id("main"),
+                options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
             )
             .expect("a graph of a Rust type loads beside an installed module");
 
@@ -992,8 +985,7 @@ mod tests {
             let stream = runner
                 .load_stream_from_graph_snapshot(
                     &a_graph_of(&[&rust_type]),
-                    OptionsForLoadingOneStream::in_stream_environment(stream_environment)
-                        .with_stream_id(stream_id),
+                    options_loading_a_stream_of_the_test_project_in(stream_environment, stream_id),
                 )
                 .expect("the load stands without the installed module");
             assert!(

@@ -133,16 +133,16 @@ pub struct LoadedStreamInThisRuntime {
     holding: LoadedStreamHolding,
     /// The label the stream is shown under, which a rename replaces.
     display_name: RwLock<String>,
-    /// Where the stream's code lives; `None` for a stream a library host loads.
-    stream_location: Option<StreamLocation>,
+    /// The project and stream asset the stream is.
+    stream_location: StreamLocation,
 }
 
 /// What a loaded stream is keyed by and shown as: its id, its display name,
-/// and the location its id was computed from, when it has one.
+/// and the project and stream asset it is.
 pub(crate) struct LoadedStreamNaming {
     pub(crate) stream_id: String,
     pub(crate) display_name: String,
-    pub(crate) stream_location: Option<StreamLocation>,
+    pub(crate) stream_location: StreamLocation,
 }
 
 /// How a loaded stream ended, and the wait for it. Held apart from the stream
@@ -339,9 +339,9 @@ impl LoadedStreamInThisRuntime {
         *self.display_name.write() = display_name;
     }
 
-    /// Where the stream's code lives; `None` for a stream a library host loads.
-    pub fn stream_location(&self) -> Option<&StreamLocation> {
-        self.stream_location.as_ref()
+    /// The project and stream asset the stream is.
+    pub fn stream_location(&self) -> &StreamLocation {
+        &self.stream_location
     }
 
     /// The directory the stream's project lives in.

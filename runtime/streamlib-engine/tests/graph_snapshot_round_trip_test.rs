@@ -6,6 +6,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
@@ -70,10 +71,14 @@ fn the_spec_without_its_node_uuids_in(graph_document: serde_json::Value) -> Grap
     graph
 }
 
-/// Load options for a stream whose project lives in `project_directory`,
-/// named by the graph it loads.
-fn in_the_project(project_directory: &Path) -> OptionsForLoadingOneStream {
-    OptionsForLoadingOneStream::in_project_directory(project_directory)
+/// Load options for the stream `stream_id` of the project in `project_directory`.
+fn in_the_project(project_directory: &Path, stream_id: &str) -> OptionsForLoadingOneStream {
+    options_loading_a_stream_of_the_test_project_at(project_directory, stream_id)
+}
+
+/// The stream id a test graph gives the stream it loads: its `stream`, else `main`.
+fn the_stream_id_a_test_graph_gives(graph: &serde_json::Value) -> String {
+    graph["stream"].as_str().unwrap_or("main").to_owned()
 }
 
 fn an_empty_stream_loaded_into(
@@ -82,7 +87,7 @@ fn an_empty_stream_loaded_into(
     stream_id: &str,
 ) -> Arc<LoadedStreamInThisRuntime> {
     runner
-        .load_an_empty_stream(in_the_project(project_directory).with_stream_id(stream_id))
+        .load_an_empty_stream(in_the_project(project_directory, stream_id))
         .expect("an empty stream loads")
 }
 
@@ -93,7 +98,11 @@ fn load(
     project_directory: &Path,
     graph: serde_json::Value,
 ) -> streamlib::sdk::error::Result<Arc<LoadedStreamInThisRuntime>> {
-    runner.load_stream_from_graph_snapshot(&the_spec_in(graph), in_the_project(project_directory))
+    let stream_id = the_stream_id_a_test_graph_gives(&graph);
+    runner.load_stream_from_graph_snapshot(
+        &the_spec_in(graph),
+        in_the_project(project_directory, &stream_id),
+    )
 }
 
 /// The refusal a load met; a load that succeeded fails the test naming `why`.
@@ -278,7 +287,7 @@ fn a_stream_id_already_loaded_is_refused_naming_where_the_first_came_from() {
                 "stream": "main",
                 "nodes": [{"name": "camera", "type": camera.as_str()}]
             })),
-            in_the_project(first_project_directory.path()),
+            in_the_project(first_project_directory.path(), "main"),
         )
         .expect("the first stream loads");
 
@@ -291,7 +300,7 @@ fn a_stream_id_already_loaded_is_refused_naming_where_the_first_came_from() {
                     {"name": "other", "type": camera.as_str()}
                 ]
             })),
-            in_the_project(second_project_directory.path()),
+            in_the_project(second_project_directory.path(), "Main"),
         ),
         "a name already loaded is refused",
     )
@@ -302,7 +311,7 @@ fn a_stream_id_already_loaded_is_refused_naming_where_the_first_came_from() {
         refusal.contains(&first_project_directory.path().display().to_string()),
         "the refusal must name where the first stream came from: {refusal}"
     );
-    assert!(refusal.contains("with_stream_id"), "{refusal}");
+    assert!(refusal.contains("at_stream_location"), "{refusal}");
     assert_eq!(runner.ids_of_the_loaded_streams(), ["main"]);
     assert_eq!(
         the_graph_document_of(&first)["nodes"]
@@ -321,7 +330,7 @@ fn a_stream_id_already_loaded_is_refused_naming_where_the_first_came_from() {
                 "stream": "Main",
                 "nodes": [{"name": "camera", "type": camera.as_str()}]
             })),
-            in_the_project(second_project_directory.path()).with_stream_id("second"),
+            in_the_project(second_project_directory.path(), "second"),
         )
         .expect("the same graph loads under another name");
     assert_eq!(renamed.stream_id(), "second");
@@ -354,7 +363,7 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
     let named_by_the_load_refusal = the_refusal_of(
         runner.load_stream_from_graph_snapshot(
             &the_spec_in(serde_json::json!({"nodes": []})),
-            in_the_project(project_directory.path()).with_stream_id("named-by-the-load"),
+            in_the_project(project_directory.path(), "named-by-the-load"),
         ),
         "an empty graph is refused",
     )
@@ -364,19 +373,6 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
         "{named_by_the_load_refusal}"
     );
 
-    let unnamed_refusal = the_refusal_of(
-        load(
-            &runner,
-            project_directory.path(),
-            serde_json::json!({"nodes": []}),
-        ),
-        "a graph naming no stream is refused",
-    )
-    .to_string();
-    assert!(
-        unnamed_refusal.contains("names no stream") && unnamed_refusal.contains("with_stream_id"),
-        "{unnamed_refusal}"
-    );
     assert!(runner.ids_of_the_loaded_streams().is_empty());
 }
 
