@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.49](https://github.com/tatolab/streamlib/compare/v0.68.48...v0.68.49) (2026-11-10)
+
+
+### Features
+
+* **project:** the change feed carries each edit's undo state ([02bee55](https://github.com/tatolab/streamlib/commit/02bee55c1e8d84039abb4f22da47a6ed7c5cb205))
+
 ## [0.68.48](https://github.com/tatolab/streamlib/compare/v0.68.47...v0.68.48) (2026-11-10)
 
 
