@@ -27,9 +27,8 @@ use streamlib_project_repository::{
     IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, ProjectAction, ProjectActionIdempotencyKey,
-    ProjectAssetKind, ProjectAssetOperation, ProjectOperation,
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionLineage,
+    ProjectOperation, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionLineage,
     ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
     StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
     StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
@@ -48,7 +47,8 @@ use uuid::Uuid;
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
 use crate::mcp_project_asset_tools::{
     AUTHOR_ARGUMENT_DESCRIPTION, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION,
-    ProjectTransactionAuthorToolArgument, the_author_of_a_change,
+    ProjectTransactionAuthorToolArgument,
+    bring_the_loaded_streams_in_line_with_the_stream_documents_of, the_author_of_a_change,
     the_idempotency_key_a_caller_sent,
 };
 use crate::mcp_project_change_feed::{
@@ -1753,7 +1753,19 @@ impl GraphTransactionInFlight<'_> {
                 let applied = outcome.into_applied_transaction();
                 let edited_project_directory = project_repository.project_directory().to_path_buf();
                 drop(project_repository);
-                self.forget_the_stream_of_each_stream_asset_taken_out(project, &applied)?;
+                bring_the_loaded_streams_in_line_with_the_stream_documents_of(
+                    self.operations_on_the_loaded_streams,
+                    project,
+                    &edited_project_directory,
+                    &applied.transaction,
+                )
+                .map_err(|not_in_line| {
+                    format!(
+                        "the transaction {} applied, and the loaded streams were not brought in \
+                         line with it: {not_in_line}",
+                        applied.transaction.transaction
+                    )
+                })?;
                 self.reconcile_each_loaded_stream_holding_a_stream_fragment(
                     &edited_project_directory,
                 );
@@ -1764,38 +1776,6 @@ impl GraphTransactionInFlight<'_> {
                 Err(refusal.to_string())
             }
         }
-    }
-
-    /// Unload and forget the stream of each stream asset `applied` took out of the project
-    /// `project`, so no stream runs a graph document the project no longer holds.
-    fn forget_the_stream_of_each_stream_asset_taken_out(
-        &self,
-        project: Uuid,
-        applied: &streamlib_project_repository::AppliedProjectTransaction,
-    ) -> Result<(), String> {
-        for operation in &applied.transaction.operations {
-            let stream_asset = match operation {
-                ProjectOperation::StreamDocument(
-                    ProjectStreamDocumentOperation::DeleteStreamDocument { stream, .. },
-                ) => *stream,
-                ProjectOperation::Asset(ProjectAssetOperation::DeleteAsset { asset })
-                    if asset.kind == ProjectAssetKind::Stream =>
-                {
-                    asset.asset
-                }
-                _ => continue,
-            };
-            self.operations_on_the_loaded_streams
-                .forget_the_stream_of_a_deleted_stream_asset(project, stream_asset)
-                .map_err(|not_forgotten| {
-                    format!(
-                        "the transaction {} applied, and the stream of the stream asset \
-                         {stream_asset} it took out was not unloaded: {not_forgotten}",
-                        applied.transaction.transaction
-                    )
-                })?;
-        }
-        Ok(())
     }
 
     /// Apply the inverse of each operation of `applied_live`, newest first, to the running

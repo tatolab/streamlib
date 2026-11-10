@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The streams the machine's runtime holds, managed one call at a time: `new`, `start`, `reload`,
-//! `stop`, `pause`, `resume`, `rm`, `cancel`, `rename`, `streams` and `clock`, each the local API
+//! `stop`, `pause`, `resume`, `rm`, `cancel`, `streams` and `clock`, each the local API
 //! tool of the same purpose, and the lines or table each prints. A verb naming one stream resolves
 //! its stream argument to an id through `list_streams` first. `start`, `reload` and `dev` share the
 //! project load request.
@@ -14,9 +14,8 @@ use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CancelStreamActionToolResult, CreateProjectToolResult, ListStreamsToolResult,
     ListStreamsToolResultStream, ListedStreamState, PauseProjectToolResult,
-    RemoveProjectToolResult, RenameStreamToolResult, ResumeProjectToolResult,
-    SetStreamClockScaleToolResult, StartOrReloadProjectToolResult, StopProjectToolResult,
-    StreamActionStateOnTheWire,
+    RemoveProjectToolResult, ResumeProjectToolResult, SetStreamClockScaleToolResult,
+    StartOrReloadProjectToolResult, StopProjectToolResult, StreamActionStateOnTheWire,
 };
 
 use crate::TatolabCommandFailure;
@@ -45,8 +44,6 @@ pub(crate) enum StreamActionTool {
     RemoveProject,
     /// Drops a queued stream action, or stops a running one at its step.
     CancelStreamAction,
-    /// Shows a stream under another display name.
-    RenameStream,
     /// Lists the streams the runtime holds.
     ListStreams,
     /// Runs a started stream's scaled clock at a new scale.
@@ -65,7 +62,6 @@ impl StreamActionTool {
             StreamActionTool::ResumeProject => "resume_project",
             StreamActionTool::RemoveProject => "remove_project",
             StreamActionTool::CancelStreamAction => "cancel_stream_action",
-            StreamActionTool::RenameStream => "rename_stream",
             StreamActionTool::ListStreams => "list_streams",
             StreamActionTool::SetStreamClockScale => "set_stream_clock_scale",
         }
@@ -469,30 +465,6 @@ pub(crate) fn the_project_directory_a_verb_names(
                 )
             ))
         })
-}
-
-/// `tatolab rename [STREAM] DISPLAY_NAME`, its positionals as given.
-pub(crate) fn rename_stream(
-    stream_then_display_name: &[String],
-) -> Result<u8, TatolabCommandFailure> {
-    let (stream_argument, display_name) = match stream_then_display_name {
-        [display_name] => (None, display_name),
-        [stream, display_name] => (Some(stream.as_str()), display_name),
-        _ => {
-            return Err(TatolabCommandFailure::refused(
-                "rename takes [STREAM] DISPLAY_NAME".to_owned(),
-            ));
-        }
-    };
-    let stream = stream_id_the_stream_argument_names_on_the_running_runtime(stream_argument)?;
-    let mut rename_stream_arguments = stream_tool_arguments(&stream);
-    rename_stream_arguments.insert("display_name".to_owned(), display_name.as_str().into());
-    let rename_stream_result: RenameStreamToolResult =
-        call_one_stream_action_tool(StreamActionTool::RenameStream, rename_stream_arguments)?;
-    write_verb_standard_output(&format!(
-        "{} is shown as \"{}\"\n",
-        rename_stream_result.stream, rename_stream_result.display_name
-    ))
 }
 
 /// `tatolab streams`.

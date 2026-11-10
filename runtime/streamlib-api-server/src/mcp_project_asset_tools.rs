@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The asset tools: a project's assets listed, described, imported, renamed, moved, deleted and
-//! given new settings, each change one transaction on the project's history.
+//! given new settings, and its streams created, deleted and named, each change one transaction
+//! on the project's history.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -13,10 +14,13 @@ use rmcp::service::RequestContext;
 use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use streamlib::sdk::error::Result as StreamlibResult;
+use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, StreamActionQueued};
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectAsset, ProjectAssetAction,
-    ProjectAssetImportSource, ProjectAssetKind, ProjectAssetOperation, ProjectOperation,
-    ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
+    AppliedProjectTransaction, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectActionIdempotencyKey,
+    ProjectAsset, ProjectAssetAction, ProjectAssetImportSource, ProjectAssetKind,
+    ProjectAssetOperation, ProjectOperation, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -46,6 +50,9 @@ pub(crate) const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
     "The project, by absolute path: a folder holding `tatolab-project.json`.";
 const ASSET_ARGUMENT_DESCRIPTION: &str =
     "The asset, by the UUID `import_asset` or `list_assets` answered.";
+const STREAM_ASSET_ARGUMENT_DESCRIPTION: &str = "The stream asset, by the UUID `create_stream` answered as `asset` or `list_streams` reports as its location's `stream_asset`.";
+const STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION: &str =
+    "The name the stream is shown under, written in its graph document; refused when blank.";
 pub(crate) const AUTHOR_ARGUMENT_DESCRIPTION: &str = "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.";
 
 /// What an asset is, as a caller names it.
@@ -183,6 +190,54 @@ struct SetAssetSettingsToolArguments {
     asset: String,
     #[schemars(description = "The settings that replace the asset's import settings whole.")]
     import_settings: Map<String, Value>,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct CreateStreamToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(
+        description = "Where the stream's graph document sits in the project, `/`-separated and relative to the project directory and ending `.graph.json`, such as `streams/preview.graph.json`."
+    )]
+    path: String,
+    #[schemars(description = STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION)]
+    display_name: String,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DeleteStreamToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = STREAM_ASSET_ARGUMENT_DESCRIPTION)]
+    stream_asset: String,
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct SetStreamDisplayNameToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = STREAM_ASSET_ARGUMENT_DESCRIPTION)]
+    stream_asset: String,
+    #[schemars(description = STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION)]
+    display_name: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
@@ -332,34 +387,16 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<DeleteAssetToolArguments>,
     ) -> ToolCallAnswer {
-        let (deleted, project, applied_now) = self
-            .an_asset_change_applied_as_a_transaction(
-                "delete_asset",
-                project_directory,
-                the_author_of_a_change(author, &tool_call_request_context),
-                idempotency_key,
-                ProjectAssetAction::DeleteAsset {
-                    asset: the_asset_a_call_names("delete_asset", &asset)?,
-                },
-            )
-            .await?;
-        if applied_now
-            && deleted.asset.kind == project_asset_kind_on_the_wire(ProjectAssetKind::Stream)
-        {
-            let stream_asset = the_asset_a_call_names("delete_asset", &deleted.asset.asset)?;
-            self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams
-                    .forget_the_stream_of_a_deleted_stream_asset(project, stream_asset)
-            })
-            .await
-            .map_err(|not_forgotten| {
-                format!(
-                    "delete_asset applied its transaction, and the stream of the asset was not \
-                     unloaded: {not_forgotten}"
-                )
-            })?;
-        }
-        serialized_tool_result("delete_asset", &deleted)
+        self.one_asset_change_as_a_transaction(
+            "delete_asset",
+            project_directory,
+            the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
+            ProjectAssetAction::DeleteAsset {
+                asset: the_asset_a_call_names("delete_asset", &asset)?,
+            },
+        )
+        .await
     }
 
     #[tool(
@@ -384,6 +421,81 @@ impl LocalApiMcpServerHandler {
             ProjectAssetAction::SetAssetSettings {
                 asset: the_asset_a_call_names("set_asset_settings", &asset)?,
                 import_settings,
+            },
+        )
+        .await
+    }
+    #[tool(
+        description = "Create a stream in the project as one transaction: a new stream asset, its graph document written at `path` holding no nodes, its UUID, which the runtime makes, and its `display_name`. While the project runs, the new stream is loaded on the project's queue and the answer carries that load's `action`, which `describe_stream_action` follows. Answers the stream asset as `asset`, with the `transaction` and `commit`; an undo takes the document out and unloads the stream. Refused for a path another file holds or outside the project, and a blank `display_name`."
+    )]
+    async fn create_stream(
+        &self,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(CreateStreamToolArguments {
+            project_directory,
+            path,
+            display_name,
+            author,
+            idempotency_key,
+        }): Parameters<CreateStreamToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "create_stream",
+            project_directory,
+            the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
+            ProjectAssetAction::CreateStream { path, display_name },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Delete a stream from the project as one transaction: its graph document leaves the project, recorded in the transaction so an undo writes it back and loads the stream again while the project runs, and its stream is unloaded and forgotten. Answers the stream asset as it was, with the `transaction` and `commit`. Refused for a UUID the project holds no stream asset under."
+    )]
+    async fn delete_stream(
+        &self,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(DeleteStreamToolArguments {
+            project_directory,
+            stream_asset,
+            author,
+            idempotency_key,
+        }): Parameters<DeleteStreamToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "delete_stream",
+            project_directory,
+            the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
+            ProjectAssetAction::DeleteStream {
+                stream_asset: the_asset_a_call_names("delete_stream", &stream_asset)?,
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Show a stream under another display name as one transaction, written in its graph document so every machine the project is on shows it and an undo writes the earlier one. A loaded stream is shown under it at once and keeps its stream id. Answers the stream asset as it now is, with the `transaction` and `commit`. Refused for a blank `display_name`."
+    )]
+    async fn set_stream_display_name(
+        &self,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(SetStreamDisplayNameToolArguments {
+            project_directory,
+            stream_asset,
+            display_name,
+            author,
+            idempotency_key,
+        }): Parameters<SetStreamDisplayNameToolArguments>,
+    ) -> ToolCallAnswer {
+        self.one_asset_change_as_a_transaction(
+            "set_stream_display_name",
+            project_directory,
+            the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
+            ProjectAssetAction::SetStreamDisplayName {
+                stream_asset: the_asset_a_call_names("set_stream_display_name", &stream_asset)?,
+                display_name,
             },
         )
         .await
@@ -422,7 +534,10 @@ impl LocalApiMcpServerHandler {
         .map_err(|refusal| format!("{tool_name} failed: {refusal}"))
     }
 
-    /// Apply `change` by `author` to the project as one transaction, answering the asset it changed.
+    /// Apply `change` by `author` to the project as one transaction, answering the asset it
+    /// changed; a transaction applied now also brings the loaded streams in line with each graph
+    /// document it wrote or took out. Sent again under `idempotency_key`, it answers the
+    /// transaction that key first applied.
     async fn one_asset_change_as_a_transaction(
         &self,
         tool_name: &'static str,
@@ -431,79 +546,120 @@ impl LocalApiMcpServerHandler {
         idempotency_key: Option<String>,
         change: ProjectAssetAction,
     ) -> ToolCallAnswer {
-        let (answered, _project, _applied_now) = self
-            .an_asset_change_applied_as_a_transaction(
+        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let (mut answered, project, project_directory, transaction_applied_now) = self
+            .a_project_repository_call_off_the_async_runtime(
                 tool_name,
                 project_directory,
-                author,
-                idempotency_key,
-                change,
+                move |project_repository| {
+                    let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
+                    let outcome = project_repository.apply_asset_changes(
+                        &author,
+                        idempotency_key.as_ref(),
+                        vec![change],
+                    )?;
+                    project_repositories
+                        .announce_the_transaction_if_applied_now(project_repository, &outcome);
+                    let applied_now = outcome.was_applied_now();
+                    let AppliedProjectTransaction {
+                        transaction,
+                        commit,
+                        ..
+                    } = outcome.into_applied_transaction();
+                    let changed_asset =
+                        project_repository.the_asset_a_transaction_changed(&transaction)?;
+                    Ok((
+                        AssetTransactionToolResult {
+                            asset: project_asset_on_the_wire(&changed_asset),
+                            transaction: transaction.transaction.to_string(),
+                            commit,
+                            action: None,
+                        },
+                        project_repository.project_file().project,
+                        project_repository.project_directory().to_path_buf(),
+                        applied_now.then_some(transaction),
+                    ))
+                },
             )
             .await?;
+        if let Some(transaction) = transaction_applied_now {
+            let loads_queued = self
+                .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+                    bring_the_loaded_streams_in_line_with_the_stream_documents_of(
+                        operations_on_the_loaded_streams,
+                        project,
+                        &project_directory,
+                        &transaction,
+                    )
+                })
+                .await
+                .map_err(|not_in_line| {
+                    format!(
+                        "{tool_name} applied its transaction, and the loaded streams were not \
+                         brought in line with it: {not_in_line}"
+                    )
+                })?;
+            answered.action = loads_queued
+                .into_iter()
+                .next()
+                .map(|queued| queued.action_id);
+        }
         serialized_tool_result(tool_name, &answered)
     }
+}
 
-    /// Apply `change` by `author` to the project as one transaction, answering the asset it
-    /// changed, the project's UUID and whether this call applied it; sent again under
-    /// `idempotency_key`, it answers the transaction that key first applied.
-    async fn an_asset_change_applied_as_a_transaction(
-        &self,
-        tool_name: &'static str,
-        project_directory: PathBuf,
-        author: ProjectTransactionAuthor,
-        idempotency_key: Option<String>,
-        change: ProjectAssetAction,
-    ) -> Result<(AssetTransactionToolResult, Uuid, bool), String> {
-        let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
-        self.a_project_repository_call_off_the_async_runtime(
-            tool_name,
-            project_directory,
-            move |project_repository| {
-                let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
-                let outcome = project_repository.apply_asset_changes(
-                    &author,
-                    idempotency_key.as_ref(),
-                    vec![change],
-                )?;
-                project_repositories
-                    .announce_the_transaction_if_applied_now(project_repository, &outcome);
-                let applied_now = outcome.was_applied_now();
-                let AppliedProjectTransaction {
-                    transaction,
-                    commit,
-                    ..
-                } = outcome.into_applied_transaction();
-                let changed_asset = match transaction.operations.first() {
-                    Some(ProjectOperation::Asset(
-                        ProjectAssetOperation::ImportAsset { asset }
-                        | ProjectAssetOperation::DeleteAsset { asset },
-                    )) => asset.clone(),
-                    Some(ProjectOperation::Asset(
-                        ProjectAssetOperation::RelocateAsset { asset, .. }
-                        | ProjectAssetOperation::SetAssetSettings { asset, .. },
-                    )) => project_repository.asset(*asset)?,
-                    Some(
-                        ProjectOperation::StreamGraph(_)
-                        | ProjectOperation::Import(_)
-                        | ProjectOperation::StreamDocument(_),
-                    )
-                    | None => {
-                        return Err(ProjectRepositoryRefusal::EmptyTransaction);
-                    }
-                };
-                Ok((
-                    AssetTransactionToolResult {
-                        asset: project_asset_on_the_wire(&changed_asset),
-                        transaction: transaction.transaction.to_string(),
-                        commit,
-                    },
-                    project_repository.project_file().project,
-                    applied_now,
-                ))
-            },
-        )
-        .await
+/// Bring the streams this runtime loads in line with each graph document `transaction` changed
+/// in the project `project`, at `project_directory`: a document taken out unloads and forgets
+/// its stream, a document written is loaded while the project runs, and a new display name shows
+/// the loaded stream under it. Answers each load queued.
+pub(crate) fn bring_the_loaded_streams_in_line_with_the_stream_documents_of(
+    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
+    project: Uuid,
+    project_directory: &Path,
+    transaction: &ProjectTransaction,
+) -> StreamlibResult<Vec<StreamActionQueued>> {
+    let mut loads_queued = Vec::new();
+    for operation in &transaction.operations {
+        match operation {
+            ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::DeleteStreamDocument { stream, .. },
+            ) => {
+                operations_on_the_loaded_streams
+                    .forget_the_stream_of_a_deleted_stream_asset(project, *stream)?;
+            }
+            ProjectOperation::Asset(ProjectAssetOperation::DeleteAsset { asset })
+                if asset.kind == ProjectAssetKind::Stream =>
+            {
+                operations_on_the_loaded_streams
+                    .forget_the_stream_of_a_deleted_stream_asset(project, asset.asset)?;
+            }
+            ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::CreateStreamDocument { stream, .. },
+            ) => loads_queued.extend(
+                operations_on_the_loaded_streams
+                    .load_the_stream_of_a_created_stream_asset(project_directory, *stream),
+            ),
+            ProjectOperation::StreamDocument(
+                ProjectStreamDocumentOperation::SetStreamDisplayName {
+                    stream, path, to, ..
+                },
+            ) => {
+                let file_name = path.file_name();
+                let display_name = to.as_deref().unwrap_or_else(|| {
+                    file_name
+                        .strip_suffix(GRAPH_DOCUMENT_FILE_SUFFIX)
+                        .unwrap_or(file_name)
+                });
+                operations_on_the_loaded_streams.show_the_stream_of_a_stream_asset_under(
+                    project,
+                    *stream,
+                    display_name,
+                );
+            }
+            _ => {}
+        }
     }
+    Ok(loads_queued)
 }
 
 /// The author a change names: the caller's own, or the agent the request's MCP client names

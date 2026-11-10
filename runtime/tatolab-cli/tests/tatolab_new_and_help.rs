@@ -89,7 +89,6 @@ fn help_lists_exactly_the_served_verbs() {
             "resume",
             "rm",
             "cancel",
-            "rename",
             "streams",
             "clock",
             "graph",

@@ -258,7 +258,10 @@ impl LoadedStreamInThisRuntime {
         let compiler = Arc::new(Compiler::new_resolving_node_types_through(Arc::clone(
             &node_types_this_stream_resolves,
         )));
-        compiler.scope(|graph, _tx| graph.set_loaded_stream_id(stream_id.clone()));
+        compiler.scope(|graph, _tx| {
+            graph.set_loaded_stream_id(stream_id.clone());
+            graph.set_stream_display_name(display_name.clone());
+        });
         let runtime_context = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(RuntimeStatus::Initial));
         let graph_change_listener: Arc<Mutex<dyn EventListener>> =
@@ -336,6 +339,8 @@ impl LoadedStreamInThisRuntime {
 
     /// Show the stream under `display_name` from now on.
     pub(crate) fn rename(&self, display_name: String) {
+        self.compiler
+            .scope(|graph, _tx| graph.set_stream_display_name(display_name.clone()));
         *self.display_name.write() = display_name;
     }
 

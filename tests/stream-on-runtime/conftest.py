@@ -20,8 +20,7 @@ and follows the project's log. What a test hands a loading fixture —
 - a `@graph_generator` function of one of the suite's `*_streams.py` (or other non-test)
   modules, compiled in this process and run as a one-stream project of its own:
   its graph document beside links to the suite's modules, and a `.venv` linked to
-  the suite venv. Its display name is set with `tatolab rename` once it loads. A
-  function defined in a test module, inside another function or built at run time
+  the suite venv. A function defined in a test module, inside another function or built at run time
   is refused by name: move it to a `*_streams.py` module, taking what varies from
   its config;
 - a graph written by hand, a dict or its text verbatim — refusal tests, or a

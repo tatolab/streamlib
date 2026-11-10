@@ -41,6 +41,8 @@ pub struct Graph {
 
     /// The UUID of the stream asset whose graph document this graph was loaded from.
     stream_asset: Option<uuid::Uuid>,
+    /// The name the stream this graph was loaded as is shown under.
+    stream_display_name: Option<String>,
 
     /// The clock the stream this graph was loaded as runs on.
     stream_clock_spec: StreamClockSpec,
@@ -79,6 +81,7 @@ impl Graph {
             digraph: DiGraph::new(),
             loaded_stream_id: None,
             stream_asset: None,
+            stream_display_name: None,
             stream_clock_spec: StreamClockSpec::Real,
             node_types_this_stream_resolves,
             node_names_the_graph_only_nodes_hold: HashSet::new(),
@@ -159,6 +162,11 @@ impl Graph {
         self.stream_asset = stream_asset;
     }
 
+    /// Record the name the stream this graph was loaded as is shown under.
+    pub fn set_stream_display_name(&mut self, display_name: String) {
+        self.stream_display_name = Some(display_name);
+    }
+
     /// The clock the stream this graph was loaded as runs on.
     pub fn stream_clock_spec(&self) -> StreamClockSpec {
         self.stream_clock_spec
@@ -221,6 +229,7 @@ impl Graph {
             asset: self
                 .stream_asset
                 .map(|stream_asset| stream_asset.to_string()),
+            display_name: self.stream_display_name.clone(),
             stream: self.loaded_stream_id.clone(),
             clock: self.stream_clock_spec,
             nodes: self

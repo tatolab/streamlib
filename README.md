@@ -394,9 +394,10 @@ its process imports the class by that name.
 
 A project may hold several graph documents, and a load of the project loads each one as its own
 stream; a document that is gone unloads and forgets its stream. `--dir DIR` names another project
-directory than the working one. A stream first loaded by `run` or `dev` shows under its document's
-name, and the one `tatolab new` creates under the project folder's name, until `tatolab rename`
-gives it another display name, which a load of the project keeps. A stream is keyed and addressed
+directory than the working one. A stream shows under the `display_name` its graph document
+writes, or the document's name while it writes none; the one `tatolab new` creates writes the
+project folder's name, and the local API's `set_stream_display_name` writes another, recorded on
+the project's history like any edit. A stream is keyed and addressed
 by its **stream id**, `<project name>-<stream name>-<hash>`, the hash over the project's UUID in
 `tatolab-project.json` and the stream asset's UUID in its document. Once recorded, a stream keeps
 its id when the project moves or its document is renamed, since the runtime finds its record by
@@ -419,7 +420,6 @@ tatolab pause [--dir DIR]
 tatolab resume [--dir DIR]
 tatolab rm [--dir DIR]
 tatolab cancel ACTION
-tatolab rename [STREAM] DISPLAY_NAME
 tatolab clock [STREAM] --scale SCALE
 
 tatolab graph [--stream STREAM]
@@ -560,9 +560,10 @@ that does not run, and `reload_project`, which queues a re-read from disk of one
 each answering at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
 same way, and `list_assets`, `describe_asset`, `import_asset`, `move_asset`, `rename_asset` and
-`delete_asset` over the project's assets; `stop_project`, which stops a whole project until
+`delete_asset` over the project's assets, and `create_stream`, `delete_stream` and
+`set_stream_display_name` over its streams; `stop_project`, which stops a whole project until
 `start_project` starts it again, `pause_project` and `resume_project`, which pause and resume a
-whole project at once, `remove_project`, `rename_stream`, `set_stream_clock_scale` and
+whole project at once, `remove_project`, `set_stream_clock_scale` and
 `list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
 machine, naming the node by the `id` `graph` lists. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside

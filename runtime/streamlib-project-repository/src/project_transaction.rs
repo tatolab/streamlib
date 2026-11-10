@@ -128,6 +128,16 @@ pub enum ProjectAssetAction {
         asset: Uuid,
         import_settings: Map<String, Value>,
     },
+    /// Write a new stream asset's graph document at `path`, holding no node, shown as
+    /// `display_name`.
+    CreateStream { path: String, display_name: String },
+    /// Take a stream asset's graph document out of the project.
+    DeleteStream { stream_asset: Uuid },
+    /// Show a stream asset under `display_name`, written in its graph document.
+    SetStreamDisplayName {
+        stream_asset: Uuid,
+        display_name: String,
+    },
 }
 
 /// One change a transaction made, recorded with everything its inverse needs.
@@ -286,6 +296,14 @@ pub enum ProjectStreamDocumentOperation {
         path: ProjectRelativeAssetPath,
         document: Value,
     },
+    /// The name the stream asset is shown under changed in its graph document at `path`;
+    /// `None` shows it under its file name.
+    SetStreamDisplayName {
+        stream: Uuid,
+        path: ProjectRelativeAssetPath,
+        from: Option<String>,
+        to: Option<String>,
+    },
 }
 
 impl ProjectStreamDocumentOperation {
@@ -310,6 +328,17 @@ impl ProjectStreamDocumentOperation {
                 path,
                 document,
             },
+            Self::SetStreamDisplayName {
+                stream,
+                path,
+                from,
+                to,
+            } => Self::SetStreamDisplayName {
+                stream,
+                path,
+                from: to,
+                to: from,
+            },
         }
     }
 
@@ -319,6 +348,7 @@ impl ProjectStreamDocumentOperation {
         match self {
             Self::CreateStreamDocument { path, .. } => format!("create_stream_document {path}"),
             Self::DeleteStreamDocument { path, .. } => format!("delete_stream_document {path}"),
+            Self::SetStreamDisplayName { path, .. } => format!("set_stream_display_name {path}"),
         }
     }
 }

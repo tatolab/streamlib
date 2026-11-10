@@ -397,14 +397,20 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "resume_project",
                 ))
             }
-            fn rename_stream(
+            fn show_the_stream_of_a_stream_asset_under(
                 &self,
-                _stream_id: &str,
+                _project: ::uuid::Uuid,
+                _stream_asset: ::uuid::Uuid,
                 _display_name: &str,
-            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamRenameOutcome> {
-                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "rename_stream",
-                ))
+            ) -> Option<String> {
+                None
+            }
+            fn load_the_stream_of_a_created_stream_asset(
+                &self,
+                _project_directory: &::std::path::Path,
+                _stream_asset: ::uuid::Uuid,
+            ) -> Option<::streamlib::sdk::runtime::StreamActionQueued> {
+                None
             }
             fn list_streams(&self) -> Vec<::streamlib::sdk::runtime::StreamListing> {
                 vec![::streamlib::sdk::runtime::StreamListing {

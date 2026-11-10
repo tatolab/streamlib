@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab`: `new` writes a stream project; `start`, `reload`, `dev`, `stop`, `pause`, `resume`, `rm`, `rename`,
+//! `tatolab`: `new` writes a stream project; `start`, `reload`, `dev`, `stop`, `pause`, `resume`, `rm`,
 //! `streams` and `clock` load and manage the streams the machine's runtime holds; and `graph`, `logs` and
 //! `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's
@@ -237,19 +237,6 @@ enum TatolabVerb {
         /// The stream action's id.
         action: String,
     },
-    /// Show a stream under another display name; its id and address stay as they are.
-    #[command(
-        override_usage = "tatolab rename [STREAM] <DISPLAY_NAME>",
-        after_long_help = STREAM_ARGUMENT_LONG_HELP,
-        long_about = "Show a stream under another display name — any text, never cast and never \
-                      unique. Its id, its address and its broadcast stay as they are, so no reader \
-                      of its ports is cut off, and the name holds across restarts and re-loads."
-    )]
-    Rename {
-        /// [STREAM], as every stream verb takes it, then the display name to show it under.
-        #[arg(value_names = ["STREAM", "DISPLAY_NAME"], num_args = 1..=2, required = true)]
-        stream_then_display_name: Vec<String>,
-    },
     /// List the streams the runtime holds: running, stopped or failed, and why each failed.
     Streams,
     /// Run a stream's scaled clock at another scale, live.
@@ -429,9 +416,6 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
             })
         }
         TatolabVerb::Cancel { action } => stream_actions_on_the_runtime::cancel_stream_action(&action),
-        TatolabVerb::Rename {
-            stream_then_display_name,
-        } => stream_actions_on_the_runtime::rename_stream(&stream_then_display_name),
         TatolabVerb::Streams => stream_actions_on_the_runtime::list_streams(),
         TatolabVerb::Clock { stream, scale } => {
             stream_actions_on_the_runtime::set_stream_clock_scale(stream.as_deref(), scale)

@@ -59,7 +59,8 @@ pub use project_repository::{
 };
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 pub use project_stream_document::{
-    ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, project_stream_documents,
+    ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, STREAM_DOCUMENT_DISPLAY_NAME_KEY,
+    project_stream_documents,
 };
 pub use project_transaction::{
     AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectAction,

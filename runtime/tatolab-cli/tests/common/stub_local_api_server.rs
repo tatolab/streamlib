@@ -719,8 +719,3 @@ impl Drop for StubLocalApiServer {
 pub fn start_or_reload_project_tool_result_text(action: &str, project_directory: &Path) -> String {
     serde_json::json!({ "action": action, "project_directory": project_directory }).to_string()
 }
-
-/// The text a runtime's `rename_stream` answers with, `stream` shown as `display_name`.
-pub fn rename_stream_tool_result_text(stream: &str, display_name: &str) -> String {
-    serde_json::json!({ "stream": stream, "display_name": display_name }).to_string()
-}

@@ -48,6 +48,11 @@ pub struct GraphSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset: Option<Uuid>,
 
+    /// The name the stream asset is shown under, written in its graph document; absent shows
+    /// it under its document's file name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
     /// The stream this graph is. Absent on a graph no stream was loaded as.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<String>,
@@ -72,6 +77,8 @@ pub struct GraphSnapshot {
 struct GraphSnapshotAsWritten {
     #[serde(default)]
     asset: Option<Uuid>,
+    #[serde(default)]
+    display_name: Option<String>,
     #[serde(default)]
     stream: Option<String>,
     #[serde(default)]
@@ -100,7 +107,15 @@ struct GraphDocumentObjectKeys {
 
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
-    spec_keys: &["asset", "stream", "clock", "nodes", "links", "groups"],
+    spec_keys: &[
+        "asset",
+        "display_name",
+        "stream",
+        "clock",
+        "nodes",
+        "links",
+        "groups",
+    ],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &["extensions", "machine", "references", "runtime_name"],
 };
@@ -252,6 +267,7 @@ impl GraphSnapshot {
         refuse_a_key_this_runtime_does_not_read(&graph_document)?;
         let GraphSnapshotAsWritten {
             asset,
+            display_name,
             stream,
             clock,
             nodes,
@@ -261,6 +277,7 @@ impl GraphSnapshot {
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
         let mut graph = Self {
             asset,
+            display_name,
             stream,
             clock,
             nodes,
@@ -1127,6 +1144,7 @@ mod tests {
     fn a_graph_serializes_exactly_the_spec_keys() {
         let graph = GraphSnapshot {
             asset: None,
+            display_name: None,
             stream: None,
             clock: StreamClockSpec::Real,
             nodes: vec![GraphSnapshotNode {
@@ -1469,7 +1487,7 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`asset`, `stream`, `clock`, `nodes`, `links` and `groups`",
+                    "`asset`, `display_name`, `stream`, `clock`, `nodes`, `links` and `groups`",
                 ],
             ),
             (
