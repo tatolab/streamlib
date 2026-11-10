@@ -445,7 +445,8 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
             None,
             vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(image_source),
-                asset_path: "media/logo.png".to_owned(),
+                asset_path: Some("media/logo.png".to_owned()),
+                file_name: None,
                 kind: None,
                 import_settings: Map::new(),
             }],
@@ -558,7 +559,8 @@ fn an_imported_asset(
             None,
             vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(source),
-                asset_path: "media/grade.cube".to_owned(),
+                asset_path: Some("media/grade.cube".to_owned()),
+                file_name: None,
                 kind: None,
                 import_settings: Map::new(),
             }],

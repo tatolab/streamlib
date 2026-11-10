@@ -153,10 +153,15 @@ impl ProjectSettingsAction {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProjectAssetAction {
-    /// Track new bytes as an asset at `asset_path`, of `kind` or the kind its extension implies.
+    /// Track new bytes as an asset at `asset_path`, of `kind` or the kind its extension implies;
+    /// with no `asset_path`, at `file_name` (the source's own name when absent) in the kind's
+    /// standard folder, numbered past a name already taken there.
     ImportAsset {
         source: ProjectAssetImportSource,
-        asset_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        asset_path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file_name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<ProjectAssetKind>,
         #[serde(default, skip_serializing_if = "Map::is_empty")]

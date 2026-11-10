@@ -2246,6 +2246,63 @@ impl ProjectRepository {
         }
     }
 
+    /// Where an import that names no path lands: `file_name`, or the source file's own name, in
+    /// its kind's standard folder, numbered `<stem>-2.<extension>`, `-3`, … past a name an asset
+    /// or another file already takes there.
+    fn the_free_path_in_the_standard_folder_of_an_import(
+        &self,
+        staged_assets: &BTreeMap<Uuid, ProjectAsset>,
+        source: &ProjectAssetImportSource,
+        file_name: Option<String>,
+        kind: Option<ProjectAssetKind>,
+    ) -> Result<ProjectRelativeAssetPath, ProjectRepositoryRefusal> {
+        let file_name = match (file_name, source) {
+            (Some(file_name), _) => file_name,
+            (None, ProjectAssetImportSource::FileOnThisMachine(source_path)) => source_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+                .ok_or_else(|| ProjectRepositoryRefusal::ImportSourceUnreadable {
+                    path: source_path.clone(),
+                    why: "an import source names a file".to_owned(),
+                })?,
+            (None, ProjectAssetImportSource::UploadedContent(_)) => {
+                return Err(ProjectRepositoryRefusal::UploadImportedWithNoPathNamesNoFileName);
+            }
+        };
+        refuse_an_import_file_name(&file_name)?;
+        let kind = kind.unwrap_or_else(|| ProjectAssetKind::inferred_from_file_name(&file_name));
+        if kind == ProjectAssetKind::Stream {
+            return Err(ProjectRepositoryRefusal::StreamAssetsAreNotImported);
+        }
+        let folder = kind.standard_folder_in_a_project();
+        let (stem, extension) = match file_name.rsplit_once('.') {
+            Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
+            _ => (file_name.as_str(), None),
+        };
+        let mut number: u64 = 1;
+        loop {
+            let numbered_file_name = match (number, extension) {
+                (1, _) => file_name.clone(),
+                (_, Some(extension)) => format!("{stem}-{number}.{extension}"),
+                (_, None) => format!("{stem}-{number}"),
+            };
+            let candidate =
+                ProjectRelativeAssetPath::parse(&format!("{folder}/{numbered_file_name}"))?;
+            let taken_by_an_asset =
+                refuse_a_path_another_asset_holds(staged_assets, &candidate, None).is_err();
+            let taken_on_disk = candidate.on_disk_under(&self.project_directory).exists()
+                || self
+                    .project_directory
+                    .join(candidate.sidecar_path())
+                    .exists();
+            if !taken_by_an_asset && !taken_on_disk {
+                return Ok(candidate);
+            }
+            number += 1;
+        }
+    }
+
     fn operation_for_change(
         &self,
         staged_assets: &BTreeMap<Uuid, ProjectAsset>,
@@ -2260,10 +2317,19 @@ impl ProjectRepository {
             ProjectAssetAction::ImportAsset {
                 source,
                 asset_path,
+                file_name,
                 kind,
                 import_settings,
             } => {
-                let path = ProjectRelativeAssetPath::parse(&asset_path)?;
+                let path = match asset_path {
+                    Some(asset_path) => ProjectRelativeAssetPath::parse(&asset_path)?,
+                    None => self.the_free_path_in_the_standard_folder_of_an_import(
+                        staged_assets,
+                        &source,
+                        file_name,
+                        kind,
+                    )?,
+                };
                 self.refuse_a_path_through_a_symbolic_link(&path)?;
                 let kind = kind
                     .unwrap_or_else(|| ProjectAssetKind::inferred_from_file_name(path.file_name()));
@@ -3097,6 +3163,24 @@ fn refuse_a_stream_document_path_without_its_suffix(
             path: path.to_string(),
             why: "a stream asset's graph document is named `<name>.graph.json`",
         });
+    }
+    Ok(())
+}
+
+/// Refuse `file_name` unless it names one visible file, with no folder.
+fn refuse_an_import_file_name(file_name: &str) -> Result<(), ProjectRepositoryRefusal> {
+    let refuse = |why: &'static str| ProjectRepositoryRefusal::ImportFileNameRefused {
+        file_name: file_name.to_owned(),
+        why,
+    };
+    if file_name.is_empty() {
+        return Err(refuse("it is empty"));
+    }
+    if file_name.contains('/') || file_name.contains('\\') {
+        return Err(refuse("it names a folder; send `asset_path` to choose one"));
+    }
+    if file_name.starts_with('.') {
+        return Err(refuse("a hidden file is never an asset"));
     }
     Ok(())
 }

@@ -50,7 +50,8 @@ fn agent() -> ProjectTransactionAuthor {
 fn import_from(source: &Path, asset_path: &str) -> ProjectAssetAction {
     ProjectAssetAction::ImportAsset {
         source: ProjectAssetImportSource::FileOnThisMachine(source.to_path_buf()),
-        asset_path: asset_path.to_owned(),
+        asset_path: Some(asset_path.to_owned()),
+        file_name: None,
         kind: None,
         import_settings: Map::new(),
     }
@@ -449,6 +450,102 @@ fn a_file_already_in_the_project_is_imported_in_place() {
     assert_eq!(std::fs::read(&in_place).unwrap(), b"wav");
 }
 
+fn import_into_its_kinds_folder(source: &Path) -> ProjectAssetAction {
+    ProjectAssetAction::ImportAsset {
+        source: ProjectAssetImportSource::FileOnThisMachine(source.to_path_buf()),
+        asset_path: None,
+        file_name: None,
+        kind: None,
+        import_settings: Map::new(),
+    }
+}
+
+fn the_paths_imported_by(
+    applied: &streamlib_project_repository::AppliedProjectTransaction,
+) -> Vec<String> {
+    applied
+        .transaction
+        .operations
+        .iter()
+        .filter_map(|operation| match operation {
+            ProjectOperation::Asset(ProjectAssetOperation::ImportAsset { asset }) => {
+                Some(asset.path.to_string())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn an_import_with_no_path_is_numbered_past_a_name_an_asset_or_another_file_takes() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let take = fixture.import_source("take.wav", b"take");
+    let readme = fixture.import_source("README", b"notes");
+    std::fs::create_dir_all(fixture.project_directory.join("media")).unwrap();
+    std::fs::write(
+        fixture.project_directory.join("media/take.wav"),
+        b"untracked",
+    )
+    .unwrap();
+
+    let applied = repository
+        .apply_asset_changes(
+            &agent(),
+            None,
+            vec![
+                import_into_its_kinds_folder(&take),
+                import_into_its_kinds_folder(&take),
+                import_into_its_kinds_folder(&readme),
+                import_into_its_kinds_folder(&readme),
+            ],
+        )
+        .unwrap()
+        .into_applied_transaction();
+
+    assert_eq!(
+        the_paths_imported_by(&applied),
+        [
+            "media/take-2.wav",
+            "media/take-3.wav",
+            "data/README",
+            "data/README-2"
+        ]
+    );
+    assert_eq!(
+        std::fs::read(fixture.project_directory.join("media/take.wav")).unwrap(),
+        b"untracked"
+    );
+    assert_eq!(
+        std::fs::read(fixture.project_directory.join("media/take-3.wav")).unwrap(),
+        b"take"
+    );
+}
+
+#[test]
+fn a_kind_named_by_the_caller_picks_the_folder_an_import_with_no_path_lands_in() {
+    let fixture = ProjectBesideItsImportSources::new();
+    let mut repository =
+        ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
+    let weights = fixture.import_source("weights.png", b"not an image");
+    let applied = repository
+        .apply_asset_changes(
+            &agent(),
+            None,
+            vec![ProjectAssetAction::ImportAsset {
+                source: ProjectAssetImportSource::FileOnThisMachine(weights),
+                asset_path: None,
+                file_name: Some("weights.bin".to_owned()),
+                kind: Some(ProjectAssetKind::Data),
+                import_settings: Map::new(),
+            }],
+        )
+        .unwrap()
+        .into_applied_transaction();
+    assert_eq!(the_paths_imported_by(&applied), ["data/weights.bin"]);
+}
+
 #[test]
 fn a_path_another_asset_or_another_file_holds_is_refused() {
     let fixture = ProjectBesideItsImportSources::new();
@@ -495,7 +592,8 @@ fn an_upload_is_moved_to_its_assets_path_by_its_hash_and_leaves_the_uploads() {
     let import_the_upload =
         |content_sha256: &str, asset_path: &str| ProjectAssetAction::ImportAsset {
             source: ProjectAssetImportSource::UploadedContent(content_sha256.to_owned()),
-            asset_path: asset_path.to_owned(),
+            asset_path: Some(asset_path.to_owned()),
+            file_name: None,
             kind: Some(ProjectAssetKind::Data),
             import_settings: Map::new(),
         };
@@ -693,7 +791,8 @@ fn a_stream_asset_is_never_imported_and_a_project_is_never_created_twice() {
             None,
             vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(graph),
-                asset_path: "streams/main.graph.json".to_owned(),
+                asset_path: Some("streams/main.graph.json".to_owned()),
+                file_name: None,
                 kind: Some(ProjectAssetKind::Stream),
                 import_settings: Map::new(),
             }],
@@ -743,7 +842,8 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
             None,
             vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(data.clone()),
-                asset_path: "data/table.graph.json".to_owned(),
+                asset_path: Some("data/table.graph.json".to_owned()),
+                file_name: None,
                 kind: Some(ProjectAssetKind::Data),
                 import_settings: Map::new(),
             }],

@@ -1924,7 +1924,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A project is a versioned repository of assets, and a stream's graph is one of
   them. A project holds a project file, assets — a stream's graph document, media, images, USD,
   FMUs and the rest, one file per asset — and node code; it has no `stream.py`, and a load reads
-  its stream assets. Every asset and every node instance gets a UUID the runtime generates when it
+  its stream assets. The project's folder layout is the runtime's, the same for every client:
+  `tatolab-project.json` at its root, `views/<name>/`, `imports/<folder>/` and the runtime's own
+  `.tatolab/`, with stream assets in `streams/` and node code in `nodes/` as the scaffold writes
+  them; an import that names no path lands in its kind's folder, `media/`, `scenes/` or `data/`,
+  under its own name, numbered `<name>-2.<extension>`, `-3`, … past a name already taken, and an
+  asset may still be moved anywhere in the project (owner, 2026-11-10, that the runtime owns the
+  layout; session, 2026-11-10, for the folders, the numbering and free relocation). Every asset and every node instance gets a UUID the runtime generates when it
   is created or placed; its config, state and links follow it, a name is only a label, and every
   reference names a UUID. The runtime is the project's one writer: every change, a graph edit or
   an asset import alike, is a transaction with an author and an inverse, applied whole or refused
