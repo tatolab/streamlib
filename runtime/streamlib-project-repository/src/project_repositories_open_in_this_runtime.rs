@@ -30,7 +30,7 @@ pub struct ProjectChangeFeedAnnouncement {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProjectChangeOnTheFeed {
     /// The project's writer applied this transaction, which its history now records.
-    Applied(AppliedProjectTransaction),
+    Applied(Box<AppliedProjectTransaction>),
     /// The runtime refused an action on the project, which no history records.
     Refused,
 }
@@ -97,7 +97,7 @@ impl ProjectRepositoriesOpenInThisRuntime {
         self.commit_the_edit_on_each_enclosing_project(project_repository, &applied);
         self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement {
             project: project_repository.project_file().project,
-            change: ProjectChangeOnTheFeed::Applied(applied),
+            change: ProjectChangeOnTheFeed::Applied(Box::new(applied)),
         });
     }
 
@@ -258,7 +258,7 @@ mod tests {
         let announced = change_feed.try_recv().unwrap();
         assert_eq!(
             announced.change,
-            ProjectChangeOnTheFeed::Applied(applied.clone())
+            ProjectChangeOnTheFeed::Applied(Box::new(applied.clone()))
         );
         assert_eq!(announced.project, project_repository.project_file().project);
         assert_eq!(
