@@ -45,7 +45,7 @@ const QUEUED_RECORDS_WRITTEN_AS_THE_LAST_HOLD_DROPS_BUDGET: Duration = Duration:
 /// **Demotions when set** — these features rely on the streamlib
 /// worker existing, so opting in disables them:
 ///
-/// - Each stream's JSONL log (`<project>/.streamlib/logs/`).
+/// - Each stream's JSONL log (`<project>/.tatolab/logs/`).
 /// - Stdio interception that converges python/deno cdylib subprocess
 ///   stderr onto the same tracing dispatch as Rust events.
 /// - The streamlib panic hook that funnels Rust panics through the

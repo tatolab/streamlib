@@ -490,7 +490,7 @@ tatolab enable-virtual-camera [--print]
   trailing mDNS `.local`, cast to lowercase URL-safe.
 - **`logs`** reads a project's log — `--dir`'s, or the working directory's — through the runtime,
   oldest record first, rendered the way the runtime prints them: every record its streams, their
-  venv step and their load wrote, kept in `<project>/.streamlib/logs/project.jsonl` across
+  venv step and their load wrote, kept in `<project>/.tatolab/logs/project.jsonl` across
   restarts. `--stream` narrows it to one stream, by its id or a display name only it holds, and a
   removed stream's id still reads its records; `--action` narrows it to one stream action.
   `--follow` keeps reading as records land until Ctrl-C, which leaves every stream running, and

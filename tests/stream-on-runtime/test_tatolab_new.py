@@ -56,14 +56,13 @@ def scaffold_with_tatolab_new(
 
 def files_written_into(app_directory: Path) -> "dict[str, str]":
     """Every file under the project but its `.venv`, the bytecode its load
-    compiled and what the runtime keeps in `.streamlib` and `.tatolab`, by its path in
-    the project."""
+    compiled and what the runtime keeps in `.tatolab`, by its path in the project."""
     written_files: "dict[str, str]" = {}
     for directory, subdirectory_names, file_names in os.walk(app_directory):
         subdirectory_names[:] = [
             name
             for name in subdirectory_names
-            if name not in (".venv", "__pycache__", ".streamlib", ".tatolab")
+            if name not in (".venv", "__pycache__", ".tatolab")
         ]
         for file_name in file_names:
             path = Path(directory) / file_name
