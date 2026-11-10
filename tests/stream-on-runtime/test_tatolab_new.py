@@ -42,6 +42,8 @@ SCAFFOLDED_FILE_PATHS = {
     "pyproject.toml",
     ".python-version",
     ".gitignore",
+    # The lockfile the runtime's sync of the project venv writes on the load.
+    "uv.lock",
 }
 
 def scaffold_with_tatolab_new(

@@ -52,8 +52,8 @@ every loaded stream is unloaded and `tatolabd` exits.
 `TatolabRunOrDevOnTheRuntime.await_loaded()` follows the load it queued with
 `describe_stream_action` until it ends, and answers the stream it loaded —
 `tatolabd.await_the_latest_stream_loaded()` for the latest one, returning its
-id — and `stop_the_stream()` runs `tatolab stop <id>`, the one way a test ends
-that stream short of the machine shutdown; a Ctrl-C to `dev` ends the following
+id — and `stop_the_stream()` runs `tatolab stop --dir <dir>` on its project, the one
+way a test ends that stream short of the machine shutdown; a Ctrl-C to `dev` ends the following
 and leaves the stream loaded. The local API serves every stream the runtime holds, so the client's
 waits on one stream's graph name it: `await_every_node_running(stream=...)`.
 """
@@ -358,6 +358,7 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         refusal_line_prefix: str,
         verb: str,
         working_directory: Path,
+        project_dir_argument: str,
         tatolab_commands: "TatolabCommandsOfThisTest",
     ) -> None:
         super().__init__(
@@ -367,6 +368,7 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         )
         self.verb = verb
         self.working_directory = working_directory
+        self.project_dir_argument = project_dir_argument
         self._tatolab_commands = tatolab_commands
         self._ended_actions: "dict[str, dict[str, Any]]" = {}
 
@@ -477,16 +479,17 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
         return failed_stream[1] if failed_stream is not None else None
 
     def stop_the_stream(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> int:
-        """Run `tatolab stop <id>` on the stream this load started, to its exit, and follow
-        the stop it queued to its end; return its exit status. The stream is unloaded and
-        recorded stopped."""
-        stream_id = self.await_loaded(timeout=timeout)["stream_id"]
+        """Run `tatolab stop --dir <dir>` on the project this load ran, once its stream is
+        loaded, to its exit, and follow the stop it queued to its end; return its exit status.
+        Every stream of the project is unloaded and recorded stopped."""
+        self.await_loaded(timeout=timeout)
         stop = self._tatolab_commands.start_tatolab(
-            "stop", stream_id, working_directory=self.working_directory
+            "stop", "--dir", self.project_dir_argument, working_directory=self.working_directory
         )
         exit_status = stop.await_exit(timeout=timeout)
         assert exit_status == 0, (
-            f"`tatolab stop {stream_id}` exited {exit_status}; standard error:\n"
+            f"`tatolab stop --dir {self.project_dir_argument}` exited {exit_status}; "
+            f"standard error:\n"
             f"{stop.recent_stderr()}"
         )
         queued_stop = QUEUED_STREAM_ACTION_LINE_PATTERN.search(stop.stdout_text)
@@ -659,6 +662,7 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
                 TatolabRunOrDevOnTheRuntime,
                 verb=verb,
                 working_directory=tatolab_run.working_directory,
+                project_dir_argument=tatolab_run.dir_argument,
                 tatolab_commands=self._tatolab_commands,
             ),
         )

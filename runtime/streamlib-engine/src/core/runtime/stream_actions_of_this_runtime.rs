@@ -46,7 +46,7 @@ use crate::core::compiler::compiler_ops::cross_floor_check_in_the_projects_inter
 use crate::core::context::{CaptureDeviceAccessPrompting, StreamClockReading};
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::names_listed_for_a_refusal;
-use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::graph_snapshot::{GraphSnapshot, refuse_an_integer_literal_wider_than_64_bits};
 use crate::core::logging::{ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread};
 use crate::core::{Error, Result};
 use streamlib_consumer_rhi::runtime_unit_layout::first_party_modules_directory_beside_the_lend;
@@ -197,6 +197,8 @@ fn the_graph_a_stream_document_holds(
         .map_err(|why| why_it_holds_no_graph(format!("names no stream asset: {why}")))?;
     let document_text = std::str::from_utf8(bytes)
         .map_err(|not_utf8| why_it_holds_no_graph(format!("is not UTF-8: {not_utf8}")))?;
+    refuse_an_integer_literal_wider_than_64_bits(document_text)
+        .map_err(|too_wide| why_it_holds_no_graph(format!("does not load: {too_wide}")))?;
     let document: serde_json::Value = serde_json::from_str(document_text)
         .map_err(|not_parsed| why_it_holds_no_graph(format!("does not parse: {not_parsed}")))?;
     let document =
@@ -3781,6 +3783,36 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].state, StreamListingState::Failed);
         assert_eq!(listed[0].failed_because.as_deref(), Some(failed_because));
+    }
+
+    #[test]
+    #[serial]
+    fn a_graph_document_holding_an_integer_wider_than_64_bits_is_recorded_failed_naming_it() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        let mut graph = the_graph_of_a_stream_named("camera");
+        graph["nodes"][0]["config"] = serde_json::json!({ "value": "the wide integer" });
+        project.write_the_graph_document(graph);
+        let document_path = project.graph_document_path_of("camera");
+        let document_text = std::fs::read_to_string(&document_path).unwrap();
+        std::fs::write(
+            &document_path,
+            document_text.replace("\"the wide integer\"", "18446744073709551616"),
+        )
+        .unwrap();
+
+        let run = runner
+            .load_the_project_off_its_queue(project.run_request())
+            .expect("an integer wider than 64 bits fails its stream, not the run");
+
+        let (_, failed_because) = the_one_failed_stream_of(&run);
+        assert!(
+            failed_because.contains("`streams/camera.graph.json` does not load")
+                && failed_because.contains("18446744073709551616"),
+            "{failed_because}"
+        );
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
 
     #[test]
