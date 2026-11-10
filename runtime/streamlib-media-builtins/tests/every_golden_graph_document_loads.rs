@@ -14,7 +14,7 @@ use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_str
 use sha2::{Digest, Sha256};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::runtime::{OptionsForLoadingOneStream, Runner};
+use streamlib::sdk::runtime::Runner;
 use streamlib_media_builtins::register_media_builtin_processor_types;
 
 /// Each golden graph document's SHA-256, pinned as it was added.

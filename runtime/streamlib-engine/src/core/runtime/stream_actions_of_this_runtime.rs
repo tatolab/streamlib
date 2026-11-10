@@ -3734,7 +3734,7 @@ mod tests {
     }
 
     /// The stream `stream_name` of `project` loaded by a library host under the id a run
-    /// records it under, not started.
+    /// records it under, not recorded and not started.
     fn a_stream_its_host_loaded(
         runner: &Runner,
         project: &ProjectWithGraphDocuments,
@@ -3879,7 +3879,7 @@ mod tests {
 
         let refusal = refusal_of(runner.load_the_project_off_its_queue(project.run_request()));
 
-        assert!(refusal.contains("its host loaded"), "{refusal}");
+        assert!(refusal.contains("the loaded stream from"), "{refusal}");
         assert!(
             refusal.contains(&host_project.path().display().to_string()),
             "{refusal}"
@@ -4992,7 +4992,6 @@ mod tests {
         let mut expected = [
             StreamListing {
                 display_name: project.stream_id_of("a-hosted"),
-                stream_location: None,
                 ..listing_of("a-hosted", StreamListingState::Running, Some(1))
             },
             listing_of("b-recorded", StreamListingState::Running, Some(1)),

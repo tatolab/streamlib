@@ -17,7 +17,7 @@ use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::{OptionsForLoadingOneStream, Runner};
+use streamlib::sdk::runtime::Runner;
 use streamlib_media_builtins::register_media_builtin_processor_types;
 
 /// Each golden graph's SHA-256, pinned as it was added: a golden is never

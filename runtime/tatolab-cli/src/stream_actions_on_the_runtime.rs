@@ -91,8 +91,8 @@ const NOT_LOADED_NODE_COUNT_CELL: &str = "-";
 /// What `streams` prints in place of a step for a preparing stream whose action waits its turn.
 const STREAM_ACTION_STILL_QUEUED_CELL: &str = "queued";
 
-/// The `PROJECT` and `ASSET` cells of a stream with no location: one a library host loaded,
-/// or a record an earlier runtime wrote.
+/// The `PROJECT` and `ASSET` cells of a stream with no location: a record an earlier runtime
+/// wrote.
 const NO_LOCATION_CELL: &str = "-";
 
 /// What `start`, `reload` and `dev` ask the runtime to load: the project, every stream asset of its

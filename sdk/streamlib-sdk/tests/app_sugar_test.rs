@@ -21,12 +21,12 @@ use streamlib::sdk::runtime::a_project_on_disk_for_a_test::{
     the_location_of_a_stream_of_the_test_project_at,
 };
 
-use streamlib::sdk::App;
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{Config, GeneratedProcessor, ManualProcessor, ProcessorSpec};
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
+use streamlib::sdk::{App, THE_STREAM_ID_AN_APP_LOADS};
 
 // =============================================================================
 // Fixtures — in-crate `#[processor]` host types. No package, no build: the

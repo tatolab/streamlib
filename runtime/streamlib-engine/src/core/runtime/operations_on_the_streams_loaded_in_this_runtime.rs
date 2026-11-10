@@ -191,8 +191,8 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         let stream = self.loaded_stream_of_the_id(stream_id)?;
         let stream_environment = stream.stream_environment().ok_or_else(|| {
             crate::core::error::Error::Configuration(format!(
-                "stream `{stream_id}` belongs to no project, so it has no interpreter to run \
-                 graph generator `{generator}` in"
+                "stream `{stream_id}` was loaded with no stream environment, so it has no \
+                 interpreter to run graph generator `{generator}` in"
             ))
         })?;
         let _entered_this_streams_log_route = stream.log_route().enter_on_this_thread();

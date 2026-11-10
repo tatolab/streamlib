@@ -106,8 +106,7 @@ pub struct ListStreamsToolResultStream {
     pub stream: String,
     /// The label the stream is shown under.
     pub display_name: String,
-    /// Where the stream's code lives; `null` for a stream a library host loaded, and for a
-    /// record an earlier runtime wrote.
+    /// Where the stream's code lives; `null` for a record an earlier runtime wrote.
     pub location: Option<StreamLocationOnTheWire>,
     /// Whether it is running, stopped or failed.
     pub state: ListedStreamState,

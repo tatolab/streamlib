@@ -1113,7 +1113,7 @@ impl LocalApiMcpServerHandler {
 /// transaction has staged it.
 struct StreamATransactionEdits {
     stream_operations: Arc<dyn RuntimeOperations>,
-    stream_location: Option<StreamLocation>,
+    stream_location: StreamLocation,
     staged_graph: StreamGraphDocument,
 }
 
@@ -1304,7 +1304,6 @@ impl GraphTransactionInFlight<'_> {
         let project_of_each_loaded_stream_asset: HashMap<Uuid, Uuid> = self
             .the_location_of_each_loaded_stream()
             .into_values()
-            .flatten()
             .map(|stream_location| (stream_location.stream_asset, stream_location.project))
             .collect();
         stream_assets.iter().find_map(|stream_asset| {
@@ -1361,12 +1360,12 @@ impl GraphTransactionInFlight<'_> {
             .collect()
     }
 
-    /// The location of each loaded stream by its stream id, `None` for one of no project.
-    fn the_location_of_each_loaded_stream(&self) -> HashMap<String, Option<StreamLocation>> {
+    /// The location of each listed stream by its stream id.
+    fn the_location_of_each_loaded_stream(&self) -> HashMap<String, StreamLocation> {
         self.operations_on_the_loaded_streams
             .list_streams()
             .into_iter()
-            .map(|listing| (listing.stream_id, listing.stream_location))
+            .filter_map(|listing| Some((listing.stream_id, listing.stream_location?)))
             .collect()
     }
 
@@ -1395,7 +1394,7 @@ impl GraphTransactionInFlight<'_> {
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
-        stream_locations: &HashMap<String, Option<StreamLocation>>,
+        stream_locations: &HashMap<String, StreamLocation>,
         project_repository_held: Option<&mut ProjectRepository>,
     ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
         let actions_as_sent: Vec<ProjectAction> = requests_and_the_stream_id_each_names
@@ -1417,9 +1416,13 @@ impl GraphTransactionInFlight<'_> {
                 .map_err(|refusal| {
                     GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
                 })?;
-            let stream_location = stream_locations.get(stream_id).cloned().flatten();
-            let staged_graph = match (&project_repository_held, &stream_location) {
-                (Some(project_repository), Some(stream_location)) => {
+            let stream_location = stream_locations.get(stream_id).cloned().ok_or_else(|| {
+                GraphTransactionRefusal::of_the_whole_transaction(format!(
+                    "stream `{stream_id}` is not loaded"
+                ))
+            })?;
+            let staged_graph = match &project_repository_held {
+                Some(project_repository) => {
                     if stream_location.project != project_repository.project_file().project {
                         return Err(GraphTransactionRefusal::of_the_whole_transaction(format!(
                             "a transaction edits the streams of one project, and `{stream_id}` \
@@ -1560,7 +1563,7 @@ impl GraphTransactionInFlight<'_> {
                 let project_operations = applied_live
                     .iter()
                     .filter_map(|(stream_id, graph_operation)| {
-                        let stream_location = streams.get(stream_id)?.stream_location.as_ref()?;
+                        let stream_location = &streams.get(stream_id)?.stream_location;
                         Some(ProjectOperation::StreamGraph(
                             StreamGraphOperationOnAStream {
                                 stream: stream_location.stream_asset,
@@ -1607,12 +1610,12 @@ impl GraphTransactionInFlight<'_> {
         ))
     }
 
-    /// The project every stream of `stream_ids` belongs to, its one writer, refused for a
-    /// stream with no project and for streams of two projects.
+    /// The project every stream of `stream_ids` belongs to, its one writer, refused for
+    /// streams of two projects.
     fn the_one_project_the_streams_belong_to(
         &self,
         stream_ids: &[String],
-        stream_locations: &HashMap<String, Option<StreamLocation>>,
+        stream_locations: &HashMap<String, StreamLocation>,
     ) -> Result<streamlib_project_repository::ProjectRepositoryOneWriterAtATime, String> {
         let mut project: Option<&StreamLocation> = None;
         for stream_id in stream_ids {
@@ -1627,13 +1630,7 @@ impl GraphTransactionInFlight<'_> {
                             |refusal| refusal.to_string(),
                         ));
                 }
-                Some(None) => {
-                    return Err(format!(
-                        "stream `{stream_id}` belongs to no project, so no graph document keeps \
-                         its edits; edit it with `mode` `live`"
-                    ));
-                }
-                Some(Some(stream_location)) => stream_location,
+                Some(stream_location) => stream_location,
             };
             match project {
                 Some(first) if first.project != stream_location.project => {
@@ -1714,7 +1711,13 @@ impl GraphTransactionInFlight<'_> {
                             stream_id.clone(),
                             StreamATransactionEdits {
                                 stream_operations: Arc::clone(&stream_operations),
-                                stream_location: None,
+                                stream_location: StreamLocation {
+                                    project_directory: project_repository
+                                        .project_directory()
+                                        .to_path_buf(),
+                                    project,
+                                    stream_asset: *stream,
+                                },
                                 staged_graph: StreamGraphDocument::from_value(Value::Object(
                                     Map::new(),
                                 ))?,
