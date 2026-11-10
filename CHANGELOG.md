@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.45](https://github.com/tatolab/streamlib/compare/v0.68.44...v0.68.45) (2026-11-10)
+
+
+### Bug Fixes
+
+* **ci:** give the runtime's project sync this run's tatolab-testpattern too ([a9cbfe9](https://github.com/tatolab/streamlib/commit/a9cbfe9685fb992223113ed976cff8297dc070cc))
+* **ci:** give the runtime's project sync this run's tatolab-testpattern too ([4936cf8](https://github.com/tatolab/streamlib/commit/4936cf81646552cdc1d78d4d797148671a68bfc2))
+
 ## [0.68.44](https://github.com/tatolab/streamlib/compare/v0.68.43...v0.68.44) (2026-11-10)
 
 
