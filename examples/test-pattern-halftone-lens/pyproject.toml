@@ -1,0 +1,8 @@
+[project]
+name = "test-pattern-halftone-lens"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tatolab-stream>=0.54.3", "tatolab-testpattern", "numpy>=2.1"]
+
+[tool.uv.sources]
+tatolab-testpattern = { path = "../../packages/tatolab-testpattern", editable = true }
