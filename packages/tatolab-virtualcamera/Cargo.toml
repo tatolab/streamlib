@@ -1,6 +1,6 @@
 [package]
 name = "tatolab-virtualcamera"
-version = "0.68.43"
+version = "0.68.44"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]

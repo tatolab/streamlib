@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.44](https://github.com/tatolab/streamlib/compare/v0.68.43...v0.68.44) (2026-11-10)
+
+
+### Features
+
+* **project:** versioned transactions, idempotency keys, structured refusals on the change feed ([ad0dece](https://github.com/tatolab/streamlib/commit/ad0deceb085d7d764d583c3b7d98d2fa2165a380))
+
 ## [0.68.43](https://github.com/tatolab/streamlib/compare/v0.68.42...v0.68.43) (2026-11-10)
 
 
