@@ -38,7 +38,7 @@ Fixtures, each documented where it is defined:
 - `start_tatolabd` — start this test's `tatolabd`; returns a `TatolabdUnderTest`.
 - `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it with `tatolab run`.
 - `run_stream_on_tatolabd_with_no_vulkan_driver` — the GPU-free run: loaded and failed at the GPU, or failed or refused before it.
-- `make_tatolab_project` — a project directory whose `.venv` is the suite venv.
+- `make_tatolab_project` — a project directory whose `.venv` is the suite venv, or one the runtime makes.
 - `run_tatolab` / `start_tatolab` — any `tatolab` command to completion, or started.
 - `run_tatolab_observation_verb` — a `tatolab` verb against this test's runtime, to completion.
 - `held_node_module` — a node module in a project of its own whose describe parks the load.
@@ -927,17 +927,31 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
 def make_tatolab_project(tmp_path: Path) -> "Callable[..., Path]":
     """Make a `tatolab` project directory whose `.venv` symlinks the suite venv.
 
-    `make_tatolab_project(files={relative_path: text}, directory_name="app") -> Path`:
-    each file is written under the project, and `.venv` points at the suite
-    venv's root, so the project's Python nodes run in `<project>/.venv/bin/python`,
-    holding `tatolab-stream` and nothing of the runtime. A `stream.py` among the files
-    is compiled in the suite venv to the project's graph documents.
+    `make_tatolab_project(files={relative_path: text}, directory_name="app",
+    runs_in_the_suite_venv=True) -> Path`: each file is written under the project, and
+    `.venv` points at the suite venv's root, so the project's Python nodes run in
+    `<project>/.venv/bin/python`, holding `tatolab-stream` and nothing of the runtime. A
+    `stream.py` among the files is compiled in the suite venv to the project's graph
+    documents. With `runs_in_the_suite_venv=False` the project gets no `.venv`, and the
+    runtime makes one of its own from the `pyproject.toml` the project holds or is
+    given: the runtime syncs a venv to its project's `pyproject.toml`, so a project
+    holding one never links the suite venv.
     """
 
-    def make(files: "dict[str, str] | None" = None, directory_name: str = "app") -> Path:
+    def make(
+        files: "dict[str, str] | None" = None,
+        directory_name: str = "app",
+        runs_in_the_suite_venv: bool = True,
+    ) -> Path:
+        if runs_in_the_suite_venv and "pyproject.toml" in (files or {}):
+            raise ValueError(
+                "a project given its own pyproject.toml would have the runtime sync "
+                "the suite venv to it; make it with runs_in_the_suite_venv=False"
+            )
         project_directory = tmp_path / directory_name
         project_directory.mkdir(parents=True)
-        (project_directory / ".venv").symlink_to(SUITE_VENV_PREFIX, target_is_directory=True)
+        if runs_in_the_suite_venv:
+            (project_directory / ".venv").symlink_to(SUITE_VENV_PREFIX, target_is_directory=True)
         for relative_path, text in (files or {}).items():
             project_file = project_directory / relative_path
             project_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1009,15 +1023,18 @@ def make_scaffolded_tatolab_project(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
 ) -> "Callable[..., Path]":
-    """`tatolab new` into a project whose `.venv` is the suite venv, on a running `tatolabd`.
+    """`tatolab new` into an empty project directory, on a running `tatolabd`.
 
     `make_scaffolded_tatolab_project(tatolabd, directory_name="app") -> Path`:
-    the runtime writes the scaffold beside the `.venv` and loads its stream;
+    the runtime writes the scaffold, makes the project's own `.venv` from the
+    scaffold's `pyproject.toml` as it does for a user, and loads its stream;
     returns once that action is `done`.
     """
 
     def make(tatolabd: TatolabdUnderTest, directory_name: str = "app") -> Path:
-        app_directory = make_tatolab_project(directory_name=directory_name)
+        app_directory = make_tatolab_project(
+            directory_name=directory_name, runs_in_the_suite_venv=False
+        )
         created = run_tatolab("new", app_directory, working_directory=app_directory.parent)
         assert created.returncode == 0, created.stdout + created.stderr
         action = created.stdout.split(" ", 1)[0]

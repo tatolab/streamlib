@@ -949,12 +949,7 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     assert uvs_lines, unsyncable_page
     assert all(record["runtime_id"] for record in uvs_lines), uvs_lines
 
-    app_directory = make_tatolab_project(
-        {
-            "pyproject.toml": '[project]\nname = "two-streams"\nversion = "0.1.0"\n',
-            "stream.py": STREAM_PY_WITH_TWO_STREAMS,
-        }
-    )
+    app_directory = make_tatolab_project({"stream.py": STREAM_PY_WITH_TWO_STREAMS})
     project_directory = str(app_directory.resolve())
     run = client.call_tool("run_project", {"project_directory": project_directory})
     loaded_streams = client.stream_action_once_ended(run["action"])["streams"]
