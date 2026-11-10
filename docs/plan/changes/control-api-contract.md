@@ -68,22 +68,21 @@ change touches the entries listed under MODIFIED and no OPEN entry.
   `dependency`, `node_type`, `view`, `observe`) and its exposure (`studio`, `agent`, `public`).
   Request and result types are the action contract's Rust types, with serde and schemars. The
   project-action-contract types move into this crate rather than being copied.
-  [NEEDS DECISION: how an operation is declared]
-  - (a) An `impl ControlOperation for AddNode` per operation, with associated `Request`,
-    `Result` and constants, collected into one `const` table the core and adapters iterate.
-  - (b) A derive macro on the request type that emits the same.
-  - (c) One `control_operations!` table macro listing every operation.
-  - Recommendation: (a). It is plain Rust, compiles to one table and needs no new proc-macro;
-    a missing operation is a compile error in the dispatcher's exhaustive match.
+  An operation is declared by one `impl ControlOperation for AddNode`, with associated
+  `Request`, `Result` and constants, collected into one `const` table the core and adapters
+  iterate; a missing operation is a compile error in the dispatcher's exhaustive match
+  (owner, 2026-11-10).
+  Rejected: a derive macro on the request type, or one `control_operations!` table macro —
+  plain trait impls need no new macro (owner, 2026-11-10).
 - **The contract file.** `cargo xtask generate-control-contract` writes
   `runtime/streamlib-control-contract/contract.json` from the registry: every request with its
   params and result schemas (JSON Schema 2020-12, which MCP 2026-07-28 accepts), every
   notification with its direction, every refusal, and each entry's `since`, stability and
   docs. `--check` fails CI on any difference, as `generate-built-in-node-classes --check` does.
-  [NEEDS DECISION: the file's shape]
-  - (a) OpenRPC-shaped methods plus an explicit `notifications` array.
-  - (b) LSP-metaModel-shaped: `requests`, `notifications`, `structures`.
-  - Recommendation: (a), so existing OpenRPC doc tooling can render most of it.
+  The file is OpenRPC-shaped, with an explicit `notifications` array beside its methods, so
+  existing OpenRPC doc tooling renders most of it (owner, 2026-11-10).
+  Rejected: the LSP metaModel shape (`requests`, `notifications`, `structures`) — OpenRPC doc
+  tooling does not read it (owner, 2026-11-10).
 - **The contract version.** One integer, `contract_version`, bumped only on a breaking change
   (a removed or renamed operation, a removed field, a narrowed type). An addition is marked by
   its `since` and needs no bump. An `experimental` operation may change without a bump before it
@@ -128,12 +127,11 @@ change touches the entries listed under MODIFIED and no OPEN entry.
   adapter and grades the final graph, recording success rate, tool calls and tokens per run.
 - **A localhost WebSocket adapter, after Studio.** The JSON-RPC adapter served over a WebSocket
   on loopback for tools that cannot open a Unix socket, such as OBS or a browser-based tool
-  (owner, 2026-11-10). It lands only after Studio runs on the JSON-RPC adapter.
-  [NEEDS DECISION: how the WebSocket is gated]
-  - (a) A random token the runtime writes to an owner-only file in the runtime directory, sent
-    on connect, plus an `Origin` allow-list against DNS rebinding.
-  - (b) Off by default; the user turns it on in Studio, which shows the token to paste.
-  - Recommendation: (a) and (b) together: off by default, token-gated when on.
+  (owner, 2026-11-10). It lands only after Studio runs on the JSON-RPC adapter. It is off by
+  default; the user turns it on in Studio, which shows the token to paste. When on, a client
+  sends a random token the runtime writes to an owner-only file in the runtime directory, and
+  the runtime refuses an `Origin` outside its allow-list, against DNS rebinding
+  (owner, 2026-11-10).
 
 ## MODIFIED
 
@@ -171,8 +169,8 @@ change touches the entries listed under MODIFIED and no OPEN entry.
 5. Agent evals.
 6. The loopback WebSocket adapter.
 
-[NEEDS DECISION: where this sits in `ROADMAP.md`. Step 1 unblocks Studio's breakages; the
-owner sets the order.]
+Step 1 sits in `ROADMAP.md` as step 6, beside step 5, because it also fixes Studio's Run and
+stream rename (owner, 2026-11-10).
 
 ## Consumers
 

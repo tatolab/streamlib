@@ -89,7 +89,16 @@ Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (
 rides this step: a generator placing a generator joins #3259, and labelled groups in the graph
 document, #3308, follow #3258.
 
-## 6. New capability: lightweight nodes, then shaders
+## 6. One control API contract
+
+Change: [`changes/control-api-contract.md`](changes/control-api-contract.md), Order step 1.
+
+The operation registry and dispatcher for the first operations, the checked contract file, the
+JSON-RPC adapter and the generated TypeScript client in the runtime unit. Tato Studio moves onto
+that client, which also fixes its Run and stream rename. It may run beside step 5; the change's
+later steps follow it in the change's own order (owner, 2026-11-10).
+
+## 7. New capability: lightweight nodes, then shaders
 
 Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) and
 [`changes/slang-shader-compiler.md`](changes/slang-shader-compiler.md).
@@ -113,11 +122,11 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
   item 4 (PR #3297); and the first of item 5's pool, islands a built-in reads (PRs #3305 and
   #3310).
 
-Step 6 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
+Step 7 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
 transaction ticket, #3258, so live edits and pin values are built once, as transactions. Nothing in steps
-1 to 5 waits on this step.
+1 to 6 waits on this step.
 
-## 7. Loop zones and hand-editable containers
+## 8. Loop zones and hand-editable containers
 
 Design not yet written. Input: *Loops for function nodes: options* (2026-11-08), whose option the owner has yet to pick. A
 zone's body is a fragment run N times, and a zone drawn by hand needs a container a person edits,
