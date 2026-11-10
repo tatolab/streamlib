@@ -159,6 +159,17 @@ fn a_graphs_studio_holding_a_key_other_than_notes_is_refused_by_name() {
     assert!(refusal.contains("`studio.viewport`"), "{refusal}");
 }
 
+#[test]
+fn a_note_carrying_a_key_a_note_does_not_take_is_refused_by_name() {
+    let mut document: Value = serde_json::from_str(A_STUDIO_CONTRACT_1_DOCUMENT).unwrap();
+    document["studio"]["notes"][0]["colour"] = json!("amber");
+    let refusal = StreamGraphDocument::from_value(document)
+        .unwrap()
+        .notes()
+        .unwrap_err();
+    assert!(refusal.contains("`colour`"), "{refusal}");
+}
+
 struct ProjectHoldingOneStream {
     _root: tempfile::TempDir,
     repository: ProjectRepository,
