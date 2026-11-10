@@ -64,7 +64,11 @@ on-disk transaction format.
   key and one transaction (owner, 2026-11-09).
 - **Structured refusals.** A refused action answers a typed refusal: the action, the field or link
   it refused, and the runtime's own words. A client shows it beside what caused it and never
-  rewrites it (owner, 2026-11-09).
+  rewrites it (owner, 2026-11-09). A project's change feed carries each refused action beside the
+  applied transactions, tagged `refused`, with its author, the operations it asked for, its
+  `mode`, its key, the refusal and when it was refused. The runtime keeps the latest 100 of
+  each project in memory since it started, never in history, and announces each one through the
+  same `notifications/resources/updated` (owner, 2026-11-09).
 - **Stream verbs.** `create_stream {project_directory, path, display_name}` and
   `delete_stream {project_directory, stream_asset}` record `CreateStreamDocument` and
   `DeleteStreamDocument`. Creating a stream loads it with the project's other streams, and deleting

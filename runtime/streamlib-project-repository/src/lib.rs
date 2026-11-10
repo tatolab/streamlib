@@ -44,8 +44,8 @@ pub use project_history_repository::{
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
 #[cfg(feature = "history")]
 pub use project_repositories_open_in_this_runtime::{
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
-    ProjectTransactionAnnouncement,
+    ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,
+    ProjectRepositoryOneWriterAtATime,
 };
 #[cfg(feature = "history")]
 pub use project_repository::{

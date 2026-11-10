@@ -153,6 +153,8 @@ pub(crate) struct LocalApiMcpServerHandler {
     mcp_connection: LocalApiMcpConnection,
     viewers_this_connection_holds_open: Arc<ViewersOneLocalApiConnectionHoldsOpen>,
     pub(crate) project_repositories_open_in_this_runtime: Arc<ProjectRepositoriesOpenInThisRuntime>,
+    pub(crate) project_actions_refused_since_the_runtime_started:
+        Arc<crate::mcp_project_change_feed::ProjectActionsRefusedSinceTheRuntimeStarted>,
     tool_router: Arc<ToolRouter<Self>>,
     prompt_router: Arc<PromptRouter<Self>>,
 }
@@ -180,6 +182,7 @@ impl LocalApiMcpServerHandler {
             mcp_connection: LocalApiMcpConnection::OneShotStreamableHttpRequest,
             viewers_this_connection_holds_open: Arc::default(),
             project_repositories_open_in_this_runtime,
+            project_actions_refused_since_the_runtime_started: Arc::default(),
             tool_router: Arc::new(
                 Self::tool_router()
                     + Self::project_asset_tool_router()
@@ -985,6 +988,7 @@ impl ServerHandler for LocalApiMcpServerHandler {
         {
             return crate::mcp_project_change_feed::read_project_transactions_resource(
                 Arc::clone(&self.project_repositories_open_in_this_runtime),
+                Arc::clone(&self.project_actions_refused_since_the_runtime_started),
                 &request.uri,
                 project,
             )

@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Each open project's change feed: the resource `streamlib://project/<project>/transactions`
-//! holds its newest transactions, and a `subscriptions/listen` naming it is sent
-//! `notifications/resources/updated` for every transaction applied after.
+//! holds its newest transactions and the actions refused since the runtime started, and a
+//! `subscriptions/listen` naming it is sent `notifications/resources/updated` for every
+//! transaction applied or action refused after.
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use rmcp::ErrorData as McpError;
 use rmcp::model::{
@@ -15,10 +19,12 @@ use rmcp::model::{
 use rmcp::service::SubscriptionContext;
 use serde_json::json;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectRepositoriesOpenInThisRuntime, ProjectTransactionAuthorKind,
+    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectRepositoriesOpenInThisRuntime,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents,
+    ProjectActionRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire, ProjectTransactionOnTheWire,
+    ProjectTransactionsResourceContents, RefusedProjectActionOnTheWire,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
@@ -29,6 +35,137 @@ const PROJECT_TRANSACTIONS_RESOURCE_URI_SUFFIX: &str = "/transactions";
 
 /// How many of a project's newest transactions its resource holds.
 const PROJECT_TRANSACTIONS_RESOURCE_TRANSACTION_COUNT: usize = 64;
+
+/// How many of a project's latest refused actions the runtime keeps.
+const REFUSED_PROJECT_ACTIONS_KEPT_PER_PROJECT: usize = 100;
+
+/// One refused action as the runtime keeps it, with the second it was refused at.
+struct RefusedProjectActionKeptInMemory {
+    refused_at_unix_seconds: i64,
+    refused_action: RefusedProjectActionOnTheWire,
+}
+
+/// The latest actions the runtime refused on each project since it started, held in memory
+/// only, since no history records a refusal.
+#[derive(Default)]
+pub(crate) struct ProjectActionsRefusedSinceTheRuntimeStarted {
+    refused_actions_oldest_first_by_project:
+        Mutex<HashMap<Uuid, VecDeque<RefusedProjectActionKeptInMemory>>>,
+}
+
+/// An action on a project the runtime refused, as its caller sent it.
+pub(crate) struct ProjectActionTheRuntimeRefused<'action> {
+    pub(crate) author: &'action ProjectTransactionAuthor,
+    pub(crate) mode: &'static str,
+    pub(crate) operations_as_requested: Vec<serde_json::Value>,
+    pub(crate) idempotency_key: Option<&'action ProjectActionIdempotencyKey>,
+    pub(crate) refusal: ProjectActionRefusalOnTheWire,
+}
+
+impl ProjectActionsRefusedSinceTheRuntimeStarted {
+    /// Keep `refused` among `project`'s latest refusals and announce it on the change feed.
+    pub(crate) fn keep_and_announce(
+        &self,
+        project_repositories: &ProjectRepositoriesOpenInThisRuntime,
+        project: Uuid,
+        refused: ProjectActionTheRuntimeRefused<'_>,
+    ) {
+        let refused_at_unix_seconds = the_wall_clock_in_unix_seconds();
+        let refused_action = RefusedProjectActionOnTheWire {
+            author_kind: author_kind_on_the_wire(&refused.author.kind).to_owned(),
+            author_name: refused.author.name.clone(),
+            mode: refused.mode.to_owned(),
+            operations: refused.operations_as_requested,
+            idempotency_key: refused
+                .idempotency_key
+                .map(|idempotency_key| idempotency_key.as_str().to_owned()),
+            refusal: refused.refusal,
+            refused_at: rfc_3339_utc_of_unix_seconds(refused_at_unix_seconds),
+        };
+        {
+            let mut refused_actions_oldest_first_by_project =
+                self.refused_actions_oldest_first_by_project.lock();
+            let refused_actions_oldest_first = refused_actions_oldest_first_by_project
+                .entry(project)
+                .or_default();
+            if refused_actions_oldest_first.len() == REFUSED_PROJECT_ACTIONS_KEPT_PER_PROJECT {
+                refused_actions_oldest_first.pop_front();
+            }
+            refused_actions_oldest_first.push_back(RefusedProjectActionKeptInMemory {
+                refused_at_unix_seconds,
+                refused_action,
+            });
+        }
+        project_repositories.announce_a_refused_action(project);
+    }
+
+    /// `project`'s kept refusals, newest first, each with the second it was refused at.
+    fn the_refused_actions_newest_first(
+        &self,
+        project: Uuid,
+    ) -> Vec<(i64, RefusedProjectActionOnTheWire)> {
+        self.refused_actions_oldest_first_by_project
+            .lock()
+            .get(&project)
+            .map(|refused_actions_oldest_first| {
+                refused_actions_oldest_first
+                    .iter()
+                    .rev()
+                    .map(|kept| (kept.refused_at_unix_seconds, kept.refused_action.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// `applied`, newest first, and `refused`, newest first, merged newest first; a refusal in the
+/// same second as an applied transaction comes before it.
+fn the_change_feed_newest_first(
+    applied: Vec<AppliedProjectTransaction>,
+    refused: Vec<(i64, RefusedProjectActionOnTheWire)>,
+) -> Vec<ProjectChangeFeedEntryOnTheWire> {
+    let mut change_feed: Vec<(i64, bool, ProjectChangeFeedEntryOnTheWire)> = applied
+        .into_iter()
+        .map(|applied| {
+            (
+                applied.applied_at_unix_seconds,
+                false,
+                ProjectChangeFeedEntryOnTheWire::Applied(project_transaction_on_the_wire(applied)),
+            )
+        })
+        .chain(
+            refused
+                .into_iter()
+                .map(|(refused_at_unix_seconds, refused_action)| {
+                    (
+                        refused_at_unix_seconds,
+                        true,
+                        ProjectChangeFeedEntryOnTheWire::Refused(refused_action),
+                    )
+                }),
+        )
+        .collect();
+    change_feed.sort_by(|(at, is_refused, _), (other_at, other_is_refused, _)| {
+        (other_at, other_is_refused).cmp(&(at, is_refused))
+    });
+    change_feed.into_iter().map(|(_, _, entry)| entry).collect()
+}
+
+fn the_wall_clock_in_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_the_epoch| {
+            i64::try_from(since_the_epoch.as_secs()).unwrap_or(i64::MAX)
+        })
+}
+
+fn author_kind_on_the_wire(author_kind: &ProjectTransactionAuthorKind) -> &'static str {
+    match author_kind {
+        ProjectTransactionAuthorKind::Person => "person",
+        ProjectTransactionAuthorKind::Agent => "agent",
+        ProjectTransactionAuthorKind::Runtime => "runtime",
+    }
+}
 
 /// The change feed of the project whose UUID is `project`.
 pub(crate) fn project_transactions_resource_uri(project: Uuid) -> String {
@@ -52,7 +189,7 @@ pub(crate) fn project_transactions_resource_template() -> ResourceTemplate {
         "project-transactions",
     )
     .with_title("Project transactions")
-    .with_description("A project's change feed, by its UUID as `list_assets` answers it under `transactions_resource_uri`: its newest transactions, newest first, each with its `transaction` UUID, its `commit`, its `parent_commit`, its author's kind and name, and its `operations` and `inverse_operations`. Name the URI in `subscriptions/listen`'s resource subscriptions to be sent `notifications/resources/updated` for it each time a transaction applies. Served for a project an asset tool has opened since the runtime started.")
+    .with_description("A project's change feed, by its UUID as `list_assets` answers it under `transactions_resource_uri`: its newest transactions and the actions refused since the runtime started, newest first, each tagged by `status`. An `applied` one carries its `transaction` UUID, its `commit`, its `parent_commit`, its author's kind and name, its `operations` and `inverse_operations`, its `format_version`, its `idempotency_key` when it had one, and `applied_at`. A `refused` one carries its author's kind and name, its `mode`, the `operations` it asked for, its `idempotency_key` when it had one, the `refusal` in the runtime's own words, and `refused_at`; the runtime keeps the latest 100 of each project in memory only. Name the URI in `subscriptions/listen`'s resource subscriptions to be sent `notifications/resources/updated` for it each time a transaction applies or an action is refused. Served for a project an asset tool has opened since the runtime started.")
     .with_mime_type("application/json")
 }
 
@@ -93,7 +230,7 @@ pub(crate) async fn announce_project_transactions_until_the_listen_ends(
             () = context.cancelled() => return,
             () = local_api_stopping_token.cancelled() => return,
             received = change_feed.recv() => match received {
-                Ok(announcement) => vec![project_transactions_resource_uri(announcement.project)],
+            Ok(announcement) => vec![project_transactions_resource_uri(announcement.project)],
                 Err(RecvError::Lagged(missed_announcement_count)) => {
                     tracing::debug!(missed_announcement_count, "a change-feed listener fell behind; every subscribed project is marked updated");
                     subscribed_resource_uris.clone()
@@ -119,6 +256,7 @@ pub(crate) async fn announce_project_transactions_until_the_listen_ends(
 /// Read the change feed of `project`, which an asset tool must have opened.
 pub(crate) async fn read_project_transactions_resource(
     project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
+    project_actions_refused: Arc<ProjectActionsRefusedSinceTheRuntimeStarted>,
     uri: &str,
     project: Uuid,
 ) -> Result<ReadResourceResult, McpError> {
@@ -131,14 +269,15 @@ pub(crate) async fn read_project_transactions_resource(
             ));
         };
         let project_repository = project_repository.lock();
-        let transactions = project_repository
+        let applied_transactions = project_repository
             .applied_transactions_newest_first(PROJECT_TRANSACTIONS_RESOURCE_TRANSACTION_COUNT)
             .map_err(|refusal| {
                 McpError::internal_error(format!("project {project}'s history could not be read: {refusal}"), None)
-            })?
-            .into_iter()
-            .map(project_transaction_on_the_wire)
-            .collect();
+            })?;
+        let transactions = the_change_feed_newest_first(
+            applied_transactions,
+            project_actions_refused.the_refused_actions_newest_first(project),
+        );
         serde_json::to_string_pretty(&ProjectTransactionsResourceContents {
             project: project.to_string(),
             project_directory: project_repository.project_directory().to_path_buf(),
@@ -167,12 +306,7 @@ pub(crate) fn project_transaction_on_the_wire(
         transaction: transaction.transaction.to_string(),
         commit,
         parent_commit: transaction.parent_commit,
-        author_kind: match transaction.author.kind {
-            ProjectTransactionAuthorKind::Person => "person",
-            ProjectTransactionAuthorKind::Agent => "agent",
-            ProjectTransactionAuthorKind::Runtime => "runtime",
-        }
-        .to_owned(),
+        author_kind: author_kind_on_the_wire(&transaction.author.kind).to_owned(),
         author_name: transaction.author.name,
         operations: transaction.operations.iter().map(operation_json).collect(),
         inverse_operations: transaction
@@ -224,7 +358,57 @@ fn civil_date_of_days_since_the_unix_epoch(days: i64) -> (i64, i64, i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::rfc_3339_utc_of_unix_seconds;
+    use super::*;
+
+    fn a_refusal_of(runtime_words: &str) -> ProjectActionRefusalOnTheWire {
+        ProjectActionRefusalOnTheWire {
+            action: "remove_node".to_owned(),
+            refused_operation_index: Some(0),
+            refused_node: None,
+            refused_link: None,
+            refused_field: None,
+            runtime_words: runtime_words.to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_project_keeps_its_latest_refusals_newest_first_and_each_is_announced() {
+        let project_repositories = ProjectRepositoriesOpenInThisRuntime::default();
+        let mut change_feed = project_repositories.subscribe_to_the_change_feed();
+        let project_actions_refused = ProjectActionsRefusedSinceTheRuntimeStarted::default();
+        let (project, other_project) = (Uuid::new_v4(), Uuid::new_v4());
+        let author = ProjectTransactionAuthor::the_runtime();
+        for refusal_number in 0..=REFUSED_PROJECT_ACTIONS_KEPT_PER_PROJECT {
+            project_actions_refused.keep_and_announce(
+                &project_repositories,
+                project,
+                ProjectActionTheRuntimeRefused {
+                    author: &author,
+                    mode: "commit",
+                    operations_as_requested: Vec::new(),
+                    idempotency_key: None,
+                    refusal: a_refusal_of(&format!("refusal {refusal_number}")),
+                },
+            );
+            assert_eq!(change_feed.try_recv().unwrap().project, project);
+        }
+        let kept = project_actions_refused.the_refused_actions_newest_first(project);
+        assert_eq!(kept.len(), REFUSED_PROJECT_ACTIONS_KEPT_PER_PROJECT);
+        assert_eq!(
+            kept[0].1.refusal.runtime_words,
+            format!("refusal {REFUSED_PROJECT_ACTIONS_KEPT_PER_PROJECT}")
+        );
+        assert_eq!(
+            kept.last().unwrap().1.refusal.runtime_words,
+            "refusal 1",
+            "the oldest refusal is dropped"
+        );
+        assert!(
+            project_actions_refused
+                .the_refused_actions_newest_first(other_project)
+                .is_empty()
+        );
+    }
 
     #[test]
     fn unix_seconds_render_as_rfc_3339_utc() {

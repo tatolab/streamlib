@@ -13,7 +13,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::schemars::JsonSchema;
 use rmcp::{Peer, RoleServer, tool, tool_router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamLocation,
@@ -43,7 +43,9 @@ use crate::mcp_project_asset_tools::{
     ProjectTransactionAuthorToolArgument, the_author_of_a_change,
     the_idempotency_key_a_caller_sent,
 };
-use crate::mcp_project_change_feed::project_transaction_on_the_wire;
+use crate::mcp_project_change_feed::{
+    ProjectActionTheRuntimeRefused, project_transaction_on_the_wire,
+};
 
 pub(crate) const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the edit is to, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
 const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.";
@@ -84,7 +86,7 @@ impl GraphEditMode {
     }
 }
 
-#[derive(Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GraphLinkEndToolArgument {
@@ -95,7 +97,7 @@ pub(crate) struct GraphLinkEndToolArgument {
 }
 
 /// One operation of a graph transaction, as a caller names it.
-#[derive(Clone, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum StreamGraphOperationToolArgument {
@@ -1201,22 +1203,52 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let author = the_author_of_a_change(author, peer);
         let mode = mode.unwrap_or_default();
-        let idempotency_key = match the_idempotency_key_a_caller_sent(idempotency_key) {
-            Ok(idempotency_key) => idempotency_key,
-            Err(refusal) => {
-                return Ok(GraphTransactionRefusal::from(refusal).into_a_tool_result(tool_name));
-            }
-        };
         let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let project_actions_refused =
+            Arc::clone(&self.project_actions_refused_since_the_runtime_started);
         let async_runtime = tokio::runtime::Handle::current();
         let applied = tokio::task::spawn_blocking(move || {
-            GraphTransactionInFlight {
+            let in_flight = GraphTransactionInFlight {
                 operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
                 project_repositories: &project_repositories,
                 async_runtime: &async_runtime,
-            }
-            .apply(operations, mode, &author, idempotency_key.as_ref())
+            };
+            let operations_as_requested: Vec<Value> = operations
+                .iter()
+                .map(|operation| serde_json::to_value(operation).unwrap_or_default())
+                .collect();
+            let streams_named: Vec<String> = operations
+                .iter()
+                .map(|operation| operation.stream().to_owned())
+                .collect();
+            let (idempotency_key, applied) =
+                match the_idempotency_key_a_caller_sent(idempotency_key) {
+                    Ok(idempotency_key) => {
+                        let applied =
+                            in_flight.apply(operations, mode, &author, idempotency_key.as_ref());
+                        (idempotency_key, applied)
+                    }
+                    Err(refusal) => (None, Err(GraphTransactionRefusal::from(refusal))),
+                };
+            applied.map_err(|refusal| {
+                let refusal = refusal.into_the_refusal_on_the_wire(tool_name);
+                if let Some(project) = in_flight.the_project_of_the_first_stream_of(&streams_named)
+                {
+                    project_actions_refused.keep_and_announce(
+                        &project_repositories,
+                        project,
+                        ProjectActionTheRuntimeRefused {
+                            author: &author,
+                            mode: mode.on_the_wire(),
+                            operations_as_requested,
+                            idempotency_key: idempotency_key.as_ref(),
+                            refusal: refusal.clone(),
+                        },
+                    );
+                }
+                refusal
+            })
         })
         .await
         .map_err(|join_failure| {
@@ -1224,7 +1256,7 @@ impl LocalApiMcpServerHandler {
         })?;
         match applied {
             Ok(applied) => serialized_tool_result(tool_name, &applied),
-            Err(refusal) => Ok(refusal.into_a_tool_result(tool_name)),
+            Err(refusal) => Ok(a_tool_result_of_the_refusal(refusal)),
         }
     }
 
@@ -1250,19 +1282,42 @@ impl LocalApiMcpServerHandler {
         }
         let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let project_actions_refused =
+            Arc::clone(&self.project_actions_refused_since_the_runtime_started);
         let async_runtime = tokio::runtime::Handle::current();
         let applied = tokio::task::spawn_blocking(move || {
+            let idempotency_key_as_sent = idempotency_key.clone();
             GraphTransactionInFlight {
                 operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
                 project_repositories: &project_repositories,
                 async_runtime: &async_runtime,
             }
-            .apply_a_reversal(
-                &project_directory,
-                &author,
-                idempotency_key,
-                reversal_of,
-            )
+            .apply_a_reversal(&project_directory, &author, idempotency_key, reversal_of)
+            .map_err(|refusal| {
+                let refusal = GraphTransactionRefusal::of_the_whole_transaction(refusal)
+                    .into_the_refusal_on_the_wire(tool_name);
+                if let Ok(project_repository) =
+                    project_repositories.the_project_repository_at(&project_directory)
+                {
+                    let project = project_repository.lock().project_file().project;
+                    let idempotency_key =
+                        the_idempotency_key_a_caller_sent(idempotency_key_as_sent)
+                            .ok()
+                            .flatten();
+                    project_actions_refused.keep_and_announce(
+                        &project_repositories,
+                        project,
+                        ProjectActionTheRuntimeRefused {
+                            author: &author,
+                            mode: GraphEditMode::Commit.on_the_wire(),
+                            operations_as_requested: Vec::new(),
+                            idempotency_key: idempotency_key.as_ref(),
+                            refusal: refusal.clone(),
+                        },
+                    );
+                }
+                refusal
+            })
         })
         .await
         .map_err(|join_failure| {
@@ -1270,8 +1325,7 @@ impl LocalApiMcpServerHandler {
         })?;
         match applied {
             Ok(applied) => serialized_tool_result(tool_name, &applied),
-            Err(refusal) => Ok(GraphTransactionRefusal::of_the_whole_transaction(refusal)
-                .into_a_tool_result(tool_name)),
+            Err(refusal) => Ok(a_tool_result_of_the_refusal(refusal)),
         }
     }
 }
@@ -1321,24 +1375,27 @@ impl GraphTransactionRefusal {
         }
     }
 
-    /// The refusal as the tool `tool_name` answers it: an error result whose text is the
-    /// runtime's words and whose `structuredContent` holds them under `refusal` with what the
-    /// refused operation names.
-    fn into_a_tool_result(self, tool_name: &str) -> CallToolResult {
+    /// The refusal of the action the tool `tool_name` was sent, as the wire carries it.
+    fn into_the_refusal_on_the_wire(self, tool_name: &str) -> ProjectActionRefusalOnTheWire {
         let what_the_refused_operation_names = self.what_the_refused_operation_names;
-        let text = format!("{tool_name} failed: {}", self.runtime_words);
-        let refusal = ProjectActionRefusalOnTheWire {
+        ProjectActionRefusalOnTheWire {
             action: tool_name.to_owned(),
             refused_operation_index: self.refused_operation_index,
             refused_node: what_the_refused_operation_names.node,
             refused_link: what_the_refused_operation_names.link,
             refused_field: what_the_refused_operation_names.field,
             runtime_words: self.runtime_words,
-        };
-        let mut tool_result = CallToolResult::error(vec![ContentBlock::text(text)]);
-        tool_result.structured_content = Some(json!({ "refusal": refusal }));
-        tool_result
+        }
     }
+}
+
+/// `refusal` as its tool answers it: an error result whose text is the runtime's words and whose
+/// `structuredContent` holds the refusal under `refusal`.
+fn a_tool_result_of_the_refusal(refusal: ProjectActionRefusalOnTheWire) -> CallToolResult {
+    let text = format!("{} failed: {}", refusal.action, refusal.runtime_words);
+    let mut tool_result = CallToolResult::error(vec![ContentBlock::text(text)]);
+    tool_result.structured_content = Some(json!({ "refusal": refusal }));
+    tool_result
 }
 
 impl From<ProjectRepositoryRefusal> for GraphTransactionRefusal {
@@ -1460,6 +1517,15 @@ impl GraphTransactionInFlight<'_> {
                 );
             }
         }
+    }
+
+    /// The project of the first of `stream_ids` that is a loaded stream of a project.
+    fn the_project_of_the_first_stream_of(&self, stream_ids: &[String]) -> Option<Uuid> {
+        let stream_locations = self.the_location_of_each_loaded_stream();
+        stream_ids
+            .iter()
+            .find_map(|stream_id| stream_locations.get(stream_id).cloned().flatten())
+            .map(|stream_location| stream_location.project)
     }
 
     /// The location of each loaded stream by its stream id, `None` for one of no project.
