@@ -135,7 +135,7 @@ pub fn browser_host_directory_beside_the_lend(lend_directory: &Path) -> Option<P
 }
 
 /// The directory beside the lend that holds the first-party modules the
-/// runtime unit carries, one folder each, installed into every project's
+/// runtime unit carries, one wheel each, installed into every project's
 /// `.venv`.
 pub const FIRST_PARTY_MODULES_DIRECTORY_NAME: &str = "imports";
 

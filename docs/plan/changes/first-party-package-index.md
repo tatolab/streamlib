@@ -199,6 +199,39 @@ reshapes #3216.
    `gateway-nodes`' viewer read path, which the proof uses to read the starter's one port. Landing
    first would need a second reader in the proof alone, which nothing else wants.
 
+## Amended — every first-party module rides the runtime (owner, 2026-11-10)
+
+> **The owner, 2026-11-10:** "Should every first-party module ship inside the runtime, as
+> tatolab-ops does?" — "Yes, all ride the runtime."
+
+This extends self-contained-project-imports Decided 10 from `tatolab-ops` to every module in
+`packages/`, and replaces this change's sentence 1 for a project the runtime makes:
+
+- **The unit carries a built wheel of each module.** `cargo xtask build-runtime` builds every
+  module the host's platform runs (`xtask/src/stage_first_party_modules.rs`,
+  `FIRST_PARTY_MODULE_PACKAGES`) into one wheel each in `lib/tatolab/imports/`: a pure module
+  with `uv build --wheel`, a native one with the pinned maturin at the macOS deployment target
+  its `pyproject.toml` names. `tatolab-browser`, `tatolab-rive` and `tatolab-virtualcamera` are
+  Linux-only, as their release wheels are. A wheel, not a source folder, because a native module
+  cannot build on a machine with no Rust toolchain.
+- **A project declares each wheel.** Each time the runtime makes, syncs or locks a project's
+  `.venv`, it links each wheel into `.tatolab/first-party-imports/<wheel file name>` and declares
+  it as a requirement and a uv path source through that link. The link keeps the wheel's file
+  name, since uv reads its tags from it, so the source is written again whenever the runtime's
+  version changes; a source the project holds outside the links folder is kept as written.
+- **The starter names no index.** Its one dependency is `tatolab-stream` from PyPI; its
+  `TestPatternSource` comes from the wheel the runtime declares. The scaffold lock check in the
+  release locks `tatolab-stream` alone, and the release's tarball and macOS proofs take
+  `tatolab-testpattern` from the unit they test.
+- **Assumed unless overruled: the index's remaining role.** The release keeps publishing every
+  module to `https://get.tatolab.com/simple/` for a venv the runtime does not make — a plain
+  `pip install`, a third party's module that depends on one — and nothing a project the runtime
+  makes reads from it. Whether it retires for modules is settled with #3471, beside the PyPI
+  copies (decision 2).
+- **Assumed unless overruled: one lock per platform.** A native wheel's file name carries its
+  platform tag, so a project opened on a Mac and on Linux writes a different source path and
+  `uv.lock` on each.
+
 ## What this does not change
 
 - `tatolab-stream` and the Rust crate keep their channels, and the runtime unit still never goes

@@ -10,7 +10,7 @@
 #
 # The project's venv holds what a user's `uv sync` gives it — `tatolab-stream`,
 # from the wheel directory because no index carries this version yet, and the
-# `tatolab-testpattern` module from this checkout — and no runtime. Passes when
+# `tatolab-testpattern` wheel the runtime unit carries — and no runtime. Passes when
 # `tatolabd` opened the lend's Vulkan loader and the source wrote at least sixty
 # frames on `video` while a viewer held the port open, as Tato Studio's viewer
 # does, by the stream's `graph`. Needs a Mac with no Vulkan driver of its own,
@@ -25,14 +25,11 @@ tatolabd_executable="$runtime_unit_root/bin/tatolabd"
 tatolab_executable="$runtime_unit_root/bin/tatolab"
 
 # The runtime syncs the project's venv on the load, and the scaffold requires
-# the `tatolab-stream` and `tatolab-testpattern` this runtime was built beside,
-# which no index carries before the release publishes them. uv reads this
-# comma-separated list from the environment the sync inherits from `tatolabd`,
-# and resolves it from the project directory, so each path is absolute.
-tatolab_testpattern_wheel_directory="$(mktemp -d)"
-uv build --quiet --wheel --out-dir "$tatolab_testpattern_wheel_directory" \
-  "$(cd "$(dirname "$0")/.." && pwd)/packages/tatolab-testpattern"
-UV_FIND_LINKS="$(cd "$tatolab_stream_wheel_directory" && pwd),$tatolab_testpattern_wheel_directory"
+# the `tatolab-stream` this runtime was built beside, which no index carries
+# before the release publishes it. uv reads this from the environment the sync
+# inherits from `tatolabd`, and resolves it from the project directory, so the
+# path is absolute.
+UV_FIND_LINKS="$(cd "$tatolab_stream_wheel_directory" && pwd)"
 export UV_FIND_LINKS
 
 "$tatolabd_executable" > /tmp/tatolabd.log 2>&1 &
@@ -63,9 +60,9 @@ python3 -m venv /tmp/scaffold-check/.venv
 /tmp/scaffold-check/.venv/bin/pip install --no-index \
   --find-links "$tatolab_stream_wheel_directory" \
   tatolab-stream
-# Pure Python; `--no-deps` keeps its `tatolab-stream` to this run's build.
+# The unit's own wheel; `--no-deps` keeps its `tatolab-stream` to this run's build.
 /tmp/scaffold-check/.venv/bin/pip install --no-deps \
-  "$(cd "$(dirname "$0")/.." && pwd)/packages/tatolab-testpattern"
+  "$runtime_unit_root"/lib/tatolab/imports/tatolab_testpattern-*.whl
 if /tmp/scaffold-check/.venv/bin/python -c '
 import importlib.util, sys
 sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)

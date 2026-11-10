@@ -69,8 +69,11 @@ install_build_dependencies_with_bounded_retry() {
 	return 1
 }
 
-# libclang for iceoryx2's bindgen; cmake and ninja for aws-lc-sys.
-install_build_dependencies_with_bounded_retry clang-devel cmake ninja-build pkgconfig
+# libclang for iceoryx2's bindgen; cmake and ninja for aws-lc-sys; clang, git
+# and libuuid's headers for the tatolab-rive wheel's rive-runtime build.
+install_build_dependencies_with_bounded_retry clang-devel cmake ninja-build pkgconfig clang git libuuid-devel
+bash packages/tatolab-rive/install_the_glslang_and_spirv_tools_rive_runtime_needs.sh /opt/shader-compilers
+export PATH="/opt/shader-compilers/bin:$PATH"
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
 	sh -s -- -y --quiet --profile minimal --default-toolchain stable
@@ -96,10 +99,12 @@ for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.
 		exit 1
 	}
 done
-[ -f "$runtime_unit_root/lib/tatolab/imports/tatolab-ops/pyproject.toml" ] || {
-	echo "the runtime unit has no lib/tatolab/imports/tatolab-ops/pyproject.toml: a release ships its first-party modules" >&2
-	exit 1
-}
+for first_party_module in tatolab_ops tatolab_testpattern tatolab_h264 tatolab_camera tatolab_rive; do
+	compgen -G "$runtime_unit_root/lib/tatolab/imports/$first_party_module-*.whl" >/dev/null || {
+		echo "the runtime unit has no lib/tatolab/imports/$first_party_module-*.whl: a release ships every first-party module" >&2
+		exit 1
+	}
+done
 
 uv build --wheel --out-dir /tmp/tatolab-stream-dist sdk/tatolab-stream
 uv venv --python 3.12 /tmp/runtime-unit-gate-venv

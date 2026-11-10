@@ -95,15 +95,15 @@ impl From<ProjectVenvNotMade> for Error {
 /// `runtime_unit_uv`: one whose interpreter does not run is removed and made
 /// again by `uv sync`, one whose interpreter runs is synced again when the
 /// project's `pyproject.toml` or `uv.lock`, the runtime's version or the
-/// first-party modules it carries changed since its last sync. Each module of
-/// `first_party_module_folders` is declared in the project first, so the sync
+/// first-party modules it carries changed since its last sync. Each wheel of
+/// `first_party_module_wheels` is declared in the project first, so the sync
 /// installs it.
 /// A sync is unbounded — uv's own network timeouts end a stalled download —
 /// and cut short whenever `is_interrupted_by_the_host` reports true.
 pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
-    first_party_module_folders: &[PathBuf],
+    first_party_module_wheels: &[PathBuf],
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
@@ -120,7 +120,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
             what_interrupted_a_load()
         )))
     };
-    declare_each_first_party_module_in_the_project(project_directory, first_party_module_folders)?;
+    declare_each_first_party_module_in_the_project(project_directory, first_party_module_wheels)?;
     let interpreter = the_projects_venv_interpreter(project_directory);
     let venv = project_directory.join(".venv");
     let why_the_interpreter_does_not_run = match probe_the_venv_interpreter(
@@ -132,7 +132,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         VenvInterpreterProbe::CutShortByTheHost => return Err(an_interrupt_refusal()),
         VenvInterpreterProbe::DoesNotRun { why } => Some(why),
     };
-    let sync_stamp_now = the_venv_sync_stamp_of(project_directory, first_party_module_folders);
+    let sync_stamp_now = the_venv_sync_stamp_of(project_directory, first_party_module_wheels);
     let Some(why_the_interpreter_does_not_run) = why_the_interpreter_does_not_run else {
         let synced_with_what_it_holds_now = sync_stamp_now.as_deref()
             == std::fs::read_to_string(venv.join(PROJECT_VENV_SYNC_STAMP_FILE_NAME))
@@ -142,7 +142,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
             return Ok(());
         };
         let current = synced_with_what_it_holds_now
-            && every_first_party_module_is_installed_in(&venv, first_party_module_folders);
+            && every_first_party_module_is_installed_in(&venv, first_party_module_wheels);
         if current || sync_stamp_now.is_none() {
             return Ok(());
         }
@@ -156,7 +156,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         return sync_the_venv_with_the_runtime_unit_uv(
             project_directory,
             runtime_unit_uv,
-            first_party_module_folders,
+            first_party_module_wheels,
             is_interrupted_by_the_host,
             WhatAFailedSyncLeaves::TheVenvAsItWas,
         );
@@ -189,13 +189,13 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
     sync_the_venv_with_the_runtime_unit_uv(
         project_directory,
         runtime_unit_uv,
-        first_party_module_folders,
+        first_party_module_wheels,
         is_interrupted_by_the_host,
         WhatAFailedSyncLeaves::NoVenv,
     )
 }
 
-/// Link each module of `first_party_module_folders` into the project's
+/// Link each wheel of `first_party_module_wheels` into the project's
 /// [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`], take out each link to a module
 /// the runtime no longer carries, and declare each module in the project's
 /// `pyproject.toml` as a uv path source through its link. Nothing is written
@@ -203,10 +203,10 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
 /// `pyproject.toml`.
 fn declare_each_first_party_module_in_the_project(
     project_directory: &Path,
-    first_party_module_folders: &[PathBuf],
+    first_party_module_wheels: &[PathBuf],
 ) -> Result<(), ProjectVenvNotMade> {
     let pyproject_path = project_directory.join("pyproject.toml");
-    if first_party_module_folders.is_empty() || !pyproject_path.is_file() {
+    if first_party_module_wheels.is_empty() || !pyproject_path.is_file() {
         return Ok(());
     }
     let not_declared_because = |why: String| ProjectVenvNotMade::Failed {
@@ -222,29 +222,29 @@ fn declare_each_first_party_module_in_the_project(
             links_directory.display()
         ))
     })?;
-    let declared_modules: Vec<FirstPartyModuleDeclaredByAProject> = first_party_module_folders
+    let declared_modules: Vec<FirstPartyModuleDeclaredByAProject> = first_party_module_wheels
         .iter()
-        .filter_map(|module_folder| {
+        .filter_map(|module_wheel| {
             Some(FirstPartyModuleDeclaredByAProject {
-                distribution_name: the_distribution_name_of_the_module_in(module_folder)?,
-                link_folder_name: module_folder.file_name()?.to_str()?.to_owned(),
+                distribution_name: the_distribution_name_of_the_module_wheel(module_wheel)?,
+                link_file_name: module_wheel.file_name()?.to_str()?.to_owned(),
             })
         })
         .collect();
-    for module_folder in first_party_module_folders {
-        let Some(link_folder_name) = module_folder.file_name() else {
+    for module_wheel in first_party_module_wheels {
+        let Some(link_file_name) = module_wheel.file_name() else {
             continue;
         };
-        let link = links_directory.join(link_folder_name);
-        if std::fs::read_link(&link).is_ok_and(|target| target == *module_folder) {
+        let link = links_directory.join(link_file_name);
+        if std::fs::read_link(&link).is_ok_and(|target| target == *module_wheel) {
             continue;
         }
         remove_what_stands_at(&link)?;
-        std::os::unix::fs::symlink(module_folder, &link).map_err(|not_linked| {
+        std::os::unix::fs::symlink(module_wheel, &link).map_err(|not_linked| {
             not_declared_because(format!(
                 "{} was not linked to {}: {not_linked}",
                 link.display(),
-                module_folder.display()
+                module_wheel.display()
             ))
         })?;
     }
@@ -259,7 +259,7 @@ fn declare_each_first_party_module_in_the_project(
         .filter(|entry| {
             !declared_modules
                 .iter()
-                .any(|module| entry.file_name() == module.link_folder_name.as_str())
+                .any(|module| entry.file_name() == module.link_file_name.as_str())
         })
         .map(|entry| entry.path())
         .collect();
@@ -291,12 +291,12 @@ const PROJECT_FILES_A_VENV_IS_SYNCED_FROM: [&str; 3] =
 
 /// What a project's `.venv` would be synced from now: the SHA-256 over its
 /// `pyproject.toml`, `uv.lock` and `.python-version`, each import's
-/// `pyproject.toml`, this runtime's version and the folder of each first-party
-/// module with its `pyproject.toml`. `None` when the project
+/// `pyproject.toml`, this runtime's version and the path, size and modification
+/// time of each first-party module's wheel. `None` when the project
 /// holds no `pyproject.toml`, which uv syncs nothing from.
 fn the_venv_sync_stamp_of(
     project_directory: &Path,
-    first_party_module_folders: &[PathBuf],
+    first_party_module_wheels: &[PathBuf],
 ) -> Option<String> {
     use sha2::{Digest, Sha256};
     if !project_directory.join("pyproject.toml").is_file() {
@@ -312,9 +312,14 @@ fn the_venv_sync_stamp_of(
         stamp.update(import_pyproject.as_os_str().as_encoded_bytes());
         stamp.update(std::fs::read(&import_pyproject).unwrap_or_default());
     }
-    for module_folder in first_party_module_folders {
-        stamp.update(module_folder.as_os_str().as_encoded_bytes());
-        stamp.update(std::fs::read(module_folder.join("pyproject.toml")).unwrap_or_default());
+    for module_wheel in first_party_module_wheels {
+        stamp.update(module_wheel.as_os_str().as_encoded_bytes());
+        if let Ok(wheel_metadata) = std::fs::metadata(module_wheel) {
+            stamp.update(wheel_metadata.len().to_le_bytes());
+            if let Ok(modified) = wheel_metadata.modified() {
+                stamp.update(format!("{modified:?}").as_bytes());
+            }
+        }
     }
     Some(
         stamp
@@ -325,31 +330,33 @@ fn the_venv_sync_stamp_of(
     )
 }
 
-/// Each folder in `first_party_modules_directory` holding a `pyproject.toml`,
-/// in name order; none when the directory is not there.
-pub(crate) fn every_first_party_module_folder_in(
+/// Each wheel file in `first_party_modules_directory`, in name order; none
+/// when the directory is not there.
+pub(crate) fn every_first_party_module_wheel_in(
     first_party_modules_directory: &Path,
 ) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(first_party_modules_directory) else {
         return Vec::new();
     };
-    let mut module_folders: Vec<PathBuf> = entries
+    let mut module_wheels: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|folder| folder.join("pyproject.toml").is_file())
+        .filter(|path| {
+            path.is_file() && path.extension().is_some_and(|extension| extension == "whl")
+        })
         .collect();
-    module_folders.sort();
-    module_folders
+    module_wheels.sort();
+    module_wheels
 }
 
 /// Whether `venv` holds a `.dist-info` of every module of
-/// `first_party_module_folders`, which a command outside the runtime, such as
+/// `first_party_module_wheels`, which a command outside the runtime, such as
 /// `uv pip uninstall`, may have taken out.
 fn every_first_party_module_is_installed_in(
     venv: &Path,
-    first_party_module_folders: &[PathBuf],
+    first_party_module_wheels: &[PathBuf],
 ) -> bool {
     let Ok(library_entries) = std::fs::read_dir(venv.join("lib")) else {
-        return first_party_module_folders.is_empty();
+        return first_party_module_wheels.is_empty();
     };
     let installed_dist_info_names: Vec<String> = library_entries
         .filter_map(|entry| entry.ok())
@@ -362,8 +369,8 @@ fn every_first_party_module_is_installed_in(
         .filter(|name| name.ends_with(".dist-info"))
         .map(|name| name.to_ascii_lowercase())
         .collect();
-    first_party_module_folders.iter().all(|module_folder| {
-        the_dist_info_prefix_of_the_module_in(module_folder).is_some_and(|prefix| {
+    first_party_module_wheels.iter().all(|module_wheel| {
+        the_dist_info_prefix_of_the_module_wheel(module_wheel).is_some_and(|prefix| {
             installed_dist_info_names
                 .iter()
                 .any(|installed| installed.starts_with(&prefix))
@@ -371,32 +378,36 @@ fn every_first_party_module_is_installed_in(
     })
 }
 
-/// `<name>-` as a `.dist-info` directory spells the distribution that
-/// `module_folder`'s `pyproject.toml` names: lowercase, each `-` and `.` an `_`.
-fn the_dist_info_prefix_of_the_module_in(module_folder: &Path) -> Option<String> {
-    let name = the_distribution_name_of_the_module_in(module_folder)?;
+/// `<name>-` as a `.dist-info` directory spells the distribution of
+/// `module_wheel`: the wheel file name's own escaped name, lowercase.
+fn the_dist_info_prefix_of_the_module_wheel(module_wheel: &Path) -> Option<String> {
     Some(format!(
         "{}-",
-        name.to_ascii_lowercase().replace(['-', '.'], "_")
+        the_escaped_distribution_name_of_the_module_wheel(module_wheel)?.to_ascii_lowercase()
     ))
 }
 
-/// The `[project].name` that `module_folder`'s `pyproject.toml` declares.
-fn the_distribution_name_of_the_module_in(module_folder: &Path) -> Option<String> {
-    let pyproject: toml::Table = std::fs::read_to_string(module_folder.join("pyproject.toml"))
-        .ok()?
-        .parse()
-        .ok()?;
-    Some(pyproject.get("project")?.get("name")?.as_str()?.to_owned())
+/// The distribution `module_wheel` installs, from its file name: the wheel
+/// spec writes the name's every `-` as `_`, and each first-party name is
+/// `tatolab-<name>`, so the `-` spelling is restored.
+fn the_distribution_name_of_the_module_wheel(module_wheel: &Path) -> Option<String> {
+    Some(the_escaped_distribution_name_of_the_module_wheel(module_wheel)?.replace('_', "-"))
+}
+
+/// The distribution segment of `module_wheel`'s file name, before its first `-`.
+fn the_escaped_distribution_name_of_the_module_wheel(module_wheel: &Path) -> Option<String> {
+    let wheel_file_name = module_wheel.file_name()?.to_str()?;
+    let (escaped_distribution_name, _) = wheel_file_name.split_once('-')?;
+    Some(escaped_distribution_name.to_owned())
 }
 
 /// Write into the project's `.venv` what it is synced from now, so a load
 /// finding the same runs no uv.
 pub(crate) fn record_the_venv_synced_with_what_the_project_holds_now(
     project_directory: &Path,
-    first_party_module_folders: &[PathBuf],
+    first_party_module_wheels: &[PathBuf],
 ) -> std::io::Result<()> {
-    match the_venv_sync_stamp_of(project_directory, first_party_module_folders) {
+    match the_venv_sync_stamp_of(project_directory, first_party_module_wheels) {
         Some(sync_stamp) => std::fs::write(
             project_directory
                 .join(".venv")
@@ -438,7 +449,7 @@ enum WhatAFailedSyncLeaves {
 fn sync_the_venv_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: &Path,
-    first_party_module_folders: &[PathBuf],
+    first_party_module_wheels: &[PathBuf],
     is_interrupted_by_the_host: &dyn Fn() -> bool,
     what_a_failed_sync_leaves: WhatAFailedSyncLeaves,
 ) -> Result<(), ProjectVenvNotMade> {
@@ -497,7 +508,7 @@ fn sync_the_venv_with_the_runtime_unit_uv(
     tracing::info!("`uv sync` made {}", venv.display());
     if let Err(not_written) = record_the_venv_synced_with_what_the_project_holds_now(
         project_directory,
-        first_party_module_folders,
+        first_party_module_wheels,
     ) {
         tracing::warn!(
             venv = %venv.display(),
@@ -509,15 +520,15 @@ fn sync_the_venv_with_the_runtime_unit_uv(
 }
 
 /// `<runtime_unit_uv> lock` in `project_directory`, each module of
-/// `first_party_module_folders` declared in the project first; refused in uv's
+/// `first_party_module_wheels` declared in the project first; refused in uv's
 /// own words when the requirements its `pyproject.toml` declares cannot be
 /// resolved.
 pub(crate) fn lock_the_projects_python_requirements_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: &Path,
-    first_party_module_folders: &[PathBuf],
+    first_party_module_wheels: &[PathBuf],
 ) -> Result<(), String> {
-    declare_each_first_party_module_in_the_project(project_directory, first_party_module_folders)
+    declare_each_first_party_module_in_the_project(project_directory, first_party_module_wheels)
         .map_err(|not_declared| Error::from(not_declared).to_string())?;
     let mut command = project_venv_uv_command(runtime_unit_uv, project_directory);
     command.arg("lock");
@@ -723,12 +734,12 @@ mod tests {
 
         fn make_the_venv_with_the_first_party_modules(
             &self,
-            first_party_module_folders: &[PathBuf],
+            first_party_module_wheels: &[PathBuf],
         ) -> Result<(), ProjectVenvNotMade> {
             make_the_projects_venv_current_with_the_runtime_unit_uv(
                 &self.project_directory,
                 Some(&self.stub_uv),
-                first_party_module_folders,
+                first_party_module_wheels,
                 &|| false,
             )
         }
@@ -1099,25 +1110,23 @@ mod tests {
         );
     }
 
-    /// A first-party module folder `folder` beside the project, declaring `distribution_name`.
+    /// A first-party module's wheel beside the project, of `distribution_name`.
     fn a_first_party_module_beside(
         project: &ProjectAndAStubUv,
-        folder: &str,
         distribution_name: &str,
     ) -> PathBuf {
-        let module_folder = project
+        let imports_directory = project
             .project_directory
             .parent()
             .unwrap()
-            .join("runtime-unit-imports")
-            .join(folder);
-        std::fs::create_dir_all(&module_folder).unwrap();
-        std::fs::write(
-            module_folder.join("pyproject.toml"),
-            format!("[project]\nname = \"{distribution_name}\"\n"),
-        )
-        .unwrap();
-        module_folder
+            .join("runtime-unit-imports");
+        std::fs::create_dir_all(&imports_directory).unwrap();
+        let module_wheel = imports_directory.join(format!(
+            "{}-0.68.51-py3-none-any.whl",
+            distribution_name.replace('-', "_")
+        ));
+        std::fs::write(&module_wheel, "a wheel").unwrap();
+        module_wheel
     }
 
     fn the_projects_pyproject(project: &ProjectAndAStubUv) -> toml::Table {
@@ -1130,7 +1139,7 @@ mod tests {
     #[test]
     fn each_first_party_module_is_linked_and_declared_so_one_uv_sync_installs_it() {
         let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
-        let ops = a_first_party_module_beside(&project, "tatolab-ops", "tatolab-ops");
+        let ops = a_first_party_module_beside(&project, "tatolab-ops");
 
         project
             .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
@@ -1141,7 +1150,7 @@ mod tests {
             std::fs::read_link(
                 project
                     .project_directory
-                    .join(".tatolab/first-party-imports/tatolab-ops")
+                    .join(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl")
             )
             .unwrap(),
             ops
@@ -1153,14 +1162,8 @@ mod tests {
         );
         assert_eq!(
             pyproject["tool"]["uv"]["sources"]["tatolab-ops"]["path"].as_str(),
-            Some(".tatolab/first-party-imports/tatolab-ops"),
+            Some(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl"),
             "a path source through the project's own link keeps uv.lock free of the runtime's path"
-        );
-        assert!(
-            pyproject["tool"]["uv"]["sources"]["tatolab-ops"]
-                .get("package")
-                .is_none(),
-            "uv builds and installs a first-party module, so its code is importable"
         );
     }
 
@@ -1168,16 +1171,20 @@ mod tests {
     fn a_link_to_another_runtimes_module_is_relinked_and_a_module_the_runtime_dropped_is_taken_out()
     {
         let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
-        let ops = a_first_party_module_beside(&project, "tatolab-ops", "tatolab-ops");
-        let dropped = a_first_party_module_beside(&project, "tatolab-dropped", "tatolab-dropped");
+        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let dropped = a_first_party_module_beside(&project, "tatolab-dropped");
         project
             .make_the_venv_with_the_first_party_modules(&[dropped.clone(), ops.clone()])
             .expect("the venv is made");
         let ops_link = project
             .project_directory
-            .join(".tatolab/first-party-imports/tatolab-ops");
+            .join(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl");
         std::fs::remove_file(&ops_link).unwrap();
-        std::os::unix::fs::symlink("/an/older/runtime/imports/tatolab-ops", &ops_link).unwrap();
+        std::os::unix::fs::symlink(
+            "/an/older/runtime/imports/tatolab_ops-0.68.51-py3-none-any.whl",
+            &ops_link,
+        )
+        .unwrap();
 
         project
             .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
@@ -1187,7 +1194,7 @@ mod tests {
         assert!(
             !project
                 .project_directory
-                .join(".tatolab/first-party-imports/tatolab-dropped")
+                .join(".tatolab/first-party-imports/tatolab_dropped-0.68.51-py3-none-any.whl")
                 .exists()
         );
         let pyproject = the_projects_pyproject(&project);
@@ -1224,7 +1231,7 @@ mod tests {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
         project.given_a_venv_interpreter_running("exit 0");
         project.given_the_venv_synced_with_what_the_project_holds_now();
-        let ops = a_first_party_module_beside(&project, "tatolab-ops", "tatolab-ops");
+        let ops = a_first_party_module_beside(&project, "tatolab-ops");
 
         project
             .make_the_venv_with_the_first_party_modules(&[ops])
@@ -1238,7 +1245,7 @@ mod tests {
      {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
         project.given_a_venv_interpreter_running("exit 0");
-        let ops = a_first_party_module_beside(&project, "tatolab-ops", "tatolab-ops");
+        let ops = a_first_party_module_beside(&project, "tatolab-ops");
         let site_packages = project.venv().join("lib/python3.12/site-packages");
         std::fs::create_dir_all(site_packages.join("tatolab_ops-0.68.41.dist-info")).unwrap();
         declare_each_first_party_module_in_the_project(
@@ -1265,24 +1272,54 @@ mod tests {
     }
 
     #[test]
-    fn the_first_party_modules_are_each_folder_holding_a_pyproject_in_name_order() {
+    fn the_first_party_modules_are_each_wheel_in_name_order() {
         let modules = tempfile::tempdir().unwrap();
-        for folder in ["tatolab-ops", "a-module", "no-pyproject"] {
-            std::fs::create_dir(modules.path().join(folder)).unwrap();
+        for file_name in [
+            "tatolab_ops-0.68.51-py3-none-any.whl",
+            "tatolab_h264-0.68.51-cp312-abi3-manylinux_2_28_x86_64.whl",
+            "README.md",
+        ] {
+            std::fs::write(modules.path().join(file_name), "").unwrap();
         }
-        for folder in ["tatolab-ops", "a-module"] {
-            std::fs::write(modules.path().join(folder).join("pyproject.toml"), "").unwrap();
-        }
-        std::fs::write(modules.path().join("pyproject.toml"), "").unwrap();
+        std::fs::create_dir(modules.path().join("tatolab-camera")).unwrap();
 
         assert_eq!(
-            every_first_party_module_folder_in(modules.path()),
+            every_first_party_module_wheel_in(modules.path()),
             [
-                modules.path().join("a-module"),
-                modules.path().join("tatolab-ops")
+                modules
+                    .path()
+                    .join("tatolab_h264-0.68.51-cp312-abi3-manylinux_2_28_x86_64.whl"),
+                modules.path().join("tatolab_ops-0.68.51-py3-none-any.whl")
             ]
         );
-        assert!(every_first_party_module_folder_in(&modules.path().join("missing")).is_empty());
+        assert!(every_first_party_module_wheel_in(&modules.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn a_wheel_names_its_distribution_and_its_dist_info_prefix() {
+        let module_wheel =
+            Path::new("/imports/tatolab_h264-0.68.51-cp312-abi3-manylinux_2_28_x86_64.whl");
+        assert_eq!(
+            the_distribution_name_of_the_module_wheel(module_wheel).as_deref(),
+            Some("tatolab-h264")
+        );
+        assert_eq!(
+            the_dist_info_prefix_of_the_module_wheel(module_wheel).as_deref(),
+            Some("tatolab_h264-")
+        );
+    }
+
+    #[test]
+    fn a_running_venv_is_synced_again_once_a_first_party_wheel_is_rebuilt() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let stamp_before =
+            the_venv_sync_stamp_of(&project.project_directory, std::slice::from_ref(&ops));
+        std::fs::write(&ops, "a rebuilt wheel of another size").unwrap();
+        assert_ne!(
+            the_venv_sync_stamp_of(&project.project_directory, std::slice::from_ref(&ops)),
+            stamp_before
+        );
     }
 
     #[test]
@@ -1306,7 +1343,7 @@ mod tests {
     #[test]
     fn a_lock_declares_each_first_party_module_before_uv_locks() {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
-        let ops = a_first_party_module_beside(&project, "tatolab-ops", "tatolab-ops");
+        let ops = a_first_party_module_beside(&project, "tatolab-ops");
 
         lock_the_projects_python_requirements_with_the_runtime_unit_uv(
             &project.project_directory,
@@ -1318,7 +1355,7 @@ mod tests {
         assert_eq!(
             the_projects_pyproject(&project)["tool"]["uv"]["sources"]["tatolab-ops"]["path"]
                 .as_str(),
-            Some(".tatolab/first-party-imports/tatolab-ops")
+            Some(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl")
         );
         assert_eq!(project.uv_runs().len(), 1, "{:?}", project.uv_runs());
     }

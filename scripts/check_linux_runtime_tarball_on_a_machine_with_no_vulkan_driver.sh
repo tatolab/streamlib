@@ -5,16 +5,15 @@
 # Runs the Linux runtime tarball on two machines with no Vulkan driver and
 # starts a stream on each:
 #
-#   scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh \
-#     <tarball> <first-party-module-distribution-directory>
+#   scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh <tarball>
 #
 # one with no Vulkan loader either, and an Ubuntu 22.04 whose system loader
 # (1.3.204) predates the `VK_ADD_DRIVER_FILES` that names the bundled driver.
 # Passes when on both `tatolabd` opened the Vulkan loader the lend carries and
 # the first stream start built its device on the lavapipe beside it. The
-# scaffolded stream imports `tatolab.h264` and `tatolab.testpattern`, which come
-# from the distribution directory because no index holds this build yet. What the stream does after
-# the device is built is not checked here. Needs docker.
+# scaffolded stream imports `tatolab.testpattern`, a wheel the tarball itself
+# carries. What the stream does after the device is built is not checked here.
+# Needs docker.
 
 set -euo pipefail
 
@@ -33,10 +32,9 @@ case "${1:-}" in
 	machine="$1"
 	;;
 *)
-	usage="usage: $script_name <linux-runtime-tarball> <first-party-module-distribution-directory>"
+	usage="usage: $script_name <linux-runtime-tarball>"
 	runtime_tarball="${1:?$usage}"
 	runtime_tarball="$(cd "$(dirname "$runtime_tarball")" && pwd)/$(basename "$runtime_tarball")"
-	first_party_module_distribution_directory="$(cd "${2:?$usage}" && pwd)"
 	for machine_and_image in \
 		"--inside-the-machine-with-no-vulkan-loader $MACHINE_WITH_NO_VULKAN_DRIVER_IMAGE" \
 		"--inside-the-machine-with-an-old-system-vulkan-loader $MACHINE_WITH_AN_OLD_SYSTEM_VULKAN_LOADER_IMAGE"; do
@@ -44,7 +42,6 @@ case "${1:-}" in
 		echo "=== $machine"
 		docker run --rm \
 			--volume "$runtime_tarball:/linux-runtime-tarball.tar.gz:ro" \
-			--volume "$first_party_module_distribution_directory:/first-party-module-distributions:ro" \
 			--volume "$workspace_root:/workspace:ro" \
 			"$image" \
 			bash "/workspace/scripts/$script_name" "$machine"
@@ -85,10 +82,10 @@ python3 -m pip install --quiet uv
 python3 -m uv build --quiet --wheel --out-dir /tmp/tatolab-stream-wheel /tmp/tatolab-stream-source
 
 # The runtime syncs the project's venv on the load, and the scaffold requires
-# the `tatolab-stream` this runtime was built beside and the modules this run
-# built, which no index carries before the release publishes them. uv reads
-# this comma-separated list from the environment the sync inherits.
-export UV_FIND_LINKS=/tmp/tatolab-stream-wheel,/first-party-module-distributions
+# the `tatolab-stream` this runtime was built beside, which no index carries
+# before the release publishes it. uv reads this from the environment the sync
+# inherits; the first-party modules are the wheels the tarball carries.
+export UV_FIND_LINKS=/tmp/tatolab-stream-wheel
 
 "$tatolabd_executable" >/tmp/tatolabd.log 2>&1 &
 tatolabd_pid=$!
@@ -112,9 +109,9 @@ done
 # 3.12 `requires-python` floors it at: Ubuntu 22.04's own python3 is 3.10.
 mkdir -p /tmp/stream-on-the-software-device
 python3 -m uv venv --quiet --seed --python 3.12 /tmp/stream-on-the-software-device/.venv
-/tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source 'numpy>=2.1'
-/tmp/stream-on-the-software-device/.venv/bin/pip install --quiet \
-	--no-index --find-links /first-party-module-distributions tatolab-h264 tatolab-testpattern
+/tmp/stream-on-the-software-device/.venv/bin/pip install --quiet /tmp/tatolab-stream-source
+/tmp/stream-on-the-software-device/.venv/bin/pip install --quiet --no-deps \
+	"$runtime_unit_root"/lib/tatolab/imports/tatolab_testpattern-*.whl
 
 if ! "$tatolab_executable" new /tmp/stream-on-the-software-device >/tmp/tatolab-new.log 2>&1; then
 	cat /tmp/tatolab-new.log /tmp/tatolabd.log

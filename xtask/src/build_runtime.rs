@@ -9,7 +9,7 @@
 //! because CI hands that same file to the jobs that install the engine. Then
 //! builds `tatolabd` and `tatolab` and places them in `bin/` with the pinned
 //! uv, beside `lib/`, the install prefix's own shape, in which `tatolabd` finds
-//! the lend and uv from its own directory. The first-party modules go beside
+//! the lend and uv from its own directory. A wheel of each first-party module goes beside
 //! the lend in `lib/tatolab/imports/`.
 //!
 //! The unit's layout below its root is `streamlib-consumer-rhi`'s
@@ -232,7 +232,7 @@ pub fn run(
     );
 
     stage_the_browser_host(workspace_root)?;
-    stage_the_first_party_modules(workspace_root)?;
+    stage_the_first_party_modules(workspace_root, build_profile)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
     let mut built_binaries = build_runtime_unit_binaries(

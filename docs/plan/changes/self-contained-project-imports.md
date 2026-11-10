@@ -193,7 +193,9 @@ not a lock. It replaces the PyPI requirement PR #3392 added. Each time the runti
 or locks a project's `.venv`, it links each first-party module it carries into the project's
 `.tatolab/first-party-imports/<folder>` and declares it in `pyproject.toml` as a requirement and
 a uv path source through that link (`{ path = ".tatolab/first-party-imports/<folder>" }`, built
-and installed), so any `uv sync`, the runtime's or a person's, keeps the module and its
+and installed; amended by first-party-package-index, 2026-11-10: the unit carries every
+first-party module as a wheel built for its platform, linked as
+`.tatolab/first-party-imports/<wheel file name>`), so any `uv sync`, the runtime's or a person's, keeps the module and its
 requirements, and `uv.lock` names only the project-relative link. A link is repointed at the
 runtime's own copy at each load, so each release still gives every project its version; a source
 the project already holds for a module is kept as written; and the `.venv` is synced again when
