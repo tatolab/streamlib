@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract, project-run-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -264,9 +264,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   reads one and `cancel_stream_action` ends one. `logs {project_directory, stream?, action?,
   after}` pages a project's log, `after` a record position. The tools: `list_project_streams` (a
   project's `@stream` functions), `stop_project` (unload every stream of the project; record
-  each `stopped`), `remove_project` (unload and forget every stream of the project),
-  `rename_stream` (the display name), `list_streams` (id, display name, location, running /
-  preparing / stopping / stopped / failed and why, node count, and each capture device whose
+  each `stopped`), `pause_project` and `resume_project` (pause and resume every loaded stream
+  of the project at once, unqueued), `remove_project` (unload and forget every stream of the
+  project), `rename_stream` (the display name), `list_streams` (id, display name, location,
+  running / paused / preparing / stopping / stopped / failed and why, node count, and each capture device whose
   access a loaded stream waits on because nobody has asked for it) and `expose_port
   {stream, node, port, level}`, `level` one of `internal`, `private`, `public`, which sets the
   port's level live, cutting at once every reader the level no longer allows, and records the
@@ -276,7 +277,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; create-project — SHIPPED
-  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; amended by project-level-run-controls: `stop_project` replaces `stop_stream` and `start_stream`, and `run_project` is the start]
+  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #PRNUM]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -423,6 +424,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
     one `stopped`, so the runtime leaves the project stopped across its restarts; `run` /
     `run_project` runs it again and retries its failed streams. No tool stops or starts one
     stream (owner, 2026-11-09).
+  - **`pause` pauses the whole project, at once.** `tatolab pause [--dir]` and `pause_project
+    {project_directory}` pause every loaded stream of the project without queuing behind its
+    actions: each processor holds its state and processes nothing, and `list_streams` shows
+    each stream `paused`. A graph edit made meanwhile compiles on `tatolab resume` /
+    `resume_project`, which resumes them all. The project stays paused until its resume, stop
+    or removal, and a stream a run starts meanwhile starts paused, so a `tatolab dev` re-load
+    of a paused project stays paused (session, 2026-11-10). Pause is live state and never
+    recorded, so a runtime restart re-loads the project running (session, 2026-11-09).
+    Projects, not streams, are paused (owner, 2026-11-09).
   - **`rm` removes the whole project.** `tatolab rm [--dir]` and `remove_project
     {project_directory}` unload every loaded stream of the project and forget every record of
     it, deleting no file; no tool removes one stream — a `@stream` in `stream.py` runs, and
@@ -2453,7 +2463,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts, project-run-controls; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -3917,7 +3927,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, project-run-controls, studio-view-nodes)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3932,9 +3942,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   The served MCP tool set is exactly the observation verbs `graph`, `logs` and
   `describe_runtime` (the runtime's version, build id, monotonic uptime and its own log's
   folder), the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
-  `disconnect` — the ten stream actions — `run_project`, `create_project`,
+  `disconnect` — the twelve stream actions — `run_project`, `create_project`,
   `describe_stream_action`, `cancel_stream_action`, `list_project_streams`, `stop_project`,
-  `remove_project`, `rename_stream`, `list_streams` and `expose_port`
+  `pause_project`, `resume_project`, `remove_project`, `rename_stream`, `list_streams` and `expose_port`
   (§Product) — and the four relay verbs —
   `add_relay`, `configure_relay`, `remove_relay` and `list_relays` (§Networking, the
   adapters); `health` is a REST route, not a tool. The MCP handshake's server version is the

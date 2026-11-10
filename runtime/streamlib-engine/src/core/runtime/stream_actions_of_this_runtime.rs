@@ -38,9 +38,9 @@ use super::runtime::{
 use super::{
     CrashOfThePreviousRuntimeRun, FunctionNodeState, HowThePreviousRuntimeRunEnded,
     LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream,
-    PendingStreamActionKind, Runner, StreamEnvironment, StreamLoadObservingInterrupts,
-    StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordReadFailure,
-    StreamRecordsInTheStateDirectory, is_the_machines_shutdown_requested,
+    PendingStreamActionKind, Runner, RuntimeStatus, StreamEnvironment,
+    StreamLoadObservingInterrupts, StreamLocation, StreamRecord, StreamRecordAsRead,
+    StreamRecordReadFailure, StreamRecordsInTheStateDirectory, is_the_machines_shutdown_requested,
 };
 use crate::core::compiler::compiler_ops::cross_floor_check_in_the_projects_interpreter::warn_of_what_binds_the_project_to_one_floor;
 use crate::core::context::{CaptureDeviceAccessPrompting, StreamClockReading};
@@ -347,6 +347,15 @@ pub(crate) struct StreamStopOutcome {
     pub stop_not_recorded_because: Option<String>,
 }
 
+/// The project [`Runner::pause_project`] paused or [`Runner::resume_project`] resumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectPausedOrResumed {
+    /// The project's directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The id of each loaded stream of the project paused or resumed now.
+    pub stream_ids: Vec<String>,
+}
+
 /// A stream [`Runner::rename_stream`] shows under a new display name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamRenameOutcome {
@@ -364,6 +373,9 @@ pub enum StreamListingState {
     Running,
     /// Stopped with its project, and left unloaded until `run_project`.
     Stopped,
+    /// Loaded with its project paused: its processors hold their state and process nothing
+    /// until `resume_project`.
+    Paused,
     /// It kept crashing the runtime or could not re-load at its start, and is
     /// skipped at the start until a `run_project` retries it; or it was
     /// recorded by an earlier runtime, and is never loaded.
@@ -380,6 +392,7 @@ impl StreamListingState {
         match self {
             Self::Running => "running",
             Self::Stopped => "stopped",
+            Self::Paused => "paused",
             Self::Failed => "failed",
             Self::Preparing => "preparing",
             Self::Stopping => "stopping",
@@ -462,6 +475,10 @@ pub(crate) struct StreamActionsOfTheEngine {
     one_stream_action_at_a_time: Mutex<()>,
     /// Each project's serial queue of stream actions, and the actions held.
     pub(super) stream_action_queue_of_each_project: StreamActionQueueOfEachProject,
+    /// The directory of each project `pause_project` paused, held across the start of each
+    /// stream a stream action starts, so a stream of a paused project starts paused. Live
+    /// state only: a restart of the runtime starts every project running.
+    directories_of_the_paused_projects: Mutex<Vec<PathBuf>>,
 }
 
 /// One stream a stream action loads, recorded by the runtime under its id: its display name
@@ -890,6 +907,7 @@ impl Runner {
             .iter()
             .map(|stream| stream.stream_id.clone())
             .collect();
+        self.forget_that_the_project_is_paused(&project_directory);
         let action = StreamAction {
             action_id: action_id.clone(),
             project_directory,
@@ -983,6 +1001,7 @@ impl Runner {
                 self.recorded_stream_ids_listed_for_a_refusal()
             )));
         }
+        self.forget_that_the_project_is_paused(&project_directory);
         let action = StreamAction {
             action_id: action_id.clone(),
             project_directory: project_directory.clone(),
@@ -1002,6 +1021,136 @@ impl Runner {
                 }),
                 &self.tokio_handle(),
             ))
+    }
+
+    /// Pause every loaded stream of the project in `project_directory` now, never waiting
+    /// behind an action on its queue, and answer the streams paused: each processor holds its
+    /// state and processes nothing, and a graph change made meanwhile compiles on
+    /// [`Self::resume_project`]. The project stays paused until that resume, a `stop_project`
+    /// or a `remove_project`: a stream a `run_project` starts meanwhile, `tatolab dev`'s re-load
+    /// on a save among them, starts paused. Live state, never recorded, so a restart of the
+    /// runtime re-loads the project running. Pausing a paused project pauses nothing more.
+    /// Refused for a directory not named by its absolute path, and for a project none of whose
+    /// streams is loaded and whose last action queued is not a run.
+    pub fn pause_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
+        let project_directory = the_absolute_project_directory_resolved(project_directory)?;
+        let mut directories_of_the_paused_projects = self
+            .stream_actions
+            .directories_of_the_paused_projects
+            .lock();
+        let loaded_streams_of_the_project = self.loaded_streams_of_the_project(&project_directory);
+        if loaded_streams_of_the_project.is_empty()
+            && !self.is_a_run_the_last_action_queued_on_the_project(&project_directory)
+        {
+            return Err(Error::Runtime(format!(
+                "no stream of the project in {} runs, so there is none to pause; `run` runs it. \
+                 Loaded: {}",
+                project_directory.display(),
+                self.loaded_stream_ids_listed_for_a_refusal()
+            )));
+        }
+        if !directories_of_the_paused_projects
+            .iter()
+            .any(|paused| the_same_directory(paused, &project_directory))
+        {
+            directories_of_the_paused_projects.push(project_directory.clone());
+        }
+        let mut stream_ids = Vec::new();
+        for stream in loaded_streams_of_the_project {
+            if stream.status() != RuntimeStatus::Started {
+                continue;
+            }
+            stream.pause()?;
+            stream_ids.push(stream.stream_id().to_string());
+        }
+        Ok(ProjectPausedOrResumed {
+            project_directory,
+            stream_ids,
+        })
+    }
+
+    /// Resume every paused stream of the project in `project_directory` now, compiling each
+    /// one's graph changes made while it was paused, and answer the streams resumed; a compile
+    /// that fails is logged on the stream, as a live edit's is. Refused for a directory not
+    /// named by its absolute path, and for a project that is not paused.
+    pub fn resume_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
+        let project_directory = the_absolute_project_directory_resolved(project_directory)?;
+        let mut directories_of_the_paused_projects = self
+            .stream_actions
+            .directories_of_the_paused_projects
+            .lock();
+        let paused_streams_of_the_project: Vec<Arc<LoadedStreamInThisRuntime>> = self
+            .loaded_streams_of_the_project(&project_directory)
+            .into_iter()
+            .filter(|stream| is_paused(stream.status()))
+            .collect();
+        let the_project_was_marked_paused = directories_of_the_paused_projects
+            .iter()
+            .any(|paused| the_same_directory(paused, &project_directory));
+        if !the_project_was_marked_paused && paused_streams_of_the_project.is_empty() {
+            return Err(Error::Runtime(format!(
+                "the project in {} is not paused, so there is none to resume",
+                project_directory.display()
+            )));
+        }
+        directories_of_the_paused_projects
+            .retain(|paused| !the_same_directory(paused, &project_directory));
+        let mut stream_ids = Vec::new();
+        for stream in paused_streams_of_the_project {
+            if let Err(not_compiled) = stream.resume() {
+                let _entered_this_streams_log_route = stream.log_route().enter_on_this_thread();
+                tracing::error!(
+                    "the stream `{}` resumed, and the graph changes made while it was paused \
+                     did not compile: {not_compiled}",
+                    stream.stream_id()
+                );
+            }
+            stream_ids.push(stream.stream_id().to_string());
+        }
+        Ok(ProjectPausedOrResumed {
+            project_directory,
+            stream_ids,
+        })
+    }
+
+    /// Start `stream`, paused while its project is paused, holding the paused projects so a
+    /// `pause_project` cannot land between the check and the start.
+    fn start_the_stream_paused_while_its_project_is(
+        &self,
+        stream: &Arc<LoadedStreamInThisRuntime>,
+    ) -> Result<()> {
+        let directories_of_the_paused_projects = self
+            .stream_actions
+            .directories_of_the_paused_projects
+            .lock();
+        if directories_of_the_paused_projects
+            .iter()
+            .any(|paused| the_same_directory(paused, stream.project_directory()))
+        {
+            stream.start_paused()
+        } else {
+            stream.start()
+        }
+    }
+
+    /// Take the project in `project_directory` off the paused projects, as its stop or
+    /// removal is queued.
+    fn forget_that_the_project_is_paused(&self, project_directory: &Path) {
+        self.stream_actions
+            .directories_of_the_paused_projects
+            .lock()
+            .retain(|paused| !the_same_directory(paused, project_directory));
+    }
+
+    /// Every loaded stream of the project in `project_directory`.
+    fn loaded_streams_of_the_project(
+        &self,
+        project_directory: &Path,
+    ) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+        self.every_loaded_stream()
+            .into_iter()
+            .filter(|loaded| the_same_directory(loaded.project_directory(), project_directory))
+            .collect()
     }
 
     /// The next stream action id of this runtime.
@@ -1306,7 +1455,11 @@ impl Runner {
                 stream_id: stream.stream_id().to_string(),
                 display_name: stream.display_name(),
                 stream_location: stream.stream_location().cloned(),
-                state: StreamListingState::Running,
+                state: if is_paused(stream.status()) {
+                    StreamListingState::Paused
+                } else {
+                    StreamListingState::Running
+                },
                 node_count: Some(stream.node_count()),
                 failed_because: None,
                 capture_devices_whose_access_was_never_asked_for: stream
@@ -1978,7 +2131,7 @@ impl Runner {
             unload_a_stream_an_action_took_back(&stream, "its record was not written");
             return Err(not_written);
         }
-        if let Err(start_refusal) = stream.start() {
+        if let Err(start_refusal) = self.start_the_stream_paused_while_its_project_is(&stream) {
             unload_a_stream_an_action_took_back(&stream, "its start was refused");
             return record_a_refused_load_failed(stream_records, stream_record, start_refusal);
         }
@@ -2183,7 +2336,7 @@ impl Runner {
         stream_to_load: OneStreamAStreamActionLoads<'_>,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         let stream = self.load_a_recorded_stream(stream_to_load)?;
-        if let Err(start_refusal) = stream.start() {
+        if let Err(start_refusal) = self.start_the_stream_paused_while_its_project_is(&stream) {
             unload_a_stream_an_action_took_back(&stream, "its start was refused");
             return Err(start_refusal);
         }
@@ -2796,6 +2949,25 @@ impl Drop for TheProjectsLogEnteredForOneLoad {
     }
 }
 
+/// `project_directory` with its symlinks resolved, refused when it is not absolute.
+fn the_absolute_project_directory_resolved(project_directory: &Path) -> Result<PathBuf> {
+    if !project_directory.is_absolute() {
+        return Err(Error::Configuration(format!(
+            "`project_directory` must be an absolute path; got `{}`",
+            project_directory.display()
+        )));
+    }
+    Ok(
+        std::fs::canonicalize(project_directory)
+            .unwrap_or_else(|_| project_directory.to_path_buf()),
+    )
+}
+
+/// Whether a stream in `status` is paused or pausing.
+fn is_paused(status: RuntimeStatus) -> bool {
+    matches!(status, RuntimeStatus::Paused | RuntimeStatus::Pausing)
+}
+
 /// Whether `first` and `second` name one directory, symlinks resolved; spelled
 /// alike when either cannot be resolved.
 fn the_same_directory(first: &Path, second: &Path) -> bool {
@@ -2940,6 +3112,7 @@ fn the_state_a_refusal_names_a_record_by(record: &StreamRecord) -> &'static str 
         StreamListingState::Failed => " failed",
         StreamListingState::Stopped => " stopped",
         StreamListingState::Running
+        | StreamListingState::Paused
         | StreamListingState::Preparing
         | StreamListingState::Stopping => "",
     }
@@ -6866,5 +7039,136 @@ mod tests {
         assert_eq!(stopped.state, StreamActionState::Done);
         assert_eq!(runner.list_streams()[0].state, StreamListingState::Stopped);
         assert_eq!(runner.list_streams()[0].stream_id, camera);
+    }
+
+    fn the_listed_state_of(runner: &Runner, stream_id: &str) -> StreamListingState {
+        runner
+            .list_streams()
+            .into_iter()
+            .find(|listing| listing.stream_id == stream_id)
+            .unwrap_or_else(|| panic!("the stream `{stream_id}` is listed"))
+            .state
+    }
+
+    #[test]
+    #[serial]
+    fn a_pause_or_resume_of_a_relative_directory_or_a_project_running_nothing_is_refused() {
+        let runner = a_runner_recording_its_streams_in(None);
+        let idle = ProjectWithGraphDocuments::with_no_venv();
+
+        assert!(refusal_of(runner.pause_project(Path::new("relative"))).contains("absolute"));
+        assert!(refusal_of(runner.resume_project(Path::new("relative"))).contains("absolute"));
+        let pause_refusal = refusal_of(runner.pause_project(idle.path()));
+        assert!(pause_refusal.contains("none to pause"), "{pause_refusal}");
+        let resume_refusal = refusal_of(runner.resume_project(idle.path()));
+        assert!(resume_refusal.contains("is not paused"), "{resume_refusal}");
+    }
+
+    #[test]
+    #[serial]
+    fn a_paused_project_stays_paused_until_its_resume_or_its_stop_and_records_nothing() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        let camera = project.stream_id_of("camera");
+        a_recorded_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_record_of(&project, "camera"),
+        );
+
+        let paused = runner.pause_project(project.path()).unwrap();
+        assert_eq!(
+            paused.stream_ids,
+            Vec::<String>::new(),
+            "an unstarted stream is not paused"
+        );
+        let paused_again = runner.pause_project(project.path()).unwrap();
+        assert_eq!(paused_again.project_directory, paused.project_directory);
+        assert!(!the_record_of(state_directory.path(), &camera).stopped);
+        assert!(runner.resume_project(project.path()).is_ok());
+        let refusal = refusal_of(runner.resume_project(project.path()));
+        assert!(refusal.contains("is not paused"), "{refusal}");
+
+        runner.pause_project(project.path()).unwrap();
+        let stop = runner.stop_project(project.path()).unwrap();
+        let refusal = refusal_of(runner.resume_project(project.path()));
+        assert!(refusal.contains("is not paused"), "{refusal}");
+        the_stream_action_once_finished(&runner, &stop.action_id);
+        assert!(the_record_of(state_directory.path(), &camera).stopped);
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_paused_project_lists_paused_re_loads_paused_and_resumes_running_and_a_restart_runs_it() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        project.write_the_graph_document(the_graph_of_a_stream_named("microphone"));
+        let camera = project.stream_id_of("camera");
+        let microphone = project.stream_id_of("microphone");
+        let mut both_streams = vec![camera.clone(), microphone.clone()];
+        both_streams.sort();
+        {
+            let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+            runner
+                .load_the_project_off_its_queue(project.run_request())
+                .unwrap();
+
+            let paused = runner.pause_project(project.path()).unwrap();
+            let mut paused_ids = paused.stream_ids.clone();
+            paused_ids.sort();
+            assert_eq!(paused_ids, both_streams);
+            for stream_id in &both_streams {
+                assert_eq!(
+                    the_listed_state_of(&runner, stream_id),
+                    StreamListingState::Paused
+                );
+                assert_eq!(
+                    runner.loaded_stream_of_the_id(stream_id).unwrap().status(),
+                    RuntimeStatus::Paused
+                );
+            }
+
+            runner
+                .load_the_project_off_its_queue(project.run_request())
+                .expect("a run of the paused project re-loads it");
+            for stream_id in &both_streams {
+                assert_eq!(
+                    runner.loaded_stream_of_the_id(stream_id).unwrap().status(),
+                    RuntimeStatus::Paused,
+                    "a stream a run re-loads while its project is paused starts paused"
+                );
+            }
+
+            let resumed = runner.resume_project(project.path()).unwrap();
+            let mut resumed_ids = resumed.stream_ids.clone();
+            resumed_ids.sort();
+            assert_eq!(resumed_ids, both_streams);
+            for stream_id in &both_streams {
+                assert_eq!(
+                    the_listed_state_of(&runner, stream_id),
+                    StreamListingState::Running
+                );
+            }
+
+            runner.pause_project(project.path()).unwrap();
+        }
+
+        let restarted = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        restarted.reload_every_recorded_stream_neither_stopped_nor_failed_at_once();
+        for stream_id in &both_streams {
+            assert_eq!(
+                restarted
+                    .loaded_stream_of_the_id(stream_id)
+                    .unwrap()
+                    .status(),
+                RuntimeStatus::Started,
+                "pause is not recorded, so a restart runs the project"
+            );
+        }
     }
 }
