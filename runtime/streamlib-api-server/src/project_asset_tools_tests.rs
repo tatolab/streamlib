@@ -441,6 +441,22 @@ async fn a_listen_over_mcp_stdio_is_told_of_each_transaction_and_reads_it_from_t
     assert_eq!(newest["author_name"], "Jonathan");
     assert_eq!(newest["operations"][0]["operation"], "import_asset");
     assert_eq!(newest["inverse_operations"][0]["operation"], "delete_asset");
+    assert_eq!(newest["status"], "applied");
+    assert_eq!(newest["format_version"], 2);
+    assert!(newest.get("idempotency_key").is_none(), "{newest}");
+    let import_commit = ProjectHistoryRepository::open_for_project(&served.project_directory())
+        .unwrap()
+        .commits_newest_first()
+        .unwrap()
+        .remove(0);
+    assert_eq!(newest["commit"], import_commit.commit);
+    assert_eq!(
+        newest["applied_at"],
+        crate::mcp_project_change_feed::rfc_3339_utc_of_unix_seconds(
+            import_commit.committed_at_unix_seconds
+        ),
+        "applied_at is when the import's commit was made"
+    );
 }
 
 #[tokio::test]

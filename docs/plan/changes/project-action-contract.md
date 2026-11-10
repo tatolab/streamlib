@@ -61,10 +61,15 @@ on-disk transaction format.
   version. It also gains `idempotency_key`, a string the caller mints. A second action carrying a
   key the project's history already holds answers the first transaction instead of applying
   again. A client mints one key per user gesture, so a slider drag that commits on release is one
-  key and one transaction (owner, 2026-11-09).
+  key and one transaction (owner, 2026-11-09). The key is optional: an action sent without one applies, and a
+  retry of it can apply twice (owner, 2026-11-10).
 - **Structured refusals.** A refused action answers a typed refusal: the action, the field or link
   it refused, and the runtime's own words. A client shows it beside what caused it and never
-  rewrites it (owner, 2026-11-09).
+  rewrites it (owner, 2026-11-09). A project's change feed carries each refused action beside the
+  applied transactions, tagged `refused`, with its author, the operations it asked for, its
+  `mode`, its key, the refusal and when it was refused. The runtime keeps the latest 100 of
+  each project in memory since it started, never in history, and announces each one through the
+  same `notifications/resources/updated` (owner, 2026-11-09).
 - **Stream verbs.** `create_stream {project_directory, path, display_name}` and
   `delete_stream {project_directory, stream_asset}` record `CreateStreamDocument` and
   `DeleteStreamDocument`. Creating a stream loads it with the project's other streams, and deleting
@@ -86,7 +91,9 @@ on-disk transaction format.
   `tatolab-project.json`. `duplicate_project {project_directory, into}` and
   `delete_project {project_directory}` are verbs, not transactions, because they act on the
   project and its history whole. Delete stops the project first, and #3406 builds both
-  (owner, 2026-11-09).
+  (owner, 2026-11-09). Renaming a project rewrites, in the same transaction, the `view_type` of
+  every `StudioView` node naming a view the project brings, so one undo restores both
+  (owner, 2026-11-10).
   `import_project {source, project_directory}` is a verb, not a transaction: it unpacks the
   `.zip` of a project, as `add_dependency` reads one, into a `project_directory` that does not
   exist yet, under a new project UUID, so the same zip imported twice is two projects whose

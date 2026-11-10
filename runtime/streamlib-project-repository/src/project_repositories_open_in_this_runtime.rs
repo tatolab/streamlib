@@ -12,20 +12,27 @@ use uuid::Uuid;
 use crate::project_file::PROJECT_FILE_NAME;
 use crate::project_repository::{ProjectPythonRequirementsLock, ProjectRepository};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
-use crate::project_transaction::AppliedProjectTransaction;
+use crate::project_transaction::{AppliedProjectTransaction, ProjectActionApplyOutcome};
 
 /// How many announcements a slow listener may fall behind before it is told it lagged.
-const PROJECT_TRANSACTION_FEED_CAPACITY: usize = 256;
+const PROJECT_CHANGE_FEED_CAPACITY: usize = 256;
 
-/// A transaction one project's writer applied, as the change feed announces it.
+/// A change to one project, as the change feed announces it.
 #[derive(Clone, Debug)]
-pub struct ProjectTransactionAnnouncement {
+pub struct ProjectChangeFeedAnnouncement {
     /// The project's UUID, from its `tatolab-project.json`.
     pub project: Uuid,
-    /// The project directory, symlinks resolved.
-    pub project_directory: PathBuf,
-    /// The transaction and the commit that records it.
-    pub applied: AppliedProjectTransaction,
+    /// What changed on the project's feed.
+    pub change: ProjectChangeOnTheFeed,
+}
+
+/// What one announcement on the change feed tells of.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProjectChangeOnTheFeed {
+    /// The project's writer applied this transaction, which its history now records.
+    Applied(Box<AppliedProjectTransaction>),
+    /// The runtime refused an action on the project, which no history records.
+    Refused,
 }
 
 /// One project the runtime holds open, which only one caller writes at a time.
@@ -37,7 +44,7 @@ pub type ProjectRepositoryOneWriterAtATime = Arc<Mutex<ProjectRepository>>;
 pub struct ProjectRepositoriesOpenInThisRuntime {
     project_repository_by_resolved_directory:
         Mutex<BTreeMap<PathBuf, ProjectRepositoryOneWriterAtATime>>,
-    project_transaction_feed: broadcast::Sender<ProjectTransactionAnnouncement>,
+    project_change_feed: broadcast::Sender<ProjectChangeFeedAnnouncement>,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
 }
 
@@ -45,7 +52,7 @@ impl Default for ProjectRepositoriesOpenInThisRuntime {
     fn default() -> Self {
         Self {
             project_repository_by_resolved_directory: Mutex::default(),
-            project_transaction_feed: broadcast::channel(PROJECT_TRANSACTION_FEED_CAPACITY).0,
+            project_change_feed: broadcast::channel(PROJECT_CHANGE_FEED_CAPACITY).0,
             python_requirements_lock: None,
         }
     }
@@ -88,12 +95,22 @@ impl ProjectRepositoriesOpenInThisRuntime {
         applied: AppliedProjectTransaction,
     ) {
         self.commit_the_edit_on_each_enclosing_project(project_repository, &applied);
-        let announcement = ProjectTransactionAnnouncement {
+        self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement {
             project: project_repository.project_file().project,
-            project_directory: project_repository.project_directory().to_path_buf(),
-            applied,
-        };
-        if self.project_transaction_feed.send(announcement).is_err() {
+            change: ProjectChangeOnTheFeed::Applied(Box::new(applied)),
+        });
+    }
+
+    /// Announce that the runtime refused an action on the project `project`.
+    pub fn announce_a_refused_action(&self, project: Uuid) {
+        self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement {
+            project,
+            change: ProjectChangeOnTheFeed::Refused,
+        });
+    }
+
+    fn announce_on_the_change_feed(&self, announcement: ProjectChangeFeedAnnouncement) {
+        if self.project_change_feed.send(announcement).is_err() {
             tracing::trace!("no change-feed listener is subscribed");
         }
     }
@@ -130,11 +147,23 @@ impl ProjectRepositoriesOpenInThisRuntime {
         }
     }
 
-    /// A receiver of every transaction announced from now on, across every open project.
+    /// Announce `outcome`'s transaction as [`Self::announce_applied_transaction`] does when this
+    /// call applied it; one an earlier call applied under its key was announced by that call.
+    pub fn announce_the_transaction_if_applied_now(
+        &self,
+        project_repository: &ProjectRepository,
+        outcome: &ProjectActionApplyOutcome,
+    ) {
+        if let ProjectActionApplyOutcome::AppliedNow(applied) = outcome {
+            self.announce_applied_transaction(project_repository, applied.clone());
+        }
+    }
+
+    /// A receiver of every change announced from now on, across every project.
     pub fn subscribe_to_the_change_feed(
         &self,
-    ) -> broadcast::Receiver<ProjectTransactionAnnouncement> {
-        self.project_transaction_feed.subscribe()
+    ) -> broadcast::Receiver<ProjectChangeFeedAnnouncement> {
+        self.project_change_feed.subscribe()
     }
 
     /// The project at the absolute `project_directory`, opened the first time it is asked for.
@@ -213,6 +242,7 @@ mod tests {
         let applied = project_repository
             .apply_asset_changes(
                 &ProjectTransactionAuthor::the_runtime(),
+                None,
                 vec![crate::ProjectAssetChangeRequest::ImportAsset {
                     source: crate::ProjectAssetImportSource::FileOnThisMachine(
                         parent.path().join("intro.mp4"),
@@ -222,10 +252,14 @@ mod tests {
                     import_settings: serde_json::Map::new(),
                 }],
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
         open.announce_applied_transaction(&project_repository, applied.clone());
         let announced = change_feed.try_recv().unwrap();
-        assert_eq!(announced.applied, applied);
+        assert_eq!(
+            announced.change,
+            ProjectChangeOnTheFeed::Applied(Box::new(applied.clone()))
+        );
         assert_eq!(announced.project, project_repository.project_file().project);
         assert_eq!(
             project_repository

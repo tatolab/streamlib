@@ -64,6 +64,7 @@ impl ProjectWithOneStream {
         self.repository
             .apply_project_operations(
                 &a_person(),
+                None,
                 vec![ProjectOperation::StreamGraph(
                     StreamGraphOperationOnAStream {
                         stream: self.stream,
@@ -84,7 +85,8 @@ impl ProjectWithOneStream {
                 )],
                 ProjectTransactionLineage::NewEdit,
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
         node
     }
 
@@ -95,6 +97,7 @@ impl ProjectWithOneStream {
             .repository
             .apply_asset_changes(
                 &a_person(),
+                None,
                 vec![ProjectAssetChangeRequest::ImportAsset {
                     source: ProjectAssetImportSource::FileOnThisMachine(source),
                     asset_path: "grade.cube".to_owned(),
@@ -102,7 +105,8 @@ impl ProjectWithOneStream {
                     import_settings: Map::new(),
                 }],
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
         self.repository
             .assets()
             .unwrap()
@@ -115,15 +119,17 @@ impl ProjectWithOneStream {
     fn undo(&mut self) {
         let reversal = self.repository.undo_by(&a_person()).unwrap();
         self.repository
-            .apply_project_operations(&a_person(), reversal.operations, reversal.lineage)
-            .unwrap();
+            .apply_project_operations(&a_person(), None, reversal.operations, reversal.lineage)
+            .unwrap()
+            .into_applied_transaction();
     }
 
     fn redo(&mut self) {
         let reversal = self.repository.redo_by(&a_person()).unwrap();
         self.repository
-            .apply_project_operations(&a_person(), reversal.operations, reversal.lineage)
-            .unwrap();
+            .apply_project_operations(&a_person(), None, reversal.operations, reversal.lineage)
+            .unwrap()
+            .into_applied_transaction();
     }
 
     fn main_document(&self) -> Value {
@@ -199,8 +205,9 @@ impl CellImportingArm {
         let source = self.arm.directory().display().to_string();
         self.cell
             .repository
-            .add_dependency(&a_person(), &source, None)
-            .unwrap();
+            .add_dependency(&a_person(), None, &source, None)
+            .unwrap()
+            .into_applied_transaction();
     }
 
     fn place_the_arms_stream_as_a_fragment(&mut self) -> Uuid {
@@ -299,8 +306,9 @@ fn a_zip_and_a_github_archive_of_a_module_are_imported_like_its_folder() {
         imports
             .cell
             .repository
-            .add_dependency(&a_person(), &archive.display().to_string(), None)
-            .unwrap();
+            .add_dependency(&a_person(), None, &archive.display().to_string(), None)
+            .unwrap()
+            .into_applied_transaction();
 
         let import_folder = imports.cell.directory().join("imports/robot-arm");
         assert!(
@@ -321,7 +329,12 @@ fn a_source_holding_no_project_file_or_no_project_uuid_is_refused_by_what_is_mis
     let refusal = imports
         .cell
         .repository
-        .add_dependency(&a_person(), &not_a_project.display().to_string(), None)
+        .add_dependency(
+            &a_person(),
+            None,
+            &not_a_project.display().to_string(),
+            None,
+        )
         .unwrap_err();
     assert!(
         refusal.to_string().contains("tatolab-project.json"),
@@ -336,7 +349,12 @@ fn a_source_holding_no_project_file_or_no_project_uuid_is_refused_by_what_is_mis
     let refusal = imports
         .cell
         .repository
-        .add_dependency(&a_person(), &not_a_project.display().to_string(), None)
+        .add_dependency(
+            &a_person(),
+            None,
+            &not_a_project.display().to_string(),
+            None,
+        )
         .unwrap_err();
     assert!(refusal.to_string().contains("project UUID"), "{refusal}");
     assert!(!imports.cell.directory().join("imports").exists());
@@ -356,7 +374,7 @@ fn a_project_is_refused_as_its_own_import_and_a_second_import_of_one_is_refused(
         imports
             .cell
             .repository
-            .add_dependency(&a_person(), &cell_source, Some("me")),
+            .add_dependency(&a_person(), None, &cell_source, Some("me")),
         Err(ProjectRepositoryRefusal::ProjectImportsItself(_))
     ));
     imports.import_the_arm();
@@ -365,7 +383,7 @@ fn a_project_is_refused_as_its_own_import_and_a_second_import_of_one_is_refused(
         imports
             .cell
             .repository
-            .add_dependency(&a_person(), &arm_source, Some("arm-again")),
+            .add_dependency(&a_person(), None, &arm_source, Some("arm-again")),
         Err(ProjectRepositoryRefusal::ImportAlreadyHeld(_))
     ));
 }
@@ -461,7 +479,7 @@ fn an_import_is_removed_only_once_nothing_references_it_and_undo_puts_it_back() 
     let refusal = imports
         .cell
         .repository
-        .remove_dependency(&a_person(), arm)
+        .remove_dependency(&a_person(), None, arm)
         .unwrap_err();
     assert!(
         matches!(
@@ -475,8 +493,9 @@ fn an_import_is_removed_only_once_nothing_references_it_and_undo_puts_it_back() 
     imports
         .cell
         .repository
-        .remove_dependency(&a_person(), arm)
-        .unwrap();
+        .remove_dependency(&a_person(), None, arm)
+        .unwrap()
+        .into_applied_transaction();
     let import_folder = imports.cell.directory().join("imports/robot-arm");
     assert!(!import_folder.exists());
     assert!(imports.cell.repository.import(arm).is_err());
@@ -528,7 +547,7 @@ fn an_update_over_edited_files_answers_them_and_overwrites_once_confirmed() {
     let refusal = imports
         .cell
         .repository
-        .update_dependency(&a_person(), arm, None, false)
+        .update_dependency(&a_person(), None, arm, None, false)
         .unwrap_err();
     match refusal {
         ProjectRepositoryRefusal::ImportEditedSinceItsCopy { edited_files, .. } => {
@@ -541,8 +560,9 @@ fn an_update_over_edited_files_answers_them_and_overwrites_once_confirmed() {
     imports
         .cell
         .repository
-        .update_dependency(&a_person(), arm, None, true)
-        .unwrap();
+        .update_dependency(&a_person(), None, arm, None, true)
+        .unwrap()
+        .into_applied_transaction();
     let updated: Value =
         serde_json::from_slice(&std::fs::read(&edited_in_the_cell).unwrap()).unwrap();
     assert_eq!(updated["nodes"][1]["name"], "tint");
@@ -646,6 +666,7 @@ fn a_transaction_in_an_import_opened_as_its_own_project_commits_on_the_enclosing
     let applied = module
         .apply_project_operations(
             &a_person(),
+            None,
             vec![ProjectOperation::StreamGraph(
                 StreamGraphOperationOnAStream {
                     stream: imports.arm.stream,
@@ -666,7 +687,8 @@ fn a_transaction_in_an_import_opened_as_its_own_project_commits_on_the_enclosing
             )],
             ProjectTransactionLineage::NewEdit,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     open_in_this_runtime.announce_applied_transaction(&module, applied);
 
     assert!(module.history().commits_newest_first().unwrap().len() >= 2);
@@ -713,6 +735,7 @@ fn a_created_stream_document_referencing_an_asset_the_project_does_not_hold_is_r
         .repository
         .apply_project_operations(
             &a_person(),
+            None,
             vec![ProjectOperation::StreamDocument(
                 ProjectStreamDocumentOperation::CreateStreamDocument {
                     stream,
@@ -795,8 +818,9 @@ fn a_zipped_module_holding_pyvenv_cfg_at_its_root_is_still_copied() {
     imports
         .cell
         .repository
-        .add_dependency(&a_person(), &archive.display().to_string(), None)
-        .unwrap();
+        .add_dependency(&a_person(), None, &archive.display().to_string(), None)
+        .unwrap()
+        .into_applied_transaction();
 
     assert!(
         imports
@@ -818,10 +842,12 @@ fn an_asset_only_a_nested_copy_of_an_import_holds_resolves_to_that_copy() {
             .repository
             .add_dependency(
                 &a_person(),
+                None,
                 &imported.directory().display().to_string(),
                 None,
             )
-            .unwrap();
+            .unwrap()
+            .into_applied_transaction();
     };
     add(&mut cell, &gripper);
     let lut_only_the_newer_gripper_holds = gripper.import_a_lut(b"LUT 2");
@@ -899,10 +925,12 @@ fn a_node_type_an_imports_own_code_defines_is_led_by_its_folder_at_every_depth()
     arm.repository
         .add_dependency(
             &a_person(),
+            None,
             &gripper.directory().display().to_string(),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     arm.add_a_node(
         "claw",
         STREAM_FRAGMENT_NODE_TYPE,
@@ -912,8 +940,14 @@ fn a_node_type_an_imports_own_code_defines_is_led_by_its_folder_at_every_depth()
     write_node_code(&cell, "nodes/cell.py");
     cell.add_a_node("own", "nodes.cell:Own", json!({}));
     cell.repository
-        .add_dependency(&a_person(), &arm.directory().display().to_string(), None)
-        .unwrap();
+        .add_dependency(
+            &a_person(),
+            None,
+            &arm.directory().display().to_string(),
+            None,
+        )
+        .unwrap()
+        .into_applied_transaction();
     cell.add_a_node(
         "arm",
         STREAM_FRAGMENT_NODE_TYPE,
@@ -1065,7 +1099,7 @@ fn an_import_whose_requirements_cannot_be_resolved_is_refused_in_the_resolvers_w
     let refusal = imports
         .cell
         .repository
-        .add_dependency(&a_person(), &source, None)
+        .add_dependency(&a_person(), None, &source, None)
         .unwrap_err();
 
     assert!(
@@ -1139,7 +1173,7 @@ fn a_project_the_runtime_opens_is_handed_its_lock() {
 
     let refusal = cell
         .lock()
-        .add_dependency(&a_person(), &source, None)
+        .add_dependency(&a_person(), None, &source, None)
         .unwrap_err();
 
     assert!(

@@ -71,21 +71,21 @@ impl ProjectHoldingOneStream {
         operations: Vec<ProjectOperation>,
     ) -> Result<(), ProjectRepositoryRefusal> {
         self.repository
-            .apply_project_operations(author, operations, ProjectTransactionLineage::NewEdit)
+            .apply_project_operations(author, None, operations, ProjectTransactionLineage::NewEdit)
             .map(|_| ())
     }
 
     fn undo(&mut self, author: &ProjectTransactionAuthor) -> Result<(), ProjectRepositoryRefusal> {
         let reversal = self.repository.undo_by(author)?;
         self.repository
-            .apply_project_operations(author, reversal.operations, reversal.lineage)
+            .apply_project_operations(author, None, reversal.operations, reversal.lineage)
             .map(|_| ())
     }
 
     fn redo(&mut self, author: &ProjectTransactionAuthor) -> Result<(), ProjectRepositoryRefusal> {
         let reversal = self.repository.redo_by(author)?;
         self.repository
-            .apply_project_operations(author, reversal.operations, reversal.lineage)
+            .apply_project_operations(author, None, reversal.operations, reversal.lineage)
             .map(|_| ())
     }
 }
@@ -358,6 +358,7 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
         .repository
         .apply_asset_changes(
             &agent,
+            None,
             vec![ProjectAssetChangeRequest::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(image_source),
                 asset_path: "media/logo.png".to_owned(),
@@ -365,7 +366,8 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
                 import_settings: Map::new(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let ProjectOperation::Asset(streamlib_project_repository::ProjectAssetOperation::ImportAsset {
         asset: image,
     }) = &imported.transaction.operations[0]
@@ -381,6 +383,7 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
         .repository
         .apply_asset_changes(
             &agent,
+            None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset: image.asset }],
         )
         .unwrap_err();
@@ -468,6 +471,7 @@ fn an_imported_asset(
         .repository
         .apply_asset_changes(
             author,
+            None,
             vec![ProjectAssetChangeRequest::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(source),
                 asset_path: "media/grade.cube".to_owned(),
@@ -475,7 +479,8 @@ fn an_imported_asset(
                 import_settings: Map::new(),
             }],
         )
-        .unwrap();
+        .unwrap()
+        .into_applied_transaction();
     let ProjectOperation::Asset(streamlib_project_repository::ProjectAssetOperation::ImportAsset {
         asset,
     }) = &imported.transaction.operations[0]
@@ -564,6 +569,7 @@ fn an_asset_only_a_fragments_inner_node_references_is_held_against_deletion() {
         .repository
         .apply_asset_changes(
             &agent,
+            None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset: lut }],
         )
         .unwrap_err();

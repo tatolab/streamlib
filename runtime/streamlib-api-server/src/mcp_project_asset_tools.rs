@@ -14,9 +14,10 @@ use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectAsset, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetKind, ProjectAssetOperation, ProjectOperation, ProjectRepository,
-    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectAsset,
+    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectAssetKind, ProjectAssetOperation,
+    ProjectOperation, ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, DescribeAssetToolResult, ListAssetsToolResult,
@@ -29,6 +30,17 @@ use crate::mcp_project_change_feed::project_transactions_resource_uri;
 
 /// The author an asset change names when its caller's MCP client gave no name.
 const AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT: &str = "an MCP client";
+
+pub(crate) const IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION: &str = "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.";
+
+/// The key a caller sent, refused when blank.
+pub(crate) fn the_idempotency_key_a_caller_sent(
+    idempotency_key: Option<String>,
+) -> Result<Option<ProjectActionIdempotencyKey>, ProjectRepositoryRefusal> {
+    idempotency_key
+        .map(ProjectActionIdempotencyKey::from_caller)
+        .transpose()
+}
 
 pub(crate) const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
     "The project, by absolute path: a folder holding `tatolab-project.json`.";
@@ -125,6 +137,8 @@ struct ImportAssetToolArguments {
     import_settings: Option<Map<String, Value>>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -139,6 +153,8 @@ struct RenameAssetToolArguments {
     file_name: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -155,6 +171,8 @@ struct MoveAssetToolArguments {
     into_directory: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -167,6 +185,8 @@ struct DeleteAssetToolArguments {
     asset: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -181,6 +201,8 @@ struct SetAssetSettingsToolArguments {
     import_settings: Map<String, Value>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    idempotency_key: Option<String>,
 }
 
 #[tool_router(router = project_asset_tool_router, vis = "pub(crate)")]
@@ -266,6 +288,7 @@ impl LocalApiMcpServerHandler {
             kind,
             import_settings,
             author,
+            idempotency_key,
         }): Parameters<ImportAssetToolArguments>,
     ) -> ToolCallAnswer {
         let change = ProjectAssetChangeRequest::ImportAsset {
@@ -278,6 +301,7 @@ impl LocalApiMcpServerHandler {
             "import_asset",
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
             change,
         )
         .await
@@ -294,12 +318,14 @@ impl LocalApiMcpServerHandler {
             asset,
             file_name,
             author,
+            idempotency_key,
         }): Parameters<RenameAssetToolArguments>,
     ) -> ToolCallAnswer {
         self.one_asset_change_as_a_transaction(
             "rename_asset",
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
             ProjectAssetChangeRequest::RenameAsset {
                 asset: the_asset_a_call_names("rename_asset", &asset)?,
                 file_name,
@@ -319,12 +345,14 @@ impl LocalApiMcpServerHandler {
             asset,
             into_directory,
             author,
+            idempotency_key,
         }): Parameters<MoveAssetToolArguments>,
     ) -> ToolCallAnswer {
         self.one_asset_change_as_a_transaction(
             "move_asset",
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
             ProjectAssetChangeRequest::MoveAsset {
                 asset: the_asset_a_call_names("move_asset", &asset)?,
                 into_directory,
@@ -343,19 +371,23 @@ impl LocalApiMcpServerHandler {
             project_directory,
             asset,
             author,
+            idempotency_key,
         }): Parameters<DeleteAssetToolArguments>,
     ) -> ToolCallAnswer {
-        let (deleted, project) = self
+        let (deleted, project, applied_now) = self
             .an_asset_change_applied_as_a_transaction(
                 "delete_asset",
                 project_directory,
                 the_author_of_a_change(author, &tool_call_request_context),
+                idempotency_key,
                 ProjectAssetChangeRequest::DeleteAsset {
                     asset: the_asset_a_call_names("delete_asset", &asset)?,
                 },
             )
             .await?;
-        if deleted.asset.kind == project_asset_kind_on_the_wire(ProjectAssetKind::Stream) {
+        if applied_now
+            && deleted.asset.kind == project_asset_kind_on_the_wire(ProjectAssetKind::Stream)
+        {
             let stream_asset = the_asset_a_call_names("delete_asset", &deleted.asset.asset)?;
             self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
                 operations_on_the_loaded_streams
@@ -383,12 +415,14 @@ impl LocalApiMcpServerHandler {
             asset,
             import_settings,
             author,
+            idempotency_key,
         }): Parameters<SetAssetSettingsToolArguments>,
     ) -> ToolCallAnswer {
         self.one_asset_change_as_a_transaction(
             "set_asset_settings",
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
+            idempotency_key,
             ProjectAssetChangeRequest::SetAssetSettings {
                 asset: the_asset_a_call_names("set_asset_settings", &asset)?,
                 import_settings,
@@ -436,35 +470,51 @@ impl LocalApiMcpServerHandler {
         tool_name: &'static str,
         project_directory: PathBuf,
         author: ProjectTransactionAuthor,
+        idempotency_key: Option<String>,
         change: ProjectAssetChangeRequest,
     ) -> ToolCallAnswer {
-        let (answered, _project) = self
-            .an_asset_change_applied_as_a_transaction(tool_name, project_directory, author, change)
+        let (answered, _project, _applied_now) = self
+            .an_asset_change_applied_as_a_transaction(
+                tool_name,
+                project_directory,
+                author,
+                idempotency_key,
+                change,
+            )
             .await?;
         serialized_tool_result(tool_name, &answered)
     }
 
     /// Apply `change` by `author` to the project as one transaction, answering the asset it
-    /// changed and the project's UUID.
+    /// changed, the project's UUID and whether this call applied it; sent again under
+    /// `idempotency_key`, it answers the transaction that key first applied.
     async fn an_asset_change_applied_as_a_transaction(
         &self,
         tool_name: &'static str,
         project_directory: PathBuf,
         author: ProjectTransactionAuthor,
+        idempotency_key: Option<String>,
         change: ProjectAssetChangeRequest,
-    ) -> Result<(AssetTransactionToolResult, Uuid), String> {
+    ) -> Result<(AssetTransactionToolResult, Uuid, bool), String> {
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
         self.a_project_repository_call_off_the_async_runtime(
             tool_name,
             project_directory,
             move |project_repository| {
-                let applied = project_repository.apply_asset_changes(&author, vec![change])?;
+                let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
+                let outcome = project_repository.apply_asset_changes(
+                    &author,
+                    idempotency_key.as_ref(),
+                    vec![change],
+                )?;
                 project_repositories
-                    .announce_applied_transaction(project_repository, applied.clone());
+                    .announce_the_transaction_if_applied_now(project_repository, &outcome);
+                let applied_now = outcome.was_applied_now();
                 let AppliedProjectTransaction {
                     transaction,
                     commit,
-                } = applied;
+                    ..
+                } = outcome.into_applied_transaction();
                 let changed_asset = match transaction.operations.first() {
                     Some(ProjectOperation::Asset(
                         ProjectAssetOperation::ImportAsset { asset }
@@ -490,6 +540,7 @@ impl LocalApiMcpServerHandler {
                         commit,
                     },
                     project_repository.project_file().project,
+                    applied_now,
                 ))
             },
         )

@@ -2134,6 +2134,206 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     assert!(nothing_left.contains("bob"), "{nothing_left}");
 }
 
+/// A graph edit the runtime refuses, from any connection, is announced to a listen on the
+/// project's change feed and read back from it tagged `refused`, newest first above the
+/// transactions history records, with its author, the operations it asked for, its mode, its key
+/// and the runtime's refusal; history records nothing for it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
+    let editing_connection = rmcp_client_over_the_upgraded_stream(&served).await;
+    let listening_connection = rmcp_client_over_the_upgraded_stream(&served).await;
+    let listed = tool_answer(
+        &tool_call_over_the_connection(
+            &editing_connection,
+            "list_assets",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("the project's assets list");
+    let transactions_resource_uri = listed["transactions_resource_uri"]
+        .as_str()
+        .expect("the change feed's URI")
+        .to_owned();
+    let history_before = streamlib_project_repository::ProjectRepository::open(project.path())
+        .expect("the project opens")
+        .applied_transactions_newest_first(8)
+        .expect("history reads");
+    let mut subscription = listening_connection
+        .listen(
+            rmcp::model::SubscriptionFilter::builder()
+                .resource_subscription(transactions_resource_uri.clone())
+                .build(),
+        )
+        .await
+        .expect("the runtime acknowledges a listen on the change feed");
+
+    let absent_node = "33333333-3333-4333-8333-333333333333";
+    let refused = tool_call_over_the_connection(
+        &editing_connection,
+        "remove_node",
+        json!({
+            "stream": stream_id, "node": absent_node, "author": an_agent_named("alice"),
+            "idempotency_key": "remove-gesture",
+        }),
+    )
+    .await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    let live_refused = tool_call_over_the_connection(
+        &editing_connection,
+        "rename_node",
+        json!({
+            "stream": stream_id, "node": absent_node, "name": "glow", "mode": "live",
+            "author": an_agent_named("bob"),
+        }),
+    )
+    .await;
+    assert_eq!(live_refused["isError"], true, "{live_refused}");
+
+    let update = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+        .await
+        .expect("the refusal is announced")
+        .expect("the listen is still open")
+        .expect("the update is well formed");
+    let rmcp::model::ServerNotification::ResourceUpdatedNotification(update) = update else {
+        panic!("expected notifications/resources/updated, got {update:?}");
+    };
+    assert_eq!(update.params.uri, transactions_resource_uri);
+
+    let read = listening_connection
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            transactions_resource_uri.clone(),
+        ))
+        .await
+        .expect("the change feed reads");
+    let read = serde_json::to_value(read).unwrap();
+    let feed: Value = serde_json::from_str(read["contents"][0]["text"].as_str().unwrap()).unwrap();
+    let entries = feed["transactions"].as_array().expect("the feed's entries");
+    assert_eq!(entries.len(), history_before.len() + 2, "{feed}");
+    let (newest, refused_before_it) = (&entries[0], &entries[1]);
+    assert_eq!(newest["status"], "refused", "{feed}");
+    assert_eq!(newest["mode"], "live");
+    assert_eq!(newest["author_name"], "bob");
+    assert_eq!(newest["refusal"]["action"], "rename_node");
+    assert_eq!(refused_before_it["status"], "refused");
+    assert_eq!(refused_before_it["author_kind"], "agent");
+    assert_eq!(refused_before_it["author_name"], "alice");
+    assert_eq!(refused_before_it["mode"], "commit");
+    assert_eq!(refused_before_it["idempotency_key"], "remove-gesture");
+    assert_eq!(
+        refused_before_it["operations"],
+        json!([{ "operation": "remove_node", "stream": stream_id, "node": absent_node }])
+    );
+    assert_eq!(
+        refused_before_it["refusal"], refused["structuredContent"]["refusal"],
+        "the feed carries the refusal the caller was answered"
+    );
+    assert!(
+        refused_before_it["refused_at"]
+            .as_str()
+            .is_some_and(|at| at.ends_with('Z'))
+    );
+    assert!(
+        entries[2..]
+            .iter()
+            .all(|entry| entry["status"] == "applied"),
+        "{feed}"
+    );
+    assert_eq!(
+        streamlib_project_repository::ProjectRepository::open(project.path())
+            .expect("the project opens")
+            .applied_transactions_newest_first(8)
+            .expect("history reads"),
+        history_before,
+        "history records no refusal"
+    );
+}
+
+/// A committed edit sent twice under one idempotency key, as a client retrying after a timeout
+/// would, applies once to the running stream and its graph document and answers the first
+/// transaction; its commit records the format version and the key. An undo sent twice under
+/// its own key undoes once.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+            .unwrap_or_else(|refusal| panic!("`{tool_name}` was refused: {refusal}"))
+        }
+    };
+    let add_the_sink = json!({
+        "stream": stream_id, "type": sink_type.as_str(), "name": "sink",
+        "author": an_agent_named("alice"), "idempotency_key": "add-sink-gesture",
+    });
+
+    let first = call("add_node", add_the_sink.clone()).await;
+    let retried = call("add_node", add_the_sink).await;
+    assert_eq!(retried["transaction"], first["transaction"], "{retried}");
+    assert_eq!(retried["commit"], first["commit"], "{retried}");
+    assert_eq!(
+        retried["added_nodes"][0]["node"],
+        first["added_nodes"][0]["node"]
+    );
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["sink", "source"]
+    );
+    assert_eq!(
+        sorted_node_names_in(&engine.the_live_graph_of(&stream_id)),
+        ["sink", "source"],
+        "the retry reached the running stream not at all"
+    );
+
+    let undo = json!({
+        "project_directory": project.path(), "author": an_agent_named("alice"),
+        "idempotency_key": "undo-gesture",
+    });
+    let undone = call("undo", undo.clone()).await;
+    let undone_again = call("undo", undo).await;
+    assert_eq!(undone_again["transaction"], undone["transaction"]);
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["source"]
+    );
+
+    let recorded = streamlib_project_repository::ProjectRepository::open(project.path())
+        .expect("the project opens")
+        .applied_transactions_newest_first(2)
+        .expect("history reads");
+    assert_eq!(recorded.len(), 2, "one add and one undo, each once");
+    assert_eq!(
+        recorded[1].transaction.format_version,
+        streamlib_project_repository::PROJECT_TRANSACTION_FORMAT_VERSION
+    );
+    assert_eq!(
+        recorded[1]
+            .transaction
+            .idempotency_key
+            .as_ref()
+            .map(|key| key.as_str()),
+        Some("add-sink-gesture")
+    );
+    assert_eq!(undone["format_version"], json!(2), "{undone}");
+    assert_eq!(undone["idempotency_key"], "undo-gesture", "{undone}");
+    assert!(
+        undone["applied_at"]
+            .as_str()
+            .is_some_and(|applied_at| applied_at.ends_with('Z')),
+        "{undone}"
+    );
+}
+
 /// A venv interpreter that answers the runtime's probe and, run as the graph generator run
 /// entry, prints the project's `generator-run.json` as the run's document.
 const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_GENERATOR_RUN: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._graph_generator_run_entry*) cat generator-run.json ;;\nesac\nexit 0\n";
@@ -2564,6 +2764,7 @@ impl ProjectWithGraphDocuments {
                     kind: streamlib_project_repository::ProjectTransactionAuthorKind::Person,
                     name: "arm maintainer".to_owned(),
                 },
+                None,
                 vec![streamlib_project_repository::ProjectOperation::StreamGraph(
                     streamlib_project_repository::StreamGraphOperationOnAStream {
                         stream: self.stream_asset_of("main"),
@@ -2588,6 +2789,7 @@ impl ProjectWithGraphDocuments {
                 streamlib_project_repository::ProjectTransactionLineage::NewEdit,
             )
             .expect("the sink is committed")
+            .into_applied_transaction()
             .commit
     }
 }

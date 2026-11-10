@@ -2688,19 +2688,24 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly five surfaces and nowhere else: log record `host_ts`
-  and `source_ts`, log file naming, the local relay certificate's validity — its UTC
-  `notBefore` / `notAfter`, issued and aged by the one file that writes the certificate
-  (owner, 2026-10-17) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro
-  JWTs the moq.pro adapter and the live proof's subscribe minter sign (owner, 2026-10-20) —
-  their job is correlating with the outside world, which monotonic time cannot do. A wall-clock value never enters the data plane and is never compared
-  against a media timestamp; another surface is a plan change, not a judgement call. The
-  list is mechanically enforced, with no per-line pragma and no opt-out attribute: the
-  permitted surfaces are a closed set in the gate, so a sixth is a source change that
-  surfaces in review rather than a line quietly appended, and an
-  entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
-  allowlist is per-file, which is why a data-plane file never joins it — a machine-global
-  unique name comes from the engine's unique-name primitive, never from reading a clock.
+  Wall clock is permitted on exactly six surfaces and nowhere else: log record `host_ts`
+  and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an action
+  was refused, beside the `applied_at` a transaction reads off its commit (owner,
+  2026-11-10) — the local relay certificate's validity — its UTC `notBefore` / `notAfter`,
+  issued and aged by the one file that writes the certificate (owner, 2026-10-17) — and a
+  relay token's expiry — the UTC `iat` / `exp` of the moq.pro JWTs the moq.pro adapter and
+  the live proof's subscribe minter sign (owner, 2026-10-20) — their job is correlating with
+  the outside world, which monotonic time cannot do. A wall-clock value never enters the
+  data plane and is never compared against a media timestamp; another surface is a plan
+  change, not a judgement call. The gate enforces the list in the tree it scans — `runtime`,
+  `sdk`, `adapters`, `xtask` and `packages/test-fixtures` — with no per-line pragma and no
+  opt-out attribute: the surfaces read there are a closed set of kinds in the gate, so
+  another is a source change that surfaces in review rather than a line quietly appended,
+  and an entry whose file stops reading a wall clock is a licence the gate makes you hand
+  back. The relay certificate and token surfaces are read outside its scan, a relay token in
+  `packages/tatolab-moq`. The allowlist is per-file, which is why a data-plane file never joins it — a
+  machine-global unique name comes from the engine's unique-name primitive, never from
+  reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
   SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158]
 - **DECIDED** — Audio backend: one chain per platform, probed once per process and logged
@@ -4019,7 +4024,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `insert_node_between_linked_nodes` among them. The engine's Rust identifiers keep
   "processor" until the rename. Owner, 2026-10-02. [local-api; stream-graph — SHIPPED #2614;
   zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; runtime-hosting — SHIPPED #2704, #2711,
-  #2715; queued-stream-actions — SHIPPED #2997; amended by project-and-assets: every tool names a node, an asset and a project by UUID, and every change is a transaction with undo and redo]
+  #2715; queued-stream-actions — SHIPPED #2997; amended by project-and-assets: every tool names a node, an asset and a project by UUID, and every change is a transaction with undo and redo; amended by project-action-contract: every tool's arguments are the action contract's types]
 - **DECIDED** — `graph` carries the machine's name as a top-level key, `machine`, beside a
   stream's `stream`, `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the
   generated schema and the prompt fixture — and no mesh key. Every channel reserves one
@@ -4044,7 +4049,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
   #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description;
-  stream-identity-and-persistence — SHIPPED #2962; amended by gateway-nodes: `expose` and the relay verbs go]
+  stream-identity-and-persistence — SHIPPED #2962; amended by gateway-nodes: `expose` and the relay verbs go; amended by project-run-controls: `stop` stops the working directory's project and `start` runs it]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
   local API socket and the iceoryx2 domain. On Linux it is
@@ -4060,7 +4065,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   log in the state directory (§Product). There is no registry to discover a runtime by: one
   runtime per machine serves one socket at a fixed path. Owner, 2026-09-14.
   [control-plane-one-surface; local-transport-hardening — SHIPPED #2261; local-api — SHIPPED
-  #2660, #2663; package-split-and-lend — SHIPPED #2697; runtime-hosting — SHIPPED #2711]
+  #2660, #2663; package-split-and-lend — SHIPPED #2697; runtime-hosting — SHIPPED #2711;
+  amended by project-action-contract: a project's log moves into `.tatolab/logs/`]
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; graph and health
   inspection ride the same control plane. [control-plane-one-surface]
 - **DECIDED** — There is no observer effect: reading a port requires neither terminating it in

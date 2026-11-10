@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -25,7 +25,8 @@ use crate::project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };
 use crate::project_history_repository::{
-    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryRepository,
+    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit, ProjectHistoryCommitWritten,
+    ProjectHistoryRepository,
 };
 use crate::project_import_copy::{
     PROJECT_IMPORT_STAGING_DIRECTORY, files_an_import_carries, files_edited_since_the_copy,
@@ -39,10 +40,12 @@ use crate::project_pyproject_import_sources::{
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
 use crate::project_transaction::{
-    AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
+    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionApplyOutcome,
+    ProjectActionIdempotencyKey, ProjectAssetChangeRequest, ProjectAssetImportSource,
     ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
     ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
+    ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
+    StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -73,6 +76,7 @@ pub struct ProjectRepository {
     history: ProjectHistoryRepository,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
     asset_files_waiting_for_their_import: BTreeMap<Uuid, AssetFileWaitingForItsImport>,
+    commit_of_each_idempotency_key: HashMap<ProjectActionIdempotencyKey, String>,
 }
 
 /// The bytes an import of an asset moves to its path once the transaction applies.
@@ -186,6 +190,7 @@ impl ProjectRepository {
             assets_by_uuid: BTreeMap::new(),
             python_requirements_lock: None,
             asset_files_waiting_for_their_import: BTreeMap::new(),
+            commit_of_each_idempotency_key: HashMap::new(),
         };
         repository.history.commit_tracked_files(
             &repository.tracked_files(&repository.assets_by_uuid)?,
@@ -258,13 +263,16 @@ impl ProjectRepository {
             );
         }
         let assets_by_uuid = read_every_asset_sidecar(project_directory)?;
+        let history = ProjectHistoryRepository::open_for_project(project_directory)?;
+        let commit_of_each_idempotency_key = the_commit_of_each_idempotency_key_in(&history)?;
         Ok(Self {
             project_directory: project_directory.to_path_buf(),
-            history: ProjectHistoryRepository::open_for_project(project_directory)?,
+            history,
             project_file,
             assets_by_uuid,
             python_requirements_lock: None,
             asset_files_waiting_for_their_import: BTreeMap::new(),
+            commit_of_each_idempotency_key,
         })
     }
 
@@ -345,36 +353,80 @@ impl ProjectRepository {
         &self,
         max_transactions: usize,
     ) -> Result<Vec<AppliedProjectTransaction>, ProjectRepositoryRefusal> {
-        let trailer_prefix = format!("{PROJECT_TRANSACTION_COMMIT_TRAILER}: ");
-        let mut applied_transactions = Vec::new();
-        for history_commit in self.history.commits_newest_first()? {
-            if applied_transactions.len() == max_transactions {
-                break;
-            }
-            let Some(transaction_json) = history_commit
-                .message
-                .lines()
-                .find_map(|line| line.strip_prefix(&trailer_prefix))
-            else {
-                continue;
-            };
-            applied_transactions.push(AppliedProjectTransaction {
-                transaction: serde_json::from_str(transaction_json)?,
-                commit: history_commit.commit,
-            });
-        }
-        Ok(applied_transactions)
+        self.each_applied_transaction_newest_first()?
+            .take(max_transactions)
+            .collect()
     }
 
-    /// Apply `changes` by `author` as one transaction, whole or not at all, and commit it.
+    /// The transaction history holds under the key a caller sent, which an action sent again
+    /// under that key answers instead of applying again; `None` when the caller sent no key.
+    pub fn the_transaction_applied_under_a_key_the_caller_sent(
+        &self,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+    ) -> Result<Option<AppliedProjectTransaction>, ProjectRepositoryRefusal> {
+        let Some(commit) =
+            idempotency_key.and_then(|key| self.commit_of_each_idempotency_key.get(key))
+        else {
+            return Ok(None);
+        };
+        let Some(history_commit) = self
+            .history
+            .commits_newest_first()?
+            .into_iter()
+            .find(|history_commit| history_commit.commit == *commit)
+        else {
+            return Ok(None);
+        };
+        let Some(transaction_json) = the_transaction_trailer_of(&history_commit.message) else {
+            return Ok(None);
+        };
+        let transaction_json = transaction_json.to_owned();
+        applied_transaction_read_from_its_trailer(&transaction_json, history_commit).map(Some)
+    }
+
+    fn each_applied_transaction_newest_first(
+        &self,
+    ) -> Result<
+        impl Iterator<Item = Result<AppliedProjectTransaction, ProjectRepositoryRefusal>>,
+        ProjectRepositoryRefusal,
+    > {
+        Ok(self
+            .history
+            .commits_newest_first()?
+            .into_iter()
+            .filter_map(|history_commit| {
+                let transaction_json =
+                    the_transaction_trailer_of(&history_commit.message)?.to_owned();
+                Some(applied_transaction_read_from_its_trailer(
+                    &transaction_json,
+                    history_commit,
+                ))
+            }))
+    }
+
+    /// Apply `changes` by `author` as one transaction, whole or not at all, and commit it; sent
+    /// again under the same `idempotency_key`, it answers the first transaction.
     pub fn apply_asset_changes(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         changes: Vec<ProjectAssetChangeRequest>,
-    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        if let Some(applied_before) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(
+                applied_before,
+            ));
+        }
         let applied = self.operations_for_changes(changes).and_then(|operations| {
-            self.apply_project_operations(author, operations, ProjectTransactionLineage::NewEdit)
+            self.apply_and_commit_project_operations(
+                author,
+                idempotency_key,
+                operations,
+                ProjectTransactionLineage::NewEdit,
+            )
         });
         for waiting in std::mem::take(&mut self.asset_files_waiting_for_their_import).into_values()
         {
@@ -382,7 +434,7 @@ impl ProjectRepository {
                 let _ = std::fs::remove_file(&waiting.file);
             }
         }
-        applied
+        applied.map(ProjectActionApplyOutcome::AppliedNow)
     }
 
     fn operations_for_changes(
@@ -444,10 +496,30 @@ impl ProjectRepository {
     }
 
     /// Apply `operations` by `author` as one transaction, whole or not at all, write the
-    /// files they change and commit it.
+    /// files they change and commit it; sent again under the same `idempotency_key`, it applies
+    /// nothing and answers the first transaction.
     pub fn apply_project_operations(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        operations: Vec<ProjectOperation>,
+        lineage: ProjectTransactionLineage,
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        if let Some(applied_before) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(
+                applied_before,
+            ));
+        }
+        self.apply_and_commit_project_operations(author, idempotency_key, operations, lineage)
+            .map(ProjectActionApplyOutcome::AppliedNow)
+    }
+
+    fn apply_and_commit_project_operations(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
@@ -531,6 +603,7 @@ impl ProjectRepository {
         };
         let parent_commit = self.commit_the_files_when_history_holds_none()?;
         let transaction = ProjectTransaction {
+            format_version: PROJECT_TRANSACTION_FORMAT_VERSION,
             transaction: Uuid::new_v4(),
             author: author.clone(),
             inverse_operations: operations
@@ -542,6 +615,7 @@ impl ProjectRepository {
             operations,
             undoes,
             redoes,
+            idempotency_key: idempotency_key.cloned(),
         };
 
         let mut performed_effects = Vec::with_capacity(transaction.operations.len());
@@ -643,8 +717,11 @@ impl ProjectRepository {
                     &transaction_commit_message(&transaction)?,
                 )
             });
-        let commit = match committed {
-            Ok(commit) => commit,
+        let ProjectHistoryCommitWritten {
+            commit,
+            committed_at_unix_seconds: applied_at_unix_seconds,
+        } = match committed {
+            Ok(written) => written,
             Err(refusal) => {
                 if let Some(uv_lock_as_it_was) = uv_lock_as_it_was {
                     self.restore_the_uv_lock(uv_lock_as_it_was);
@@ -659,6 +736,10 @@ impl ProjectRepository {
                 return Err(refusal);
             }
         };
+        if let Some(idempotency_key) = &transaction.idempotency_key {
+            self.commit_of_each_idempotency_key
+                .insert(idempotency_key.clone(), commit.clone());
+        }
         self.remove_what_import_effects_set_aside(performed_import_effects);
         remove_what_asset_effects_set_aside(performed_effects);
         staged_assets.retain(|_, asset| asset.kind != ProjectAssetKind::Stream);
@@ -672,6 +753,7 @@ impl ProjectRepository {
         Ok(AppliedProjectTransaction {
             transaction,
             commit,
+            applied_at_unix_seconds,
         })
     }
 
@@ -683,10 +765,18 @@ impl ProjectRepository {
     pub fn add_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         source: &str,
         folder: Option<&str>,
-    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        if let Some(applied_before) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(
+                applied_before,
+            ));
+        }
         let staged = stage_a_copy_of_the_project_source(&self.project_directory, source)?;
         let added = (|| {
             let folder = folder
@@ -699,8 +789,9 @@ impl ProjectRepository {
                 version: staged.version()?,
                 copied_files: staged.copied_files.clone(),
             };
-            self.apply_project_operations(
+            self.apply_and_commit_project_operations(
                 author,
+                idempotency_key,
                 vec![ProjectOperation::Import(
                     ProjectImportOperation::PlaceImport {
                         import,
@@ -716,7 +807,7 @@ impl ProjectRepository {
         if added.is_err() {
             let _ = std::fs::remove_dir_all(self.project_directory.join(&staged.staged_at));
         }
-        added
+        added.map(ProjectActionApplyOutcome::AppliedNow)
     }
 
     /// Copy the import `project` again, whole, from `source`, or from the source it was copied
@@ -725,11 +816,19 @@ impl ProjectRepository {
     pub fn update_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         project: Uuid,
         source: Option<&str>,
         overwrite_edited_files: bool,
-    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        if let Some(applied_before) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(
+                applied_before,
+            ));
+        }
         let held = self.import(project)?;
         let edited_files = self.files_edited_in_the_import(&held)?;
         if !edited_files.is_empty() && !overwrite_edited_files {
@@ -755,8 +854,9 @@ impl ProjectRepository {
                 version: staged.version()?,
                 copied_files: staged.copied_files.clone(),
             };
-            self.apply_project_operations(
+            self.apply_and_commit_project_operations(
                 author,
+                idempotency_key,
                 vec![ProjectOperation::Import(
                     ProjectImportOperation::PlaceImport {
                         import,
@@ -772,7 +872,7 @@ impl ProjectRepository {
         if updated.is_err() {
             let _ = std::fs::remove_dir_all(self.project_directory.join(&staged.staged_at));
         }
-        updated
+        updated.map(ProjectActionApplyOutcome::AppliedNow)
     }
 
     /// The import of `project` as the project file records it.
@@ -847,16 +947,26 @@ impl ProjectRepository {
     pub fn remove_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         project: Uuid,
-    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        if let Some(applied_before) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(ProjectActionApplyOutcome::AppliedBeforeUnderItsKey(
+                applied_before,
+            ));
+        }
         let import = self.import(project)?;
-        self.apply_project_operations(
+        self.apply_and_commit_project_operations(
             author,
+            idempotency_key,
             vec![ProjectOperation::Import(
                 ProjectImportOperation::RemoveImport { import },
             )],
             ProjectTransactionLineage::NewEdit,
         )
+        .map(ProjectActionApplyOutcome::AppliedNow)
     }
 
     /// Refuse removing the import `project` while a node of a stream, as the transaction has
@@ -1199,11 +1309,13 @@ impl ProjectRepository {
             .map(ProjectOperation::summary)
             .collect::<Vec<_>>()
             .join("; ");
-        self.history.commit_tracked_files(
-            &self.tracked_files(&self.assets_by_uuid)?,
-            &transaction.author,
-            &format!("edit {PROJECT_IMPORTS_DIRECTORY}/{folder}: {summary}"),
-        )
+        self.history
+            .commit_tracked_files(
+                &self.tracked_files(&self.assets_by_uuid)?,
+                &transaction.author,
+                &format!("edit {PROJECT_IMPORTS_DIRECTORY}/{folder}: {summary}"),
+            )
+            .map(|written| written.commit)
     }
 
     /// Commit the project's files as they are when its history holds no commit yet, as for an
@@ -1212,11 +1324,13 @@ impl ProjectRepository {
         if let Some(head) = self.history.head_commit()? {
             return Ok(head);
         }
-        self.history.commit_tracked_files(
-            &self.tracked_files(&self.assets_by_uuid)?,
-            &ProjectTransactionAuthor::the_runtime(),
-            &format!("open_project {}", self.project_file.name),
-        )
+        self.history
+            .commit_tracked_files(
+                &self.tracked_files(&self.assets_by_uuid)?,
+                &ProjectTransactionAuthor::the_runtime(),
+                &format!("open_project {}", self.project_file.name),
+            )
+            .map(|written| written.commit)
     }
 
     /// The undo `author`'s latest transaction not yet undone asks for: its inverse.
@@ -2015,6 +2129,67 @@ impl ProjectRepository {
         }
         Ok(referencing)
     }
+}
+
+/// The commit each idempotency key in `history` was recorded under, read from each trailer's
+/// envelope alone so a record in a newer format still yields its key.
+fn the_commit_of_each_idempotency_key_in(
+    history: &ProjectHistoryRepository,
+) -> Result<HashMap<ProjectActionIdempotencyKey, String>, ProjectRepositoryRefusal> {
+    let mut commit_of_each_idempotency_key = HashMap::new();
+    for history_commit in history.commits_newest_first()? {
+        let Some(transaction_json) = the_transaction_trailer_of(&history_commit.message) else {
+            continue;
+        };
+        let envelope: ProjectTransactionEnvelopeHeader =
+            match serde_json::from_str(transaction_json) {
+                Ok(envelope) => envelope,
+                Err(unreadable) => {
+                    tracing::warn!(
+                        commit = %history_commit.commit,
+                        %unreadable,
+                        "a transaction trailer has no readable envelope; its key is not indexed"
+                    );
+                    continue;
+                }
+            };
+        if let Some(idempotency_key) = envelope.idempotency_key {
+            commit_of_each_idempotency_key
+                .entry(idempotency_key)
+                .or_insert(history_commit.commit);
+        }
+    }
+    Ok(commit_of_each_idempotency_key)
+}
+
+/// The transaction JSON a commit message carries in its trailer, if it carries one.
+fn the_transaction_trailer_of(commit_message: &str) -> Option<&str> {
+    commit_message.lines().find_map(|line| {
+        line.strip_prefix(PROJECT_TRANSACTION_COMMIT_TRAILER)?
+            .strip_prefix(": ")
+    })
+}
+
+fn applied_transaction_read_from_its_trailer(
+    transaction_json: &str,
+    history_commit: ProjectHistoryCommit,
+) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+    let envelope: ProjectTransactionEnvelopeHeader = serde_json::from_str(transaction_json)?;
+    if envelope.format_version > PROJECT_TRANSACTION_FORMAT_VERSION {
+        return Err(
+            ProjectRepositoryRefusal::TransactionFormatNewerThanThisRuntime {
+                transaction: envelope.transaction,
+                format_version: envelope.format_version,
+                newest_format_version: PROJECT_TRANSACTION_FORMAT_VERSION,
+            },
+        );
+    }
+    let transaction: ProjectTransaction = serde_json::from_str(transaction_json)?;
+    Ok(AppliedProjectTransaction {
+        transaction,
+        commit: history_commit.commit,
+        applied_at_unix_seconds: history_commit.committed_at_unix_seconds,
+    })
 }
 
 fn transaction_commit_message(

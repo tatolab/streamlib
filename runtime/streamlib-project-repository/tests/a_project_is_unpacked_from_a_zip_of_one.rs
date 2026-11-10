@@ -46,6 +46,7 @@ impl ZippedProject {
         repository
             .apply_asset_changes(
                 &a_person(),
+                None,
                 vec![ProjectAssetChangeRequest::ImportAsset {
                     source: ProjectAssetImportSource::FileOnThisMachine(lut_source),
                     asset_path: "luts/grade.cube".to_owned(),

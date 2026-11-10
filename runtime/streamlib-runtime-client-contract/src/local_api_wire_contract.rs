@@ -436,6 +436,8 @@ pub struct ListAssetsToolResult {
 /// One transaction a project's change feed holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectTransactionOnTheWire {
+    /// The format the transaction was recorded in, `1` for one recorded before formats were.
+    pub format_version: u32,
     /// The transaction's UUID.
     pub transaction: String,
     /// The commit on the project history's `main` that records it.
@@ -456,6 +458,72 @@ pub struct ProjectTransactionOnTheWire {
     /// The transaction this one redoes, when it is a redo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redoes: Option<String>,
+    /// The key the caller sent it under, when it sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    /// When the runtime applied it, RFC 3339 in UTC to the second, for display only.
+    pub applied_at: String,
+}
+
+/// An action on a project the runtime refused, as its change feed holds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RefusedProjectActionOnTheWire {
+    /// `person`, `agent` or `runtime`.
+    pub author_kind: String,
+    /// The author's name as an applied transaction would carry it.
+    pub author_name: String,
+    /// `commit` or `live`, as the action asked.
+    pub mode: String,
+    /// The operations the action asked for, in order, as the request named them.
+    pub operations: Vec<serde_json::Value>,
+    /// The key the caller sent it under, when it sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    /// What the runtime refused, in its own words.
+    pub refusal: ProjectActionRefusalOnTheWire,
+    /// When the runtime refused it, RFC 3339 in UTC to the second, for display only.
+    pub refused_at: String,
+}
+
+/// One entry of a project's change feed, tagged by its `status`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ProjectChangeFeedEntryOnTheWire {
+    /// A transaction the project's history records.
+    Applied(ProjectTransactionOnTheWire),
+    /// An action the runtime refused since it started, which no history records.
+    Refused(RefusedProjectActionOnTheWire),
+}
+
+/// What a refused action answers under `refusal` in its tool result's `structuredContent`,
+/// beside the same words as the result's text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectActionRefusalOnTheWire {
+    /// The action refused, by the name of the tool it was sent to.
+    pub action: String,
+    /// The position, from 0, of the operation refused among those the action sent, when one was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_operation_index: Option<usize>,
+    /// The node the refused operation names, as the caller named it: a UUID or an `as` label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_node: Option<String>,
+    /// The link the refused operation names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_link: Option<RefusedGraphLinkOnTheWire>,
+    /// The node's input or config field the refused operation names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_field: Option<String>,
+    /// Why, in the runtime's own words, never rewritten.
+    pub runtime_words: String,
+}
+
+/// The link a refused operation names, each end as the caller named it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedGraphLinkOnTheWire {
+    /// The output port the link carries from.
+    pub source: GraphLinkEndOnTheWire,
+    /// The input port the link carries into.
+    pub target: GraphLinkEndOnTheWire,
 }
 
 /// One end of a link a graph tool names: a node by its UUID and one of its ports.
@@ -533,15 +601,16 @@ pub struct GraphTransactionToolResult {
     pub added_groups: Vec<GraphTransactionAddedGroup>,
 }
 
-/// What a project's transactions resource holds: its newest transactions, newest first.
+/// What a project's transactions resource holds: its newest transactions and the actions refused
+/// since the runtime started, newest first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectTransactionsResourceContents {
     /// The project's UUID.
     pub project: String,
     /// The project directory, symlinks resolved.
     pub project_directory: PathBuf,
-    /// Its newest transactions, newest first.
-    pub transactions: Vec<ProjectTransactionOnTheWire>,
+    /// Its newest applied transactions and refused actions, newest first.
+    pub transactions: Vec<ProjectChangeFeedEntryOnTheWire>,
 }
 
 /// The `describe_asset` tool's result.

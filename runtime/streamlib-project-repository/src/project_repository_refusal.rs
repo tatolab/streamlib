@@ -150,6 +150,17 @@ pub enum ProjectRepositoryRefusal {
          taking it out would lose those edits"
     )]
     StreamDocumentEditedSinceItWasWritten { path: String },
+    #[error("an idempotency key cannot be blank; mint one per user gesture, or send none")]
+    BlankIdempotencyKey,
+    #[error(
+        "the transaction {transaction} in the project's history is in format {format_version}, \
+         which a newer runtime wrote; this runtime reads formats up to {newest_format_version}"
+    )]
+    TransactionFormatNewerThanThisRuntime {
+        transaction: Uuid,
+        format_version: u32,
+        newest_format_version: u32,
+    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "history")]

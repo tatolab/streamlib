@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
 use crate::project_file::ProjectImport;
+use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::stream_graph_document::StreamGraphOperation;
 
 /// Who a transaction is by.
@@ -359,9 +360,71 @@ pub struct ProjectTransactionReversal {
     pub lineage: ProjectTransactionLineage,
 }
 
+/// The transaction format this runtime writes; it reads and undoes every older one.
+pub const PROJECT_TRANSACTION_FORMAT_VERSION: u32 = 2;
+
+fn project_transaction_format_version_before_it_was_recorded() -> u32 {
+    1
+}
+
+/// A key the caller mints once per user gesture, so an action it sends again applies once.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub struct ProjectActionIdempotencyKey(String);
+
+impl TryFrom<String> for ProjectActionIdempotencyKey {
+    type Error = ProjectRepositoryRefusal;
+
+    fn try_from(key: String) -> Result<Self, Self::Error> {
+        Self::from_caller(key)
+    }
+}
+
+impl From<ProjectActionIdempotencyKey> for String {
+    fn from(key: ProjectActionIdempotencyKey) -> Self {
+        key.0
+    }
+}
+
+impl ProjectActionIdempotencyKey {
+    /// The key `key` names, refused when it is blank.
+    pub fn from_caller(key: impl Into<String>) -> Result<Self, ProjectRepositoryRefusal> {
+        let key = key.into();
+        if key.trim().is_empty() {
+            return Err(ProjectRepositoryRefusal::BlankIdempotencyKey);
+        }
+        Ok(Self(key))
+    }
+
+    /// The key as the caller sent it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ProjectActionIdempotencyKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// The part of a recorded transaction every format shares, read before the rest so a record
+/// in a newer format is refused by name rather than by what it holds.
+#[derive(Deserialize)]
+pub(crate) struct ProjectTransactionEnvelopeHeader {
+    #[serde(default = "project_transaction_format_version_before_it_was_recorded")]
+    pub(crate) format_version: u32,
+    pub(crate) transaction: Uuid,
+    #[serde(default)]
+    pub(crate) idempotency_key: Option<ProjectActionIdempotencyKey>,
+}
+
 /// A batch of operations applied whole: the unit of undo and of history.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProjectTransaction {
+    /// The format the transaction was recorded in, `1` for one recorded before it was written.
+    #[serde(default = "project_transaction_format_version_before_it_was_recorded")]
+    pub format_version: u32,
     /// The transaction's UUID.
     pub transaction: Uuid,
     /// Who made it.
@@ -378,6 +441,9 @@ pub struct ProjectTransaction {
     /// The transaction this one redoes, when it is a redo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redoes: Option<Uuid>,
+    /// The key the caller sent it under, when it sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<ProjectActionIdempotencyKey>,
 }
 
 impl ProjectTransaction {
@@ -391,6 +457,36 @@ impl ProjectTransaction {
     }
 }
 
+/// What applying an action did: applied it now, or found it applied before under its key.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProjectActionApplyOutcome {
+    /// Applied and committed by this call.
+    AppliedNow(AppliedProjectTransaction),
+    /// Applied by an earlier call under the same idempotency key; this call changed nothing.
+    AppliedBeforeUnderItsKey(AppliedProjectTransaction),
+}
+
+impl ProjectActionApplyOutcome {
+    /// Whether this call applied the transaction, rather than an earlier one under its key.
+    pub fn was_applied_now(&self) -> bool {
+        matches!(self, Self::AppliedNow(_))
+    }
+
+    /// The transaction, whichever call applied it.
+    pub fn applied_transaction(&self) -> &AppliedProjectTransaction {
+        match self {
+            Self::AppliedNow(applied) | Self::AppliedBeforeUnderItsKey(applied) => applied,
+        }
+    }
+
+    /// The transaction, whichever call applied it.
+    pub fn into_applied_transaction(self) -> AppliedProjectTransaction {
+        match self {
+            Self::AppliedNow(applied) | Self::AppliedBeforeUnderItsKey(applied) => applied,
+        }
+    }
+}
+
 /// A transaction the runtime applied and the commit that records it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppliedProjectTransaction {
@@ -398,4 +494,6 @@ pub struct AppliedProjectTransaction {
     pub transaction: ProjectTransaction,
     /// The commit on `main` that records it.
     pub commit: String,
+    /// When the commit was made, in whole seconds since the Unix epoch, for display only.
+    pub applied_at_unix_seconds: i64,
 }

@@ -155,6 +155,8 @@ pub(crate) struct LocalApiMcpServerHandler {
     mcp_connection: LocalApiMcpConnection,
     viewers_this_connection_holds_open: Arc<ViewersOneLocalApiConnectionHoldsOpen>,
     pub(crate) project_repositories_open_in_this_runtime: Arc<ProjectRepositoriesOpenInThisRuntime>,
+    pub(crate) project_actions_refused_since_the_runtime_started:
+        Arc<crate::mcp_project_change_feed::ProjectActionsRefusedSinceTheRuntimeStarted>,
     tool_router: Arc<ToolRouter<Self>>,
     prompt_router: Arc<PromptRouter<Self>>,
 }
@@ -182,6 +184,7 @@ impl LocalApiMcpServerHandler {
             mcp_connection: LocalApiMcpConnection::OneShotStreamableHttpRequest,
             viewers_this_connection_holds_open: Arc::default(),
             project_repositories_open_in_this_runtime,
+            project_actions_refused_since_the_runtime_started: Arc::default(),
             tool_router: Arc::new(
                 Self::tool_router()
                     + Self::project_archive_tool_router()
@@ -1088,6 +1091,7 @@ impl ServerHandler for LocalApiMcpServerHandler {
         {
             return crate::mcp_project_change_feed::read_project_transactions_resource(
                 Arc::clone(&self.project_repositories_open_in_this_runtime),
+                Arc::clone(&self.project_actions_refused_since_the_runtime_started),
                 &request.uri,
                 project,
             )
@@ -2200,6 +2204,85 @@ pub(crate) mod tests {
             ],
             "the refused transaction's applied rename is reversed on the running stream"
         );
+    }
+
+    /// A refused graph edit answers, beside its text, a structured refusal naming the action,
+    /// the operation it refused and the node or link that operation names, in the runtime's own
+    /// words as the text carries them.
+    #[tokio::test]
+    async fn a_refused_graph_edit_answers_a_structured_refusal_naming_what_it_refused() {
+        let absent_node = "33333333-3333-4333-8333-333333333333";
+        let body = tool_call_result(
+            a_stub_holding_a_camera_linked_to_an_effect(),
+            "transact",
+            json!({
+                "mode": "live",
+                "operations": [
+                    { "operation": "rename_node", "stream": STUB_STREAM_ID,
+                      "node": STUB_EFFECT_NODE_UUID, "name": "glow" },
+                    { "operation": "remove_node", "stream": STUB_STREAM_ID,
+                      "node": absent_node },
+                ],
+            }),
+        )
+        .await;
+        assert_eq!(body["isError"], true, "body={body}");
+        let refusal = &body["structuredContent"]["refusal"];
+        assert_eq!(refusal["action"], "transact", "{refusal}");
+        assert_eq!(refusal["refused_operation_index"], 1, "{refusal}");
+        assert_eq!(refusal["refused_node"], absent_node, "{refusal}");
+        let runtime_words = refusal["runtime_words"].as_str().unwrap();
+        assert_eq!(
+            body["content"][0]["text"],
+            format!("transact failed: {runtime_words}"),
+            "the text and the structured refusal carry the same words"
+        );
+
+        let body = tool_call_result(
+            a_stub_holding_a_camera_linked_to_an_effect(),
+            "connect",
+            json!({
+                "stream": STUB_STREAM_ID, "mode": "live",
+                "source": { "node": absent_node, "port": "video" },
+                "target": { "node": STUB_EFFECT_NODE_UUID, "port": "video_in" },
+            }),
+        )
+        .await;
+        let refusal = &body["structuredContent"]["refusal"];
+        assert_eq!(refusal["refused_operation_index"], 0, "{refusal}");
+        assert_eq!(
+            refusal["refused_link"],
+            json!({
+                "source": { "node": absent_node, "port": "video" },
+                "target": { "node": STUB_EFFECT_NODE_UUID, "port": "video_in" },
+            }),
+            "{refusal}"
+        );
+    }
+
+    /// A blank idempotency key is refused before anything applies.
+    #[tokio::test]
+    async fn a_graph_edit_under_a_blank_idempotency_key_is_refused() {
+        let runtime = a_stub_holding_a_camera_linked_to_an_effect();
+        let recorded = runtime.recorded_graph_mutations.clone();
+        let body = tool_call_result(
+            runtime,
+            "rename_node",
+            json!({
+                "stream": STUB_STREAM_ID, "mode": "live", "node": STUB_EFFECT_NODE_UUID,
+                "name": "glow", "idempotency_key": " ",
+            }),
+        )
+        .await;
+        assert_eq!(body["isError"], true, "body={body}");
+        assert!(
+            body["structuredContent"]["refusal"]["runtime_words"]
+                .as_str()
+                .unwrap()
+                .contains("idempotency key"),
+            "{body}"
+        );
+        assert!(recorded.lock().is_empty(), "nothing was applied");
     }
 
     #[tokio::test]
