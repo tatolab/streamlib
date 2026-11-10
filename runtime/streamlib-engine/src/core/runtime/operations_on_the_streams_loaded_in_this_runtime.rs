@@ -108,6 +108,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::remove_project`].
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
+    /// [`Runner::delete_project`].
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
+
     /// [`Runner::rename_stream`].
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome>;
 
@@ -228,6 +231,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
         Runner::remove_project(self, project_directory)
+    }
+
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::delete_project(self, project_directory)
     }
 
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {

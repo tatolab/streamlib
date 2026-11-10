@@ -8,7 +8,9 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
-use crate::project_file::{ProjectImport, TatolabProjectFile};
+use crate::project_file::ProjectImport;
+#[cfg(feature = "history")]
+use crate::project_file::TatolabProjectFile;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::stream_graph_document::StreamGraphOperation;
 
@@ -312,6 +314,7 @@ impl ProjectSettingsOperation {
     }
 
     /// Set the field this operation changes in `project_file` to its value after.
+    #[cfg(feature = "history")]
     pub(crate) fn write_into(&self, project_file: &mut TatolabProjectFile) {
         match self {
             Self::SetProjectName { to, .. } => project_file.name = to.clone(),

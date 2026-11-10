@@ -874,6 +874,7 @@ fn describe_stream_action_tool_result_of(
             StreamActionKind::Load => StreamActionKindOnTheWire::Load,
             StreamActionKind::Stop => StreamActionKindOnTheWire::Stop,
             StreamActionKind::Remove => StreamActionKindOnTheWire::Remove,
+            StreamActionKind::Delete => StreamActionKindOnTheWire::Delete,
             StreamActionKind::ReloadAtStart => StreamActionKindOnTheWire::ReloadAtStart,
         },
         state: stream_action_state_on_the_wire(stream_action.state),

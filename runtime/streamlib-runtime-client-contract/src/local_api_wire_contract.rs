@@ -195,6 +195,8 @@ pub enum StreamActionKindOnTheWire {
     Stop,
     /// Unloads every stream of a project and forgets every record of it.
     Remove,
+    /// Unloads and forgets every stream of a project, then moves its folder to the Trash.
+    Delete,
     /// Re-loads, at the runtime's start, a project's streams neither stopped nor failed.
     ReloadAtStart,
 }

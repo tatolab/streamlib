@@ -489,6 +489,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::delete_project(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome> {
         OperationsOnTheStreamsLoadedInThisRuntime::rename_stream(
             self.engine.as_ref(),
