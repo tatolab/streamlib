@@ -7,6 +7,28 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::stream_graph_fragment_fold::StreamGraphFragmentFold;
+
+/// The import path a graph names `GraphInput` by, in the built-in node module.
+pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
+
+/// The import path a graph names `GraphOutput` by, in the built-in node module.
+pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
+
+/// The config key an interface node names the port it declares under.
+pub const GRAPH_INTERFACE_PORT_CONFIG_KEY: &str = "port";
+
+/// The config key an interface node names its port's family under.
+pub const GRAPH_INTERFACE_FAMILY_CONFIG_KEY: &str = "family";
+
+/// The one port an interface node has: a `GraphOutput`'s input, a
+/// `GraphInput`'s output.
+pub const GRAPH_INTERFACE_VALUE_PORT_NAME: &str = "value";
+
+/// Whether `node_type` is `GraphInput` or `GraphOutput`.
+pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
+    matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
+}
 
 /// One node as a stream's graph document holds it: the spec keys a load reads.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -193,6 +215,10 @@ pub enum StreamGraphOperation {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         nodes: Vec<Uuid>,
     },
+    /// The fold's plain nodes and their links were replaced with its fragment node.
+    FoldIntoFragment { fold: StreamGraphFragmentFold },
+    /// The fold's fragment node was replaced with the plain nodes and links it stands for.
+    UnfoldFragment { fold: StreamGraphFragmentFold },
 }
 
 impl StreamGraphOperation {
@@ -246,6 +272,8 @@ impl StreamGraphOperation {
                 from: to,
                 to: from,
             },
+            Self::FoldIntoFragment { fold } => Self::UnfoldFragment { fold },
+            Self::UnfoldFragment { fold } => Self::FoldIntoFragment { fold },
         }
     }
 
@@ -279,6 +307,16 @@ impl StreamGraphOperation {
             Self::RemoveGroup { group, .. } => {
                 format!("remove_group {} {}", group.id, group.fields.title)
             }
+            Self::FoldIntoFragment { fold } => format!(
+                "fold_into_fragment {} {}",
+                fold.fragment_node().unwrap_or_default(),
+                fold.fragment_name()
+            ),
+            Self::UnfoldFragment { fold } => format!(
+                "unfold_fragment {} {}",
+                fold.fragment_node().unwrap_or_default(),
+                fold.fragment_name()
+            ),
         }
     }
 
@@ -293,6 +331,7 @@ impl StreamGraphOperation {
             | Self::SetStudioFields { node, .. }
             | Self::RefreshFragment { node, .. }
             | Self::SetExposedConfigFields { node, .. } => Some(*node),
+            Self::FoldIntoFragment { fold } | Self::UnfoldFragment { fold } => fold.fragment_node(),
             Self::AddGroup { .. } | Self::SetGroupFields { .. } | Self::RemoveGroup { .. } => None,
         }
     }
@@ -312,6 +351,20 @@ impl StreamGraphOperation {
             Self::RefreshFragment { node, to, .. } => {
                 configs.push((*node, &to.config));
                 push_the_config_of_each_node_at_every_level(&to.fragment, &mut configs);
+            }
+            Self::FoldIntoFragment { fold } => {
+                push_the_config_of_each_of_the_nodes_at_every_level(
+                    std::slice::from_ref(&fold.fragment.value),
+                    &mut configs,
+                );
+            }
+            Self::UnfoldFragment { fold } => {
+                for node in &fold.nodes {
+                    push_the_config_of_each_of_the_nodes_at_every_level(
+                        std::slice::from_ref(&node.value),
+                        &mut configs,
+                    );
+                }
             }
             _ => {}
         }
@@ -607,6 +660,19 @@ impl StreamGraphDocument {
                 Ok(())
             }
             StreamGraphOperation::Connect { link } => self.connect(link),
+            StreamGraphOperation::FoldIntoFragment { fold } => self
+                .swap_values_on_the_streams_level(
+                    &fold.nodes,
+                    &fold.links,
+                    std::slice::from_ref(&fold.fragment),
+                    &fold.fragment_links,
+                ),
+            StreamGraphOperation::UnfoldFragment { fold } => self.swap_values_on_the_streams_level(
+                std::slice::from_ref(&fold.fragment),
+                &fold.fragment_links,
+                &fold.nodes,
+                &fold.links,
+            ),
             StreamGraphOperation::Disconnect { link } => {
                 let index = self
                     .link_values()
@@ -778,7 +844,7 @@ impl StreamGraphDocument {
         Ok(())
     }
 
-    fn why_no_node_has(&self, node: Uuid) -> String {
+    pub(crate) fn why_no_node_has(&self, node: Uuid) -> String {
         let held: Vec<String> = self
             .node_objects()
             .map(|node_object| {
@@ -800,7 +866,7 @@ impl StreamGraphDocument {
         }
     }
 
-    fn node_objects(&self) -> impl Iterator<Item = &Map<String, Value>> {
+    pub(crate) fn node_objects(&self) -> impl Iterator<Item = &Map<String, Value>> {
         self.node_values.iter().filter_map(Value::as_object)
     }
 
@@ -813,21 +879,25 @@ impl StreamGraphDocument {
             .ok_or(why_none)
     }
 
-    fn node_values_mut(&mut self) -> &mut Vec<Value> {
+    pub(crate) fn node_values_mut(&mut self) -> &mut Vec<Value> {
         &mut self.node_values
     }
 
-    fn link_values(&self) -> &[Value] {
+    pub(crate) fn node_values_of_the_level(&self) -> &[Value] {
+        &self.node_values
+    }
+
+    pub(crate) fn link_values(&self) -> &[Value] {
         &self.link_values
     }
 
-    fn link_values_mut(&mut self) -> &mut Vec<Value> {
+    pub(crate) fn link_values_mut(&mut self) -> &mut Vec<Value> {
         &mut self.link_values
     }
 
     /// `link` with each end's node by UUID, an end naming its node by name resolved through
     /// the nodes the document holds.
-    fn link_read_from(&self, link: &Value) -> Option<StreamGraphDocumentLink> {
+    pub(crate) fn link_read_from(&self, link: &Value) -> Option<StreamGraphDocumentLink> {
         let end = |end_key: &str| -> Option<StreamGraphDocumentLinkEnd> {
             let end = link.get(end_key)?;
             let named = end.get("node")?.as_str()?;
@@ -848,7 +918,7 @@ impl StreamGraphDocument {
     }
 }
 
-fn node_uuid_of(node_object: &Map<String, Value>) -> Option<Uuid> {
+pub(crate) fn node_uuid_of(node_object: &Map<String, Value>) -> Option<Uuid> {
     node_object
         .get("id")
         .and_then(Value::as_str)
@@ -863,7 +933,7 @@ fn studio_group_of(node_object: &Map<String, Value>) -> Option<Uuid> {
         .and_then(|group| Uuid::parse_str(group).ok())
 }
 
-fn node_name_of(node_object: &Map<String, Value>) -> Option<&str> {
+pub(crate) fn node_name_of(node_object: &Map<String, Value>) -> Option<&str> {
     node_object.get("name").and_then(Value::as_str)
 }
 

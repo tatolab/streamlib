@@ -300,6 +300,49 @@ pub enum StreamGraphAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
+    /// Move nodes of the stream's own level, and the links between them, into one new
+    /// authored fragment, each link that crossed the selection carried through a `GraphInput`
+    /// or `GraphOutput` inside it.
+    CollapseSelectionIntoSubgraph {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "The nodes collapsed, each as `node` names one, all of the stream's own level and none of its own `GraphInput` or `GraphOutput` nodes."
+            )
+        )]
+        nodes: Vec<String>,
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "The subgraph node's name, lowercase URL-safe, refused when a node outside the selection has it."
+            )
+        )]
+        name: String,
+        #[serde(rename = "as")]
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "A label later operations of the same transaction name the subgraph node by, before its UUID is known."
+            )
+        )]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    /// Replace a fragment node of the stream's own level with the nodes and links it places,
+    /// as plain nodes no refresh reaches.
+    UnlockGeneratorFragment {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's."
+            )
+        )]
+        fragment: String,
+    },
     /// Take out a labelled group, its nodes left ungrouped.
     RemoveGroup {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
@@ -329,7 +372,9 @@ impl StreamGraphAction {
             | Self::AddGroup { stream, .. }
             | Self::SetGroupFields { stream, .. }
             | Self::RemoveGroup { stream, .. }
-            | Self::UseDependencyStream { stream, .. } => *stream,
+            | Self::UseDependencyStream { stream, .. }
+            | Self::CollapseSelectionIntoSubgraph { stream, .. }
+            | Self::UnlockGeneratorFragment { stream, .. } => *stream,
         }
     }
 }
