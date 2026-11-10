@@ -29,13 +29,14 @@ use crate::project_file_access::{
     ProjectFileListed, ProjectRelativeFilePath, project_files_a_listing_shows,
 };
 use crate::project_history_repository::{
-    PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit, ProjectHistoryCommitWritten,
-    ProjectHistoryRepository,
+    PROJECT_HISTORY_DIRECTORY, PROJECT_TRANSACTION_COMMIT_TRAILER, ProjectHistoryCommit,
+    ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 use crate::project_import_copy::{
-    PROJECT_IMPORT_STAGING_DIRECTORY, files_an_import_carries, files_edited_since_the_copy,
-    refuse_an_import_folder_name, sha256_of_each_file_under, stage_a_copy_of_the_project_source,
-    the_import_folder_in, the_import_folder_named_after, unpack_a_project_archive_as_a_new_project,
+    PROJECT_IMPORT_STAGING_DIRECTORY, copy_the_files_a_project_copy_carries,
+    files_an_import_carries, files_edited_since_the_copy, refuse_an_import_folder_name,
+    sha256_of_each_file_under, stage_a_copy_of_the_project_source, the_import_folder_in,
+    the_import_folder_named_after, unpack_a_project_archive_as_a_new_project,
     version_of_the_copied_files,
 };
 use crate::project_pyproject_import_sources::{
@@ -48,9 +49,9 @@ use crate::project_transaction::{
     ProjectActionApplyOutcome, ProjectActionIdempotencyKey, ProjectAssetAction,
     ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectFileContent,
     ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphOperationOnAStream,
+    ProjectSettingsAction, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionEnvelopeHeader, ProjectTransactionLineage,
+    ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -285,6 +286,75 @@ impl ProjectRepository {
         })
     }
 
+    /// Duplicate the project into `into`, a path that must not exist yet, as a project of its
+    /// own: every file a copy of it carries and its whole history, under a new UUID and the name
+    /// `<name> copy`, the duplicate committed on that history by `author`. Its `.venv` and the
+    /// rest of its runtime folder stay behind. Refused, nothing left at `into`, for a relative
+    /// `into`, one that exists, and one inside this project.
+    pub fn duplicate_into(
+        &self,
+        into: &Path,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        refuse_a_relative_project_directory(into)?;
+        refuse_an_author_without_a_name(author)?;
+        if into.symlink_metadata().is_ok() {
+            return Err(ProjectRepositoryRefusal::DuplicateIntoAnExistingPath {
+                into: into.to_path_buf(),
+            });
+        }
+        let this_project_resolved = std::fs::canonicalize(&self.project_directory)?;
+        if the_nearest_existing_ancestor_resolved(into)?.starts_with(&this_project_resolved) {
+            return Err(ProjectRepositoryRefusal::DuplicateIntoTheProjectItself {
+                into: into.to_path_buf(),
+            });
+        }
+        let duplicated = self.write_the_duplicate_into(into, author);
+        if duplicated.is_err() {
+            let _ = std::fs::remove_dir_all(into);
+        }
+        duplicated
+    }
+
+    fn write_the_duplicate_into(
+        &self,
+        into: &Path,
+        author: &ProjectTransactionAuthor,
+    ) -> Result<Self, ProjectRepositoryRefusal> {
+        copy_the_files_a_project_copy_carries(&self.project_directory, into, |not_copied| {
+            ProjectRepositoryRefusal::Io(not_copied)
+        })?;
+        copy_a_folder_whole(
+            self.history.history_directory(),
+            &into.join(PROJECT_HISTORY_DIRECTORY),
+        )?;
+        let duplicate_project_file = TatolabProjectFile {
+            project: Uuid::new_v4(),
+            name: format!("{} copy", self.project_file.name),
+            ..self.project_file.clone()
+        };
+        write_file_whole(
+            &into.join(PROJECT_FILE_NAME),
+            &duplicate_project_file.canonical_bytes()?,
+        )?;
+        let duplicate = Self::open(into)?;
+        duplicate.history.commit_tracked_files(
+            &duplicate.tracked_files(&duplicate.assets_by_uuid)?,
+            author,
+            &format!(
+                "duplicate_project {} from {}",
+                duplicate_project_file.name, self.project_file.project
+            ),
+        )?;
+        Ok(duplicate)
+    }
+
+    /// When the project last changed: the time of the newest commit on its history, an undo, a
+    /// redo and its duplicate included and a run never, `None` before its first commit.
+    pub fn last_edited_at_unix_seconds(&self) -> Result<Option<i64>, ProjectRepositoryRefusal> {
+        self.history.head_committed_at_unix_seconds()
+    }
+
     /// Lock the project's Python requirements with `python_requirements_lock` each time an
     /// import change rewrites its `pyproject.toml`, refusing the change when they cannot be
     /// resolved; a project never handed one leaves them to be resolved when it loads.
@@ -362,7 +432,8 @@ impl ProjectRepository {
             Some(
                 ProjectOperation::StreamGraph(_)
                 | ProjectOperation::Import(_)
-                | ProjectOperation::File(_),
+                | ProjectOperation::File(_)
+                | ProjectOperation::ProjectSettings(_),
             )
             | None => Err(ProjectRepositoryRefusal::EmptyTransaction),
         }
@@ -498,6 +569,25 @@ impl ProjectRepository {
         applied.map(ProjectActionApplyOutcome::AppliedNow)
     }
 
+    /// Apply the settings change `action` by `author` as one transaction and commit it; sent
+    /// again under the same `idempotency_key`, it answers the first transaction.
+    pub fn apply_project_settings_action(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        action: ProjectSettingsAction,
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        let operation =
+            ProjectOperation::ProjectSettings(action.operation_against(&self.project_file));
+        self.apply_project_operations(
+            author,
+            idempotency_key,
+            vec![ProjectAction::Settings(action)],
+            vec![operation],
+            ProjectTransactionLineage::NewEdit,
+        )
+    }
+
     fn operations_for_changes(
         &mut self,
         changes: Vec<ProjectAssetAction>,
@@ -623,8 +713,16 @@ impl ProjectRepository {
                         file_operation,
                     )?;
                 }
+                ProjectOperation::ProjectSettings(project_settings_operation) => {
+                    project_settings_operation.write_into(&mut staged_project_file);
+                }
                 ProjectOperation::Asset(asset_operation) => {
                     if let ProjectAssetOperation::DeleteAsset { asset } = asset_operation {
+                        if staged_project_file.cover == Some(asset.asset) {
+                            return Err(ProjectRepositoryRefusal::AssetIsTheProjectCover(
+                                asset.asset,
+                            ));
+                        }
                         self.refuse_deleting_an_asset_a_graph_references(
                             asset,
                             &staged_assets,
@@ -671,6 +769,7 @@ impl ProjectRepository {
                 )?;
             }
         }
+        refuse_project_settings_the_project_cannot_hold(&staged_project_file, &staged_assets)?;
         let (undoes, redoes) = match lineage {
             ProjectTransactionLineage::NewEdit => (None, None),
             ProjectTransactionLineage::UndoOf(undone) => (Some(undone), None),
@@ -1500,39 +1599,98 @@ impl ProjectRepository {
         ),
         ProjectRepositoryRefusal,
     > {
-        let mut undoable: Vec<AppliedProjectTransaction> = Vec::new();
-        let mut redoable: Vec<AppliedProjectTransaction> = Vec::new();
+        let mut stacks = UndoAndRedoStacksOfOneAuthor::default();
         let mut transactions = self.applied_transactions_newest_first(usize::MAX)?;
         transactions.reverse();
         for applied in transactions {
-            if applied.transaction.author != *author {
-                continue;
-            }
-            match applied.transaction.lineage() {
-                ProjectTransactionLineage::NewEdit => {
-                    redoable.clear();
-                    undoable.push(applied);
-                }
-                ProjectTransactionLineage::UndoOf(undone) => {
-                    if let Some(position) = undoable
-                        .iter()
-                        .rposition(|held| held.transaction.transaction == undone)
-                    {
-                        redoable.push(undoable.remove(position));
-                    }
-                }
-                ProjectTransactionLineage::RedoOf(redone) => {
-                    if let Some(position) = redoable
-                        .iter()
-                        .rposition(|held| held.transaction.transaction == redone)
-                    {
-                        redoable.remove(position);
-                        undoable.push(applied);
-                    }
-                }
+            if applied.transaction.author == *author {
+                stacks.replay(applied);
             }
         }
-        Ok((undoable, redoable))
+        Ok((stacks.undoable, stacks.redoable))
+    }
+
+    /// Where each edit and each redo in history stands with its author's undo and redo now, by
+    /// transaction; an edit and every redo of it stand together. An undo has no entry.
+    pub fn the_undo_state_of_each_transaction(
+        &self,
+    ) -> Result<HashMap<Uuid, ProjectTransactionUndoState>, ProjectRepositoryRefusal> {
+        let mut stacks_of_each_author: Vec<(
+            ProjectTransactionAuthor,
+            UndoAndRedoStacksOfOneAuthor,
+        )> = Vec::new();
+        let mut edit_each_redo_reapplies: HashMap<Uuid, Uuid> = HashMap::new();
+        let mut transactions = self.applied_transactions_newest_first(usize::MAX)?;
+        transactions.reverse();
+        let mut edits_and_redos_oldest_first: Vec<Uuid> = Vec::new();
+        for applied in transactions {
+            let transaction = applied.transaction.transaction;
+            match applied.transaction.lineage() {
+                ProjectTransactionLineage::NewEdit => {
+                    edits_and_redos_oldest_first.push(transaction)
+                }
+                ProjectTransactionLineage::RedoOf(redone) => {
+                    let edit = edit_each_redo_reapplies
+                        .get(&redone)
+                        .copied()
+                        .unwrap_or(redone);
+                    edit_each_redo_reapplies.insert(transaction, edit);
+                    edits_and_redos_oldest_first.push(transaction);
+                }
+                ProjectTransactionLineage::UndoOf(_) => {}
+            }
+            let position_of_the_author = match stacks_of_each_author
+                .iter()
+                .position(|(author, _)| *author == applied.transaction.author)
+            {
+                Some(position) => position,
+                None => {
+                    stacks_of_each_author.push((
+                        applied.transaction.author.clone(),
+                        UndoAndRedoStacksOfOneAuthor::default(),
+                    ));
+                    stacks_of_each_author.len() - 1
+                }
+            };
+            let stacks = &mut stacks_of_each_author[position_of_the_author].1;
+            stacks.replay(applied);
+        }
+        let mut undo_state_of_each_edit: HashMap<Uuid, ProjectTransactionUndoState> =
+            HashMap::new();
+        for (_, stacks) in &stacks_of_each_author {
+            for (held, undo_state) in stacks
+                .undoable
+                .iter()
+                .map(|held| (held, ProjectTransactionUndoState::Applied))
+                .chain(
+                    stacks
+                        .redoable
+                        .iter()
+                        .map(|held| (held, ProjectTransactionUndoState::UndoneRedoable)),
+                )
+            {
+                let transaction = held.transaction.transaction;
+                let edit = edit_each_redo_reapplies
+                    .get(&transaction)
+                    .copied()
+                    .unwrap_or(transaction);
+                undo_state_of_each_edit.insert(edit, undo_state);
+            }
+        }
+        Ok(edits_and_redos_oldest_first
+            .into_iter()
+            .map(|transaction| {
+                let edit = edit_each_redo_reapplies
+                    .get(&transaction)
+                    .copied()
+                    .unwrap_or(transaction);
+                let undo_state = undo_state_of_each_edit
+                    .get(&edit)
+                    .copied()
+                    .unwrap_or(ProjectTransactionUndoState::UndoneNotRedoable);
+                (transaction, undo_state)
+            })
+            .collect())
     }
 
     /// Write each staged graph document at the path its stream asset holds once the
@@ -2206,6 +2364,7 @@ impl ProjectRepository {
                 let display_name = refuse_a_display_name_that_shows_nothing(display_name)?;
                 let (path, document) =
                     self.read_stream_graph_document(staged_assets, stream_asset)?;
+                self.refuse_a_path_through_a_symbolic_link(&path)?;
                 let from = document.display_name().map(str::to_owned);
                 if from.as_deref() == Some(display_name.as_str()) {
                     return Ok(None);
@@ -2691,6 +2850,73 @@ fn transaction_commit_message(
     ))
 }
 
+/// `path` resolved through its nearest ancestor that exists, the rest appended as written.
+fn the_nearest_existing_ancestor_resolved(
+    path: &Path,
+) -> Result<PathBuf, ProjectRepositoryRefusal> {
+    let mut not_yet_existing = Vec::new();
+    let mut ancestor = path;
+    loop {
+        match std::fs::canonicalize(ancestor) {
+            Ok(resolved) => {
+                return Ok(not_yet_existing
+                    .into_iter()
+                    .rev()
+                    .fold(resolved, |resolved, name| resolved.join(name)));
+            }
+            Err(_) => {
+                let (Some(parent), Some(name)) = (ancestor.parent(), ancestor.file_name()) else {
+                    return Ok(path.to_path_buf());
+                };
+                not_yet_existing.push(name.to_owned());
+                ancestor = parent;
+            }
+        }
+    }
+}
+
+/// Copy the folder `source` and everything under it to `destination`, which must not exist.
+fn copy_a_folder_whole(source: &Path, destination: &Path) -> Result<(), ProjectRepositoryRefusal> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let copied_to = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_a_folder_whole(&entry.path(), &copied_to)?;
+        } else {
+            std::fs::copy(entry.path(), copied_to)?;
+        }
+    }
+    Ok(())
+}
+
+fn refuse_project_settings_the_project_cannot_hold(
+    project_file: &TatolabProjectFile,
+    assets: &BTreeMap<Uuid, ProjectAsset>,
+) -> Result<(), ProjectRepositoryRefusal> {
+    if project_file.name.trim().is_empty() {
+        return Err(ProjectRepositoryRefusal::BlankProjectName);
+    }
+    let Some(cover) = project_file.cover else {
+        return Ok(());
+    };
+    let cover_asset = assets
+        .get(&cover)
+        .ok_or(ProjectRepositoryRefusal::NoSuchAsset(cover))?;
+    if cover_asset.kind != ProjectAssetKind::Media {
+        return Err(ProjectRepositoryRefusal::CoverIsNotAMediaAsset {
+            asset: cover,
+            kind: match cover_asset.kind {
+                ProjectAssetKind::Media => "media",
+                ProjectAssetKind::Scene => "scene",
+                ProjectAssetKind::Data => "data",
+                ProjectAssetKind::Stream => "stream",
+            },
+        });
+    }
+    Ok(())
+}
+
 fn apply_operation_to_assets(
     assets: &mut BTreeMap<Uuid, ProjectAsset>,
     operation: &ProjectAssetOperation,
@@ -2956,4 +3182,42 @@ fn refuse_a_display_name_that_shows_nothing(
         ));
     }
     Ok(trimmed.to_owned())
+}
+
+/// One author's transactions an undo reverses and a redo reapplies, each newest last.
+#[derive(Default)]
+struct UndoAndRedoStacksOfOneAuthor {
+    undoable: Vec<AppliedProjectTransaction>,
+    redoable: Vec<AppliedProjectTransaction>,
+}
+
+impl UndoAndRedoStacksOfOneAuthor {
+    /// Follow `applied`, the author's next transaction: an edit clears what could be redone.
+    fn replay(&mut self, applied: AppliedProjectTransaction) {
+        match applied.transaction.lineage() {
+            ProjectTransactionLineage::NewEdit => {
+                self.redoable.clear();
+                self.undoable.push(applied);
+            }
+            ProjectTransactionLineage::UndoOf(undone) => {
+                if let Some(position) = self
+                    .undoable
+                    .iter()
+                    .rposition(|held| held.transaction.transaction == undone)
+                {
+                    self.redoable.push(self.undoable.remove(position));
+                }
+            }
+            ProjectTransactionLineage::RedoOf(redone) => {
+                if let Some(position) = self
+                    .redoable
+                    .iter()
+                    .rposition(|held| held.transaction.transaction == redone)
+                {
+                    self.redoable.remove(position);
+                    self.undoable.push(applied);
+                }
+            }
+        }
+    }
 }

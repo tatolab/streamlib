@@ -462,7 +462,7 @@ tatolab enable-virtual-camera [--print]
   stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
   runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
   brings every other stream back.
-- **`STREAM`**, in `rename`, `clock` and `logs --stream`, is a stream id,
+- **`STREAM`**, in `clock` and `logs --stream`, is a stream id,
   or a display name exactly one stream holds. Omitted, it is the one stream loaded from the
   working directory, stopped and failed ones included. An argument several streams match, or none,
   is refused listing each candidate's id and display name. `graph --stream` is the exception: it
@@ -480,9 +480,6 @@ tatolab enable-virtual-camera [--print]
   and the streams it had not reached stay as they were; `cancel` prints `<action> cancelling`.
   A running stop or `rm` has begun unloading and cannot be cut short, so `cancel` is refused and
   the action ends done.
-- **`rename`** shows a stream under another display name — any text, never part of
-  its address. The stream's record holds it, across the runtime's restarts and the project's
-  loads.
 - **`clock`** runs a started stream's scaled clock at another `--scale`, live: stream time carries
   on from where it stands, and every node's time, write stamps and continuous pace follow it. A
   stream on the real or a stepped clock is refused, as is a scale above 1. The stream's next load
@@ -566,7 +563,8 @@ same way, and `list_assets`, `describe_asset`, `import_asset`, `relocate_asset`,
 `start_project` starts it again, `pause_project` and `resume_project`, which pause and resume a
 whole project at once, `remove_project`, `set_stream_clock_scale` and
 `list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
-machine, naming the node by the `id` `graph` lists. Every tool
+machine, naming the node by the `id` `graph` lists, and `write_studio_view_output` to hand a
+node of one of the project's Tato Studio views a value it publishes on an output. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as

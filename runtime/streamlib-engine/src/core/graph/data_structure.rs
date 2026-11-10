@@ -41,7 +41,7 @@ pub struct Graph {
 
     /// The UUID of the stream asset whose graph document this graph was loaded from.
     stream_asset: Option<uuid::Uuid>,
-    /// The name the stream this graph was loaded as is shown under.
+    /// The display name the graph document of the stream this graph was loaded as writes.
     stream_display_name: Option<String>,
 
     /// The clock the stream this graph was loaded as runs on.
@@ -162,9 +162,9 @@ impl Graph {
         self.stream_asset = stream_asset;
     }
 
-    /// Record the name the stream this graph was loaded as is shown under.
-    pub fn set_stream_display_name(&mut self, display_name: String) {
-        self.stream_display_name = Some(display_name);
+    /// Record the display name the graph document of the stream this graph was loaded as writes.
+    pub fn set_stream_display_name(&mut self, display_name: Option<String>) {
+        self.stream_display_name = display_name;
     }
 
     /// The clock the stream this graph was loaded as runs on.

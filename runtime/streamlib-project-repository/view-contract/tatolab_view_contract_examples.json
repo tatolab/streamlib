@@ -1,0 +1,486 @@
+{
+  "contract": "1.0",
+  "examples": [
+    {
+      "named": "a node view declaring every field",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Stage rig",
+        "description": "Fixtures on a stage, with a master fader.",
+        "icon": "icon.svg",
+        "preview": "preview.png",
+        "entry": "index.html",
+        "placement": "node",
+        "accepts": { "files": [".mvr", ".gdtf"] },
+        "inputs": [
+          {
+            "name": "fixtures",
+            "family": "records",
+            "description": "Each fixture and where it hangs."
+          }
+        ],
+        "outputs": [
+          { "name": "master_intensity", "family": "array", "range": [0, 1] }
+        ],
+        "settings": {
+          "type": "object",
+          "properties": { "show_beams": { "type": "boolean", "default": true } }
+        },
+        "capabilities": ["read.selection", "read.project_assets"],
+        "network": ["fixtures.example.com", "localhost:8080"],
+        "sandbox": true
+      },
+      "opens": true
+    },
+    {
+      "named": "an area view leaving out everything it may",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Notes",
+        "entry": "dist/index.html",
+        "placement": "area"
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.0",
+        "title": "Notes",
+        "entry": "dist/index.html",
+        "placement": "area",
+        "inputs": [],
+        "outputs": [],
+        "accepts": { "files": [] },
+        "sandbox": false,
+        "capabilities": [],
+        "network": []
+      }
+    },
+    {
+      "named": "a title with space around it, and a capability asked for twice",
+      "manifest": {
+        "contract": "1.0",
+        "title": "  Deck ",
+        "entry": "index.html",
+        "placement": "node",
+        "capabilities": ["gpu", "gpu"]
+      },
+      "opens": true,
+      "reads_as": {
+        "contract": "1.0",
+        "title": "Deck",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [],
+        "outputs": [],
+        "accepts": { "files": [] },
+        "sandbox": false,
+        "capabilities": ["gpu"],
+        "network": []
+      }
+    },
+    {
+      "named": "a view built for a later minor",
+      "manifest": {
+        "contract": "1.4",
+        "title": "Late",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "contract"
+    },
+    {
+      "named": "a view built for another major",
+      "manifest": {
+        "contract": "2.0",
+        "title": "Next",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "contract"
+    },
+    {
+      "named": "a contract that is a number",
+      "manifest": {
+        "contract": 1,
+        "title": "Number",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "contract"
+    },
+    {
+      "named": "a contract that is not major.minor",
+      "manifest": {
+        "contract": "1.0.0",
+        "title": "Three parts",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "contract"
+    },
+    {
+      "named": "no title",
+      "manifest": {
+        "contract": "1.0",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "title"
+    },
+    {
+      "named": "a blank title",
+      "manifest": {
+        "contract": "1.0",
+        "title": " ",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "title"
+    },
+    {
+      "named": "no entry",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Nowhere",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "entry"
+    },
+    {
+      "named": "an entry with a parent step",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Escape",
+        "entry": "../window/index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "entry"
+    },
+    {
+      "named": "an entry from the root",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Root",
+        "entry": "/index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "entry"
+    },
+    {
+      "named": "an entry with a scheme",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Remote",
+        "entry": "https://example.com/index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "entry"
+    },
+    {
+      "named": "an entry with an empty step",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Doubled",
+        "entry": "a//b.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "entry"
+    },
+    {
+      "named": "an entry with a backslash",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Windows",
+        "entry": "a\\b.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "entry"
+    },
+    {
+      "named": "an icon outside the view's folder",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Icon",
+        "icon": "../../icon.svg",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "icon"
+    },
+    {
+      "named": "a preview outside the view's folder",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Preview",
+        "preview": "/preview.png",
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "preview"
+    },
+    {
+      "named": "a field the contract does not have",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Typo",
+        "entry": "index.html",
+        "placement": "area",
+        "capabilites": []
+      },
+      "opens": false,
+      "refused_at": "tatolab_view.json"
+    },
+    {
+      "named": "an id, which a manifest never writes",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Named",
+        "entry": "index.html",
+        "placement": "area",
+        "id": "acme:named"
+      },
+      "opens": false,
+      "refused_at": "tatolab_view.json"
+    },
+    {
+      "named": "a manifest that is not an object",
+      "manifest": [],
+      "opens": false,
+      "refused_at": "tatolab_view.json"
+    },
+    {
+      "named": "a placement the contract does not have",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Dock",
+        "entry": "index.html",
+        "placement": "dock"
+      },
+      "opens": false,
+      "refused_at": "placement"
+    },
+    {
+      "named": "an area view declaring ports",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Area",
+        "entry": "index.html",
+        "placement": "area",
+        "inputs": [{ "name": "level", "family": "array" }]
+      },
+      "opens": false,
+      "refused_at": "placement"
+    },
+    {
+      "named": "a port of no known family",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Family",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "family": "numbers" }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0].family"
+    },
+    {
+      "named": "a port name out of shape",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Name",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [{ "name": "Deck A", "family": "channels" }]
+      },
+      "opens": false,
+      "refused_at": "inputs[0].name"
+    },
+    {
+      "named": "a port named twice",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Twice",
+        "entry": "index.html",
+        "placement": "node",
+        "inputs": [
+          { "name": "deck", "family": "channels" },
+          { "name": "deck", "family": "image" }
+        ]
+      },
+      "opens": false,
+      "refused_at": "inputs[1].name"
+    },
+    {
+      "named": "a range on a port that is not Array",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Range",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "family": "image", "range": [0, 1] }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0].range"
+    },
+    {
+      "named": "a range highest first",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Backwards",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "family": "array", "range": [1, 0] }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0].range"
+    },
+    {
+      "named": "a network host with a scheme",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Scheme",
+        "entry": "index.html",
+        "placement": "area",
+        "network": ["https://fixtures.example.com"]
+      },
+      "opens": false,
+      "refused_at": "network[0]"
+    },
+    {
+      "named": "a network host with a wildcard",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Wildcard",
+        "entry": "index.html",
+        "placement": "area",
+        "network": ["*.example.com"]
+      },
+      "opens": false,
+      "refused_at": "network[0]"
+    },
+    {
+      "named": "an extension without its dot",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Files",
+        "entry": "index.html",
+        "placement": "area",
+        "accepts": { "files": ["glb"] }
+      },
+      "opens": false,
+      "refused_at": "accepts.files[0]"
+    },
+    {
+      "named": "a capability the contract does not have",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Everything",
+        "entry": "index.html",
+        "placement": "area",
+        "capabilities": ["read.everything"]
+      },
+      "opens": false,
+      "refused_at": "capabilities[0]"
+    },
+    {
+      "named": "a setting that gives no default",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Settings",
+        "entry": "index.html",
+        "placement": "area",
+        "settings": {
+          "type": "object",
+          "properties": { "show_beams": { "type": "boolean" } }
+        }
+      },
+      "opens": false,
+      "refused_at": "settings.properties.show_beams.default"
+    },
+    {
+      "named": "a sandbox that is not true or false",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Sandbox",
+        "entry": "index.html",
+        "placement": "area",
+        "sandbox": "yes"
+      },
+      "opens": false,
+      "refused_at": "sandbox"
+    },
+    {
+      "named": "a description written as null",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Null",
+        "description": null,
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "description"
+    },
+    {
+      "named": "an icon written as null",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Null",
+        "icon": null,
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "icon"
+    },
+    {
+      "named": "settings written as null",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Null",
+        "settings": null,
+        "entry": "index.html",
+        "placement": "area"
+      },
+      "opens": false,
+      "refused_at": "settings"
+    },
+    {
+      "named": "inputs written as null",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Null",
+        "inputs": null,
+        "entry": "index.html",
+        "placement": "node"
+      },
+      "opens": false,
+      "refused_at": "inputs"
+    },
+    {
+      "named": "a port range written as null",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Null",
+        "entry": "index.html",
+        "placement": "node",
+        "outputs": [{ "name": "level", "family": "array", "range": null }]
+      },
+      "opens": false,
+      "refused_at": "outputs[0].range"
+    }
+  ]
+}

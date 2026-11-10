@@ -26,11 +26,14 @@ tatolabd_executable="$runtime_unit_root/bin/tatolabd"
 tatolab_executable="$runtime_unit_root/bin/tatolab"
 
 # The runtime syncs the project's venv on the load, and the scaffold requires
-# the `tatolab-stream` this runtime was built beside, which no index carries
-# before the release publishes it. uv reads this from the environment the sync
-# inherits from `tatolabd`, and resolves it from the project directory, so the
-# path is absolute.
-UV_FIND_LINKS="$(cd "$tatolab_stream_wheel_directory" && pwd)"
+# the `tatolab-stream` and `tatolab-testpattern` this runtime was built beside,
+# which no index carries before the release publishes them. uv reads this
+# comma-separated list from the environment the sync inherits from `tatolabd`,
+# and resolves it from the project directory, so each path is absolute.
+tatolab_testpattern_wheel_directory="$(mktemp -d)"
+uv build --quiet --wheel --out-dir "$tatolab_testpattern_wheel_directory" \
+  "$(cd "$(dirname "$0")/.." && pwd)/packages/tatolab-testpattern"
+UV_FIND_LINKS="$(cd "$tatolab_stream_wheel_directory" && pwd),$tatolab_testpattern_wheel_directory"
 export UV_FIND_LINKS
 
 "$tatolabd_executable" > /tmp/tatolabd.log 2>&1 &

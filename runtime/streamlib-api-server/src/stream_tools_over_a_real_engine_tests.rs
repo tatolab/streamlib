@@ -509,6 +509,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::delete_project(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
     fn show_the_stream_of_a_stream_asset_under(
         &self,
         project: uuid::Uuid,
@@ -1075,6 +1081,82 @@ async fn the_stream_tools_name_delete_and_create_a_projects_streams_in_their_gra
     );
 }
 
+/// An undo of `set_stream_display_name` shows the loaded stream under its former name again,
+/// and an undo of `create_stream` unloads and forgets the stream the creation loaded.
+#[tokio::test(flavor = "multi_thread")]
+async fn undoing_a_stream_tool_brings_the_loaded_streams_back_in_line() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
+    let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+        }
+    };
+    let listed_stream_ids_and_names = || async {
+        let listed = call("list_streams", json!({})).await.unwrap();
+        listed["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|listed| {
+                (
+                    listed["stream"].as_str().unwrap().to_owned(),
+                    listed["display_name"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let undo = || call("undo", json!({ "project_directory": project.path() }));
+
+    call(
+        "set_stream_display_name",
+        json!({
+            "project_directory": project.path(),
+            "stream_asset": project.stream_asset_of("live"),
+            "display_name": "Desk mic",
+        }),
+    )
+    .await
+    .unwrap();
+    undo().await.expect("the display name change undoes");
+    assert_eq!(
+        listed_stream_ids_and_names().await,
+        vec![(live.clone(), "live".to_owned())]
+    );
+
+    let created = call(
+        "create_stream",
+        json!({
+            "project_directory": project.path(),
+            "path": "streams/preview.graph.json",
+            "display_name": "Preview",
+        }),
+    )
+    .await
+    .unwrap();
+    the_stream_action_once_finished(
+        &engine.operations_on_the_loaded_streams(),
+        created["action"]
+            .as_str()
+            .expect("the creation queues a load"),
+    )
+    .await;
+    assert_eq!(
+        listed_stream_ids_and_names().await.len(),
+        2,
+        "the created stream is listed once its load ran"
+    );
+    undo().await.expect("the creation undoes");
+    assert_eq!(
+        listed_stream_ids_and_names().await,
+        vec![(live, "live".to_owned())]
+    );
+}
+
 /// A record an earlier runtime wrote is listed failed, keyed by its file
 /// name, with why and how to run its stream again, until `remove_project` of
 /// the project it names forgets it.
@@ -1626,6 +1708,77 @@ exec sleep 30
     )
     .unwrap_err();
     assert!(again.contains("is already cancelled"), "{again}");
+}
+
+/// A graph document deleted while its project's load makes the venv is left out when the load
+/// starts its streams: no record of its stream is written, and the project's other stream is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_document_deleted_while_its_load_makes_the_venv_never_records_its_stream() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project = ProjectWithGraphDocuments::with_no_venv();
+    project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
+    project.write_the_graph_document(the_graph_of_a_stream_named("screen"));
+    let uv_directory = tempfile::tempdir().expect("a directory for the runtime unit's uv");
+    let uv_released = uv_directory.path().join("released");
+    let uv_held_until_released = uv_directory.path().join("uv");
+    write_an_executable_script_from_a_child_process(
+        &uv_held_until_released,
+        &format!(
+            "#!/bin/sh
+while [ ! -e '{}' ]; do sleep 0.05; done
+exit 1
+",
+            uv_released.display()
+        ),
+    );
+    engine
+        .engine
+        .set_runtime_unit_uv_executable(uv_held_until_released)
+        .expect("the runtime is handed its uv");
+    let queued = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "start_project",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("a run of a project is queued");
+    let action = queued["action"]
+        .as_str()
+        .expect("the action's id")
+        .to_string();
+    the_stream_action_once(operations_on_the_loaded_streams, &action, |described| {
+        described["step"] == "making_the_venv"
+    })
+    .await;
+
+    std::fs::remove_file(project.path().join("streams/screen.graph.json"))
+        .expect("the screen stream's graph document is deleted");
+    std::fs::write(&uv_released, "").expect("uv is released");
+    the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+
+    let listed = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "list_streams",
+            json!({}),
+        )
+        .await,
+    )
+    .expect("list_streams answers");
+    let listed_stream_ids: Vec<&str> = listed["streams"]
+        .as_array()
+        .expect("the streams listed")
+        .iter()
+        .map(|listed_stream| listed_stream["stream"].as_str().expect("a stream id"))
+        .collect();
+    assert_eq!(
+        listed_stream_ids,
+        vec![project.stream_id_of("camera").as_str()],
+        "{listed}"
+    );
 }
 
 /// An action the runtime never queued, and a relative project directory, are refused
@@ -2209,16 +2362,18 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-renamed", "source"]
     );
-    call("undo", undo_by("alice")).await;
+    let alice_undo = call("undo", undo_by("alice")).await;
     assert_eq!(
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-first", "source"]
     );
-    call("redo", undo_by("alice")).await;
+    assert_eq!(alice_undo.get("undo_state"), None, "{alice_undo}");
+    let alice_redo = call("redo", undo_by("alice")).await;
     assert_eq!(
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-renamed", "source"]
     );
+    assert_eq!(alice_redo["undo_state"], "applied", "{alice_redo}");
     assert_eq!(
         sorted_node_names_in(&engine.the_live_graph_of(&stream_id)),
         ["alice-renamed", "source"],
@@ -3468,12 +3623,6 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     .await
     .expect("levels is imported");
     let folder = added["dependency"]["folder"].clone();
-    let import_directory = cell
-        .path()
-        .canonicalize()
-        .expect("the cell on disk")
-        .join("imports")
-        .join(folder.as_str().expect("a folder name"));
 
     let listed = call(
         "list_project_views",
@@ -3491,7 +3640,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
         json!({
             "view_type": format!("{TEST_PROJECT_NAME}:deck"),
             "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
-            "folder": cell.path().canonicalize().expect("the cell on disk").join("views/deck"),
+            "view_folder_in_the_project": "views/deck",
             "opens": true, "not_opened_because": null,
             "title": "DJ Deck", "description": "Two decks and a crossfader.",
             "icon": "icon.svg", "preview": "preview.png", "placement": "node",
@@ -3514,14 +3663,72 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     assert_eq!(views[2]["project_name"], "levels", "{listed}");
     assert_eq!(views[2]["placement"], "area", "{listed}");
     assert_eq!(
-        views[2]["folder"],
-        json!(import_directory.join("views/meter")),
+        views[2]["view_folder_in_the_project"],
+        json!(format!(
+            "imports/{}/views/meter",
+            folder.as_str().expect("a folder name")
+        )),
         "{listed}"
     );
 }
 
 /// A listing whose interpreter prints no listing is refused naming the project, in the
 /// runtime's own words.
+/// The UUID the graph document of the view-node test gives its `deck`.
+const DECK_NODE_UUID: &str = "decdecde-cdec-4dec-8dec-decdecdecdec";
+
+/// A graph document holding a node of the project's view `deck` loads it with the view's ports,
+/// and a panel's write onto it is live data alone: refused while the node does not run, and the
+/// graph document on disk keeps nothing of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_a_write_records_nothing()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    register_the_stream_tools_test_source_once();
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"].as_array_mut().unwrap().push(json!({
+        "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
+        "config": { "bpm": 128 },
+    }));
+    let project = ProjectWithGraphDocuments::holding(graph);
+    a_view_folder_in(
+        project.path(),
+        "deck",
+        &json!({
+            "contract": "1.0", "title": "Deck", "entry": "index.html", "placement": "node",
+            "inputs": [{ "name": "waveform", "family": "channels" }],
+            "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+        }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let document_before = project.the_graph_document_of("main");
+
+    let live_graph = engine.the_live_graph_of(&stream_id);
+    let deck = the_node_named(&live_graph, "deck");
+    assert_eq!(deck["id"], DECK_NODE_UUID, "{deck}");
+    assert_eq!(deck["type"], format!("{TEST_PROJECT_NAME}:deck"), "{deck}");
+    assert!(
+        deck.to_string().contains("waveform") && deck.to_string().contains("crossfader"),
+        "the view node takes the view's ports: {deck}"
+    );
+
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "write_studio_view_output",
+            json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
+                    "value": 0.5 }),
+        )
+        .await,
+    )
+    .expect_err("a node not running publishes nothing");
+    assert!(
+        refusal.starts_with("write_studio_view_output failed:") && refusal.contains("not running"),
+        "{refusal}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
