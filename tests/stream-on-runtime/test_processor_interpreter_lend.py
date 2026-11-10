@@ -7,7 +7,7 @@ The suite venv has no `tatolab.runtime` of its own: a processor interpreter
 started from it borrows the runtime through the runtime unit's lend, and
 `tatolabd` learns each node's ports by describing it there. What a load refuses
 — a module that raises, an unstamped class, an interpreter that cannot load
-the lent runtime — ends the `tatolab run` that asked for it, so only the
+the lent runtime — ends the `tatolab start` that asked for it, so only the
 running stream needs a GPU.
 `tatolabd` itself is native: every processor interpreter, describing or
 running, is a process beneath it, and no Python is mapped into its own.
@@ -269,7 +269,7 @@ def test_a_relative_dir_names_the_project_from_the_callers_directory(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver, tmp_path: Path
 ):
     """The runtime reads the project's graph documents, and not the caller's directory,
-    so `tatolab run --dir project` names the project from where it was typed."""
+    so `tatolab start --dir project` names the project from where it was typed."""
     callers_directory = tmp_path / "callers-directory"
     project_directory = callers_directory / "project"
     project_directory.mkdir(parents=True)

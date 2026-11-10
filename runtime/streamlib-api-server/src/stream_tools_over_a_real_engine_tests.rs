@@ -11,7 +11,7 @@
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
-//! `run_project` loads an empty stream — and the tests that run a project's
+//! `start_project` loads an empty stream — and the tests that run a project's
 //! graph document end to end are gated on `hardware-tests`.
 
 use std::path::{Path, PathBuf};
@@ -28,10 +28,10 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
-    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream, RunProjectRequest,
-    Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment, StreamListing,
-    StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordsInTheStateDirectory,
-    StreamRenameOutcome,
+    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
+    ProjectStartOrReloadRequest, Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment,
+    StreamListing, StreamLocation, StreamRecord, StreamRecordAsRead,
+    StreamRecordsInTheStateDirectory, StreamRenameOutcome,
 };
 use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
 use uuid::Uuid;
@@ -355,7 +355,7 @@ async fn tool_call_over_the_connection(
 /// answers every run with.
 const ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS: &str = "R-empty-1";
 
-/// A runtime whose `run_project` loads an empty stream under the project
+/// A runtime whose `start_project` and `reload_project` load an empty stream under the project
 /// folder's name, standing in for an id, without reading or starting it — a
 /// GPU-free stand-in for the engine's own run — answering
 /// [`ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS`], and hands every other call to the engine.
@@ -435,7 +435,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn ids_of_the_loaded_streams(&self) -> Vec<String> {
         self.engine.ids_of_the_loaded_streams()
     }
-    fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
+    fn start_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
         let stream_id = request
             .project_directory
             .file_name()
@@ -450,6 +450,9 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             action_id: ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS.to_string(),
             project_directory: request.project_directory,
         })
+    }
+    fn reload_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
+        self.start_project(request)
     }
     fn create_project(
         &self,
@@ -567,7 +570,7 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_it_and_lists_running
     let run = tool_answer(
         &tool_call_over_the_connection(
             &client,
-            "run_project",
+            "start_project",
             a_run_request_of_the_project_in("camera"),
         )
         .await,
@@ -604,7 +607,7 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_the_local_api_stoppi
     tool_answer(
         &tool_call_over_the_connection(
             &client,
-            "run_project",
+            "start_project",
             a_run_request_of_the_project_in("camera"),
         )
         .await,
@@ -1200,7 +1203,7 @@ async fn a_run_of_a_folder_that_is_no_project_fails_its_action_saying_why() {
 }
 
 /// `describe_stream_action`'s answer for the run of `project_directory` that
-/// `run_project` queued, once it has finished.
+/// `start_project` queued, once it has finished.
 async fn the_run_of_the_project_once_finished(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     project_directory: &Path,
@@ -1208,7 +1211,7 @@ async fn the_run_of_the_project_once_finished(
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": project_directory }),
         )
         .await,
@@ -1221,8 +1224,10 @@ async fn the_run_of_the_project_once_finished(
     .await
 }
 
-/// [`the_run_of_the_project_once_finished`], the run queued over `connection`.
+/// [`the_run_of_the_project_once_finished`], the start or reload `start_or_reload_tool_name`
+/// names queued over `connection`.
 async fn the_run_over_the_connection_once_finished(
+    start_or_reload_tool_name: &str,
     connection: &RunningService<RoleClient, ()>,
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     project_directory: &Path,
@@ -1230,7 +1235,7 @@ async fn the_run_over_the_connection_once_finished(
     let queued = tool_answer(
         &tool_call_over_the_connection(
             connection,
-            "run_project",
+            start_or_reload_tool_name,
             json!({ "project_directory": project_directory }),
         )
         .await,
@@ -1452,10 +1457,10 @@ async fn create_project_with_a_relative_directory_is_refused() {
     assert!(!Path::new("a-relative-project").exists());
 }
 
-/// `run_project` answers its action at once, and the action is followed to `done` with the
+/// `start_project` answers its action at once, and the action is followed to `done` with the
 /// stream of the graph document that does not load failed.
 #[tokio::test(flavor = "multi_thread")]
-async fn run_project_queues_a_run_followed_by_describe_stream_action() {
+async fn start_project_queues_a_load_followed_by_describe_stream_action() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -1465,7 +1470,7 @@ async fn run_project_queues_a_run_followed_by_describe_stream_action() {
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": project.path() }),
         )
         .await,
@@ -1521,7 +1526,7 @@ exec sleep 30
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": project.path() }),
         )
         .await,
@@ -1587,7 +1592,7 @@ exec sleep 30
 /// An action the runtime never queued, and a relative project directory, are refused
 /// saying so.
 #[tokio::test(flavor = "multi_thread")]
-async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_hold() {
+async fn describe_stream_action_and_start_project_refuse_what_the_runtime_cannot_hold() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
 
@@ -1607,7 +1612,7 @@ async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_h
     let relative = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": "desk" }),
         )
         .await,
@@ -1624,14 +1629,14 @@ async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_h
 // ============================================================================
 
 /// A project run over a `/mcp/stdio` connection is recorded and runs on once
-/// the connection drops, and stop_project, run_project and remove_project act on it through the
+/// the connection drops, and stop_project, start_project and remove_project act on it through the
 /// tools.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn a_run_project_end_to_end_outlives_its_connection_through_stop_run_and_remove() {
+async fn a_started_project_end_to_end_outlives_its_connection_through_stop_start_and_remove() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
     let camera_stream_id = project.stream_id_of("camera");
@@ -1639,6 +1644,7 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_run_and_r
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
     let run = the_run_over_the_connection_once_finished(
+        "start_project",
         &client,
         &engine.operations_on_the_loaded_streams(),
         project.path(),
@@ -1681,7 +1687,7 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_run_and_r
             json!("stopped"),
         ),
         (
-            "run_project",
+            "start_project",
             json!({ "project_directory": project.path() }),
             json!("running"),
         ),
@@ -1735,6 +1741,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     };
 
     the_run_over_the_connection_once_finished(
+        "start_project",
         &first_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -1744,6 +1751,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
 
     project.write_an_unloadable_graph_document("camera");
     let bad_save = the_run_over_the_connection_once_finished(
+        "reload_project",
         &first_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -1766,6 +1774,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
 
     project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
     let replaced = the_run_over_the_connection_once_finished(
+        "reload_project",
         &other_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -1779,6 +1788,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     project.remove_the_graph_document("camera");
     project.write_the_graph_document(the_graph_of_a_stream_named("studio"));
     the_run_over_the_connection_once_finished(
+        "reload_project",
         &first_connection,
         &operations_on_the_loaded_streams,
         project.path(),

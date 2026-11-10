@@ -313,12 +313,20 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }
-            fn run_project(
+            fn start_project(
                 &self,
-                _request: ::streamlib::sdk::runtime::RunProjectRequest,
+                _request: ::streamlib::sdk::runtime::ProjectStartOrReloadRequest,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "run_project",
+                    "start_project",
+                ))
+            }
+            fn reload_project(
+                &self,
+                _request: ::streamlib::sdk::runtime::ProjectStartOrReloadRequest,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "reload_project",
                 ))
             }
             fn create_project(

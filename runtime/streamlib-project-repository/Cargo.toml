@@ -30,7 +30,7 @@ schemars = { version = "1.2", features = ["uuid1"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.42" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.43" }
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }
 toml_edit.workspace = true

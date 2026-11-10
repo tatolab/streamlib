@@ -987,7 +987,7 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
     project_directory = listed["location"]["project_directory"]
     queued_stop = local_api.call_tool("stop_project", {"project_directory": project_directory})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
-    queued_start = local_api.call_tool("run_project", {"project_directory": project_directory})
+    queued_start = local_api.call_tool("start_project", {"project_directory": project_directory})
     assert local_api.stream_action_once_ended(queued_start["action"])["state"] == "done"
     first_read_after_the_restart = tatolabd.await_marker("FIRST_COUNT_READ", occurrence=3)
     tatolabd.interrupt()

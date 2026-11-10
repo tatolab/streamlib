@@ -10,7 +10,7 @@ as it renders a native processor's own counts. Asserted from the outside — the
 `graph` a control-plane client reads — because the failure this guards against
 is a helper that lost most of its bags while its node reads healthy.
 
-Each stream is launched with `tatolab run` on this test's `tatolabd`, from a
+Each stream is launched with `tatolab start` on this test's `tatolabd`, from a
 project directory holding its `stream.py` and processors. Running initializes a
 GPU context, so the whole module needs a device.
 """
@@ -217,7 +217,7 @@ def launch_the_loss_counting_node(
     make_tatolab_project: "Callable[..., Any]", start_tatolabd: "Callable[..., TatolabdUnderTest]"
 ) -> LossCountingStreamRunning:
     """Write `stream.py` beside its processors, start `tatolabd` under the lowered
-    helper-link ceiling, `tatolab run` the stream on it, and hand back the stream
+    helper-link ceiling, `tatolab start` the stream on it, and hand back the stream
     once it runs."""
     project_directory = make_tatolab_project(
         {
