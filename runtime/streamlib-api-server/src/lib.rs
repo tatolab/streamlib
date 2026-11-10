@@ -13,6 +13,7 @@ mod mcp_project_archive_tools;
 mod mcp_project_asset_tools;
 mod mcp_project_change_feed;
 mod mcp_project_dependency_tools;
+mod mcp_project_file_tools;
 mod mcp_project_node_type_tools;
 mod mcp_project_view_tools;
 mod mcp_prompts;

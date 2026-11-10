@@ -43,6 +43,8 @@ streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contra
 # The projects the asset tools open, each with its one writer.
 streamlib-project-repository = { path = "../streamlib-project-repository", features = ["mcp-tool-json-schema"] }
 uuid = "1.11"
+# `read_project_file` and `write_project_file` carry a file's bytes as base64.
+base64 = "0.22"
 
 # `trace` for every request's span.
 tower-http = { version = "0.6", features = ["trace"] }

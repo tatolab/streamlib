@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
 use crate::project_file::ProjectImport;
+use crate::project_file_access::ProjectRelativeFilePath;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::stream_graph_document::StreamGraphOperation;
 
@@ -249,6 +250,79 @@ pub enum ProjectImportFiles {
     RecordedAtCommit { commit: String },
 }
 
+/// Where the bytes a file write puts at its path come from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectFileContent {
+    /// A copy staged inside the project's runtime folder before the transaction, by its path
+    /// relative to the project; the transaction moves it into place.
+    StagedCopy { staged_at: String },
+    /// The file as the project's history recorded it at `commit`.
+    RecordedAtCommit { commit: String },
+}
+
+/// One change to a file of the project that is no asset, recorded with what its inverse needs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ProjectFileOperation {
+    /// The file at `path` was written with `content`, over a file there when
+    /// `replaced_a_file`.
+    WriteProjectFile {
+        path: ProjectRelativeFilePath,
+        content: ProjectFileContent,
+        replaced_a_file: bool,
+    },
+    /// The file at `path` was taken out.
+    RemoveProjectFile { path: ProjectRelativeFilePath },
+}
+
+impl ProjectFileOperation {
+    /// The operation that undoes this one, applied when history is at `parent_commit`: the
+    /// bytes it replaced or took out are read back from that commit.
+    pub fn inverse_at(&self, parent_commit: &str) -> Self {
+        let recorded_before = ProjectFileContent::RecordedAtCommit {
+            commit: parent_commit.to_owned(),
+        };
+        match self.clone() {
+            Self::WriteProjectFile {
+                path,
+                replaced_a_file: false,
+                ..
+            } => Self::RemoveProjectFile { path },
+            Self::WriteProjectFile {
+                path,
+                replaced_a_file: true,
+                ..
+            } => Self::WriteProjectFile {
+                path,
+                content: recorded_before,
+                replaced_a_file: true,
+            },
+            Self::RemoveProjectFile { path } => Self::WriteProjectFile {
+                path,
+                content: recorded_before,
+                replaced_a_file: false,
+            },
+        }
+    }
+
+    /// The file the operation changes.
+    pub fn path(&self) -> &ProjectRelativeFilePath {
+        match self {
+            Self::WriteProjectFile { path, .. } | Self::RemoveProjectFile { path } => path,
+        }
+    }
+
+    /// The operation as a commit's summary line names it.
+    #[cfg(feature = "history")]
+    pub(crate) fn summary(&self) -> String {
+        match self {
+            Self::WriteProjectFile { path, .. } => format!("write_project_file {path}"),
+            Self::RemoveProjectFile { path } => format!("remove_project_file {path}"),
+        }
+    }
+}
+
 /// One change to the projects this one imports, recorded with what its inverse needs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
@@ -409,6 +483,8 @@ pub enum ProjectOperation {
     Import(ProjectImportOperation),
     /// A stream asset's graph document written or taken out whole.
     StreamDocument(ProjectStreamDocumentOperation),
+    /// A file of the project that is no asset written or taken out.
+    File(ProjectFileOperation),
 }
 
 impl ProjectOperation {
@@ -429,6 +505,7 @@ impl ProjectOperation {
             Self::StreamDocument(stream_document_operation) => {
                 Self::StreamDocument(stream_document_operation.inverse())
             }
+            Self::File(file_operation) => Self::File(file_operation.inverse_at(parent_commit)),
         }
     }
 
@@ -440,6 +517,7 @@ impl ProjectOperation {
             Self::StreamGraph(on_a_stream) => on_a_stream.graph_operation.summary(),
             Self::Import(import_operation) => import_operation.summary(),
             Self::StreamDocument(stream_document_operation) => stream_document_operation.summary(),
+            Self::File(file_operation) => file_operation.summary(),
         }
     }
 }
