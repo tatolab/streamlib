@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal, NotRequired, Optional, Required, Typ
 import pydantic
 import pytest
 
-from tatolab.stream import Description, node
+from tatolab.stream import Description, NumberRange, node
 
 # ---------------------------------------------------------------------------
 # The config classes the cases below are declared against
@@ -658,3 +658,73 @@ def test_a_key_described_twice_is_refused():
 def test_a_description_that_is_not_a_string_is_refused():
     with pytest.raises(TypeError, match="takes its description as a str"):
         Description(42)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Key bounds: `Annotated[T, NumberRange(minimum=..., maximum=...)]`
+# ---------------------------------------------------------------------------
+
+
+@dataclasses.dataclass
+class BoundedKeysConfig:
+    opacity: Annotated[
+        float, Description("How much shows."), NumberRange(minimum=0.0, maximum=1.0)
+    ] = 1.0
+    count: Annotated[int, NumberRange(minimum=1, maximum=8)] = 1
+    gain: Annotated[Optional[float], NumberRange(minimum=0.0)] = None
+
+
+def test_a_bounded_float_carries_its_minimum_and_maximum_beside_its_description():
+    assert schema_of(BoundedKeysConfig)["properties"]["opacity"] == {
+        "type": "number",
+        "description": "How much shows.",
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "default": 1.0,
+    }
+
+
+def test_a_bounded_int_carries_its_bounds_as_integers():
+    count = schema_of(BoundedKeysConfig)["properties"]["count"]
+    assert count == {"type": "integer", "minimum": 1, "maximum": 8, "default": 1}
+    assert type(count["minimum"]) is int and type(count["maximum"]) is int
+
+
+def test_an_optional_number_bounded_on_one_side_carries_only_that_bound():
+    gain = schema_of(BoundedKeysConfig)["properties"]["gain"]
+    assert gain["minimum"] == 0.0
+    assert "maximum" not in gain
+    assert gain["anyOf"] == [{"type": "number"}, {"type": "null"}]
+
+
+def test_a_range_on_a_key_that_holds_no_number_is_refused():
+    @dataclasses.dataclass
+    class BoundedStringConfig:
+        label: Annotated[str, NumberRange(maximum=3)] = "a"
+
+    with pytest.raises(TypeError, match="holds no number"):
+        schema_of(BoundedStringConfig)
+
+
+def test_a_key_bounded_twice_is_refused():
+    @dataclasses.dataclass
+    class BoundedTwiceConfig:
+        width: Annotated[int, NumberRange(minimum=0), NumberRange(maximum=9)] = 1
+
+    with pytest.raises(TypeError, match="it takes one"):
+        schema_of(BoundedTwiceConfig)
+
+
+@pytest.mark.parametrize(
+    "bounds, refusal",
+    [
+        ({}, "states no bound"),
+        ({"minimum": True}, "an int or a float"),
+        ({"maximum": "1"}, "an int or a float"),
+        ({"minimum": float("-inf")}, "a finite `minimum`"),
+        ({"minimum": 2, "maximum": 1}, "minimum is above its maximum"),
+    ],
+)
+def test_a_range_that_is_not_two_finite_ordered_numbers_is_refused(bounds, refusal):
+    with pytest.raises((TypeError, ValueError), match=refusal):
+        NumberRange(**bounds)

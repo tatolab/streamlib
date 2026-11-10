@@ -1299,7 +1299,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `default_factory` field optional with no default, and a default the wire cannot carry
   dropped rather than rewritten — with `additionalProperties: false`, since a dataclass
   refuses an unknown key and a TypedDict does not; `Annotated[T, Description("text")]` is a
-  description, and neither a bare string nor an attribute docstring is one; a class exposing `model_json_schema()` contributes that document minus
+  description, and neither a bare string nor an attribute docstring is one;
+  `Annotated[T, NumberRange(minimum=…, maximum=…)]` on an `int` or `float` key, `Optional` or
+  not, is its inclusive `minimum` / `maximum`, and one on a key holding no number is refused; a class exposing `model_json_schema()` contributes that document minus
   `$schema` and `title`, recognised by the method rather than by importing pydantic; an
   annotation the deriver does not know renders `{}`, a config class of a kind it cannot
   read is accepted with an open schema, and a self-referential class stops at an open

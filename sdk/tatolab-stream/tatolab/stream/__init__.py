@@ -27,6 +27,7 @@ from ._exposed_name_cast import (
     cast_exposed_name_to_url_safe as cast_exposed_name_to_url_safe,
 )
 from ._description import Description as Description
+from ._number_range import NumberRange as NumberRange
 from ._built_in_nodes import ArrayToChannels as ArrayToChannels
 from ._built_in_nodes import ArrayToChannelsConfig as ArrayToChannelsConfig
 from ._built_in_nodes import ArrayToImage as ArrayToImage
@@ -207,6 +208,7 @@ __all__ = [
     "NodeOutputTextureRing",
     "NodeReference",
     "NodeReferenceToNodeType",
+    "NumberRange",
     "ExposedNameCastsToNothingError",
     "FunctionNode",
     "RustFunctionNode",
