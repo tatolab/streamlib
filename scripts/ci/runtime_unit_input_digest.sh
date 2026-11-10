@@ -4,8 +4,8 @@
 #
 # Prints one digest of everything a runtime unit is built from, for `ci.yml` to
 # key the unit's cache on. A pull request that changes none of it — an extension,
-# the integration suite, the stream package — runs on the unit `main` already
-# built instead of compiling the engine again.
+# the integration suite, the stream package's tests — runs on the unit `main`
+# already built instead of compiling the engine again.
 #
 # The digest reads the git index (`git ls-files -s`: each file's blob id), so it
 # names content, not timestamps. It is built by exclusion: a tree is left out
@@ -41,9 +41,9 @@ sha256_of_standard_input() {
     ':(exclude)*.md' \
     ':(exclude)LICENSES/**'
   # The runtime compiles the scaffold `tatolab new` writes, the wheel ships the
-  # notices, and the unit carries its first-party modules; each sits under an
-  # exclusion above.
-  git ls-files -s -- 'sdk/tatolab-stream/scaffold_template/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md' 'packages/tatolab-ops/**' 'packages/tatolab-testpattern/**' 'packages/tatolab-compositor/**'
+  # notices, and the unit carries the stream package and its core modules as
+  # wheels; each sits under an exclusion above.
+  git ls-files -s -- 'sdk/tatolab-stream/**' ':(exclude)sdk/tatolab-stream/tests/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md' 'packages/tatolab-ops/**' 'packages/tatolab-testpattern/**' 'packages/tatolab-compositor/**'
   rustc -Vv
   printf '%s\n' "$@"
 } | sha256_of_standard_input | cut -d ' ' -f 1

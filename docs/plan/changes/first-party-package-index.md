@@ -210,9 +210,14 @@ This extends self-contained-project-imports Decided 10 from `tatolab-ops` to a c
 reshapes how every other first-party module reaches a project:
 
 - **The core rides the runtime as wheels.** `cargo xtask build-runtime` builds `tatolab-ops`,
-  `tatolab-testpattern` and `tatolab-compositor` (`FIRST_PARTY_MODULE_PACKAGES_RELATIVE_TO_WORKSPACE`
+  `tatolab-testpattern` and `tatolab-compositor` (`FIRST_PARTY_PACKAGES_THE_RUNTIME_UNIT_CARRIES_RELATIVE_TO_WORKSPACE`
   in `xtask/src/stage_first_party_modules.rs`) into one wheel each in `lib/tatolab/imports/` with
   `uv build --wheel`. A core module is pure Python, so the unit build compiles nothing more.
+- **`tatolab-stream` rides the runtime beside the core** (owner, 2026-11-10, recorded in #3502:
+  the runtime carries every package a new project needs, "at minimum tatolab-stream"). The unit
+  builds its wheel from the runtime's own commit into the same folder, and a project declares it
+  through its link as it declares a core wheel, so a project the runtime makes or syncs never
+  waits on PyPI for it. PyPI keeps publishing `tatolab-stream` for use outside a runtime.
 - **A project declares each core wheel.** Each time the runtime makes, syncs or locks a
   project's `.venv`, it links each wheel into `.tatolab/first-party-imports/<wheel file name>`
   and declares it as a requirement and a uv path source through that link. The link keeps the
@@ -239,5 +244,5 @@ reshapes how every other first-party module reaches a project:
 - Module authoring, naming (`tatolab-<name>` importing as `tatolab.<name>`) and the one version
   are unchanged.
 - A third party publishes wherever they like; a project names that index the same way.
-- Offline create is not in scope: `tatolab-stream` and the starter's module still download on the
-  first `uv sync`.
+- Offline create is not in scope: the core modules' own requirements (`numba` with `llvmlite`,
+  `numpy`, `pillow`) and the Python `.python-version` names still download on the first `uv sync`.

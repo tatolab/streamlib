@@ -3766,8 +3766,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
   SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; amended by tatolab-names: the crate
   is `tatolab-stream`; amended by first-party-package-index: the first-party modules publish to
-  Tatolab's index, `tatolab-stream` alone to PyPI; the core modules ride the runtime unit as
-  wheels, and every other module is released as a module project]
+  Tatolab's index, `tatolab-stream` alone to PyPI; `tatolab-stream` and the core modules ride
+  the runtime unit as wheels, and every other module is released as a module project]
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
