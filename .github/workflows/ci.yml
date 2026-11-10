@@ -670,14 +670,16 @@ jobs:
             "$GITHUB_WORKSPACE/packages/tatolab-ops" 'numpy>=2.1'
           cd "$RUNNER_TEMP/scaffold"
           "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
+          import importlib
           import importlib.util
+          import json
           import sys
 
-          import stream
-          from tatolab.stream import compile_stream_to_graph
-
           assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
-          graph = compile_stream_to_graph(stream.main)
+          graph = json.load(open("streams/main.graph.json"))
+          for node in graph["nodes"]:
+              module_name, class_name = node["type"].split(":")
+              getattr(importlib.import_module(module_name), class_name)
           runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
           assert runtime_modules_loaded == [], runtime_modules_loaded
           print([node["type"] for node in graph["nodes"]])
