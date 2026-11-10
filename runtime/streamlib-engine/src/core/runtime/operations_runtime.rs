@@ -179,19 +179,33 @@ pub(super) async fn add_processor_impl(
         if config_references_of_the_added_node
             == ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins
         {
-            let config_of_the_added_node = graph
-                .traversal()
-                .v(&node_id)
-                .first()
-                .and_then(|node| node.config.clone())
-                .unwrap_or_default();
+            let Some((name_of_the_added_node, type_of_the_added_node, config_of_the_added_node)) =
+                graph.traversal().v(&node_id).first().map(|node| {
+                    (
+                        node.display_name.clone(),
+                        node.processor_type.clone(),
+                        node.config.clone().unwrap_or_default(),
+                    )
+                })
+            else {
+                return Err(Error::GraphError("Could not create node".into()));
+            };
+            let node_types = processor_interpreter_launch_record.node_types_this_stream_resolves();
             if let Err(refusal) =
-                crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
-                    graph,
-                    processor_interpreter_launch_record.node_types_this_stream_resolves(),
-                    &node_id,
+                crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
+                    &name_of_the_added_node,
+                    &type_of_the_added_node,
+                    node_types,
                     &config_of_the_added_node,
                 )
+                .and_then(|()| {
+                    crate::core::graph::refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
+                        graph,
+                        node_types,
+                        &node_id,
+                        &config_of_the_added_node,
+                    )
+                })
             {
                 graph.traversal_mut().v(&node_id).drop();
                 return Err(refusal);

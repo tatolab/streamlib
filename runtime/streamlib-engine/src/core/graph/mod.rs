@@ -3,6 +3,7 @@
 
 mod components;
 mod config_node_reference_edges;
+mod config_schema_value_checks;
 mod data_structure;
 
 mod edges;
@@ -25,6 +26,7 @@ pub(crate) use config_node_reference_edges::{
     refuse_a_reference_to_a_node_of_the_wrong_type,
     refuse_a_second_referrer_of_a_node_that_takes_one,
 };
+pub(crate) use config_schema_value_checks::refuse_a_config_its_node_types_config_schema_refuses;
 pub use data_structure::{Graph, GraphState};
 pub(crate) use data_structure::{
     names_listed_for_a_refusal, node_named_or_refused, node_names_listed_for_a_refusal,

@@ -1205,6 +1205,14 @@ impl LoadedStreamInThisRuntime {
             serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
         self.compiler.scope(|graph, tx| -> Result<()> {
+            if let Some(node) = graph.traversal().v(processor_id).first() {
+                crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
+                    &node.display_name,
+                    &node.processor_type,
+                    &self.node_types_this_stream_resolves,
+                    &config_json,
+                )?;
+            }
             crate::core::graph::refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
                 graph,
                 processor_id,
