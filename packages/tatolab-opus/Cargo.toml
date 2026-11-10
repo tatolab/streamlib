@@ -1,6 +1,6 @@
 [package]
 name = "tatolab-opus"
-version = "0.68.51"
+version = "0.68.52"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
