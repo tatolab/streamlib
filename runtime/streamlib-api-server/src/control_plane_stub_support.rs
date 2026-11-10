@@ -360,6 +360,24 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "remove_project",
                 ))
             }
+            fn pause_project(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProjectPausedOrResumed>
+            {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "pause_project",
+                ))
+            }
+            fn resume_project(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProjectPausedOrResumed>
+            {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "resume_project",
+                ))
+            }
             fn rename_stream(
                 &self,
                 _stream_id: &str,

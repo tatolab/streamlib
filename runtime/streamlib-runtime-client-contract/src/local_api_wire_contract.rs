@@ -56,6 +56,24 @@ pub struct StopProjectToolResult {
     pub project_directory: PathBuf,
 }
 
+/// The `pause_project` tool's result: the project paused, at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PauseProjectToolResult {
+    /// The project paused, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The id of each loaded stream of the project this call paused.
+    pub streams: Vec<String>,
+}
+
+/// The `resume_project` tool's result: the project resumed, at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeProjectToolResult {
+    /// The project resumed, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The id of each paused stream of the project this call resumed.
+    pub streams: Vec<String>,
+}
+
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoveProjectToolResult {
@@ -138,6 +156,8 @@ pub enum ListedStreamState {
     Running,
     /// Stopped with its project, and left unloaded until `run_project`.
     Stopped,
+    /// Loaded with its project paused: its processors process nothing until `resume_project`.
+    Paused,
     /// Skipped at the runtime's start until a `run_project` of its project retries it.
     Failed,
     /// A stream action of its project that loads it is queued or under way on it.
@@ -152,6 +172,7 @@ impl ListedStreamState {
         match self {
             ListedStreamState::Running => "running",
             ListedStreamState::Stopped => "stopped",
+            ListedStreamState::Paused => "paused",
             ListedStreamState::Failed => "failed",
             ListedStreamState::Preparing => "preparing",
             ListedStreamState::Stopping => "stopping",
@@ -975,6 +996,20 @@ mod tests {
             r#"{"action":"Rabc-3","state":"cancelled"}"#
         );
         assert_eq!(
+            wire_text(&PauseProjectToolResult {
+                project_directory: PathBuf::from("/srv/project"),
+                streams: vec!["project-main-1a2b3c".to_owned()],
+            }),
+            r#"{"project_directory":"/srv/project","streams":["project-main-1a2b3c"]}"#
+        );
+        assert_eq!(
+            wire_text(&ResumeProjectToolResult {
+                project_directory: PathBuf::from("/srv/project"),
+                streams: vec!["project-main-1a2b3c".to_owned()],
+            }),
+            r#"{"project_directory":"/srv/project","streams":["project-main-1a2b3c"]}"#
+        );
+        assert_eq!(
             wire_text(&LogsToolResult {
                 project_directory: PathBuf::from("/srv/project"),
                 records: vec![serde_json::json!({"message": "hello"})],
@@ -991,6 +1026,7 @@ mod tests {
         for state in [
             ListedStreamState::Running,
             ListedStreamState::Stopped,
+            ListedStreamState::Paused,
             ListedStreamState::Failed,
             ListedStreamState::Preparing,
             ListedStreamState::Stopping,

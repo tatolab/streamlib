@@ -151,6 +151,18 @@ enum TatolabVerb {
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
+    /// Start this project: the run `tatolab run` queues.
+    #[command(
+        long_about = "Queue a run of the whole project, exactly as `tatolab run` does: every \
+                      stream of it is loaded and started, a stopped project runs again and its \
+                      failed streams are retried. Prints `<action> queued: load of <project>` \
+                      and exits 0 once queued."
+    )]
+    Start {
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
+    },
     /// Stop this project: queue the unload of every stream of it, kept stopped across restarts.
     #[command(
         long_about = "Queue a stop of the whole project on its stream action queue: once the \
@@ -162,6 +174,31 @@ enum TatolabVerb {
                       streams `stopping` until it is done."
     )]
     Stop {
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
+    },
+    /// Pause this project: every processor of each of its streams holds its state, at once.
+    #[command(
+        long_about = "Pause the whole project at once, never waiting behind its queued \
+                      actions: every processor of each loaded stream holds its state and \
+                      processes nothing, and a graph edit made meanwhile compiles on `tatolab \
+                      resume`. A stream `tatolab run` or `tatolab dev` loads meanwhile starts \
+                      paused. Pause is never recorded, so a runtime restart runs the project. \
+                      Prints `paused <project>: <streams>`; `tatolab streams` shows them `paused`."
+    )]
+    Pause {
+        /// The project's directory (default: the working directory).
+        #[arg(long = "dir", value_name = "DIR")]
+        project_directory: Option<PathBuf>,
+    },
+    /// Resume this paused project: its processors carry on from the state they held.
+    #[command(
+        long_about = "Resume the whole paused project at once: every processor carries on from \
+                      the state it held, and each stream compiles the graph edits made while it \
+                      was paused. Prints `resumed <project>: <streams>`."
+    )]
+    Resume {
         /// The project's directory (default: the working directory).
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
@@ -326,7 +363,7 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
                 )
             })
         }
-        TatolabVerb::Run { project_directory } => {
+        TatolabVerb::Run { project_directory } | TatolabVerb::Start { project_directory } => {
             caller_working_directory().and_then(|caller_working_directory| {
                 stream_actions_on_the_runtime::run_project(
                     &caller_working_directory,
@@ -345,6 +382,22 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
         TatolabVerb::Stop { project_directory } => {
             caller_working_directory().and_then(|caller_working_directory| {
                 stream_actions_on_the_runtime::stop_project(
+                    &caller_working_directory,
+                    project_directory.as_deref(),
+                )
+            })
+        }
+        TatolabVerb::Pause { project_directory } => {
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_actions_on_the_runtime::pause_project(
+                    &caller_working_directory,
+                    project_directory.as_deref(),
+                )
+            })
+        }
+        TatolabVerb::Resume { project_directory } => {
+            caller_working_directory().and_then(|caller_working_directory| {
+                stream_actions_on_the_runtime::resume_project(
                     &caller_working_directory,
                     project_directory.as_deref(),
                 )

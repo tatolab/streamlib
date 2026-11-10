@@ -515,8 +515,21 @@ impl LoadedStreamInThisRuntime {
     /// Start the stream: the engine's GPU context — created now when no stream
     /// has started — viewed through this stream's surface store and pipeline
     /// cache, its own runtime context, then a commit of every queued change.
-    #[tracing::instrument(name = "stream.start", skip_all, fields(stream = %self.stream_id()))]
     pub fn start(self: &Arc<Self>) -> Result<()> {
+        self.start_with_the_graph_state(GraphState::Running)
+    }
+
+    /// Start the stream as [`Self::start`] does with every processor it
+    /// prepares paused, so none processes until [`Self::resume`].
+    pub fn start_paused(self: &Arc<Self>) -> Result<()> {
+        self.start_with_the_graph_state(GraphState::Paused)
+    }
+
+    #[tracing::instrument(name = "stream.start", skip_all, fields(stream = %self.stream_id()))]
+    fn start_with_the_graph_state(
+        self: &Arc<Self>,
+        graph_state_at_the_start: GraphState,
+    ) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
         if self.this_streams_shutdown_escalation().is_requested() {
@@ -568,7 +581,7 @@ impl LoadedStreamInThisRuntime {
         *self.runtime_context.lock() = Some(Arc::clone(&this_streams_runtime_context));
 
         self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Running);
+            graph.set_state(graph_state_at_the_start);
         });
 
         // Started before the commit so the commit compiles.
@@ -591,6 +604,10 @@ impl LoadedStreamInThisRuntime {
 
         tracing::info!("[start] The stream `{}` started", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarted);
+        if graph_state_at_the_start == GraphState::Paused {
+            *self.status.lock() = RuntimeStatus::Paused;
+            self.publish_on_this_streams_topic(RuntimeEvent::RuntimePaused);
+        }
         Ok(())
     }
 
