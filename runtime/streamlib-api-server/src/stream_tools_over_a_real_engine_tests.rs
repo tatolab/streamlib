@@ -2106,6 +2106,87 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     assert!(nothing_left.contains("bob"), "{nothing_left}");
 }
 
+/// A committed edit sent twice under one idempotency key, as a client retrying after a timeout
+/// would, applies once to the running stream and its graph document and answers the first
+/// transaction; its commit records the format version and the key. An undo sent twice under
+/// its own key undoes once.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+            .unwrap_or_else(|refusal| panic!("`{tool_name}` was refused: {refusal}"))
+        }
+    };
+    let add_the_sink = json!({
+        "stream": stream_id, "type": sink_type.as_str(), "name": "sink",
+        "author": an_agent_named("alice"), "idempotency_key": "add-sink-gesture",
+    });
+
+    let first = call("add_node", add_the_sink.clone()).await;
+    let retried = call("add_node", add_the_sink).await;
+    assert_eq!(retried["transaction"], first["transaction"], "{retried}");
+    assert_eq!(retried["commit"], first["commit"], "{retried}");
+    assert_eq!(
+        retried["added_nodes"][0]["node"],
+        first["added_nodes"][0]["node"]
+    );
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["sink", "source"]
+    );
+    assert_eq!(
+        sorted_node_names_in(&engine.the_live_graph_of(&stream_id)),
+        ["sink", "source"],
+        "the retry reached the running stream not at all"
+    );
+
+    let undo = json!({
+        "project_directory": project.path(), "author": an_agent_named("alice"),
+        "idempotency_key": "undo-gesture",
+    });
+    let undone = call("undo", undo.clone()).await;
+    let undone_again = call("undo", undo).await;
+    assert_eq!(undone_again["transaction"], undone["transaction"]);
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["source"]
+    );
+
+    let recorded = streamlib_project_repository::ProjectRepository::open(project.path())
+        .expect("the project opens")
+        .applied_transactions_newest_first(2)
+        .expect("history reads");
+    assert_eq!(recorded.len(), 2, "one add and one undo, each once");
+    assert_eq!(
+        recorded[1].transaction.format_version,
+        streamlib_project_repository::PROJECT_TRANSACTION_FORMAT_VERSION
+    );
+    assert_eq!(
+        recorded[1]
+            .transaction
+            .idempotency_key
+            .as_ref()
+            .map(|key| key.as_str()),
+        Some("add-sink-gesture")
+    );
+    assert_eq!(undone["format_version"], json!(2), "{undone}");
+    assert_eq!(undone["idempotency_key"], "undo-gesture", "{undone}");
+    assert!(
+        undone["applied_at"]
+            .as_str()
+            .is_some_and(|applied_at| applied_at.ends_with('Z')),
+        "{undone}"
+    );
+}
+
 /// A venv interpreter that answers the runtime's probe and, run as the graph generator run
 /// entry, prints the project's `generator-run.json` as the run's document.
 const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_GENERATOR_RUN: &str = "#!/bin/sh\ncase \"$*\" in\n  *tatolab.stream._graph_generator_run_entry*) cat generator-run.json ;;\nesac\nexit 0\n";
@@ -2536,6 +2617,7 @@ impl ProjectWithGraphDocuments {
                     kind: streamlib_project_repository::ProjectTransactionAuthorKind::Person,
                     name: "arm maintainer".to_owned(),
                 },
+                None,
                 vec![streamlib_project_repository::ProjectOperation::StreamGraph(
                     streamlib_project_repository::StreamGraphOperationOnAStream {
                         stream: self.stream_asset_of("main"),

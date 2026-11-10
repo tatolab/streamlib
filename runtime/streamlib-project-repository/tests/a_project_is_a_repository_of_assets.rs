@@ -94,17 +94,17 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
 
     let video_asset = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&video, "media/intro.mp4")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
             .unwrap(),
     );
     let scene_asset = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&scene, "models/arm.usda")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&scene, "models/arm.usda")])
             .unwrap(),
     );
     let fmu_asset = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&fmu, "data/arm.fmu")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&fmu, "data/arm.fmu")])
             .unwrap(),
     );
     assert_eq!(
@@ -127,6 +127,7 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::RenameAsset {
                 asset: video_asset,
                 file_name: "opening.mp4".to_owned(),
@@ -136,6 +137,7 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::MoveAsset {
                 asset: video_asset,
                 into_directory: "archive/2026".to_owned(),
@@ -145,6 +147,7 @@ fn a_media_file_a_usd_scene_and_an_fmu_are_imported_renamed_moved_and_deleted_on
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset: fmu_asset }],
         )
         .unwrap();
@@ -207,7 +210,7 @@ fn stock_git_clones_the_history_and_finds_sidecars_but_never_the_content() {
         ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
     let video = fixture.import_source("intro.mp4", b"BYTES THAT MUST NOT ENTER HISTORY");
     repository
-        .apply_asset_changes(&agent(), vec![import_from(&video, "media/intro.mp4")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
         .unwrap();
 
     let clone_directory = tempfile::tempdir().unwrap();
@@ -286,6 +289,7 @@ fn a_transaction_with_one_refused_change_changes_nothing_and_commits_nothing() {
     let refusal = repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![
                 import_from(&video, "media/intro.mp4"),
                 ProjectAssetChangeRequest::DeleteAsset {
@@ -319,6 +323,7 @@ fn a_transaction_records_its_author_parent_and_inverse() {
     let applied = repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![
                 import_from(&video, "media/intro.mp4"),
                 ProjectAssetChangeRequest::SetAssetSettings {
@@ -331,7 +336,7 @@ fn a_transaction_records_its_author_parent_and_inverse() {
     assert!(matches!(applied, ProjectRepositoryRefusal::NoSuchAsset(_)));
 
     let applied = repository
-        .apply_asset_changes(&agent(), vec![import_from(&video, "media/intro.mp4")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
         .unwrap();
     let video_asset = imported_asset(&applied);
     let settings = json!({"color_space": "rec709"})
@@ -341,6 +346,7 @@ fn a_transaction_records_its_author_parent_and_inverse() {
     let set = repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::SetAssetSettings {
                 asset: video_asset,
                 import_settings: settings.clone(),
@@ -377,7 +383,7 @@ fn an_asset_a_graph_document_references_cannot_be_deleted() {
     let image = fixture.import_source("logo.png", b"png");
     let image_asset = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&image, "images/logo.png")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
             .unwrap(),
     );
     std::fs::create_dir_all(fixture.project_directory.join("streams")).unwrap();
@@ -393,6 +399,7 @@ fn an_asset_a_graph_document_references_cannot_be_deleted() {
     let refusal = repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset: image_asset }],
         )
         .unwrap_err();
@@ -416,7 +423,11 @@ fn a_file_already_in_the_project_is_imported_in_place() {
     std::fs::write(&in_place, b"wav").unwrap();
 
     let applied = repository
-        .apply_asset_changes(&agent(), vec![import_from(&in_place, "media/dropped.wav")])
+        .apply_asset_changes(
+            &agent(),
+            None,
+            vec![import_from(&in_place, "media/dropped.wav")],
+        )
         .unwrap();
     assert_eq!(
         repository
@@ -436,16 +447,23 @@ fn a_path_another_asset_or_another_file_holds_is_refused() {
     let first = fixture.import_source("a.png", b"a");
     let second = fixture.import_source("b.png", b"b");
     repository
-        .apply_asset_changes(&agent(), vec![import_from(&first, "images/logo.png")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&first, "images/logo.png")])
         .unwrap();
     assert!(matches!(
-        repository.apply_asset_changes(&agent(), vec![import_from(&second, "images/logo.png")]),
+        repository.apply_asset_changes(
+            &agent(),
+            None,
+            vec![import_from(&second, "images/logo.png")]
+        ),
         Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset { .. })
     ));
     std::fs::write(fixture.project_directory.join("images/untracked.png"), b"x").unwrap();
     assert!(matches!(
-        repository
-            .apply_asset_changes(&agent(), vec![import_from(&second, "images/untracked.png")]),
+        repository.apply_asset_changes(
+            &agent(),
+            None,
+            vec![import_from(&second, "images/untracked.png")]
+        ),
         Err(ProjectRepositoryRefusal::AssetPathHoldsAnotherFile { .. })
     ));
 }
@@ -474,6 +492,7 @@ fn an_upload_is_moved_to_its_assets_path_by_its_hash_and_leaves_the_uploads() {
     let applied = repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![import_the_upload(
                 &content_sha256,
                 "models/weights.safetensors",
@@ -496,6 +515,7 @@ fn an_upload_is_moved_to_its_assets_path_by_its_hash_and_leaves_the_uploads() {
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![import_the_upload(&"0".repeat(64), "models/absent.bin")],
         ),
         Err(ProjectRepositoryRefusal::NoSuchUpload(_))
@@ -504,6 +524,7 @@ fn an_upload_is_moved_to_its_assets_path_by_its_hash_and_leaves_the_uploads() {
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![import_the_upload(&content_sha256, "models/other.bin")],
         ),
         Err(ProjectRepositoryRefusal::UploadHoldsOtherBytes { .. })
@@ -522,7 +543,7 @@ fn an_import_copies_the_file_once_to_its_path_and_nothing_into_the_project_besid
     let video = fixture.import_source("intro.mp4", b"video");
 
     repository
-        .apply_asset_changes(&agent(), vec![import_from(&video, "media/intro.mp4")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
         .unwrap();
 
     assert!(!fixture.project_directory.join(".tatolab/content").exists());
@@ -547,6 +568,7 @@ fn a_refused_import_leaves_no_copy_in_the_project() {
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![
                 import_from(&video, "media/intro.mp4"),
                 ProjectAssetChangeRequest::DeleteAsset {
@@ -568,7 +590,7 @@ fn a_file_replaced_at_its_path_is_what_its_asset_reads_and_history_grows_by_no_b
         ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
     let video = fixture.import_source("intro.mp4", b"take one");
     let applied = repository
-        .apply_asset_changes(&agent(), vec![import_from(&video, "media/intro.mp4")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&video, "media/intro.mp4")])
         .unwrap();
     let asset = imported_asset(&applied);
     let file = fixture.project_directory.join("media/intro.mp4");
@@ -578,6 +600,7 @@ fn a_file_replaced_at_its_path_is_what_its_asset_reads_and_history_grows_by_no_b
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::RenameAsset {
                 asset,
                 file_name: "intro-take-two.mp4".to_owned(),
@@ -601,12 +624,13 @@ fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_it
     let lut = fixture.import_source("grade.cube", b"LUT_3D_SIZE 2");
     let asset = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&lut, "looks/grade.cube")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&lut, "looks/grade.cube")])
             .unwrap(),
     );
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset }],
         )
         .unwrap();
@@ -615,7 +639,7 @@ fn an_undone_delete_brings_back_the_sidecar_and_the_asset_reads_missing_until_it
 
     let reversal = repository.undo_by(&agent()).unwrap();
     repository
-        .apply_project_operations(&agent(), reversal.operations, reversal.lineage)
+        .apply_project_operations(&agent(), None, reversal.operations, reversal.lineage)
         .unwrap();
 
     assert_eq!(
@@ -642,6 +666,7 @@ fn a_stream_asset_is_never_imported_and_a_project_is_never_created_twice() {
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(graph),
                 asset_path: "streams/main.graph.json".to_owned(),
@@ -669,10 +694,14 @@ fn a_path_differing_only_in_case_from_another_assets_is_refused() {
     let first = fixture.import_source("a.png", b"a");
     let second = fixture.import_source("b.png", b"b");
     repository
-        .apply_asset_changes(&agent(), vec![import_from(&first, "images/Logo.png")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&first, "images/Logo.png")])
         .unwrap();
     assert!(matches!(
-        repository.apply_asset_changes(&agent(), vec![import_from(&second, "images/logo.png")]),
+        repository.apply_asset_changes(
+            &agent(),
+            None,
+            vec![import_from(&second, "images/logo.png")]
+        ),
         Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset { .. })
     ));
 }
@@ -686,6 +715,7 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(data.clone()),
                 asset_path: "data/table.graph.json".to_owned(),
@@ -697,12 +727,13 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
     ));
     let asset = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&data, "data/table.json")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&data, "data/table.json")])
             .unwrap(),
     );
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::MoveAsset {
                 asset,
                 into_directory: "streams".to_owned(),
@@ -712,6 +743,7 @@ fn a_graph_document_path_is_never_an_imported_or_relocated_asset() {
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::RenameAsset {
                 asset,
                 file_name: "main.graph.json".to_owned(),
@@ -734,7 +766,11 @@ fn a_path_through_a_symbolic_link_is_refused() {
     .unwrap();
     let image = fixture.import_source("logo.png", b"png");
     assert!(matches!(
-        repository.apply_asset_changes(&agent(), vec![import_from(&image, "linked/logo.png")]),
+        repository.apply_asset_changes(
+            &agent(),
+            None,
+            vec![import_from(&image, "linked/logo.png")]
+        ),
         Err(ProjectRepositoryRefusal::AssetPathRefused { .. })
     ));
 }
@@ -747,7 +783,7 @@ fn an_unreadable_graph_document_refuses_every_delete() {
     let image = fixture.import_source("logo.png", b"png");
     let image_asset = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&image, "images/logo.png")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
             .unwrap(),
     );
     std::fs::create_dir_all(fixture.project_directory.join("streams")).unwrap();
@@ -759,6 +795,7 @@ fn an_unreadable_graph_document_refuses_every_delete() {
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::DeleteAsset { asset: image_asset }],
         ),
         Err(ProjectRepositoryRefusal::GraphDocumentUnreadable { .. })
@@ -783,7 +820,7 @@ fn an_asset_whose_file_ends_like_a_graph_document_never_enters_history() {
         ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
     let data = fixture.import_source("table.json", b"{\"secret\": 1}");
     repository
-        .apply_asset_changes(&agent(), vec![import_from(&data, "data/table.json")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&data, "data/table.json")])
         .unwrap();
     drop(repository);
     let data_directory = fixture.project_directory.join("data");
@@ -801,7 +838,7 @@ fn an_asset_whose_file_ends_like_a_graph_document_never_enters_history() {
     let mut repository = ProjectRepository::open(&fixture.project_directory).unwrap();
     let image = fixture.import_source("logo.png", b"png");
     repository
-        .apply_asset_changes(&agent(), vec![import_from(&image, "images/logo.png")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
         .unwrap();
     let files_at_head = repository.history().files_at_head().unwrap();
     assert!(files_at_head.contains_key("data/table.graph.json.asset.json"));
@@ -817,12 +854,16 @@ fn an_in_place_import_of_a_file_that_is_another_assets_file_is_refused() {
     let image = fixture.import_source("logo.png", b"png");
     let holder = imported_asset(
         &repository
-            .apply_asset_changes(&agent(), vec![import_from(&image, "images/logo.png")])
+            .apply_asset_changes(&agent(), None, vec![import_from(&image, "images/logo.png")])
             .unwrap(),
     );
     let alias = fixture.project_directory.join("images/alias.png");
     std::os::unix::fs::symlink(fixture.project_directory.join("images/logo.png"), &alias).unwrap();
-    match repository.apply_asset_changes(&agent(), vec![import_from(&alias, "images/alias.png")]) {
+    match repository.apply_asset_changes(
+        &agent(),
+        None,
+        vec![import_from(&alias, "images/alias.png")],
+    ) {
         Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset {
             holder: refused_for,
             ..
@@ -840,6 +881,7 @@ fn an_in_place_import_of_a_file_that_is_another_assets_file_is_refused() {
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![import_from(&hard_link, "images/hard-link.png")]
         ),
         Err(ProjectRepositoryRefusal::AssetPathHeldByAnotherAsset { .. })
@@ -884,6 +926,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     assert!(matches!(
         repository.apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::RenameAsset {
                 asset: stream_asset,
                 file_name: "arm-control.json".to_owned(),
@@ -893,7 +936,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     ));
     assert!(matches!(
         repository.apply_asset_changes(
-            &agent(),
+            &agent(), None,
             vec![ProjectAssetChangeRequest::SetAssetSettings {
                 asset: stream_asset,
                 import_settings: Map::new(),
@@ -905,6 +948,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::MoveAsset {
                 asset: stream_asset,
                 into_directory: "streams/cell".to_owned(),
@@ -932,6 +976,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     );
     match repository.apply_asset_changes(
         &agent(),
+        None,
         vec![ProjectAssetChangeRequest::DeleteAsset {
             asset: stream_asset,
         }],
@@ -947,6 +992,7 @@ fn a_stream_is_an_asset_its_graph_document_names_and_it_moves_and_deletes_as_one
     let deleted = repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![ProjectAssetChangeRequest::DeleteAsset {
                 asset: stream_asset,
             }],
@@ -1085,6 +1131,7 @@ fn the_history_records_the_whole_project_but_what_is_generated_hidden_or_an_asse
     repository
         .apply_asset_changes(
             &agent(),
+            None,
             vec![import_from(
                 &project.join("media/dropped.wav"),
                 "media/dropped.wav",
@@ -1115,7 +1162,7 @@ fn an_assets_file_is_the_file_at_its_path_and_an_unknown_or_missing_asset_is_ref
         ProjectRepository::create(&fixture.project_directory, "robot-cell", &agent()).unwrap();
     let lut = fixture.import_source("grade.cube", b"LUT_3D_SIZE 2");
     let applied = repository
-        .apply_asset_changes(&agent(), vec![import_from(&lut, "looks/grade.cube")])
+        .apply_asset_changes(&agent(), None, vec![import_from(&lut, "looks/grade.cube")])
         .unwrap();
     let asset = imported_asset(&applied);
 

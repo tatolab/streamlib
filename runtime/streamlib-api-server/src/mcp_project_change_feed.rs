@@ -159,9 +159,11 @@ pub(crate) fn project_transaction_on_the_wire(
     let AppliedProjectTransaction {
         transaction,
         commit,
+        applied_at_unix_seconds,
     } = applied;
     let operation_json = |operation| serde_json::to_value(operation).unwrap_or_default();
     ProjectTransactionOnTheWire {
+        format_version: transaction.format_version,
         transaction: transaction.transaction.to_string(),
         commit,
         parent_commit: transaction.parent_commit,
@@ -180,5 +182,61 @@ pub(crate) fn project_transaction_on_the_wire(
             .collect(),
         undoes: transaction.undoes.map(|undone| undone.to_string()),
         redoes: transaction.redoes.map(|redone| redone.to_string()),
+        idempotency_key: transaction
+            .idempotency_key
+            .map(|idempotency_key| idempotency_key.as_str().to_owned()),
+        applied_at: rfc_3339_utc_of_unix_seconds(applied_at_unix_seconds),
+    }
+}
+
+/// `unix_seconds` as RFC 3339 in UTC to the second, `YYYY-MM-DDTHH:MM:SSZ`.
+fn rfc_3339_utc_of_unix_seconds(unix_seconds: i64) -> String {
+    let days_since_the_epoch = unix_seconds.div_euclid(86_400);
+    let second_of_the_day = unix_seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_date_of_days_since_the_unix_epoch(days_since_the_epoch);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second_of_the_day / 3_600,
+        second_of_the_day % 3_600 / 60,
+        second_of_the_day % 60
+    )
+}
+
+/// The proleptic Gregorian `(year, month, day)` `days` after 1970-01-01, by Howard Hinnant's
+/// `civil_from_days`.
+fn civil_date_of_days_since_the_unix_epoch(days: i64) -> (i64, i64, i64) {
+    let days_since_0000_03_01 = days + 719_468;
+    let era = days_since_0000_03_01.div_euclid(146_097);
+    let day_of_era = days_since_0000_03_01.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_from_march + 2) / 5 + 1;
+    let month = if month_from_march < 10 {
+        month_from_march + 3
+    } else {
+        month_from_march - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rfc_3339_utc_of_unix_seconds;
+
+    #[test]
+    fn unix_seconds_render_as_rfc_3339_utc() {
+        assert_eq!(rfc_3339_utc_of_unix_seconds(0), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            rfc_3339_utc_of_unix_seconds(951_782_400),
+            "2000-02-29T00:00:00Z"
+        );
+        assert_eq!(
+            rfc_3339_utc_of_unix_seconds(1_794_268_920),
+            "2026-11-10T00:02:00Z"
+        );
+        assert_eq!(rfc_3339_utc_of_unix_seconds(-1), "1969-12-31T23:59:59Z");
     }
 }

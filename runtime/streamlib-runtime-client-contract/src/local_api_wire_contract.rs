@@ -402,6 +402,8 @@ pub struct ListAssetsToolResult {
 /// One transaction a project's change feed holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectTransactionOnTheWire {
+    /// The format the transaction was recorded in, `1` for one recorded before formats were.
+    pub format_version: u32,
     /// The transaction's UUID.
     pub transaction: String,
     /// The commit on the project history's `main` that records it.
@@ -422,6 +424,42 @@ pub struct ProjectTransactionOnTheWire {
     /// The transaction this one redoes, when it is a redo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redoes: Option<String>,
+    /// The key the caller sent it under, when it sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
+    /// When the runtime applied it, RFC 3339 in UTC to the second, for display only.
+    pub applied_at: String,
+}
+
+/// What a refused action answers under `refusal` in its tool result's `structuredContent`,
+/// beside the same words as the result's text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectActionRefusalOnTheWire {
+    /// The action refused, by the name of the tool it was sent to.
+    pub action: String,
+    /// The position, from 0, of the operation refused among those the action sent, when one was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_operation_index: Option<usize>,
+    /// The node the refused operation names, as the caller named it: a UUID or an `as` label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_node: Option<String>,
+    /// The link the refused operation names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_link: Option<RefusedGraphLinkOnTheWire>,
+    /// The node's input or config field the refused operation names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_field: Option<String>,
+    /// Why, in the runtime's own words, never rewritten.
+    pub runtime_words: String,
+}
+
+/// The link a refused operation names, each end as the caller named it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedGraphLinkOnTheWire {
+    /// The output port the link carries from.
+    pub source: GraphLinkEndOnTheWire,
+    /// The input port the link carries into.
+    pub target: GraphLinkEndOnTheWire,
 }
 
 /// One end of a link a graph tool names: a node by its UUID and one of its ports.

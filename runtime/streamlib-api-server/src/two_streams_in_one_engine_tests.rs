@@ -311,9 +311,10 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
     );
 }
 
-/// `connect` takes `stream`, its two ends, `mode` and `author`, and nothing else.
+/// `connect` takes `stream`, its two ends, `mode`, `author` and `idempotency_key`, and nothing
+/// else.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_connect_schema_takes_the_stream_its_two_ends_mode_and_author_and_nothing_else() {
+async fn the_connect_schema_takes_the_stream_its_two_ends_mode_author_and_key_and_nothing_else() {
     let loaded = AnEngineLoadingTwoStreams::load();
 
     let tools = listed_tools(loaded.operations_on_the_loaded_streams()).await;
@@ -328,7 +329,17 @@ async fn the_connect_schema_takes_the_stream_its_two_ends_mode_and_author_and_no
         .map(String::as_str)
         .collect();
     arguments.sort_unstable();
-    assert_eq!(arguments, ["author", "mode", "source", "stream", "target"]);
+    assert_eq!(
+        arguments,
+        [
+            "author",
+            "idempotency_key",
+            "mode",
+            "source",
+            "stream",
+            "target"
+        ]
+    );
 }
 
 /// The instructions an agent reads before its first call say both ends of a

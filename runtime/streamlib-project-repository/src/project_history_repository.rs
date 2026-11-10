@@ -27,6 +27,8 @@ pub struct ProjectHistoryCommit {
     pub message: String,
     /// The author's name.
     pub author_name: String,
+    /// When the commit was made, in whole seconds since the Unix epoch.
+    pub committed_at_unix_seconds: i64,
 }
 
 /// A project's history, a local Git repository written through libgit2 with one branch and no
@@ -101,6 +103,15 @@ impl ProjectHistoryRepository {
         Ok(commit_oid.to_string())
     }
 
+    /// When the commit `commit` was made, in whole seconds since the Unix epoch.
+    pub fn committed_at_unix_seconds(&self, commit: &str) -> Result<i64, ProjectRepositoryRefusal> {
+        Ok(self
+            .repository
+            .find_commit(Oid::from_str(commit)?)?
+            .time()
+            .seconds())
+    }
+
     /// Every commit on `main`, newest first.
     pub fn commits_newest_first(
         &self,
@@ -118,6 +129,7 @@ impl ProjectHistoryRepository {
                 commit: commit.id().to_string(),
                 message: commit.message().unwrap_or_default().to_owned(),
                 author_name: commit.author().name().unwrap_or_default().to_owned(),
+                committed_at_unix_seconds: commit.time().seconds(),
             });
         }
         Ok(commits)

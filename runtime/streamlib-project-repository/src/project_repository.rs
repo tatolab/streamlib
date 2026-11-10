@@ -38,10 +38,11 @@ use crate::project_pyproject_import_sources::{
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_stream_document::{STREAM_DOCUMENT_ASSET_KEY, project_stream_documents};
 use crate::project_transaction::{
-    AppliedProjectTransaction, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
-    ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionLineage, ProjectTransactionReversal, StreamGraphOperationOnAStream,
+    AppliedProjectTransaction, PROJECT_TRANSACTION_FORMAT_VERSION, ProjectActionIdempotencyKey,
+    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles,
+    ProjectImportOperation, ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction,
+    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
+    StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -328,23 +329,61 @@ impl ProjectRepository {
             else {
                 continue;
             };
+            let transaction: ProjectTransaction = serde_json::from_str(transaction_json)?;
+            if transaction.format_version > PROJECT_TRANSACTION_FORMAT_VERSION {
+                return Err(
+                    ProjectRepositoryRefusal::TransactionFormatNewerThanThisRuntime {
+                        transaction: transaction.transaction,
+                        format_version: transaction.format_version,
+                        newest_format_version: PROJECT_TRANSACTION_FORMAT_VERSION,
+                    },
+                );
+            }
             applied_transactions.push(AppliedProjectTransaction {
-                transaction: serde_json::from_str(transaction_json)?,
+                transaction,
                 commit: history_commit.commit,
+                applied_at_unix_seconds: history_commit.committed_at_unix_seconds,
             });
         }
         Ok(applied_transactions)
     }
 
-    /// Apply `changes` by `author` as one transaction, whole or not at all, and commit it.
+    /// The transaction history holds under the key a caller sent, which an action sent again
+    /// under that key answers instead of applying again; `None` when the caller sent no key.
+    pub fn the_transaction_applied_under_a_key_the_caller_sent(
+        &self,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+    ) -> Result<Option<AppliedProjectTransaction>, ProjectRepositoryRefusal> {
+        let Some(idempotency_key) = idempotency_key else {
+            return Ok(None);
+        };
+        Ok(self
+            .applied_transactions_newest_first(usize::MAX)?
+            .into_iter()
+            .find(|applied| applied.transaction.idempotency_key.as_ref() == Some(idempotency_key)))
+    }
+
+    /// Apply `changes` by `author` as one transaction, whole or not at all, and commit it; sent
+    /// again under the same `idempotency_key`, it answers the first transaction.
     pub fn apply_asset_changes(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         changes: Vec<ProjectAssetChangeRequest>,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        if let Some(applied) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(applied);
+        }
         let applied = self.operations_for_changes(changes).and_then(|operations| {
-            self.apply_project_operations(author, operations, ProjectTransactionLineage::NewEdit)
+            self.apply_project_operations(
+                author,
+                idempotency_key,
+                operations,
+                ProjectTransactionLineage::NewEdit,
+            )
         });
         for waiting in std::mem::take(&mut self.asset_files_waiting_for_their_import).into_values()
         {
@@ -414,14 +453,21 @@ impl ProjectRepository {
     }
 
     /// Apply `operations` by `author` as one transaction, whole or not at all, write the
-    /// files they change and commit it.
+    /// files they change and commit it; sent again under the same `idempotency_key`, it applies
+    /// nothing and answers the first transaction.
     pub fn apply_project_operations(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        if let Some(applied) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(applied);
+        }
         if operations.is_empty() {
             return Err(ProjectRepositoryRefusal::EmptyTransaction);
         }
@@ -501,6 +547,7 @@ impl ProjectRepository {
         };
         let parent_commit = self.commit_the_files_when_history_holds_none()?;
         let transaction = ProjectTransaction {
+            format_version: PROJECT_TRANSACTION_FORMAT_VERSION,
             transaction: Uuid::new_v4(),
             author: author.clone(),
             inverse_operations: operations
@@ -512,6 +559,7 @@ impl ProjectRepository {
             operations,
             undoes,
             redoes,
+            idempotency_key: idempotency_key.cloned(),
         };
 
         let mut performed_effects = Vec::with_capacity(transaction.operations.len());
@@ -639,9 +687,11 @@ impl ProjectRepository {
             commit = %commit,
             "applied a project transaction"
         );
+        let applied_at_unix_seconds = self.history.committed_at_unix_seconds(&commit)?;
         Ok(AppliedProjectTransaction {
             transaction,
             commit,
+            applied_at_unix_seconds,
         })
     }
 
@@ -653,10 +703,16 @@ impl ProjectRepository {
     pub fn add_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         source: &str,
         folder: Option<&str>,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        if let Some(applied) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(applied);
+        }
         let staged = stage_a_copy_of_the_project_source(&self.project_directory, source)?;
         let added = (|| {
             let folder = folder
@@ -671,6 +727,7 @@ impl ProjectRepository {
             };
             self.apply_project_operations(
                 author,
+                idempotency_key,
                 vec![ProjectOperation::Import(
                     ProjectImportOperation::PlaceImport {
                         import,
@@ -695,11 +752,17 @@ impl ProjectRepository {
     pub fn update_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         project: Uuid,
         source: Option<&str>,
         overwrite_edited_files: bool,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
+        if let Some(applied) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(applied);
+        }
         let held = self.import(project)?;
         let edited_files = self.files_edited_in_the_import(&held)?;
         if !edited_files.is_empty() && !overwrite_edited_files {
@@ -727,6 +790,7 @@ impl ProjectRepository {
             };
             self.apply_project_operations(
                 author,
+                idempotency_key,
                 vec![ProjectOperation::Import(
                     ProjectImportOperation::PlaceImport {
                         import,
@@ -817,11 +881,18 @@ impl ProjectRepository {
     pub fn remove_dependency(
         &mut self,
         author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
         project: Uuid,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+        if let Some(applied) =
+            self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
+        {
+            return Ok(applied);
+        }
         let import = self.import(project)?;
         self.apply_project_operations(
             author,
+            idempotency_key,
             vec![ProjectOperation::Import(
                 ProjectImportOperation::RemoveImport { import },
             )],

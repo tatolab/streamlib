@@ -213,6 +213,7 @@ mod tests {
         let applied = project_repository
             .apply_asset_changes(
                 &ProjectTransactionAuthor::the_runtime(),
+                None,
                 vec![crate::ProjectAssetChangeRequest::ImportAsset {
                     source: crate::ProjectAssetImportSource::FileOnThisMachine(
                         parent.path().join("intro.mp4"),
