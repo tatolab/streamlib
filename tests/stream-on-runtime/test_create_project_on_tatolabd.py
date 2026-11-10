@@ -20,6 +20,7 @@ import json
 import re
 import shutil
 import time
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -93,16 +94,36 @@ def create_project_through_tatolab_mcp(
     return asyncio.run(asyncio.wait_for(create_through_the_verb(), MCP_SESSION_TIMEOUT_SECONDS))
 
 
+UV_SOURCES_TABLE_HEADER = "[tool.uv.sources]"
+
+
 def point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory: Path) -> None:
     """Have uv take `tatolab-stream`, `tatolab-h264` and `tatolab-testpattern` from this checkout,
-    as the suite tests them."""
-    with (project_directory / "pyproject.toml").open("a", encoding="utf-8") as pyproject:
-        pyproject.write(
-            "\n[tool.uv.sources]\n"
-            f'tatolab-stream = {{ path = "{REPOSITORY_ROOT / "sdk" / "tatolab-stream"}" }}\n'
-            f'tatolab-h264 = {{ path = "{REPOSITORY_ROOT / "packages" / "streamlib-h264"}" }}\n'
-            f'tatolab-testpattern = {{ path = "{REPOSITORY_ROOT / "packages" / "tatolab-testpattern"}" }}\n'
-        )
+    as the suite tests them, in the one `[tool.uv.sources]` table the project holds."""
+    checkout_path_of_each_distribution = {
+        "tatolab-stream": str(REPOSITORY_ROOT / "sdk" / "tatolab-stream"),
+        "tatolab-h264": str(REPOSITORY_ROOT / "packages" / "streamlib-h264"),
+        "tatolab-testpattern": str(REPOSITORY_ROOT / "packages" / "tatolab-testpattern"),
+    }
+    pyproject_path = project_directory / "pyproject.toml"
+    pyproject_lines = [
+        line
+        for line in pyproject_path.read_text(encoding="utf-8").splitlines()
+        if line.partition("=")[0].strip() not in checkout_path_of_each_distribution
+    ]
+    if UV_SOURCES_TABLE_HEADER not in pyproject_lines:
+        pyproject_lines += ["", UV_SOURCES_TABLE_HEADER]
+    after_the_header = pyproject_lines.index(UV_SOURCES_TABLE_HEADER) + 1
+    pyproject_lines[after_the_header:after_the_header] = [
+        f'{distribution} = {{ path = "{checkout_path}" }}'
+        for distribution, checkout_path in checkout_path_of_each_distribution.items()
+    ]
+    pyproject_path.write_text("\n".join(pyproject_lines) + "\n", encoding="utf-8")
+    uv_sources = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))["tool"]["uv"]["sources"]
+    assert {
+        distribution: uv_sources[distribution]["path"]
+        for distribution in checkout_path_of_each_distribution
+    } == checkout_path_of_each_distribution, uv_sources
 
 
 def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_and_outlives_the_connection(
