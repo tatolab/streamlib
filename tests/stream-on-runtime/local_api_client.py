@@ -123,6 +123,12 @@ class LocalApiClient:
         step}`, `stream` its id."""
         return self.call_tool("list_streams")["streams"]
 
+    def stream_asset_of(self, stream_id: str) -> str:
+        """The UUID of the stream asset the stream `stream_id` runs, which a graph edit names it
+        by."""
+        [listed] = [listed for listed in self.list_streams() if listed["stream"] == stream_id]
+        return listed["location"]["stream_asset"]
+
     def stream_action_once_ended(
         self, action: str, *, timeout: float = STREAM_ACTION_FOLLOW_DEADLINE_SECONDS
     ) -> "dict[str, Any]":

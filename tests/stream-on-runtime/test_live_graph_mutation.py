@@ -173,7 +173,9 @@ def link_end(node_uuid: str, port: str) -> "dict[str, str]":
 
 def add_node_live(local_api: LocalApiClient, stream_id: str, arguments: dict) -> "dict[str, str]":
     """Add a node to the running stream alone, and answer its `node` UUID and `name`."""
-    answered = local_api.call_tool("add_node", {**arguments, "stream": stream_id, "mode": "live"})
+    answered = local_api.call_tool(
+        "add_node", {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+    )
     (added,) = answered["added_nodes"]
     return added
 
@@ -186,7 +188,13 @@ def connect_live(
 ) -> str:
     """Link `source` to `target` in the running stream alone, and answer the new link's id."""
     local_api.call_tool(
-        "connect", {"stream": stream_id, "source": source, "target": target, "mode": "live"}
+        "connect",
+        {
+            "stream": local_api.stream_asset_of(stream_id),
+            "source": source,
+            "target": target,
+            "mode": "live",
+        },
     )
     graph = local_api.call_tool("graph", {"stream": stream_id})
     name_of = {node["id"]: node["name"] for node in graph["nodes"]}
@@ -269,7 +277,7 @@ def start_the_pattern_stream(
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     project_files: "dict[str, str]",
 ) -> PatternStreamRunning:
-    """`tatolab run` on a project holding the one-source stream and `project_files`,
+    """`tatolab start` on a project holding the one-source stream and `project_files`,
     once its engine has started and its source is running."""
     app_directory = make_tatolab_project(
         {"stream.py": STREAM_WITH_ONE_PATTERN_SOURCE, **project_files}
@@ -428,7 +436,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     local_api.call_tool(
         "disconnect",
         {
-            "stream": stream_id,
+            "stream": local_api.stream_asset_of(stream_id),
             "source": link_end(pattern["id"], "video"),
             "target": link_end(added["node"], "video_from_upstream"),
             "mode": "live",
@@ -448,7 +456,8 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     ), "bags still leave a disconnected effect"
 
     removed = local_api.call_tool(
-        "remove_node", {"stream": stream_id, "node": added["node"], "mode": "live"}
+        "remove_node",
+        {"stream": local_api.stream_asset_of(stream_id), "node": added["node"], "mode": "live"},
     )
     assert [operation["operation"] for operation in removed["operations"]] == ["remove_node"]
     graph_after_remove = local_api.call_tool("graph", {"stream": stream_id})
@@ -597,7 +606,11 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
 
     refusal = local_api.call_tool_refusal(
         "add_node",
-        {"stream": stream_id, "type": "processors.no_such_module:Missing", "mode": "live"},
+        {
+            "stream": local_api.stream_asset_of(stream_id),
+            "type": "processors.no_such_module:Missing",
+            "mode": "live",
+        },
     )
     assert re.search(r"no_such_module|No module named", refusal), refusal
 
@@ -610,7 +623,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     port_refusal = local_api.call_tool_refusal(
         "connect",
         {
-            "stream": stream_id,
+            "stream": local_api.stream_asset_of(stream_id),
             "source": link_end(pattern["id"], "no_such_port"),
             "target": link_end(pattern["id"], "video"),
             "mode": "live",

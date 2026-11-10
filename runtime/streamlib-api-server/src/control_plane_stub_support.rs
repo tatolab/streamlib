@@ -23,6 +23,19 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
                 )))
             })
         }
+        fn write_a_value_onto_an_output_of_a_view_node(
+            &self,
+            node_id: String,
+            port_name: String,
+            _value: ::serde_json::Value,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            Box::pin(async move {
+                Err(::streamlib::sdk::error::Error::Link(format!(
+                    "the stub stream runs no view node `{node_id}`, so its output `{port_name}` \
+                     takes no value"
+                )))
+            })
+        }
     };
 }
 pub(crate) use every_reserved_slot_reader_is_unreachable;
@@ -191,6 +204,17 @@ pub(crate) fn the_stub_runtimes_description()
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_ID: &str = "stub-stream";
 
+/// The stream asset the stub's one stream runs.
+pub(crate) const STUB_STREAM_ASSET: ::uuid::Uuid =
+    ::uuid::Uuid::from_u128(0x57ab_0000_0000_0000_0000_0000_0001);
+
+/// The project the stub's one stream is of.
+pub(crate) const STUB_PROJECT: ::uuid::Uuid =
+    ::uuid::Uuid::from_u128(0x57ab_0000_0000_0000_0000_0000_0002);
+
+/// Where the stub's one stream's project lives.
+pub(crate) const STUB_PROJECT_DIRECTORY: &str = "/stub-project";
+
 /// Refuse a call naming a stream other than [`STUB_STREAM_ID`], in the
 /// engine's words.
 pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
@@ -302,12 +326,20 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }
-            fn run_project(
+            fn start_project(
                 &self,
-                _request: ::streamlib::sdk::runtime::RunProjectRequest,
+                _request: ::streamlib::sdk::runtime::ProjectStartOrReloadRequest,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "run_project",
+                    "start_project",
+                ))
+            }
+            fn reload_project(
+                &self,
+                _request: ::streamlib::sdk::runtime::ProjectStartOrReloadRequest,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "reload_project",
                 ))
             }
             fn create_project(
@@ -399,7 +431,13 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 vec![::streamlib::sdk::runtime::StreamListing {
                     stream_id: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
                     display_name: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),
-                    stream_location: None,
+                    stream_location: Some(::streamlib::sdk::runtime::StreamLocation {
+                        project_directory: ::std::path::PathBuf::from(
+                            $crate::control_plane_stub_support::STUB_PROJECT_DIRECTORY,
+                        ),
+                        project: $crate::control_plane_stub_support::STUB_PROJECT,
+                        stream_asset: $crate::control_plane_stub_support::STUB_STREAM_ASSET,
+                    }),
                     state: ::streamlib::sdk::runtime::StreamListingState::Running,
                     node_count: None,
                     failed_because: None,

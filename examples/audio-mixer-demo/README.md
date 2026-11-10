@@ -88,8 +88,8 @@ module is a maturin project, so the build needs a Rust toolchain. The runtime
 itself is not on pip.
 
 `tatolab dev` follows the project's log and loads the project again on every
-saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
-and leaves the stream loaded; `tatolab stop <stream>` stops it.
+saved edit; `tatolab start` queues the load and returns, and `tatolab reload` re-reads a project that already runs. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop` stops it.
 
 **No audio hardware?** It still runs. Where no audio backend exists,
 `SpeakerSink` discards what it receives — so the graph, the contract and the

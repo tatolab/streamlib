@@ -253,7 +253,7 @@ mod tests {
             .apply_asset_changes(
                 &ProjectTransactionAuthor::the_runtime(),
                 None,
-                vec![crate::ProjectAssetChangeRequest::ImportAsset {
+                vec![crate::ProjectAssetAction::ImportAsset {
                     source: crate::ProjectAssetImportSource::FileOnThisMachine(
                         parent.path().join("intro.mp4"),
                     ),

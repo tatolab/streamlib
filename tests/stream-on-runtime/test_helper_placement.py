@@ -437,7 +437,7 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
         local_api.call_tool(
             "set_pin_value",
             {
-                "stream": stream_id,
+                "stream": local_api.stream_asset_of(stream_id),
                 "node": gate["id"],
                 "input": "open",
                 "value": is_open,
@@ -498,7 +498,7 @@ def test_a_crash_moves_a_gate_reading_a_python_class_out_of_its_reader_and_the_r
     def set_crash_live(crash: bool) -> None:
         local_api.call_tool(
             "set_pin_value",
-            {"stream": stream_id, "node": gate["id"], "input": "crash", "value": crash, "mode": "live"},
+            {"stream": local_api.stream_asset_of(stream_id), "node": gate["id"], "input": "crash", "value": crash, "mode": "live"},
         )
 
     set_crash_live(True)
@@ -627,7 +627,9 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
         return {"node": node_uuid, "port": port}
 
     def edit_live(tool: str, arguments: dict) -> dict:
-        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+        return local_api.call_tool(
+            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+        )
 
     def the_link_into_the_sink() -> str:
         (link,) = [
@@ -985,7 +987,7 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
     project_directory = listed["location"]["project_directory"]
     queued_stop = local_api.call_tool("stop_project", {"project_directory": project_directory})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
-    queued_start = local_api.call_tool("run_project", {"project_directory": project_directory})
+    queued_start = local_api.call_tool("start_project", {"project_directory": project_directory})
     assert local_api.stream_action_once_ended(queued_start["action"])["state"] == "done"
     first_read_after_the_restart = tatolabd.await_marker("FIRST_COUNT_READ", occurrence=3)
     tatolabd.interrupt()
@@ -1370,7 +1372,7 @@ def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_se
         local_api.call_tool(
             "set_pin_value",
             {
-                "stream": stream_id,
+                "stream": local_api.stream_asset_of(stream_id),
                 "node": sink["id"],
                 "input": "brightness",
                 "value": value,
@@ -1437,7 +1439,9 @@ def test_a_function_node_linked_live_with_an_input_no_value_reaches_holds_until_
         return {"node": node_uuid, "port": port}
 
     def edit_live(tool: str, arguments: dict) -> dict:
-        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+        return local_api.call_tool(
+            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+        )
 
     def the_clamp_node() -> dict:
         (clamp_node,) = [
@@ -1508,7 +1512,9 @@ def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
     )
 
     def edit_live(tool: str, arguments: dict) -> dict:
-        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+        return local_api.call_tool(
+            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+        )
 
     def the_scaled_node() -> dict:
         (scaled_node,) = [
@@ -1590,7 +1596,9 @@ def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_
     )
 
     def edit_live(tool: str, arguments: dict) -> dict:
-        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+        return local_api.call_tool(
+            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+        )
 
     (held_node,) = [
         node
@@ -1659,7 +1667,9 @@ def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_l
     assert configured["lowest"] == configured["highest"] == pytest.approx(0.25), configured
 
     def edit_live(tool: str, arguments: dict) -> dict:
-        return local_api.call_tool(tool, {**arguments, "stream": stream_id, "mode": "live"})
+        return local_api.call_tool(
+            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+        )
 
     (configured_node,) = [
         node

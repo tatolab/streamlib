@@ -5,10 +5,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Map;
 use streamlib_project_repository::{
-    PROJECT_HISTORY_DIRECTORY, ProjectAssetChangeRequest, ProjectAssetImportSource,
-    ProjectAssetOperation, ProjectOperation, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectSettingsOperation, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionLineage, TatolabProjectFile,
+    PROJECT_HISTORY_DIRECTORY, ProjectAssetAction, ProjectAssetImportSource, ProjectAssetOperation,
+    ProjectOperation, ProjectRepository, ProjectRepositoryRefusal, ProjectSettingsAction,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, TatolabProjectFile,
 };
 use uuid::Uuid;
 
@@ -46,22 +45,23 @@ fn person() -> ProjectTransactionAuthor {
 
 fn apply_settings(
     repository: &mut ProjectRepository,
-    settings_operation: ProjectSettingsOperation,
+    settings_action: ProjectSettingsAction,
 ) -> Result<(), ProjectRepositoryRefusal> {
     repository
-        .apply_project_operations(
-            &person(),
-            None,
-            vec![ProjectOperation::ProjectSettings(settings_operation)],
-            ProjectTransactionLineage::NewEdit,
-        )
+        .apply_project_settings_action(&person(), None, settings_action)
         .map(|_| ())
 }
 
 fn undo(repository: &mut ProjectRepository) {
     let reversal = repository.undo_by(&person()).unwrap();
     repository
-        .apply_project_operations(&person(), None, reversal.operations, reversal.lineage)
+        .apply_project_operations(
+            &person(),
+            None,
+            Vec::new(),
+            reversal.operations,
+            reversal.lineage,
+        )
         .unwrap();
 }
 
@@ -76,7 +76,7 @@ fn import_an_image(repository: &mut ProjectRepository, source_directory: &Path) 
         .apply_asset_changes(
             &person(),
             None,
-            vec![ProjectAssetChangeRequest::ImportAsset {
+            vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(source),
                 asset_path: "assets/cover.png".to_owned(),
                 kind: None,
@@ -97,9 +97,8 @@ fn a_rename_writes_the_project_file_keeps_its_uuid_and_undoes() {
     let uuid = repository.project_file().project;
     apply_settings(
         &mut repository,
-        ProjectSettingsOperation::SetProjectName {
-            from: "Robot cell".to_owned(),
-            to: "Weld line".to_owned(),
+        ProjectSettingsAction::SetProjectName {
+            name: "Weld line".to_owned(),
         },
     )
     .unwrap();
@@ -126,9 +125,8 @@ fn a_blank_name_is_refused_with_nothing_committed() {
     let commits_before = repository.history().commits_newest_first().unwrap().len();
     let refusal = apply_settings(
         &mut repository,
-        ProjectSettingsOperation::SetProjectName {
-            from: "Robot cell".to_owned(),
-            to: "  ".to_owned(),
+        ProjectSettingsAction::SetProjectName {
+            name: "  ".to_owned(),
         },
     )
     .unwrap_err();
@@ -148,18 +146,14 @@ fn a_description_and_a_cover_are_set_cleared_and_undone_independently() {
     let cover = import_an_image(&mut repository, project.root.path());
     apply_settings(
         &mut repository,
-        ProjectSettingsOperation::SetProjectDescription {
-            from: None,
-            to: Some("Two arms and a camera".to_owned()),
+        ProjectSettingsAction::SetProjectDescription {
+            description: Some("Two arms and a camera".to_owned()),
         },
     )
     .unwrap();
     apply_settings(
         &mut repository,
-        ProjectSettingsOperation::SetProjectCover {
-            from: None,
-            to: Some(cover),
-        },
+        ProjectSettingsAction::SetProjectCover { cover: Some(cover) },
     )
     .unwrap();
     let on_disk = project_file_on_disk(&project.project_directory);
@@ -185,9 +179,8 @@ fn a_cover_must_be_a_media_asset_the_project_holds_and_cannot_be_deleted_while_i
     assert!(matches!(
         apply_settings(
             &mut repository,
-            ProjectSettingsOperation::SetProjectCover {
-                from: None,
-                to: Some(no_such_asset),
+            ProjectSettingsAction::SetProjectCover {
+                cover: Some(no_such_asset),
             },
         ),
         Err(ProjectRepositoryRefusal::NoSuchAsset(refused)) if refused == no_such_asset
@@ -196,17 +189,14 @@ fn a_cover_must_be_a_media_asset_the_project_holds_and_cannot_be_deleted_while_i
     let cover = import_an_image(&mut repository, project.root.path());
     apply_settings(
         &mut repository,
-        ProjectSettingsOperation::SetProjectCover {
-            from: None,
-            to: Some(cover),
-        },
+        ProjectSettingsAction::SetProjectCover { cover: Some(cover) },
     )
     .unwrap();
     let refusal = repository
         .apply_asset_changes(
             &person(),
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: cover }],
+            vec![ProjectAssetAction::DeleteAsset { asset: cover }],
         )
         .unwrap_err();
     assert!(
@@ -221,9 +211,8 @@ fn last_edited_is_the_newest_commit_of_history() {
     let created_at = repository.last_edited_at_unix_seconds().unwrap().unwrap();
     apply_settings(
         &mut repository,
-        ProjectSettingsOperation::SetProjectDescription {
-            from: None,
-            to: Some("a cell".to_owned()),
+        ProjectSettingsAction::SetProjectDescription {
+            description: Some("a cell".to_owned()),
         },
     )
     .unwrap();
@@ -295,9 +284,8 @@ fn an_edit_of_the_duplicate_leaves_the_original_as_it_was() {
     let mut duplicate = repository.duplicate_into(&into, &person()).unwrap();
     apply_settings(
         &mut duplicate,
-        ProjectSettingsOperation::SetProjectName {
-            from: "Robot cell copy".to_owned(),
-            to: "Weld line".to_owned(),
+        ProjectSettingsAction::SetProjectName {
+            name: "Weld line".to_owned(),
         },
     )
     .unwrap();

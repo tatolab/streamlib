@@ -11,7 +11,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeT
 use super::operations::RuntimeOperations;
 use super::{
     CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectPausedOrResumed,
-    RunProjectRequest, Runner, StreamAction, StreamActionQueued, StreamListing,
+    ProjectStartOrReloadRequest, Runner, StreamAction, StreamActionQueued, StreamListing,
     StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
@@ -23,7 +23,7 @@ use crate::core::processors::InstalledModuleOfANodeType;
 /// stream a call names, a stream's node catalog, and the stream
 /// actions.
 ///
-/// `run_project`, `stop_project` and `remove_project` answer at
+/// `start_project`, `reload_project`, `stop_project` and `remove_project` answer at
 /// once, their actions running on the project's stream action queue; every
 /// other call may block on the stream table, so the local API calls each from a
 /// blocking task.
@@ -84,8 +84,11 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// The ids of the loaded streams, in order.
     fn ids_of_the_loaded_streams(&self) -> Vec<String>;
 
-    /// [`Runner::run_project`].
-    fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued>;
+    /// [`Runner::start_project`].
+    fn start_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued>;
+
+    /// [`Runner::reload_project`].
+    fn reload_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued>;
 
     /// [`Runner::create_project`].
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued>;
@@ -208,8 +211,12 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::ids_of_the_loaded_streams(self)
     }
 
-    fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
-        Runner::run_project(self, request)
+    fn start_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
+        Runner::start_project(self, request)
+    }
+
+    fn reload_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
+        Runner::reload_project(self, request)
     }
 
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued> {

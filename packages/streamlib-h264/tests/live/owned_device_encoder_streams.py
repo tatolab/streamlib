@@ -5,7 +5,7 @@
 
 `owned_device_encoders.sh` writes a project whose `stream.py` defines one
 `@graph_generator` per encoder, `owned_device_encoder_<n>`, each building this graph,
-and loads it on one runtime with `tatolab run --dir`. Each encoder runs in its
+and loads it on one runtime with `tatolab start --dir`. Each encoder runs in its
 own helper on a device that helper owns, and each stream sends its encoder's
 port to the fixture's relay through `MoqGateway` → `MoqTrack` → `MoqTrackSend`,
 so `graph` counts what it writes and `owned_device_encoders.sh` reads it there

@@ -14,22 +14,29 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::schemars::JsonSchema;
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, tool, tool_router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamLocation,
 };
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectAssetKind,
-    ProjectAssetOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
-    ProjectRepository, ProjectRepositoryRefusal, ProjectStreamDocumentOperation,
-    ProjectTransactionAuthor, ProjectTransactionLineage, ProjectTransactionReversal,
-    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
-    StreamGraphOperation, StreamGraphOperationOnAStream,
-    fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
-    the_fragment_a_stream_fragment_places, the_stream_document_of_an_import,
+    AppliedProjectTransaction, EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
+    GROUP_ARGUMENT_DESCRIPTION, GROUP_COLOUR_ARGUMENT_DESCRIPTION,
+    GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, ProjectAction, ProjectActionIdempotencyKey,
+    ProjectAssetKind, ProjectAssetOperation, ProjectOperation,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionLineage,
+    ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
+    StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
+    StreamGraphFragmentPlacement, StreamGraphGroupFields, StreamGraphOperation,
+    StreamGraphOperationOnAStream, fragment_with_each_node_uuid_kept_by_its_name,
+    graph_document_holds_a_stream_fragment, the_fragment_a_stream_fragment_places,
+    the_stream_document_of_an_import,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
@@ -48,22 +55,6 @@ use crate::mcp_project_change_feed::{
     ProjectActionTheRuntimeRefused, project_transaction_on_the_wire,
 };
 
-pub(crate) const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the edit is to, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
-const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.";
-const IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION: &str = "The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`.";
-const IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import.";
-const IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION: &str = "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.";
-const GROUP_ARGUMENT_DESCRIPTION: &str =
-    "The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers.";
-const GROUP_TITLE_ARGUMENT_DESCRIPTION: &str =
-    "The group's title, which Tato Studio draws on its frame.";
-const GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION: &str =
-    "What the group's nodes do, for the next person who reads the graph.";
-const GROUP_COLOUR_ARGUMENT_DESCRIPTION: &str =
-    "The colour Tato Studio draws the group's frame with, e.g. `#3b82f6`.";
-pub(crate) const DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION: &str = "The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`.";
-pub(crate) const DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION: &str = "The imported project's stream, by its stream asset's UUID, the `asset` its graph document under `imports/<folder>/` holds.";
-pub(crate) const DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. Any node of that name already in the graph refuses the placement.";
 const GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.";
 
 /// Whether a graph edit is kept.
@@ -87,264 +78,45 @@ impl GraphEditMode {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct GraphLinkEndToolArgument {
-    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-    node: String,
-    #[schemars(description = "The port's name, as `graph` lists it under the node's `ports`.")]
-    port: String,
-}
-
-/// One operation of a graph transaction, as a caller names it.
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum StreamGraphOperationToolArgument {
-    /// Place a node, answering the UUID the runtime makes for it.
-    AddNode {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[serde(rename = "type")]
-        #[schemars(
-            description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
-        )]
-        node_type: String,
-        #[schemars(
-            description = "The node's name, a label: cast to lowercase URL-safe and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …"
-        )]
-        name: Option<String>,
-        #[schemars(description = "The node's config, as the keys its type's schema declares.")]
-        config: Option<Map<String, Value>>,
-        #[schemars(description = "The value on each unlinked input, by input name.")]
-        pins: Option<Map<String, Value>>,
-        #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
-        exposed_config_fields: Option<Vec<String>>,
-        #[schemars(
-            description = "What the studio draws the node with: canvas position, group, comment, colour."
-        )]
-        studio: Option<Map<String, Value>>,
-        #[serde(rename = "as")]
-        #[schemars(
-            description = "A label later operations of the same transaction name the node by, before its UUID is known."
-        )]
-        label: Option<String>,
-    },
-    /// Take a node out, with every link it has.
-    RemoveNode {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-        node: String,
-    },
-    /// Link an output port to an input port.
-    Connect {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = "The output port the link carries from.")]
-        source: GraphLinkEndToolArgument,
-        #[schemars(description = "The input port the link carries into.")]
-        target: GraphLinkEndToolArgument,
-    },
-    /// Take out the link between two ports.
-    Disconnect {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = "The output port the link carries from.")]
-        source: GraphLinkEndToolArgument,
-        #[schemars(description = "The input port the link carries into.")]
-        target: GraphLinkEndToolArgument,
-    },
-    /// Replace a node's config whole.
-    SetNodeConfig {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-        node: String,
-        #[schemars(description = "The node's new config, as the keys its type's schema declares.")]
-        config: Map<String, Value>,
-    },
-    /// Set the value on one of a node's inputs.
-    SetPinValue {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-        node: String,
-        #[schemars(
-            description = "The input's name, as `graph` lists it under the node's `ports.inputs`."
-        )]
-        input: String,
-        #[schemars(
-            description = "The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off."
-        )]
-        value: Option<Value>,
-    },
-    /// Give a node another name.
-    RenameNode {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-        node: String,
-        #[schemars(
-            description = "The node's new name: cast to lowercase URL-safe, refused when another node has it."
-        )]
-        name: String,
-    },
-    /// Replace a node's studio fields whole.
-    SetStudioFields {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-        node: String,
-        #[schemars(
-            description = "What the studio draws the node with: canvas position, group, comment, colour."
-        )]
-        studio: Map<String, Value>,
-    },
-    /// Run one of the project's graph generators and place what it builds as a fragment, or
-    /// refresh the fragment of that name with a fresh run.
-    ImportGraphGenerator {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION)]
-        generator: String,
-        #[schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION)]
-        name: Option<String>,
-        #[schemars(description = IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION)]
-        config: Option<Map<String, Value>>,
-        #[serde(rename = "as")]
-        #[schemars(
-            description = "A label later operations of the same transaction name the fragment node by, before its UUID is known."
-        )]
-        label: Option<String>,
-    },
-    /// Replace the config fields a node takes as inputs whole.
-    SetExposedConfigFields {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
-        node: String,
-        #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
-        exposed_config_fields: Vec<String>,
-    },
-    /// Make a labelled group of nodes of the stream's own level.
-    AddGroup {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
-        title: String,
-        #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
-        description: Option<String>,
-        #[schemars(description = GROUP_COLOUR_ARGUMENT_DESCRIPTION)]
-        colour: Option<String>,
-        #[schemars(
-            description = "The nodes that join it, each as `node` names one; a node of another group is refused."
-        )]
-        nodes: Vec<String>,
-    },
-    /// Set a labelled group's title, description or colour.
-    SetGroupFields {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
-        group: String,
-        #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
-        title: Option<String>,
-        #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
-        description: Option<String>,
-        #[schemars(description = GROUP_COLOUR_ARGUMENT_DESCRIPTION)]
-        colour: Option<String>,
-    },
-    /// Place a stream of an imported project as a fragment node referencing it.
-    UseDependencyStream {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
-        project: String,
-        #[schemars(description = DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION)]
-        dependency_stream: String,
-        #[schemars(description = DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION)]
-        name: Option<String>,
-        #[serde(rename = "as")]
-        #[schemars(
-            description = "A label later operations of the same transaction name the fragment node by, before its UUID is known."
-        )]
-        label: Option<String>,
-    },
-    /// Take out a labelled group, its nodes left ungrouped.
-    RemoveGroup {
-        #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-        stream: String,
-        #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
-        group: String,
-    },
-}
-
-/// What a node's `exposed_config_fields` are, as every tool that takes them says.
-const EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION: &str = "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.";
-
-impl StreamGraphOperationToolArgument {
-    /// The node, link and field this operation names, as its caller named them.
-    fn what_it_names(&self) -> WhatAGraphOperationNames {
-        let names_a_node = |node: &str| WhatAGraphOperationNames {
-            node: Some(node.to_owned()),
+/// The node, link and field `action` names, as its caller named them.
+fn what_a_graph_action_names(action: &StreamGraphAction) -> WhatAGraphOperationNames {
+    let names_a_node = |node: &str| WhatAGraphOperationNames {
+        node: Some(node.to_owned()),
+        ..WhatAGraphOperationNames::default()
+    };
+    match action {
+        StreamGraphAction::RemoveNode { node, .. }
+        | StreamGraphAction::SetNodeConfig { node, .. }
+        | StreamGraphAction::RenameNode { node, .. }
+        | StreamGraphAction::SetStudioFields { node, .. }
+        | StreamGraphAction::SetExposedConfigFields { node, .. } => names_a_node(node),
+        StreamGraphAction::SetPinValue { node, input, .. } => WhatAGraphOperationNames {
+            field: Some(input.clone()),
+            ..names_a_node(node)
+        },
+        StreamGraphAction::Connect { source, target, .. }
+        | StreamGraphAction::Disconnect { source, target, .. } => WhatAGraphOperationNames {
+            link: Some(RefusedGraphLinkOnTheWire {
+                source: GraphLinkEndOnTheWire {
+                    node: source.node.clone(),
+                    port: source.port.clone(),
+                },
+                target: GraphLinkEndOnTheWire {
+                    node: target.node.clone(),
+                    port: target.port.clone(),
+                },
+            }),
             ..WhatAGraphOperationNames::default()
-        };
-        match self {
-            Self::RemoveNode { node, .. }
-            | Self::SetNodeConfig { node, .. }
-            | Self::RenameNode { node, .. }
-            | Self::SetStudioFields { node, .. }
-            | Self::SetExposedConfigFields { node, .. } => names_a_node(node),
-            Self::SetPinValue { node, input, .. } => WhatAGraphOperationNames {
-                field: Some(input.clone()),
-                ..names_a_node(node)
-            },
-            Self::Connect { source, target, .. } | Self::Disconnect { source, target, .. } => {
-                WhatAGraphOperationNames {
-                    link: Some(RefusedGraphLinkOnTheWire {
-                        source: GraphLinkEndOnTheWire {
-                            node: source.node.clone(),
-                            port: source.port.clone(),
-                        },
-                        target: GraphLinkEndOnTheWire {
-                            node: target.node.clone(),
-                            port: target.port.clone(),
-                        },
-                    }),
-                    ..WhatAGraphOperationNames::default()
-                }
-            }
-            Self::AddNode { label, name, .. }
-            | Self::ImportGraphGenerator { label, name, .. }
-            | Self::UseDependencyStream { label, name, .. } => WhatAGraphOperationNames {
-                node: label.clone().or_else(|| name.clone()),
-                ..WhatAGraphOperationNames::default()
-            },
-            Self::AddGroup { .. } | Self::SetGroupFields { .. } | Self::RemoveGroup { .. } => {
-                WhatAGraphOperationNames::default()
-            }
-        }
-    }
-
-    fn stream(&self) -> &str {
-        match self {
-            Self::AddNode { stream, .. }
-            | Self::RemoveNode { stream, .. }
-            | Self::Connect { stream, .. }
-            | Self::Disconnect { stream, .. }
-            | Self::SetNodeConfig { stream, .. }
-            | Self::SetPinValue { stream, .. }
-            | Self::RenameNode { stream, .. }
-            | Self::SetStudioFields { stream, .. }
-            | Self::ImportGraphGenerator { stream, .. }
-            | Self::SetExposedConfigFields { stream, .. }
-            | Self::AddGroup { stream, .. }
-            | Self::SetGroupFields { stream, .. }
-            | Self::RemoveGroup { stream, .. }
-            | Self::UseDependencyStream { stream, .. } => stream,
-        }
+        },
+        StreamGraphAction::AddNode { label, name, .. }
+        | StreamGraphAction::ImportGraphGenerator { label, name, .. }
+        | StreamGraphAction::UseDependencyStream { label, name, .. } => WhatAGraphOperationNames {
+            node: label.clone().or_else(|| name.clone()),
+            ..WhatAGraphOperationNames::default()
+        },
+        StreamGraphAction::AddGroup { .. }
+        | StreamGraphAction::SetGroupFields { .. }
+        | StreamGraphAction::RemoveGroup { .. } => WhatAGraphOperationNames::default(),
     }
 }
 
@@ -355,7 +127,7 @@ struct TransactToolArguments {
     #[schemars(
         description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group` or `use_dependency_stream` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
-    operations: Vec<StreamGraphOperationToolArgument>,
+    operations: Vec<StreamGraphAction>,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     mode: Option<GraphEditMode>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
@@ -369,7 +141,7 @@ struct TransactToolArguments {
 #[serde(deny_unknown_fields)]
 struct AddNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[serde(rename = "type")]
     #[schemars(
         description = "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
@@ -404,7 +176,7 @@ struct AddNodeToolArguments {
 #[serde(deny_unknown_fields)]
 struct OneNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -420,15 +192,15 @@ struct OneNodeToolArguments {
 #[serde(deny_unknown_fields)]
 struct OneLinkToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(
         description = "The output port the link carries from: a node's UUID and its output port's name."
     )]
-    source: GraphLinkEndToolArgument,
+    source: StreamGraphActionLinkEnd,
     #[schemars(
         description = "The input port the link carries into: a node's UUID and its input port's name."
     )]
-    target: GraphLinkEndToolArgument,
+    target: StreamGraphActionLinkEnd,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
     mode: Option<GraphEditMode>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
@@ -442,7 +214,7 @@ struct OneLinkToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetNodeConfigToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -462,7 +234,7 @@ struct SetNodeConfigToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetPinValueToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -486,7 +258,7 @@ struct SetPinValueToolArguments {
 #[serde(deny_unknown_fields)]
 struct RenameNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -506,7 +278,7 @@ struct RenameNodeToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetStudioFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -526,7 +298,7 @@ struct SetStudioFieldsToolArguments {
 #[serde(deny_unknown_fields)]
 struct AddGroupToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
     title: String,
     #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
@@ -550,7 +322,7 @@ struct AddGroupToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetGroupFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
     group: String,
     #[schemars(description = "The group's new title; kept when omitted.")]
@@ -572,7 +344,7 @@ struct SetGroupFieldsToolArguments {
 #[serde(deny_unknown_fields)]
 struct RemoveGroupToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
     group: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -588,7 +360,7 @@ struct RemoveGroupToolArguments {
 #[serde(deny_unknown_fields)]
 struct ImportGraphGeneratorToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION)]
     generator: String,
     #[schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION)]
@@ -608,7 +380,7 @@ struct ImportGraphGeneratorToolArguments {
 #[serde(deny_unknown_fields)]
 struct SetExposedConfigFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
+    stream: Uuid,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
@@ -699,7 +471,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<ImportGraphGeneratorToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::ImportGraphGenerator {
+        let operation = StreamGraphAction::ImportGraphGenerator {
             stream,
             generator,
             name,
@@ -736,7 +508,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<AddNodeToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::AddNode {
+        let operation = StreamGraphAction::AddNode {
             stream,
             node_type,
             name,
@@ -771,7 +543,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<OneNodeToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::RemoveNode { stream, node };
+        let operation = StreamGraphAction::RemoveNode { stream, node };
         self.one_graph_transaction(
             "remove_node",
             vec![operation],
@@ -798,7 +570,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<OneLinkToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::Connect {
+        let operation = StreamGraphAction::Connect {
             stream,
             source,
             target,
@@ -829,7 +601,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<OneLinkToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::Disconnect {
+        let operation = StreamGraphAction::Disconnect {
             stream,
             source,
             target,
@@ -860,7 +632,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<SetNodeConfigToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::SetNodeConfig {
+        let operation = StreamGraphAction::SetNodeConfig {
             stream,
             node,
             config,
@@ -892,7 +664,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<SetPinValueToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::SetPinValue {
+        let operation = StreamGraphAction::SetPinValue {
             stream,
             node,
             input,
@@ -924,7 +696,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<RenameNodeToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::RenameNode { stream, node, name };
+        let operation = StreamGraphAction::RenameNode { stream, node, name };
         self.one_graph_transaction(
             "rename_node",
             vec![operation],
@@ -951,7 +723,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<SetStudioFieldsToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::SetStudioFields {
+        let operation = StreamGraphAction::SetStudioFields {
             stream,
             node,
             studio,
@@ -982,7 +754,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<SetExposedConfigFieldsToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::SetExposedConfigFields {
+        let operation = StreamGraphAction::SetExposedConfigFields {
             stream,
             node,
             exposed_config_fields,
@@ -1015,7 +787,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<AddGroupToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::AddGroup {
+        let operation = StreamGraphAction::AddGroup {
             stream,
             title,
             description,
@@ -1050,7 +822,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<SetGroupFieldsToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::SetGroupFields {
+        let operation = StreamGraphAction::SetGroupFields {
             stream,
             group,
             title,
@@ -1082,7 +854,7 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<RemoveGroupToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphOperationToolArgument::RemoveGroup { stream, group };
+        let operation = StreamGraphAction::RemoveGroup { stream, group };
         self.one_graph_transaction(
             "remove_group",
             vec![operation],
@@ -1203,7 +975,7 @@ impl LocalApiMcpServerHandler {
     pub(crate) async fn one_graph_transaction(
         &self,
         tool_name: &'static str,
-        operations: Vec<StreamGraphOperationToolArgument>,
+        operations: Vec<StreamGraphAction>,
         mode: Option<GraphEditMode>,
         author: Option<ProjectTransactionAuthorToolArgument>,
         idempotency_key: Option<String>,
@@ -1226,10 +998,8 @@ impl LocalApiMcpServerHandler {
                 .iter()
                 .map(|operation| serde_json::to_value(operation).unwrap_or_default())
                 .collect();
-            let streams_named: Vec<String> = operations
-                .iter()
-                .map(|operation| operation.stream().to_owned())
-                .collect();
+            let stream_assets_named: Vec<Uuid> =
+                operations.iter().map(StreamGraphAction::stream).collect();
             let (idempotency_key, applied) =
                 match the_idempotency_key_a_caller_sent(idempotency_key) {
                     Ok(idempotency_key) => {
@@ -1241,7 +1011,8 @@ impl LocalApiMcpServerHandler {
                 };
             applied.map_err(|refusal| {
                 let refusal = refusal.into_the_refusal_on_the_wire(tool_name);
-                if let Some(project) = in_flight.the_project_of_the_first_stream_of(&streams_named)
+                if let Some(project) =
+                    in_flight.the_project_of_the_first_stream_asset_of(&stream_assets_named)
                 {
                     project_actions_refused.keep_and_announce(
                         &project_repositories,
@@ -1425,7 +1196,7 @@ impl GraphTransactionInFlight<'_> {
     /// the project's history already holds, it applies nothing and answers that transaction.
     pub(crate) fn apply(
         &self,
-        requests: Vec<StreamGraphOperationToolArgument>,
+        requests: Vec<StreamGraphAction>,
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
@@ -1436,13 +1207,11 @@ impl GraphTransactionInFlight<'_> {
             ));
         }
         let stream_locations = self.the_location_of_each_loaded_stream();
+        let stream_id_of_each_request = self.the_loaded_stream_each_request_names(&requests)?;
         let mut stream_ids_in_order: Vec<String> = Vec::new();
-        for request in &requests {
-            if !stream_ids_in_order
-                .iter()
-                .any(|seen| seen == request.stream())
-            {
-                stream_ids_in_order.push(request.stream().to_owned());
+        for stream_id in &stream_id_of_each_request {
+            if !stream_ids_in_order.contains(stream_id) {
+                stream_ids_in_order.push(stream_id.clone());
             }
         }
         let project_repository = match mode {
@@ -1463,7 +1232,10 @@ impl GraphTransactionInFlight<'_> {
             ));
         }
         let applied = self.apply_the_requests(
-            requests,
+            requests
+                .into_iter()
+                .zip(stream_id_of_each_request)
+                .collect(),
             mode,
             author,
             idempotency_key,
@@ -1528,12 +1300,65 @@ impl GraphTransactionInFlight<'_> {
     }
 
     /// The project of the first of `stream_ids` that is a loaded stream of a project.
-    fn the_project_of_the_first_stream_of(&self, stream_ids: &[String]) -> Option<Uuid> {
-        let stream_locations = self.the_location_of_each_loaded_stream();
-        stream_ids
+    fn the_project_of_the_first_stream_asset_of(&self, stream_assets: &[Uuid]) -> Option<Uuid> {
+        let project_of_each_loaded_stream_asset: HashMap<Uuid, Uuid> = self
+            .the_location_of_each_loaded_stream()
+            .into_values()
+            .flatten()
+            .map(|stream_location| (stream_location.stream_asset, stream_location.project))
+            .collect();
+        stream_assets.iter().find_map(|stream_asset| {
+            project_of_each_loaded_stream_asset
+                .get(stream_asset)
+                .copied()
+        })
+    }
+
+    /// The stream id of the stream running each request's stream asset, in request order; a
+    /// loaded one over one only recorded.
+    fn the_loaded_stream_each_request_names(
+        &self,
+        requests: &[StreamGraphAction],
+    ) -> Result<Vec<String>, GraphTransactionRefusal> {
+        let mut listings_loaded_last = self.operations_on_the_loaded_streams.list_streams();
+        listings_loaded_last.sort_by_key(|listing| listing.node_count.is_some());
+        let stream_id_of_each_loaded_stream_asset: HashMap<Uuid, String> = listings_loaded_last
+            .into_iter()
+            .filter_map(|listing| Some((listing.stream_location?.stream_asset, listing.stream_id)))
+            .collect();
+        requests
             .iter()
-            .find_map(|stream_id| stream_locations.get(stream_id).cloned().flatten())
-            .map(|stream_location| stream_location.project)
+            .enumerate()
+            .map(|(request_index, request)| {
+                stream_id_of_each_loaded_stream_asset
+                    .get(&request.stream())
+                    .cloned()
+                    .ok_or_else(|| {
+                        let mut loaded_stream_assets: Vec<String> =
+                            stream_id_of_each_loaded_stream_asset
+                                .iter()
+                                .map(|(stream_asset, stream_id)| {
+                                    format!("{stream_asset} (stream `{stream_id}`)")
+                                })
+                                .collect();
+                        loaded_stream_assets.sort();
+                        GraphTransactionRefusal::of_the_operation(
+                            request_index,
+                            what_a_graph_action_names(request),
+                            format!(
+                                "no stream the runtime holds runs the stream asset {}; the stream \
+                                 assets it holds are: {}",
+                                request.stream(),
+                                if loaded_stream_assets.is_empty() {
+                                    "none".to_owned()
+                                } else {
+                                    loaded_stream_assets.join(", ")
+                                }
+                            ),
+                        )
+                    })
+            })
+            .collect()
     }
 
     /// The location of each loaded stream by its stream id, `None` for one of no project.
@@ -1562,24 +1387,25 @@ impl GraphTransactionInFlight<'_> {
             .collect()
     }
 
-    /// Apply `requests` as one transaction by `author`, to the project `project_repository_held`
-    /// holds when the transaction is committed.
+    /// Apply each request, to the loaded stream it names, as one transaction by `author`, to the
+    /// project `project_repository_held` holds when the transaction is committed.
     fn apply_the_requests(
         &self,
-        requests: Vec<StreamGraphOperationToolArgument>,
+        requests_and_the_stream_id_each_names: Vec<(StreamGraphAction, String)>,
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
         stream_locations: &HashMap<String, Option<StreamLocation>>,
         project_repository_held: Option<&mut ProjectRepository>,
     ) -> Result<GraphTransactionToolResult, GraphTransactionRefusal> {
+        let actions_as_sent: Vec<ProjectAction> = requests_and_the_stream_id_each_names
+            .iter()
+            .map(|(request, _)| ProjectAction::StreamGraph(request.clone()))
+            .collect();
         let mut stream_ids_in_order: Vec<String> = Vec::new();
-        for request in &requests {
-            if !stream_ids_in_order
-                .iter()
-                .any(|seen| seen == request.stream())
-            {
-                stream_ids_in_order.push(request.stream().to_owned());
+        for (_, stream_id) in &requests_and_the_stream_id_each_names {
+            if !stream_ids_in_order.contains(stream_id) {
+                stream_ids_in_order.push(stream_id.clone());
             }
         }
 
@@ -1627,19 +1453,21 @@ impl GraphTransactionInFlight<'_> {
         let mut labels_of_added_nodes: HashMap<Uuid, String> = HashMap::new();
         let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
         let project_repository_read_during_the_requests = project_repository_held.as_deref();
-        for (request_index, request) in requests.into_iter().enumerate() {
-            let stream_id = request.stream().to_owned();
-            let what_the_request_names = request.what_it_names();
+        for (request_index, (request, stream_id)) in requests_and_the_stream_id_each_names
+            .into_iter()
+            .enumerate()
+        {
+            let what_the_request_names = what_a_graph_action_names(&request);
             let applied = streams
                 .get_mut(&stream_id)
                 .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))
                 .and_then(|stream| {
                     let label = match &request {
-                        StreamGraphOperationToolArgument::AddNode { label, .. }
-                        | StreamGraphOperationToolArgument::ImportGraphGenerator {
+                        StreamGraphAction::AddNode { label, .. }
+                        | StreamGraphAction::ImportGraphGenerator {
                             label, ..
                         }
-                        | StreamGraphOperationToolArgument::UseDependencyStream {
+                        | StreamGraphAction::UseDependencyStream {
                             label, ..
                         } => label.clone(),
                         _ => None,
@@ -1744,6 +1572,7 @@ impl GraphTransactionInFlight<'_> {
                 match project_repository.apply_project_operations(
                     author,
                     idempotency_key,
+                    actions_as_sent,
                     project_operations,
                     ProjectTransactionLineage::NewEdit,
                 ) {
@@ -1853,7 +1682,13 @@ impl GraphTransactionInFlight<'_> {
             .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())
             .map_err(|refusal| refusal.to_string())?
         {
-            return Ok(project_transaction_on_the_wire(applied_before));
+            let undo_state_of_each_transaction = project_repository
+                .the_undo_state_of_each_transaction()
+                .map_err(|refusal| refusal.to_string())?;
+            return Ok(project_transaction_on_the_wire(
+                applied_before,
+                &undo_state_of_each_transaction,
+            ));
         }
         let reversal =
             reversal_of(&project_repository, author).map_err(|refusal| refusal.to_string())?;
@@ -1914,6 +1749,7 @@ impl GraphTransactionInFlight<'_> {
         match project_repository.apply_project_operations(
             author,
             idempotency_key.as_ref(),
+            Vec::new(),
             reversal.operations,
             reversal.lineage,
         ) {
@@ -1921,13 +1757,19 @@ impl GraphTransactionInFlight<'_> {
                 self.project_repositories
                     .announce_the_transaction_if_applied_now(&project_repository, &outcome);
                 let applied = outcome.into_applied_transaction();
+                let undo_state_of_each_transaction = project_repository
+                    .the_undo_state_of_each_transaction()
+                    .map_err(|refusal| refusal.to_string())?;
                 let edited_project_directory = project_repository.project_directory().to_path_buf();
                 drop(project_repository);
                 self.forget_the_stream_of_each_stream_asset_taken_out(project, &applied)?;
                 self.reconcile_each_loaded_stream_holding_a_stream_fragment(
                     &edited_project_directory,
                 );
-                Ok(project_transaction_on_the_wire(applied))
+                Ok(project_transaction_on_the_wire(
+                    applied,
+                    &undo_state_of_each_transaction,
+                ))
             }
             Err(refusal) => {
                 self.reverse_what_was_applied_live(&streams, applied_live);
@@ -2127,7 +1969,7 @@ type ImportedStreamPlacement<'repository> =
 /// The operation `request` asks of the graph `staged_graph` holds, with everything its inverse
 /// needs read from it; an added node takes a new UUID, recorded under its `as` when it has one.
 fn graph_operation_for_the_request(
-    request: StreamGraphOperationToolArgument,
+    request: StreamGraphAction,
     staged_graph: &StreamGraphDocument,
     node_by_label: &mut HashMap<String, Uuid>,
     run_the_graph_generator: &GraphGeneratorRunOfTheStream<'_>,
@@ -2145,8 +1987,8 @@ fn graph_operation_for_the_request(
                 )
             })
     };
-    let link_between = |source: &GraphLinkEndToolArgument,
-                        target: &GraphLinkEndToolArgument,
+    let link_between = |source: &StreamGraphActionLinkEnd,
+                        target: &StreamGraphActionLinkEnd,
                         node_by_label: &HashMap<String, Uuid>|
      -> Result<StreamGraphDocumentLink, String> {
         Ok(StreamGraphDocumentLink {
@@ -2172,7 +2014,7 @@ fn graph_operation_for_the_request(
         }
     };
     match request {
-        StreamGraphOperationToolArgument::ImportGraphGenerator {
+        StreamGraphAction::ImportGraphGenerator {
             generator,
             name,
             config,
@@ -2245,7 +2087,7 @@ fn graph_operation_for_the_request(
             };
             Ok(operation)
         }
-        StreamGraphOperationToolArgument::AddNode {
+        StreamGraphAction::AddNode {
             node_type,
             name,
             config,
@@ -2271,24 +2113,22 @@ fn graph_operation_for_the_request(
                 links: Vec::new(),
             })
         }
-        StreamGraphOperationToolArgument::RemoveNode { node, .. } => {
+        StreamGraphAction::RemoveNode { node, .. } => {
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::RemoveNode {
                 node: staged_graph.node(node)?,
                 links: staged_graph.links_touching(node),
             })
         }
-        StreamGraphOperationToolArgument::Connect { source, target, .. } => {
-            Ok(StreamGraphOperation::Connect {
-                link: link_between(&source, &target, node_by_label)?,
-            })
-        }
-        StreamGraphOperationToolArgument::Disconnect { source, target, .. } => {
+        StreamGraphAction::Connect { source, target, .. } => Ok(StreamGraphOperation::Connect {
+            link: link_between(&source, &target, node_by_label)?,
+        }),
+        StreamGraphAction::Disconnect { source, target, .. } => {
             Ok(StreamGraphOperation::Disconnect {
                 link: link_between(&source, &target, node_by_label)?,
             })
         }
-        StreamGraphOperationToolArgument::SetNodeConfig { node, config, .. } => {
+        StreamGraphAction::SetNodeConfig { node, config, .. } => {
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::SetNodeConfig {
                 node,
@@ -2296,7 +2136,7 @@ fn graph_operation_for_the_request(
                 to: Value::Object(config),
             })
         }
-        StreamGraphOperationToolArgument::SetPinValue {
+        StreamGraphAction::SetPinValue {
             node, input, value, ..
         } => {
             let node = node_named(&node, node_by_label)?;
@@ -2307,7 +2147,7 @@ fn graph_operation_for_the_request(
                 to: value.filter(|value| !value.is_null()),
             })
         }
-        StreamGraphOperationToolArgument::RenameNode { node, name, .. } => {
+        StreamGraphAction::RenameNode { node, name, .. } => {
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::RenameNode {
                 node,
@@ -2315,7 +2155,7 @@ fn graph_operation_for_the_request(
                 to: name,
             })
         }
-        StreamGraphOperationToolArgument::SetStudioFields { node, studio, .. } => {
+        StreamGraphAction::SetStudioFields { node, studio, .. } => {
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::SetStudioFields {
                 node,
@@ -2323,7 +2163,7 @@ fn graph_operation_for_the_request(
                 to: studio,
             })
         }
-        StreamGraphOperationToolArgument::SetExposedConfigFields {
+        StreamGraphAction::SetExposedConfigFields {
             node,
             exposed_config_fields,
             ..
@@ -2335,7 +2175,7 @@ fn graph_operation_for_the_request(
                 to: exposed_config_fields,
             })
         }
-        StreamGraphOperationToolArgument::AddGroup {
+        StreamGraphAction::AddGroup {
             title,
             description,
             colour,
@@ -2361,7 +2201,7 @@ fn graph_operation_for_the_request(
                 nodes,
             })
         }
-        StreamGraphOperationToolArgument::SetGroupFields {
+        StreamGraphAction::SetGroupFields {
             group,
             title,
             description,
@@ -2383,7 +2223,7 @@ fn graph_operation_for_the_request(
                 to,
             })
         }
-        StreamGraphOperationToolArgument::UseDependencyStream {
+        StreamGraphAction::UseDependencyStream {
             project,
             dependency_stream,
             name,
@@ -2438,7 +2278,7 @@ fn graph_operation_for_the_request(
                 links: Vec::new(),
             })
         }
-        StreamGraphOperationToolArgument::RemoveGroup { group, .. } => {
+        StreamGraphAction::RemoveGroup { group, .. } => {
             let group = staged_graph.group(the_group_named(&group)?)?;
             Ok(StreamGraphOperation::RemoveGroup {
                 nodes: staged_graph.nodes_of_the_group(group.id),
@@ -2513,7 +2353,7 @@ fn the_refresh_of_each_fragment_a_changed_module_defines(
     project_repositories: &ProjectRepositoriesOpenInThisRuntime,
     project_directory: &std::path::Path,
     changed_files: &[PathBuf],
-) -> Result<Vec<StreamGraphOperationToolArgument>, String> {
+) -> Result<Vec<StreamGraphAction>, String> {
     let changed_modules: std::collections::HashSet<String> = changed_files
         .iter()
         .filter_map(|changed_file| {
@@ -2553,8 +2393,8 @@ fn the_refresh_of_each_fragment_a_changed_module_defines(
             if !defined_in_a_changed_module {
                 continue;
             }
-            refreshes.push(StreamGraphOperationToolArgument::ImportGraphGenerator {
-                stream: listing.stream_id.clone(),
+            refreshes.push(StreamGraphAction::ImportGraphGenerator {
+                stream: stream_location.stream_asset,
                 generator: fragment_node.node_type,
                 name: Some(fragment_node.name),
                 config: match fragment_node.config {

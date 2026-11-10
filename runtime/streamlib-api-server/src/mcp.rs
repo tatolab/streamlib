@@ -7,7 +7,7 @@
 //! are the control vocabulary — the observation verbs `graph`, `logs` and
 //! `describe_runtime`; the graph-mutation verbs `add_node`, `remove_node`,
 //! `connect` and `disconnect`, each naming a node by its name; and the stream
-//! actions `run_project`, `describe_stream_action`,
+//! actions `start_project`, `reload_project`, `describe_stream_action`,
 //! `cancel_stream_action`, `stop_project`, `pause_project`,
 //! `resume_project`, `remove_project`,
 //! `list_streams` and `set_stream_clock_scale`; and the viewer verbs
@@ -52,8 +52,8 @@ use serde_json::Value;
 use streamlib::sdk::error::{Error, PrivacyGatedCaptureDevice, Result as StreamlibResult};
 use streamlib::sdk::runtime::{
     CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, OutputPortViewerHeldOpen,
-    RunProjectRequest, RuntimeOperations, StreamAction, StreamActionKind, StreamActionState,
-    StreamActionStep, StreamListingState, StreamLocation,
+    ProjectStartOrReloadRequest, RuntimeOperations, StreamAction, StreamActionKind,
+    StreamActionState, StreamActionStep, StreamListingState, StreamLocation,
 };
 use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -61,7 +61,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     CreateProjectToolResult, DescribeStreamActionToolResult, DescribeStreamActionToolResultStream,
     ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, LogsToolResult,
     OpenViewerToolResult, PauseProjectToolResult, RemoveProjectToolResult, RenameStreamToolResult,
-    ResumeProjectToolResult, RunProjectToolResult, SetStreamClockScaleToolResult,
+    ResumeProjectToolResult, SetStreamClockScaleToolResult, StartOrReloadProjectToolResult,
     StopProjectToolResult, StreamActionKindOnTheWire, StreamActionStateOnTheWire,
     StreamActionStepOnTheWire, StreamLocationOnTheWire,
 };
@@ -89,7 +89,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a stream asset of a project: its graph document, `streams/<name>.graph.json`, which holds each node by the UUID the runtime gave it. `run_project` runs a project from its absolute `project_directory`: it answers at once with an `action` id while the project's own queue reads each stream asset's graph document, makes its `.venv` and starts each stream — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled`, end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_assets` narrowed to the `kind` `stream` lists the project's stream assets, running none of its code. `create_project` creates a project — the one `tatolab new` creates — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its run the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, paused, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. Each stream a run takes in is listed under its stream id, `<project>-<stream>-<hash>`: the project's name, the stream asset's name and a hash over the project's UUID and the stream asset's UUID, kept while the stream is recorded, so moving the project or renaming its document keeps it. Run again, a project replaces its streams under the same ids, keeping their display names. A run runs no project code and never fails for what a document holds: a stream whose graph document does not load, or whose load or start is refused, is listed failed with the reason in `failed_because` until a run of the fixed document replaces it, and a stream whose document is gone is unloaded and forgotten; only the caller's own mistakes — a directory holding no `tatolab-project.json`, an id another stream holds — fail the action. A project runs and stops as a whole, never one stream of it: every stream a run loads is recorded and re-loaded whenever the runtime starts, until `stop_project` or `remove_project` ends it, and closing the connection that carried the call unloads nothing. `stop_project` queues the unload of every stream of a project, recording each stopped, and `run_project` runs a stopped project again and retries its failed streams; `pause_project` pauses every loaded stream of a project at once, never waiting behind an action, each listed `paused` with its processors holding their state, a stream a run starts meanwhile starting paused, until `resume_project` resumes them and compiles the graph edits made meanwhile — live state, so a runtime restart re-loads the project running; `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its project's queue; `rename_stream` shows a stream under another display name — recorded at once, never waiting behind an action, and never changing its id; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. Every tool about one stream — the graph edits, `rename_stream` and `set_stream_clock_scale` — names it by its stream id with a required `stream`, never by its display name; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by UUID and name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream in two ways. `open_viewer` holds a node's output port open for a viewer on this machine, naming the node by the `id` `graph` lists, and answers the channel the viewer reads it from with no copy, until `close_viewer` or the connection's end. A stream sends a port off itself through the `tatolab-moq` gateway nodes: a `MoqTrackSend` linked from the port publishes it as a track at the relay a `MoqGateway` node joins, which any MoQ client reads, and another stream reads that track through a `MoqTrackReceive`. Change its graph with `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields` and `remove_group`, or several of them as one `transact`, each naming a node by its UUID, which `add_node` answers and `graph` lists as `id`, and each one transaction by its `author`, applied whole or refused whole in the runtime's own words: with `mode` `commit`, the default, it is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load; with `mode` `live`, applied to the running stream alone. `import_graph_generator` runs one of the project's `@graph_generator` functions, `<module>:<function>`, in the stream's own interpreter and places what it builds as a fragment node, the nodes and links it built stored inside it; run again under the name of a fragment the graph holds, it refreshes that fragment, each node keeping its UUID by name; `refresh_fragments` refreshes, as one transaction, every fragment of a project's loaded streams whose generator a changed module defines, which `tatolab dev` asks for on each save of a `.py` file. `add_group` makes a labelled group of nodes — a title, a description and a colour, listed under `graph`'s `groups` and joined by a node holding its UUID as `studio.group` — which changes nothing that runs; `set_group_fields` edits one and `remove_group` takes one out, its nodes left ungrouped. `undo` reverses an author's latest transaction in a project as a new transaction and `redo` reapplies it, each reversing only that author's own. A config value `{\"asset\": \"<uuid>\"}` references an asset the project must hold, which cannot then be deleted. A Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path, and a class of an import's own node code by `imports/<folder>/module:ClassName`, imported from that folder ahead of the project's own code, and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for UUIDs and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `run_project` again starts it afresh. A node that reads `Error` carries why in `components.failed_because`, in the words of what failed it — a `start()` that raised among them; a node that has not failed carries `null` there. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's track at a relay, on this machine or another, through a `MoqTrackReceive` node. A project's assets — media, scenes and data such as an FMU or a LUT, each a file beside its sidecar `<file>.asset.json`, which holds the UUID the runtime made at its import and keeps across every rename and move, and streams, each its graph document alone with its UUID inside it — are read with `list_assets` and `describe_asset` and changed with `import_asset`, `rename_asset`, `move_asset`, `delete_asset` and `set_asset_settings`, each naming the project by its absolute `project_directory`, a folder holding `tatolab-project.json`, and an asset by its UUID; each change is one transaction by its `author`, applied whole or refused whole in the runtime's own words, and one commit on the project's own history at `.tatolab/history.git`; an asset's bytes are the one file at its path, which a node reads with `asset_content_path` and history never holds: history records a media, scene or data asset by its sidecar alone, so an undo of a delete brings its bytes back only while its file is still at its path. A project's change feed is the resource `list_assets` names as `transactions_resource_uri`, `streamlib://project/<project>/transactions`, holding its newest transactions with their author, operations and inverse; name it in `subscriptions/listen` over `/mcp/stdio` to be sent `notifications/resources/updated` each time a transaction applies, then read it. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. A project is renamed with `rename_project`, described with `set_project_description` and given a cover — a media asset it holds, by UUID — with `set_project_cover`, each one transaction on its history that undoes like any edit, its folder and UUID untouched; `list_assets` serves them with `project_last_edited_at`, when its history last changed. `duplicate_project` copies a project with its whole history into a new folder under a new UUID, and `delete_project` queues, like `remove_project`, the unload and forgetting of every stream of a project and then moves its folder to the Trash. Another project is imported with `add_dependency`: the project a folder or a `.zip` on this machine holds — a GitHub archive downloaded first — is copied whole into `imports/<folder>/` and recorded in `tatolab-project.json` with the `version` its copy carries, and nothing reaches the network. The copy is this project's own: its assets are referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read from its folder, which a node reads with `asset_content_path(asset, from_project)`; `use_dependency_stream` places one of its streams in a loaded stream's graph as a fragment referencing it, which every load places as the stream's graph document is on disk, each node type the import's own node code defines led by its folder, `imports/<folder>/<module>:<class>`, so it runs that code from there; to edit an import, open `imports/<folder>/` as a project of its own, whose transactions also commit on this project's history. `update_dependency` copies an import again as one transaction, listing the files of its folder edited since its copy and overwriting them only with `overwrite_edited_files`; `list_dependencies` lists each import with its edited files and, with `check_for_newer`, the version its source holds now; `remove_dependency` stops importing a project no node references any longer. `list_project_node_types` lists the node types and graph generators a project offers — its own node code outside `imports/`, each import's and each installed distribution's `tatolab.nodes` — read from source without running any of it, a module that does not parse listed with why and where while the rest still lists. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a stream asset of a project: its graph document, `streams/<name>.graph.json`, which holds each node by the UUID the runtime gave it. `start_project` starts a project from its absolute `project_directory`, and `reload_project` re-reads a running or paused one from disk: each answers at once with an `action` id while the project's own queue reads each stream asset's graph document, makes its `.venv` and starts each stream — however long uv takes — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled`, end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_assets` narrowed to the `kind` `stream` lists the project's stream assets, running none of its code. `create_project` creates a project — the one `tatolab new` creates — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its start the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, paused, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. Each stream a load takes in is listed under its stream id, `<project>-<stream>-<hash>`: the project's name, the stream asset's name and a hash over the project's UUID and the stream asset's UUID, kept while the stream is recorded, so moving the project or renaming its document keeps it. Reloaded, a project replaces its streams under the same ids, keeping their display names. A load runs no project code and never fails for what a document holds: a stream whose graph document does not load, or whose load or start is refused, is listed failed with the reason in `failed_because` until a reload of the fixed document replaces it, and a stream whose document is gone is unloaded and forgotten; only the caller's own mistakes — a directory holding no `tatolab-project.json`, an id another stream holds — fail the action. A project runs and stops as a whole, never one stream of it: every stream a load takes in is recorded and re-loaded whenever the runtime starts, until `stop_project` or `remove_project` ends it, and closing the connection that carried the call unloads nothing. `stop_project` queues the unload of every stream of a project, recording each stopped, and `start_project` starts a stopped project again; a verb refuses a project already in the state it asks for and names the verb that fits — `start_project` on a running project names `reload_project`, on a paused one `resume_project`; `pause_project` pauses every loaded stream of a project at once, never waiting behind an action, each listed `paused` with its processors holding their state, a stream a reload starts meanwhile starting paused, until `resume_project` resumes them and compiles the graph edits made meanwhile — live state, so a runtime restart re-loads the project running; `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its project's queue; `rename_stream` shows a stream under another display name — recorded at once, never waiting behind an action, and never changing its id; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. `rename_stream` and `set_stream_clock_scale` name a stream by its stream id with a required `stream`, never by its display name; a graph edit names it by its stream asset's UUID, the `stream_asset` `list_streams` reports under its `location`, which is the same on every machine the project is on; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by UUID and name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream in two ways. `open_viewer` holds a node's output port open for a viewer on this machine, naming the node by the `id` `graph` lists, and answers the channel the viewer reads it from with no copy, until `close_viewer` or the connection's end. A stream sends a port off itself through the `tatolab-moq` gateway nodes: a `MoqTrackSend` linked from the port publishes it as a track at the relay a `MoqGateway` node joins, which any MoQ client reads, and another stream reads that track through a `MoqTrackReceive`. Change its graph with `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields` and `remove_group`, or several of them as one `transact`, each naming a node by its UUID, which `add_node` answers and `graph` lists as `id`, and each one transaction by its `author`, applied whole or refused whole in the runtime's own words: with `mode` `commit`, the default, it is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load; with `mode` `live`, applied to the running stream alone. `import_graph_generator` runs one of the project's `@graph_generator` functions, `<module>:<function>`, in the stream's own interpreter and places what it builds as a fragment node, the nodes and links it built stored inside it; run again under the name of a fragment the graph holds, it refreshes that fragment, each node keeping its UUID by name; `refresh_fragments` refreshes, as one transaction, every fragment of a project's loaded streams whose generator a changed module defines, which `tatolab dev` asks for on each save of a `.py` file. `add_group` makes a labelled group of nodes — a title, a description and a colour, listed under `graph`'s `groups` and joined by a node holding its UUID as `studio.group` — which changes nothing that runs; `set_group_fields` edits one and `remove_group` takes one out, its nodes left ungrouped. `undo` reverses an author's latest transaction in a project as a new transaction and `redo` reapplies it, each reversing only that author's own. A config value `{\"asset\": \"<uuid>\"}` references an asset the project must hold, which cannot then be deleted. A Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path, and a class of an import's own node code by `imports/<folder>/module:ClassName`, imported from that folder ahead of the project's own code, and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for UUIDs and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `reload_project` starts it afresh. A node that reads `Error` carries why in `components.failed_because`, in the words of what failed it — a `start()` that raised among them; a node that has not failed carries `null` there. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's track at a relay, on this machine or another, through a `MoqTrackReceive` node. A project's assets — media, scenes and data such as an FMU or a LUT, each a file beside its sidecar `<file>.asset.json`, which holds the UUID the runtime made at its import and keeps across every relocation, and streams, each its graph document alone with its UUID inside it — are read with `list_assets` and `describe_asset` and changed with `import_asset`, `relocate_asset`, `delete_asset` and `set_asset_settings`, each naming the project by its absolute `project_directory`, a folder holding `tatolab-project.json`, and an asset by its UUID; each change is one transaction by its `author`, applied whole or refused whole in the runtime's own words, and one commit on the project's own history at `.tatolab/history.git`; an asset's bytes are the one file at its path, which a node reads with `asset_content_path` and history never holds: history records a media, scene or data asset by its sidecar alone, so an undo of a delete brings its bytes back only while its file is still at its path. A project's change feed is the resource `list_assets` names as `transactions_resource_uri`, `streamlib://project/<project>/transactions`, holding its newest transactions with their author, operations and inverse, each edit and redo with its `undo_state` — `applied`, `undone_redoable` or `undone_not_redoable` — as its author's `undo` and `redo` stand now; name it in `subscriptions/listen` over `/mcp/stdio` to be sent `notifications/resources/updated` each time a transaction applies, then read it. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. A project is renamed with `rename_project`, described with `set_project_description` and given a cover — a media asset it holds, by UUID — with `set_project_cover`, each one transaction on its history that undoes like any edit, its folder and UUID untouched; `list_assets` serves them with `project_last_edited_at`, when its history last changed. `duplicate_project` copies a project with its whole history into a new folder under a new UUID, and `delete_project` queues, like `remove_project`, the unload and forgetting of every stream of a project and then moves its folder to the Trash. Another project is imported with `add_dependency`: the project a folder or a `.zip` on this machine holds — a GitHub archive downloaded first — is copied whole into `imports/<folder>/` and recorded in `tatolab-project.json` with the `version` its copy carries, and nothing reaches the network. The copy is this project's own: its assets are referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read from its folder, which a node reads with `asset_content_path(asset, from_project)`; `use_dependency_stream` places one of its streams in a loaded stream's graph as a fragment referencing it, which every load places as the stream's graph document is on disk, each node type the import's own node code defines led by its folder, `imports/<folder>/<module>:<class>`, so it runs that code from there; to edit an import, open `imports/<folder>/` as a project of its own, whose transactions also commit on this project's history. `update_dependency` copies an import again as one transaction, listing the files of its folder edited since its copy and overwriting them only with `overwrite_edited_files`; `list_dependencies` lists each import with its edited files and, with `check_for_newer`, the version its source holds now; `remove_dependency` stops importing a project no node references any longer. `list_project_node_types` lists the node types and graph generators a project offers — its own node code outside `imports/`, each import's and each installed distribution's `tatolab.nodes` — read from source without running any of it, a module that does not parse listed with why and where while the rest still lists. `list_project_views` lists the Tato Studio views a project and its imports bring — each folder of their `views/`, by its `view_type` `<project name>:<view folder>`, with what its `tatolab_view.json` declares — reading each manifest and running nothing, a folder whose manifest does not read listed with why it does not open. Each such view that opens and whose `placement` is `node` is a node type of every stream the project runs, named by its `view_type`, whose ports are the view's declared inputs and outputs and whose config is the view's settings, listed in the node catalog with the manifest's description; a stream holds one node of each view, and a view that does not open is no type. A panel reads a view node's inputs with `open_viewer` on the port linked into each, and `write_studio_view_output` hands the node a value for one of its Array, Channels or Records outputs, which it publishes there as live data: the last write wins, and nothing is recorded. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// How many log records one `logs` call returns when the caller names no
 /// `count`.
@@ -187,10 +187,12 @@ impl LocalApiMcpServerHandler {
             project_actions_refused_since_the_runtime_started: Arc::default(),
             tool_router: Arc::new(
                 Self::tool_router()
+                    + Self::project_archive_tool_router()
                     + Self::project_asset_tool_router()
                     + Self::project_dependency_tool_router()
                     + Self::project_node_type_tool_router()
                     + Self::project_tool_router()
+                    + Self::project_view_tool_router()
                     + Self::stream_graph_tool_router(),
             ),
             prompt_router: Arc::new(Self::prompt_router()),
@@ -208,7 +210,7 @@ impl LocalApiMcpServerHandler {
 
     /// The operations on the stream a `tool` call names, or the refusal —
     /// naming the loaded streams — its caller reads.
-    fn the_stream_a_tool_call_names(
+    pub(crate) fn the_stream_a_tool_call_names(
         &self,
         tool: &str,
         stream: &str,
@@ -295,7 +297,15 @@ struct LogsToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct RunProjectToolArguments {
+struct StartProjectToolArguments {
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ReloadProjectToolArguments {
     #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
 }
@@ -323,7 +333,9 @@ struct RemoveProjectToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct DescribeStreamActionToolArguments {
-    #[schemars(description = "The stream action, by the action id `run_project` answered.")]
+    #[schemars(
+        description = "The stream action, by the action id `start_project` or `reload_project` answered."
+    )]
     action: String,
 }
 
@@ -332,7 +344,7 @@ struct DescribeStreamActionToolArguments {
 #[serde(deny_unknown_fields)]
 struct CancelStreamActionToolArguments {
     #[schemars(
-        description = "The stream action, by the action id `run_project`, `stop_project` or `remove_project` answered."
+        description = "The stream action, by the action id `start_project`, `reload_project`, `stop_project` or `remove_project` answered."
     )]
     action: String,
 }
@@ -499,24 +511,24 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Queue a run of the project in `project_directory` on its own stream action queue and answer at once with the action's id as `action`: the run reads its `tatolab-project.json` and each stream asset's graph document, makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — then loads and starts each stream under its stream id, `<project>-<stream>-<hash>`, the hash over the project's UUID and the stream asset's UUID, recording each stream running or failed: a graph document that does not load, or a load or start that is refused, with its reason, and a `.venv` uv cannot make — uv's own words — failing every stream of the project. It runs no project code. A run replaces the streams the project's last run recorded under the same ids, keeping their display names; a running stream is unloaded once its replacement is recorded, and a stream whose graph document is gone is unloaded and forgotten. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or holds no `tatolab-project.json` fails the action, never the call; refused only for a `project_directory` that is not absolute."
+        description = "Start the project in `project_directory`: queue its load on its own stream action queue and answer at once with the action's id as `action`. The load reads its `tatolab-project.json` and each stream asset's graph document, makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — then loads and starts each stream under its stream id, `<project>-<stream>-<hash>`, the hash over the project's UUID and the stream asset's UUID, recording each stream running or failed: a graph document that does not load, or a load or start that is refused, with its reason, and a `.venv` uv cannot make — uv's own words — failing every stream of the project. It runs no project code. Starts a project that was never started, one `stop_project` stopped, and one whose every stream failed, retrying them. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or holds no `tatolab-project.json` fails the action, never the call. Refused, with nothing queued: a `project_directory` that is not absolute; a project that runs once its queued actions run, which `reload_project` re-reads from disk; and a paused project, which `resume_project` resumes."
     )]
-    async fn run_project(
+    async fn start_project(
         &self,
-        Parameters(RunProjectToolArguments { project_directory }): Parameters<
-            RunProjectToolArguments,
+        Parameters(StartProjectToolArguments { project_directory }): Parameters<
+            StartProjectToolArguments,
         >,
     ) -> ToolCallAnswer {
         refuse_a_relative_project_directory(&project_directory)?;
         let queued = self
             .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
                 operations_on_the_loaded_streams
-                    .run_project(RunProjectRequest { project_directory })
+                    .start_project(ProjectStartOrReloadRequest { project_directory })
             })
             .await?;
         serialized_tool_result(
-            "run_project",
-            &RunProjectToolResult {
+            "start_project",
+            &StartOrReloadProjectToolResult {
                 action: queued.action_id,
                 project_directory: queued.project_directory,
             },
@@ -524,7 +536,32 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Create a project — the one `tatolab new` creates: its `tatolab-project.json`, one stream asset `streams/main.graph.json` running the sample animation through a GPU effect, the node modules it uses, `pyproject.toml`, `.python-version` and `.gitignore`, committed as the first commit of the project's history — in `project_directory`, or with none in a folder `<adjective>-<noun>` drawn under `~/streams`, and queue its run, answering at once with the action's id as `action`, the stream id its `main` runs under as `stream`, and the resolved `project_directory`. The action writes the project's files, then runs it as `run_project` does — reads its graph documents, makes its `.venv`, however long uv takes, and starts its streams — showing its stream under the folder's name. A directory already holding a file a new project starts with fails the action with nothing written. Follow it with `describe_stream_action` and `logs`; the project is recorded and re-loaded whenever the runtime starts, so a later session finds it in `list_streams`. Refused only for a relative `project_directory`, one that cannot be created, or, with none, a `HOME` that is unset or not absolute or a draw that finds no free folder."
+        description = "Reload the running or paused project in `project_directory` from disk: queue the load `start_project` queues and answer at once with the action's id as `action`. It re-reads every stream asset's graph document and replaces each stream under its same id, keeping its display name — a running stream is unloaded once its replacement is recorded, a stream whose graph document is gone is unloaded and forgotten, and a failed stream is retried. The project keeps its state: a paused project's streams start paused. `tatolab dev` asks for it on each save. Follow it as `start_project`'s load. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is stopped or was never started, which `start_project` starts."
+    )]
+    async fn reload_project(
+        &self,
+        Parameters(ReloadProjectToolArguments { project_directory }): Parameters<
+            ReloadProjectToolArguments,
+        >,
+    ) -> ToolCallAnswer {
+        refuse_a_relative_project_directory(&project_directory)?;
+        let queued = self
+            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+                operations_on_the_loaded_streams
+                    .reload_project(ProjectStartOrReloadRequest { project_directory })
+            })
+            .await?;
+        serialized_tool_result(
+            "reload_project",
+            &StartOrReloadProjectToolResult {
+                action: queued.action_id,
+                project_directory: queued.project_directory,
+            },
+        )
+    }
+
+    #[tool(
+        description = "Create a project — the one `tatolab new` creates: its `tatolab-project.json`, one stream asset `streams/main.graph.json` running the sample animation through a GPU effect, the node modules it uses, `pyproject.toml`, `.python-version` and `.gitignore`, committed as the first commit of the project's history — in `project_directory`, or with none in a folder `<adjective>-<noun>` drawn under `~/streams`, and queue its run, answering at once with the action's id as `action`, the stream id its `main` runs under as `stream`, and the resolved `project_directory`. The action writes the project's files, then starts it as `start_project` does — reads its graph documents, makes its `.venv`, however long uv takes, and starts its streams — showing its stream under the folder's name. A directory already holding a file a new project starts with fails the action with nothing written. Follow it with `describe_stream_action` and `logs`; the project is recorded and re-loaded whenever the runtime starts, so a later session finds it in `list_streams`. Refused only for a relative `project_directory`, one that cannot be created, or, with none, a `HOME` that is unset or not absolute or a draw that finds no free folder."
     )]
     async fn create_project(
         &self,
@@ -595,7 +632,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Stop the whole project in `project_directory`: queue the stop on its stream action queue and answer at once with the action's id as `action` beside the `project_directory`. Once the project's earlier actions have run, it unloads every loaded stream of the project and records each stopped, so the runtime leaves the project stopped across its restarts until `run_project` runs it again. A project runs or stops as a whole: no tool stops or starts one of its streams. Its streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Each recorded stream carries the stop on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, a project whose removal is queued, and a project none of whose streams runs once the actions queued before it run."
+        description = "Stop the whole project in `project_directory`: queue the stop on its stream action queue and answer at once with the action's id as `action` beside the `project_directory`. Once the project's earlier actions have run, it unloads every loaded stream of the project and records each stopped, so the runtime leaves the project stopped across its restarts until `start_project` starts it again. A project runs or stops as a whole: no tool stops or starts one of its streams. Its streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Each recorded stream carries the stop on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, a project whose removal is queued, and a project none of whose streams runs once the actions queued before it run."
     )]
     async fn stop_project(
         &self,
@@ -619,7 +656,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Pause the whole project in `project_directory` at once, never waiting behind an action on its queue, and answer the `project_directory` and, as `streams`, the id of each loaded stream this call paused. Every processor of each loaded stream holds its state and processes nothing; the streams stay loaded and are `paused` in `list_streams`, and a graph edit made meanwhile is applied and compiles on `resume_project`. The project stays paused until `resume_project`, `stop_project` or `remove_project`: a stream a `run_project` starts meanwhile, the re-load `tatolab dev` asks for on a save among them, starts paused. Pause is live state, never recorded, so a runtime restart re-loads the project running. Pausing a paused project pauses nothing more. Refused: a `project_directory` that is not absolute, and a project none of whose streams is loaded and whose last action queued is not a run."
+        description = "Pause the whole project in `project_directory` at once, never waiting behind an action on its queue, and answer the `project_directory` and, as `streams`, the id of each loaded stream this call paused. Every processor of each loaded stream holds its state and processes nothing; the streams stay loaded and are `paused` in `list_streams`, and a graph edit made meanwhile is applied and compiles on `resume_project`. The project stays paused until `resume_project`, `stop_project` or `remove_project`: a stream a `reload_project` starts meanwhile, the one `tatolab dev` asks for on a save among them, starts paused. Pause is live state, never recorded, so a runtime restart re-loads the project running. Pausing a paused project pauses nothing more. Refused: a `project_directory` that is not absolute, and a project none of whose streams is loaded and whose last action queued is not a start or reload."
     )]
     async fn pause_project(
         &self,
@@ -715,7 +752,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `paused` (loaded with its project paused by `pause_project`, until `resume_project`), `preparing` (an action that loads it — a `run_project` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_project` or a `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until a `run_project` of its project retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `stop_project` then `run_project` of its project asks."
+        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `paused` (loaded with its project paused by `pause_project`, until `resume_project`), `preparing` (an action that loads it — a `start_project` or `reload_project` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_project` or a `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until a `start_project` or `reload_project` of its project retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `stop_project` then `start_project` of its project asks."
     )]
     async fn list_streams(
         &self,
@@ -1108,7 +1145,7 @@ pub(crate) mod tests {
     //! and what must never be again.
 
     use crate::control_plane_stub_support::{
-        LocalApiServedOnAFreshSocket, STUB_MACHINE_NAME, STUB_STREAM_ID,
+        LocalApiServedOnAFreshSocket, STUB_MACHINE_NAME, STUB_STREAM_ASSET, STUB_STREAM_ID,
     };
     use parking_lot::Mutex;
     use rmcp::RoleClient;
@@ -1214,8 +1251,10 @@ pub(crate) mod tests {
         "transact",
         "undo",
         "redo",
-        "run_project",
+        "start_project",
+        "reload_project",
         "create_project",
+        "import_project",
         "describe_stream_action",
         "cancel_stream_action",
         "stop_project",
@@ -1231,8 +1270,7 @@ pub(crate) mod tests {
         "list_assets",
         "describe_asset",
         "import_asset",
-        "rename_asset",
-        "move_asset",
+        "relocate_asset",
         "delete_asset",
         "set_asset_settings",
         "add_dependency",
@@ -1246,6 +1284,8 @@ pub(crate) mod tests {
         "set_project_cover",
         "duplicate_project",
         "delete_project",
+        "list_project_views",
+        "write_studio_view_output",
     ];
 
     /// The tools that act on one stream, each naming it with a required
@@ -1268,6 +1308,7 @@ pub(crate) mod tests {
         "rename_stream",
         "open_viewer",
         "set_stream_clock_scale",
+        "write_studio_view_output",
     ];
 
     /// Exact, not a superset: the catalog IS the control vocabulary, so a
@@ -1705,7 +1746,7 @@ pub(crate) mod tests {
                 runtime,
                 "add_node",
                 json!({
-                    "stream": STUB_STREAM_ID,
+                    "stream": STUB_STREAM_ASSET,
                     "type": "processors.grayscale_effect:GrayscaleEffect",
                     "config": { "strength": 0.5 },
                     "name": "Gray",
@@ -1757,7 +1798,7 @@ pub(crate) mod tests {
             runtime,
             "add_node",
             json!({
-                "stream": STUB_STREAM_ID,
+                "stream": STUB_STREAM_ASSET,
                 "type": "processors.grayscale_effect:GrayscaleEffect",
                 "name": "gray",
                 "mode": "live",
@@ -1773,24 +1814,23 @@ pub(crate) mod tests {
         );
     }
 
-    /// A committed edit is kept in the stream's graph document, so a stream no
-    /// project holds is refused, pointing at `live`, before anything is applied.
+    /// A committed edit is kept in the stream's graph document, so a stream whose directory
+    /// holds no project is refused before anything is applied.
     #[tokio::test]
-    async fn a_committed_edit_to_a_stream_of_no_project_is_refused_naming_live() {
+    async fn a_committed_edit_to_a_stream_whose_directory_holds_no_project_is_refused() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
         let body = tool_call_result(
             runtime,
             "add_node",
-            json!({ "stream": STUB_STREAM_ID, "type": "nodes.fx:Fx" }),
+            json!({ "stream": STUB_STREAM_ASSET, "type": "nodes.fx:Fx" }),
         )
         .await;
 
         let text = body["content"][0]["text"].as_str().unwrap();
         assert_eq!(body["isError"], true, "{text}");
-        assert!(text.contains("belongs to no project"), "{text}");
-        assert!(text.contains("`live`"), "{text}");
+        assert!(text.contains("holds no project"), "{text}");
         assert!(recorded.lock().is_empty(), "nothing was applied");
     }
 
@@ -1842,7 +1882,14 @@ pub(crate) mod tests {
                 streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
                     project_directory.path(),
                 )
-                .with_stream_id("main"),
+                .at_stream_location(
+                    "main".to_owned(),
+                    StreamLocation {
+                        project_directory: project_directory.path().to_path_buf(),
+                        project: uuid::Uuid::new_v4(),
+                        stream_asset: STUB_STREAM_ASSET,
+                    },
+                ),
             )
             .unwrap();
 
@@ -1850,7 +1897,7 @@ pub(crate) mod tests {
             Arc::clone(&runtime) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
             "add_node",
             json!({
-                "stream": "main",
+                "stream": STUB_STREAM_ASSET,
                 "type": source_type.as_str(),
                 "name": "front",
                 "config": {"frame_widht": 640},
@@ -1882,7 +1929,7 @@ pub(crate) mod tests {
             &tool_call_result(
                 runtime,
                 "add_node",
-                json!({ "stream": STUB_STREAM_ID, "type": "tatolab.moq:MoqTrackReceive", "mode": "live" }),
+                json!({ "stream": STUB_STREAM_ASSET, "type": "tatolab.moq:MoqTrackReceive", "mode": "live" }),
             )
             .await,
         );
@@ -1912,7 +1959,7 @@ pub(crate) mod tests {
             runtime,
             "add_node",
             json!({
-                "stream": STUB_STREAM_ID,
+                "stream": STUB_STREAM_ASSET,
                 "type": "processors.grayscale_effect:GrayscaleEffect",
                 "display_name": "gray",
                 "mode": "live",
@@ -1933,7 +1980,7 @@ pub(crate) mod tests {
         let recorded = runtime.recorded_graph_mutations.clone();
         let link_onto = |target_port: &str| {
             json!({
-                "stream": STUB_STREAM_ID,
+                "stream": STUB_STREAM_ASSET,
                 "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" },
                 "target": { "node": STUB_EFFECT_NODE_UUID, "port": target_port },
                 "mode": "live",
@@ -1988,13 +2035,13 @@ pub(crate) mod tests {
         for (tool_name, arguments, what_the_refusal_names) in [
             (
                 "remove_node",
-                json!({ "stream": STUB_STREAM_ID, "node": "fx", "mode": "live" }),
+                json!({ "stream": STUB_STREAM_ASSET, "node": "fx", "mode": "live" }),
                 "`fx` is neither a node's UUID",
             ),
             (
                 "connect",
                 json!({
-                    "stream": STUB_STREAM_ID,
+                    "stream": STUB_STREAM_ASSET,
                     "source": { "node": "camera", "port": "video" },
                     "target": { "node": STUB_EFFECT_NODE_UUID, "port": "video_in" },
                     "mode": "live",
@@ -2003,7 +2050,7 @@ pub(crate) mod tests {
             ),
             (
                 "set_node_config",
-                json!({ "stream": STUB_STREAM_ID, "node": absent_node_uuid, "config": {}, "mode": "live" }),
+                json!({ "stream": STUB_STREAM_ASSET, "node": absent_node_uuid, "config": {}, "mode": "live" }),
                 absent_node_uuid,
             ),
         ] {
@@ -2047,7 +2094,7 @@ pub(crate) mod tests {
             ("remove_node", json!({ "node": STUB_EFFECT_NODE_UUID })),
         ] {
             let mut arguments = arguments;
-            arguments["stream"] = json!(STUB_STREAM_ID);
+            arguments["stream"] = json!(STUB_STREAM_ASSET);
             arguments["mode"] = json!("live");
             first_text_block_json(&tool_call_result(runtime.clone(), tool_name, arguments).await);
         }
@@ -2122,9 +2169,9 @@ pub(crate) mod tests {
                 json!({
                     "mode": "live",
                     "operations": [
-                        { "operation": "add_node", "stream": STUB_STREAM_ID,
+                        { "operation": "add_node", "stream": STUB_STREAM_ASSET,
                           "type": "nodes.blur:Blur", "as": "blur" },
-                        { "operation": "connect", "stream": STUB_STREAM_ID,
+                        { "operation": "connect", "stream": STUB_STREAM_ASSET,
                           "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" },
                           "target": { "node": "blur", "port": "video_in" } },
                     ],
@@ -2146,9 +2193,9 @@ pub(crate) mod tests {
             json!({
                 "mode": "live",
                 "operations": [
-                    { "operation": "rename_node", "stream": STUB_STREAM_ID,
+                    { "operation": "rename_node", "stream": STUB_STREAM_ASSET,
                       "node": STUB_EFFECT_NODE_UUID, "name": "glow" },
-                    { "operation": "remove_node", "stream": STUB_STREAM_ID,
+                    { "operation": "remove_node", "stream": STUB_STREAM_ASSET,
                       "node": "33333333-3333-4333-8333-333333333333" },
                 ],
             }),
@@ -2187,9 +2234,9 @@ pub(crate) mod tests {
             json!({
                 "mode": "live",
                 "operations": [
-                    { "operation": "rename_node", "stream": STUB_STREAM_ID,
+                    { "operation": "rename_node", "stream": STUB_STREAM_ASSET,
                       "node": STUB_EFFECT_NODE_UUID, "name": "glow" },
-                    { "operation": "remove_node", "stream": STUB_STREAM_ID,
+                    { "operation": "remove_node", "stream": STUB_STREAM_ASSET,
                       "node": absent_node },
                 ],
             }),
@@ -2211,7 +2258,7 @@ pub(crate) mod tests {
             a_stub_holding_a_camera_linked_to_an_effect(),
             "connect",
             json!({
-                "stream": STUB_STREAM_ID, "mode": "live",
+                "stream": STUB_STREAM_ASSET, "mode": "live",
                 "source": { "node": absent_node, "port": "video" },
                 "target": { "node": STUB_EFFECT_NODE_UUID, "port": "video_in" },
             }),
@@ -2238,7 +2285,7 @@ pub(crate) mod tests {
             runtime,
             "rename_node",
             json!({
-                "stream": STUB_STREAM_ID, "mode": "live", "node": STUB_EFFECT_NODE_UUID,
+                "stream": STUB_STREAM_ASSET, "mode": "live", "node": STUB_EFFECT_NODE_UUID,
                 "name": "glow", "idempotency_key": " ",
             }),
         )
@@ -2259,13 +2306,13 @@ pub(crate) mod tests {
         for (tool_name, arguments, what_the_refusal_names) in [
             (
                 "connect",
-                json!({ "stream": STUB_STREAM_ID, "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" } }),
+                json!({ "stream": STUB_STREAM_ASSET, "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" } }),
                 "target",
             ),
             (
                 "connect",
                 json!({
-                    "stream": STUB_STREAM_ID,
+                    "stream": STUB_STREAM_ASSET,
                     "source": { "node": STUB_CAMERA_NODE_UUID, "port": "video" },
                     "target": { "node": STUB_EFFECT_NODE_UUID, "prot": "video_in" },
                 }),
@@ -2273,12 +2320,12 @@ pub(crate) mod tests {
             ),
             (
                 "disconnect",
-                json!({ "stream": STUB_STREAM_ID, "link_id": "link-9" }),
+                json!({ "stream": STUB_STREAM_ASSET, "link_id": "link-9" }),
                 "link_id",
             ),
             (
                 "remove_node",
-                json!({ "stream": STUB_STREAM_ID, "name": "fx" }),
+                json!({ "stream": STUB_STREAM_ASSET, "name": "fx" }),
                 "name",
             ),
             (
@@ -2435,18 +2482,24 @@ pub(crate) mod tests {
         let absolute_project_directory = "/home/someone/projects/camera";
         for (tool_name, arguments, what_the_refusal_must_name) in [
             (
-                "run_project",
+                "start_project",
                 json!({ "project_directory": absolute_project_directory, "keep": true }),
                 "keep",
             ),
-            ("run_project", json!({}), "project_directory"),
+            ("start_project", json!({}), "project_directory"),
             (
-                "run_project",
+                "start_project",
                 json!({ "project_directory": absolute_project_directory, "name": "camera" }),
                 "name",
             ),
             (
-                "run_project",
+                "start_project",
+                json!({ "project_directory": "projects/camera" }),
+                "absolute",
+            ),
+            ("reload_project", json!({}), "project_directory"),
+            (
+                "reload_project",
                 json!({ "project_directory": "projects/camera" }),
                 "absolute",
             ),
@@ -2531,9 +2584,14 @@ pub(crate) mod tests {
     async fn a_stream_action_the_runtime_refuses_is_a_tool_error_in_its_own_words() {
         for (tool_name, arguments, action) in [
             (
-                "run_project",
+                "start_project",
                 json!({ "project_directory": "/home/someone/projects/camera" }),
-                "run_project",
+                "start_project",
+            ),
+            (
+                "reload_project",
+                json!({ "project_directory": "/home/someone/projects/camera" }),
+                "reload_project",
             ),
             (
                 "stop_project",
@@ -2590,7 +2648,11 @@ pub(crate) mod tests {
                     "streams": [{
                         "stream": STUB_STREAM_ID,
                         "display_name": STUB_STREAM_ID,
-                        "location": null,
+                        "location": {
+                            "project_directory": crate::control_plane_stub_support::STUB_PROJECT_DIRECTORY,
+                            "project": crate::control_plane_stub_support::STUB_PROJECT,
+                            "stream_asset": STUB_STREAM_ASSET,
+                        },
                         "state": "running",
                         "node_count": null,
                         "failed_because": null,
@@ -2639,11 +2701,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// `run_project`'s and `logs`' schemas say what each takes: a required
+    /// `start_project`'s and `logs`' schemas say what each takes: a required
     /// project directory and nothing else, and a count with no maximum, since
     /// a larger one is clamped.
     #[tokio::test]
-    async fn the_run_project_and_logs_schemas_state_what_each_takes() {
+    async fn the_start_project_and_logs_schemas_state_what_each_takes() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         let input_schema_of = |tool_name: &str| {
             tools
@@ -2663,14 +2725,14 @@ pub(crate) mod tests {
             required
         };
 
-        let run_project = input_schema_of("run_project");
-        assert_eq!(required_of(&run_project), ["project_directory"]);
-        let run_project_arguments: Vec<&String> = run_project["properties"]
+        let start_project = input_schema_of("start_project");
+        assert_eq!(required_of(&start_project), ["project_directory"]);
+        let start_project_arguments: Vec<&String> = start_project["properties"]
             .as_object()
             .unwrap()
             .keys()
             .collect();
-        assert_eq!(run_project_arguments, ["project_directory"]);
+        assert_eq!(start_project_arguments, ["project_directory"]);
 
         assert_eq!(
             required_of(&input_schema_of("list_streams")),

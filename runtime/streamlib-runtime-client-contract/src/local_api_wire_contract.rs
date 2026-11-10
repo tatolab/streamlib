@@ -158,7 +158,7 @@ pub struct ListStreamsToolResultStream {
     pub failed_because: Option<String>,
     /// Each capture device a node of the loaded stream refused because nobody has asked the user
     /// for its access — the runtime re-loaded it on its own at its start — once each; a
-    /// `stop_project` then `run_project` of its project asks. Empty when it is not loaded.
+    /// `stop_project` then `start_project` of its project asks. Empty when it is not loaded.
     pub capture_devices_whose_access_was_never_asked_for: Vec<CaptureDeviceOnTheWire>,
     /// The stream action preparing it, as `describe_stream_action` takes it; `null` unless it
     /// is `preparing`.
@@ -195,11 +195,11 @@ pub enum ListedStreamState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
     /// start.
     Running,
-    /// Stopped with its project, and left unloaded until `run_project`.
+    /// Stopped with its project, and left unloaded until `start_project`.
     Stopped,
     /// Loaded with its project paused: its processors process nothing until `resume_project`.
     Paused,
-    /// Skipped at the runtime's start until a `run_project` of its project retries it.
+    /// Skipped at the runtime's start until a `reload_project` of its project retries it.
     Failed,
     /// A stream action of its project that loads it is queued or under way on it.
     Preparing,
@@ -227,9 +227,9 @@ impl std::fmt::Display for ListedStreamState {
     }
 }
 
-/// The `run_project` tool's result: the stream action it queued.
+/// The `start_project` or `reload_project` tool's result: the load it queued.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RunProjectToolResult {
+pub struct StartOrReloadProjectToolResult {
     /// The queued action's id, which `describe_stream_action` and `logs` take.
     pub action: String,
     /// The project whose queue holds it, symlinks resolved.
@@ -245,6 +245,19 @@ pub struct CreateProjectToolResult {
     pub stream: String,
     /// The project's directory, symlinks resolved.
     pub project_directory: PathBuf,
+}
+
+/// The `import_project` tool's result: the project it unpacked from a `.zip` of one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportProjectToolResult {
+    /// The new project's directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The new project's UUID, its own and never the zipped project's.
+    pub project: String,
+    /// The project's name, as the zip's `tatolab-project.json` named it.
+    pub name: String,
+    /// The first commit of the new project's history, which records every file it unpacked.
+    pub commit: String,
 }
 
 /// What a stream action does.
@@ -391,6 +404,18 @@ pub struct CloseViewerToolResult {
     pub viewer: String,
 }
 
+/// The `write_studio_view_output` tool's result: the output of the view node the value was handed
+/// to, which published it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteStudioViewOutputToolResult {
+    /// The stream id.
+    pub stream: String,
+    /// The view node's UUID, as `graph` lists it under `id`.
+    pub node: String,
+    /// The output port the value was published on.
+    pub port: String,
+}
+
 /// The `set_stream_clock_scale` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetStreamClockScaleToolResult {
@@ -498,6 +523,15 @@ pub struct ProjectTransactionOnTheWire {
     /// The key the caller sent it under, when it sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
+    /// The actions its caller sent, exactly as sent, each tagged by its `operation`; absent for
+    /// an undo, a redo, or a change the runtime made itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<serde_json::Value>,
+    /// Where an edit or a redo stands with its author's undo and redo now: `applied`,
+    /// `undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;
+    /// absent for an undo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_state: Option<String>,
     /// When the runtime applied it, RFC 3339 in UTC to the second, for display only.
     pub applied_at: String,
 }
@@ -737,6 +771,70 @@ pub struct ListedProjectDependencyOnTheWire {
 pub struct ListDependenciesToolResult {
     /// Each import of the project, in the order `tatolab-project.json` lists them.
     pub dependencies: Vec<ListedProjectDependencyOnTheWire>,
+}
+
+/// The `list_project_views` tool's result: every Tato Studio view a project and its imports
+/// bring, read from each `views/<folder>/tatolab_view.json` without running anything.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ListProjectViewsToolResult {
+    /// The project directory, symlinks resolved.
+    pub project_directory: PathBuf,
+    /// The project's UUID, from its `tatolab-project.json`.
+    pub project: String,
+    /// The project's name.
+    pub project_name: String,
+    /// The project's own views by folder, then each import's in the order its project file
+    /// records them.
+    pub views: Vec<ProjectViewListed>,
+}
+
+/// One folder of a `views/`: the view type it declares, and whether it opens.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectViewListed {
+    /// The view type's id, `<project name>:<view folder>`, the node type a node of the view is.
+    pub view_type: String,
+    /// The UUID of the project whose `views/` holds it.
+    pub project: String,
+    /// That project's name.
+    pub project_name: String,
+    /// That project's folder under `imports/`; `None` for the listed project's own view.
+    pub import_folder: Option<String>,
+    /// The view's folder relative to the listed project, as `views/deck` or
+    /// `imports/levels/views/meter`: the path a project file read names its files under.
+    pub view_folder_in_the_project: String,
+    /// Whether its manifest reads against the view contract this runtime reads.
+    pub opens: bool,
+    /// Why it does not open, in the runtime's own words; `None` when it opens.
+    pub not_opened_because: Option<String>,
+    /// The name the view-type menu lists; `None` when it does not open.
+    pub title: Option<String>,
+    /// What the view is for.
+    pub description: Option<String>,
+    /// Its icon, a path inside its folder.
+    pub icon: Option<String>,
+    /// Its preview picture, a path inside its folder.
+    pub preview: Option<String>,
+    /// `area` or `node`; `None` when it does not open.
+    pub placement: Option<String>,
+    /// The inputs a `node` view declares.
+    pub inputs: Vec<ProjectViewDeclaredPort>,
+    /// The outputs a `node` view declares.
+    pub outputs: Vec<ProjectViewDeclaredPort>,
+    /// Its `tatolab_view.json` as written, when it is JSON.
+    pub manifest: Option<serde_json::Value>,
+}
+
+/// An input or output a view declares, as a node declares a port.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectViewDeclaredPort {
+    /// The port's name.
+    pub name: String,
+    /// The port family's wire name.
+    pub family: String,
+    /// What the port carries.
+    pub description: Option<String>,
+    /// The lowest and highest value an Array port carries.
+    pub range: Option<[f64; 2]>,
 }
 
 /// The `list_project_node_types` tool's result: what a project and each source it draws node
@@ -1008,7 +1106,7 @@ mod tests {
             r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","project":"00000000-0000-0000-0000-000000000001","stream_asset":"00000000-0000-0000-0000-000000000002"},"state":"running","node_count":4,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":["camera","microphone"],"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","capture_devices_whose_access_was_never_asked_for":[],"action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","project":"00000000-0000-0000-0000-000000000003","stream_asset":"00000000-0000-0000-0000-000000000004"},"state":"preparing","node_count":null,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":[],"action":"Rabc-3","step":"making_the_venv"}]}"#
         );
         assert_eq!(
-            wire_text(&RunProjectToolResult {
+            wire_text(&StartOrReloadProjectToolResult {
                 action: "Rabc-3".to_owned(),
                 project_directory: PathBuf::from("/srv/desk"),
             }),

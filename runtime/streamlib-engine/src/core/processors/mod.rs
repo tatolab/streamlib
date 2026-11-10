@@ -13,6 +13,7 @@ mod node_types_one_stream_resolves;
 mod out_of_process_link_wire_reply;
 mod processor_instance_factory;
 mod processor_spec;
+mod project_view_node;
 // Re-export graph types — `ProcessorState` and `ProcessorStateComponent`
 // live in `core::graph` (#786); kept as a re-export here so the public
 // `streamlib::sdk::processors::ProcessorState` path stays stable.
@@ -46,3 +47,5 @@ pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };
 pub use processor_spec::ProcessorSpec;
+pub(crate) use project_view_node::ProjectViewNodeProcessor;
+pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;

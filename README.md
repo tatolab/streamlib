@@ -187,7 +187,7 @@ lands in the log `dev` prints, and the next save loads it again. An edit that le
 were. Ctrl-C ends `dev`
 and leaves the streams running. A project runs and stops as a whole: every stream the runtime
 loads is recorded, the project runs until `tatolab stop` or `tatolab rm`, and the runtime loads it
-again each time it starts. `tatolab run`
+again each time it starts. `tatolab start`
 queues the load once, without watching for edits, prints the action's id and returns at once;
 `tatolab logs -f` follows the load and the streams' records. `tatolab cancel <action>` takes an
 action back: a queued one is dropped, and a running load stops at the step it is on, its uv sync
@@ -409,11 +409,11 @@ holds the stream.
 
 ```text
 tatolab new [DIRECTORY]
-tatolab run [--dir DIR]
+tatolab start [--dir DIR]
+tatolab reload [--dir DIR]
 tatolab dev [--dir DIR]
 
 tatolab streams
-tatolab start [--dir DIR]
 tatolab stop [--dir DIR]
 tatolab pause [--dir DIR]
 tatolab resume [--dir DIR]
@@ -555,15 +555,17 @@ the host's connection: an agent's next session finds it in `list_streams`.
 
 The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, build id, uptime
 and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
-`remove_node` to change a running graph; `run_project`, which queues a run of a project and
-answers at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
+`remove_node` to change a running graph; `start_project`, which queues the start of a project
+that does not run, and `reload_project`, which queues a re-read from disk of one that does,
+each answering at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
 same way, and `list_assets`, `describe_asset`, `import_asset`, `move_asset`, `rename_asset` and
 `delete_asset` over the project's assets; `stop_project`, which stops a whole project until
-`run_project` runs it again, `pause_project` and `resume_project`, which pause and resume a
+`start_project` starts it again, `pause_project` and `resume_project`, which pause and resume a
 whole project at once, `remove_project`, `rename_stream`, `set_stream_clock_scale` and
 `list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
-machine, naming the node by the `id` `graph` lists. Every tool
+machine, naming the node by the `id` `graph` lists, and `write_studio_view_output` to hand a
+node of one of the project's Tato Studio views a value it publishes on an output. Every tool
 about one stream names it with `stream`, and `connect` links two ports of that one stream. Beside
 them the runtime serves the node catalog — every
 node type it can add, with its description, config schema and ports — and the live graph as
@@ -592,10 +594,11 @@ Support/Tatolab/` on macOS: a record of each stream it runs — its project and 
 interpreter, and whether it is stopped — and its own log. At each start it loads every
 recorded stream that is neither stopped nor failed.
 
-`tatolab run` queues a load of a project. The runtime syncs the project's `.venv`, reads
+`tatolab start` queues a load of a project. The runtime syncs the project's `.venv`, reads
 `tatolab-project.json` and each graph document in the project, then loads each graph, starts it
 and records it, writing every step to the project's log;
-`tatolab run` returns as soon as the load is queued.
+`tatolab start` returns as soon as the load is queued, and `tatolab reload` queues the same
+load of a project that already runs, keeping it paused if it is.
 
 `tatolabd` is native: the engine, the built-in nodes, and the local socket the CLI and MCP hosts
 talk to. No Python runs in its process, and it never imports your code — it learns a Python node's
@@ -795,8 +798,8 @@ Not built yet: the macOS app and Windows.
   the project does not depend on `tatolab-stream` yet: `uv add tatolab-stream`.
 - **``the stream `<id>` failed: <traceback>``** in the project's log, shown by `dev` and
   `tatolab logs` — the stream's graph document does not load, a node raised, or its load was
-  refused; the runtime lists it `failed` with that reason. Fix it and run or save again;
-  `tatolab run` retries it. A folder with no `tatolab-project.json` is no project: its
+  refused; the runtime lists it `failed` with that reason. Fix it and save again;
+  `tatolab reload` retries it. A folder with no `tatolab-project.json` is no project: its
   load fails saying so.
 - **`tatolab dev: <refusal>; save again to queue another load`** — the runtime refused to queue
   the load at all; its refusal names why.

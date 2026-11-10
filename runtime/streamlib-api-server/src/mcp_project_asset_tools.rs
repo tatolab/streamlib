@@ -14,9 +14,9 @@ use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectAsset,
-    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectAssetKind, ProjectAssetOperation,
-    ProjectOperation, ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
+    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectAsset, ProjectAssetAction,
+    ProjectAssetImportSource, ProjectAssetKind, ProjectAssetOperation, ProjectOperation,
+    ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
     ProjectTransactionAuthorKind,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -144,31 +144,15 @@ struct ImportAssetToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct RenameAssetToolArguments {
-    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
-    asset: String,
-    #[schemars(description = "The asset's new file name, in the folder it sits in.")]
-    file_name: String,
-    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
-    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
-    idempotency_key: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct MoveAssetToolArguments {
+struct RelocateAssetToolArguments {
     #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
     #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
     asset: String,
     #[schemars(
-        description = "The project folder the asset moves into, `/`-separated, `\"\"` for the project's root."
+        description = "The asset's new path in the project, `/`-separated and relative to the project directory, such as `archive/opening.mp4`; its folders are made when missing."
     )]
-    into_directory: String,
+    to_path: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorToolArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
@@ -282,7 +266,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later rename and move keeps, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Undoing the import removes the file at `asset_path`, one imported in place included, and nothing keeps its bytes. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
+        description = "Import a file as a new asset of the project at `asset_path`, answering its `asset` with the UUID the runtime made for it, which every later relocation keeps, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Undoing the import removes the file at `asset_path`, one imported in place included, and nothing keeps its bytes. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported."
     )]
     async fn import_asset(
         &self,
@@ -297,8 +281,9 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<ImportAssetToolArguments>,
     ) -> ToolCallAnswer {
-        let change = ProjectAssetChangeRequest::ImportAsset {
-            source: project_asset_import_source(&source)?,
+        let change = ProjectAssetAction::ImportAsset {
+            source: ProjectAssetImportSource::try_from(source)
+                .map_err(|refusal| format!("import_asset failed: {refusal}"))?,
             asset_path,
             kind: kind.map(ProjectAssetKind::from),
             import_settings: import_settings.unwrap_or_default(),
@@ -314,54 +299,27 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Give an asset a new file name in its folder, its sidecar going with it, as one transaction; the asset keeps its UUID. Answers the asset as it now is, with the `transaction` and `commit`."
+        description = "Put an asset at another path of the project, renaming it, moving it to another folder or both, its sidecar going with it, as one transaction; the asset keeps its UUID. Answers the asset as it now is, with the `transaction` and `commit`."
     )]
-    async fn rename_asset(
+    async fn relocate_asset(
         &self,
         tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(RenameAssetToolArguments {
+        Parameters(RelocateAssetToolArguments {
             project_directory,
             asset,
-            file_name,
+            to_path,
             author,
             idempotency_key,
-        }): Parameters<RenameAssetToolArguments>,
+        }): Parameters<RelocateAssetToolArguments>,
     ) -> ToolCallAnswer {
         self.one_asset_change_as_a_transaction(
-            "rename_asset",
+            "relocate_asset",
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
-            ProjectAssetChangeRequest::RenameAsset {
-                asset: the_asset_a_call_names("rename_asset", &asset)?,
-                file_name,
-            },
-        )
-        .await
-    }
-
-    #[tool(
-        description = "Move an asset into another folder of the project, made when missing, its sidecar going with it, as one transaction; the asset keeps its UUID. Answers the asset as it now is, with the `transaction` and `commit`."
-    )]
-    async fn move_asset(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(MoveAssetToolArguments {
-            project_directory,
-            asset,
-            into_directory,
-            author,
-            idempotency_key,
-        }): Parameters<MoveAssetToolArguments>,
-    ) -> ToolCallAnswer {
-        self.one_asset_change_as_a_transaction(
-            "move_asset",
-            project_directory,
-            the_author_of_a_change(author, &tool_call_request_context),
-            idempotency_key,
-            ProjectAssetChangeRequest::MoveAsset {
-                asset: the_asset_a_call_names("move_asset", &asset)?,
-                into_directory,
+            ProjectAssetAction::RelocateAsset {
+                asset: the_asset_a_call_names("relocate_asset", &asset)?,
+                to_path,
             },
         )
         .await
@@ -386,7 +344,7 @@ impl LocalApiMcpServerHandler {
                 project_directory,
                 the_author_of_a_change(author, &tool_call_request_context),
                 idempotency_key,
-                ProjectAssetChangeRequest::DeleteAsset {
+                ProjectAssetAction::DeleteAsset {
                     asset: the_asset_a_call_names("delete_asset", &asset)?,
                 },
             )
@@ -429,7 +387,7 @@ impl LocalApiMcpServerHandler {
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
-            ProjectAssetChangeRequest::SetAssetSettings {
+            ProjectAssetAction::SetAssetSettings {
                 asset: the_asset_a_call_names("set_asset_settings", &asset)?,
                 import_settings,
             },
@@ -477,7 +435,7 @@ impl LocalApiMcpServerHandler {
         project_directory: PathBuf,
         author: ProjectTransactionAuthor,
         idempotency_key: Option<String>,
-        change: ProjectAssetChangeRequest,
+        change: ProjectAssetAction,
     ) -> ToolCallAnswer {
         let (answered, _project, _applied_now) = self
             .an_asset_change_applied_as_a_transaction(
@@ -500,7 +458,7 @@ impl LocalApiMcpServerHandler {
         project_directory: PathBuf,
         author: ProjectTransactionAuthor,
         idempotency_key: Option<String>,
-        change: ProjectAssetChangeRequest,
+        change: ProjectAssetAction,
     ) -> Result<(AssetTransactionToolResult, Uuid, bool), String> {
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
         self.a_project_repository_call_off_the_async_runtime(
@@ -591,25 +549,6 @@ fn the_asset_a_call_names(tool_name: &str, asset: &str) -> Result<Uuid, String> 
 }
 
 /// `source` as an import reads it: an absolute path, or a content hash the store holds.
-fn project_asset_import_source(source: &str) -> Result<ProjectAssetImportSource, String> {
-    let source_path = std::path::Path::new(source);
-    if source_path.is_absolute() {
-        return Ok(ProjectAssetImportSource::FileOnThisMachine(
-            source_path.to_path_buf(),
-        ));
-    }
-    if source.len() == 64
-        && source
-            .bytes()
-            .all(|digit| digit.is_ascii_digit() || (b'a'..=b'f').contains(&digit))
-    {
-        return Ok(ProjectAssetImportSource::UploadedContent(source.to_owned()));
-    }
-    Err(format!(
-        "import_asset failed: `source` must be an absolute path or a SHA-256 in 64 lowercase hex digits; got `{source}`"
-    ))
-}
-
 pub(crate) fn project_asset_on_the_wire(asset: &ProjectAsset) -> ProjectAssetOnTheWire {
     ProjectAssetOnTheWire {
         asset: asset.asset.to_string(),

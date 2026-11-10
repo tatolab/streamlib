@@ -15,6 +15,12 @@ pub enum ProjectRepositoryRefusal {
     },
     #[error("{project_directory} already holds a project")]
     AlreadyAProject { project_directory: PathBuf },
+    #[error("{project_directory} already exists, so no project was unpacked there")]
+    ProjectDirectoryAlreadyExists { project_directory: PathBuf },
+    #[error(
+        "{import_source} is a folder: a project folder opens where it is, and only a `.zip` of one is unpacked as a new project"
+    )]
+    ProjectArchiveIsAFolder { import_source: String },
     #[error("the project in {project_directory} already has a first commit")]
     ProjectAlreadyCommitted { project_directory: PathBuf },
     #[error("the project directory {0} is not an absolute path")]
@@ -156,6 +162,11 @@ pub enum ProjectRepositoryRefusal {
     StreamDocumentEditedSinceItWasWritten { path: String },
     #[error("an idempotency key cannot be blank; mint one per user gesture, or send none")]
     BlankIdempotencyKey,
+    #[error(
+        "an import's `source` must be an absolute path or a SHA-256 in 64 lowercase hex digits; \
+         got `{0}`"
+    )]
+    ImportSourceNeitherAPathNorAnUpload(String),
     #[error(
         "the transaction {transaction} in the project's history is in format {format_version}, \
          which a newer runtime wrote; this runtime reads formats up to {newest_format_version}"

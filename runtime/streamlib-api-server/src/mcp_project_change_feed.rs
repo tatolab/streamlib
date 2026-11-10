@@ -20,7 +20,7 @@ use rmcp::service::SubscriptionContext;
 use serde_json::json;
 use streamlib_project_repository::{
     AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectRepositoriesOpenInThisRuntime,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionUndoState,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectActionRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire, ProjectTransactionOnTheWire,
@@ -122,6 +122,7 @@ impl ProjectActionsRefusedSinceTheRuntimeStarted {
 /// same second as an applied transaction comes before it.
 fn the_change_feed_newest_first(
     applied: Vec<AppliedProjectTransaction>,
+    undo_state_of_each_transaction: &HashMap<Uuid, ProjectTransactionUndoState>,
     refused: Vec<(i64, RefusedProjectActionOnTheWire)>,
 ) -> Vec<ProjectChangeFeedEntryOnTheWire> {
     let mut change_feed: Vec<(i64, bool, ProjectChangeFeedEntryOnTheWire)> = applied
@@ -130,7 +131,10 @@ fn the_change_feed_newest_first(
             (
                 applied.applied_at_unix_seconds,
                 false,
-                ProjectChangeFeedEntryOnTheWire::Applied(project_transaction_on_the_wire(applied)),
+                ProjectChangeFeedEntryOnTheWire::Applied(project_transaction_on_the_wire(
+                    applied,
+                    undo_state_of_each_transaction,
+                )),
             )
         })
         .chain(
@@ -274,8 +278,14 @@ pub(crate) async fn read_project_transactions_resource(
             .map_err(|refusal| {
                 McpError::internal_error(format!("project {project}'s history could not be read: {refusal}"), None)
             })?;
+        let undo_state_of_each_transaction = project_repository
+            .the_undo_state_of_each_transaction()
+            .map_err(|refusal| {
+                McpError::internal_error(format!("project {project}'s history could not be read: {refusal}"), None)
+            })?;
         let transactions = the_change_feed_newest_first(
             applied_transactions,
+            &undo_state_of_each_transaction,
             project_actions_refused.the_refused_actions_newest_first(project),
         );
         serde_json::to_string_pretty(&ProjectTransactionsResourceContents {
@@ -294,13 +304,16 @@ pub(crate) async fn read_project_transactions_resource(
 
 pub(crate) fn project_transaction_on_the_wire(
     applied: AppliedProjectTransaction,
+    undo_state_of_each_transaction: &HashMap<Uuid, ProjectTransactionUndoState>,
 ) -> ProjectTransactionOnTheWire {
+    let undo_state = undo_state_of_each_transaction
+        .get(&applied.transaction.transaction)
+        .map(|undo_state| undo_state_on_the_wire(*undo_state).to_owned());
     let AppliedProjectTransaction {
         transaction,
         commit,
         applied_at_unix_seconds,
     } = applied;
-    let operation_json = |operation| serde_json::to_value(operation).unwrap_or_default();
     ProjectTransactionOnTheWire {
         format_version: transaction.format_version,
         transaction: transaction.transaction.to_string(),
@@ -308,18 +321,36 @@ pub(crate) fn project_transaction_on_the_wire(
         parent_commit: transaction.parent_commit,
         author_kind: author_kind_on_the_wire(&transaction.author.kind).to_owned(),
         author_name: transaction.author.name,
-        operations: transaction.operations.iter().map(operation_json).collect(),
+        operations: transaction
+            .operations
+            .iter()
+            .map(serialized_on_the_wire)
+            .collect(),
         inverse_operations: transaction
             .inverse_operations
             .iter()
-            .map(operation_json)
+            .map(serialized_on_the_wire)
             .collect(),
         undoes: transaction.undoes.map(|undone| undone.to_string()),
         redoes: transaction.redoes.map(|redone| redone.to_string()),
         idempotency_key: transaction
             .idempotency_key
             .map(|idempotency_key| idempotency_key.as_str().to_owned()),
+        actions: transaction
+            .actions
+            .iter()
+            .map(serialized_on_the_wire)
+            .collect(),
+        undo_state,
         applied_at: rfc_3339_utc_of_unix_seconds(applied_at_unix_seconds),
+    }
+}
+
+fn undo_state_on_the_wire(undo_state: ProjectTransactionUndoState) -> &'static str {
+    match undo_state {
+        ProjectTransactionUndoState::Applied => "applied",
+        ProjectTransactionUndoState::UndoneRedoable => "undone_redoable",
+        ProjectTransactionUndoState::UndoneNotRedoable => "undone_not_redoable",
     }
 }
 
@@ -354,6 +385,10 @@ fn civil_date_of_days_since_the_unix_epoch(days: i64) -> (i64, i64, i64) {
     };
     let year = year_of_era + era * 400 + i64::from(month <= 2);
     (year, month, day)
+}
+
+fn serialized_on_the_wire(recorded: &impl serde::Serialize) -> serde_json::Value {
+    serde_json::to_value(recorded).unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -3,11 +3,12 @@
 
 use serde_json::{Map, json};
 use streamlib_project_repository::{
-    ProjectAssetChangeRequest, ProjectAssetImportSource, ProjectOperation, ProjectRepository,
+    ProjectAssetAction, ProjectAssetImportSource, ProjectOperation, ProjectRepository,
     ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionLineage, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphOperation,
-    StreamGraphOperationOnAStream, fragment_with_each_node_uuid_kept_by_its_name,
+    ProjectTransactionLineage, ProjectTransactionUndoState, StreamGraphDocumentLink,
+    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
+    StreamGraphOperation, StreamGraphOperationOnAStream,
+    fragment_with_each_node_uuid_kept_by_its_name,
 };
 use uuid::Uuid;
 
@@ -71,21 +72,39 @@ impl ProjectHoldingOneStream {
         operations: Vec<ProjectOperation>,
     ) -> Result<(), ProjectRepositoryRefusal> {
         self.repository
-            .apply_project_operations(author, None, operations, ProjectTransactionLineage::NewEdit)
+            .apply_project_operations(
+                author,
+                None,
+                Vec::new(),
+                operations,
+                ProjectTransactionLineage::NewEdit,
+            )
             .map(|_| ())
     }
 
     fn undo(&mut self, author: &ProjectTransactionAuthor) -> Result<(), ProjectRepositoryRefusal> {
         let reversal = self.repository.undo_by(author)?;
         self.repository
-            .apply_project_operations(author, None, reversal.operations, reversal.lineage)
+            .apply_project_operations(
+                author,
+                None,
+                Vec::new(),
+                reversal.operations,
+                reversal.lineage,
+            )
             .map(|_| ())
     }
 
     fn redo(&mut self, author: &ProjectTransactionAuthor) -> Result<(), ProjectRepositoryRefusal> {
         let reversal = self.repository.redo_by(author)?;
         self.repository
-            .apply_project_operations(author, None, reversal.operations, reversal.lineage)
+            .apply_project_operations(
+                author,
+                None,
+                Vec::new(),
+                reversal.operations,
+                reversal.lineage,
+            )
             .map(|_| ())
     }
 }
@@ -288,6 +307,69 @@ fn a_new_edit_after_an_undo_leaves_nothing_to_redo() {
 }
 
 #[test]
+fn each_edit_and_redo_carries_where_it_stands_with_its_authors_undo_and_redo() {
+    let mut project = ProjectHoldingOneStream::new();
+    let person = an_author(ProjectTransactionAuthorKind::Person, "Jo");
+    let agent = an_author(ProjectTransactionAuthorKind::Agent, "rig agent");
+    for name in ["kept", "undone"] {
+        project
+            .apply(
+                &person,
+                vec![project.on_the_stream(add(&a_node(name, json!({}))))],
+            )
+            .unwrap();
+    }
+    project.undo(&person).unwrap();
+    project.redo(&person).unwrap();
+    project.undo(&person).unwrap();
+    project
+        .apply(
+            &agent,
+            vec![project.on_the_stream(add(&a_node("replaced", json!({}))))],
+        )
+        .unwrap();
+    project.undo(&agent).unwrap();
+    project
+        .apply(
+            &agent,
+            vec![project.on_the_stream(add(&a_node("replacement", json!({}))))],
+        )
+        .unwrap();
+
+    let mut oldest_first = project
+        .repository
+        .applied_transactions_newest_first(usize::MAX)
+        .unwrap();
+    oldest_first.reverse();
+    let undo_state_of_each_transaction = project
+        .repository
+        .the_undo_state_of_each_transaction()
+        .unwrap();
+    let undo_states_oldest_first: Vec<Option<ProjectTransactionUndoState>> = oldest_first
+        .iter()
+        .map(|applied| {
+            undo_state_of_each_transaction
+                .get(&applied.transaction.transaction)
+                .copied()
+        })
+        .collect();
+
+    assert_eq!(
+        undo_states_oldest_first,
+        vec![
+            Some(ProjectTransactionUndoState::Applied),
+            Some(ProjectTransactionUndoState::UndoneRedoable),
+            None,
+            Some(ProjectTransactionUndoState::UndoneRedoable),
+            None,
+            Some(ProjectTransactionUndoState::UndoneNotRedoable),
+            None,
+            Some(ProjectTransactionUndoState::Applied),
+        ]
+    );
+}
+
+#[test]
 fn a_refused_operation_refuses_the_whole_transaction_and_writes_nothing() {
     let mut project = ProjectHoldingOneStream::new();
     let agent = an_author(ProjectTransactionAuthorKind::Agent, "rig agent");
@@ -359,7 +441,7 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
         .apply_asset_changes(
             &agent,
             None,
-            vec![ProjectAssetChangeRequest::ImportAsset {
+            vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(image_source),
                 asset_path: "media/logo.png".to_owned(),
                 kind: None,
@@ -384,7 +466,7 @@ fn a_config_references_only_an_asset_the_project_holds_and_holds_it_against_dele
         .apply_asset_changes(
             &agent,
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: image.asset }],
+            vec![ProjectAssetAction::DeleteAsset { asset: image.asset }],
         )
         .unwrap_err();
     assert!(
@@ -472,7 +554,7 @@ fn an_imported_asset(
         .apply_asset_changes(
             author,
             None,
-            vec![ProjectAssetChangeRequest::ImportAsset {
+            vec![ProjectAssetAction::ImportAsset {
                 source: ProjectAssetImportSource::FileOnThisMachine(source),
                 asset_path: "media/grade.cube".to_owned(),
                 kind: None,
@@ -570,7 +652,7 @@ fn an_asset_only_a_fragments_inner_node_references_is_held_against_deletion() {
         .apply_asset_changes(
             &agent,
             None,
-            vec![ProjectAssetChangeRequest::DeleteAsset { asset: lut }],
+            vec![ProjectAssetAction::DeleteAsset { asset: lut }],
         )
         .unwrap_err();
     assert!(

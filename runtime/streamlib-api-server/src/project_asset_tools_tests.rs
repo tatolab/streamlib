@@ -130,18 +130,23 @@ async fn media_usd_and_an_fmu_are_imported_renamed_moved_and_deleted_one_commit_
             &format!("{asset_path}.asset.json")
         ));
 
+        let renamed_path = match asset_path.rsplit_once('/') {
+            Some((folder, _)) => format!("{folder}/renamed-{source_file_name}"),
+            None => format!("renamed-{source_file_name}"),
+        };
         let renamed = served
             .answered(
-                "rename_asset",
-                json!({ "asset": asset, "file_name": format!("renamed-{source_file_name}") }),
+                "relocate_asset",
+                json!({ "asset": asset, "to_path": renamed_path }),
             )
             .await;
         assert_eq!(renamed["asset"]["asset"], asset.as_str());
+        assert_eq!(renamed["asset"]["path"], renamed_path);
 
         let moved = served
             .answered(
-                "move_asset",
-                json!({ "asset": asset, "into_directory": "library" }),
+                "relocate_asset",
+                json!({ "asset": asset, "to_path": format!("library/renamed-{source_file_name}") }),
             )
             .await;
         assert_eq!(
@@ -176,6 +181,56 @@ async fn media_usd_and_an_fmu_are_imported_renamed_moved_and_deleted_one_commit_
     let listed = served.answered("list_assets", json!({})).await;
     assert_eq!(listed["assets"], json!([]));
     assert_eq!(listed["project_name"], "arm-control");
+}
+
+/// Each asset action a tool is sent is what its commit records, field for field, once the
+/// project, the author and the key that carry it are set aside.
+#[tokio::test]
+async fn an_asset_action_sent_over_mcp_is_the_action_its_commit_records() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let source = served.a_file_outside_the_project("intro.mp4", b"video");
+    let import = json!({
+        "source": source, "asset_path": "media/intro.mp4", "kind": "media",
+        "import_settings": { "colour_space": "rec709" },
+    });
+    let imported = served.answered("import_asset", import.clone()).await;
+    let asset = imported["asset"]["asset"].as_str().unwrap().to_owned();
+    let relocate = json!({ "asset": asset, "to_path": "archive/opening.mp4" });
+    served
+        .answered(
+            "relocate_asset",
+            json!({ "asset": asset, "to_path": "archive/opening.mp4", "idempotency_key": "drag-1" }),
+        )
+        .await;
+    let set_settings = json!({ "asset": asset, "import_settings": { "colour_space": "srgb" } });
+    served
+        .answered("set_asset_settings", set_settings.clone())
+        .await;
+    let delete = json!({ "asset": asset });
+    served.answered("delete_asset", delete.clone()).await;
+
+    let recorded_actions_oldest_first: Vec<Value> =
+        ProjectRepository::open(&served.project_directory())
+            .unwrap()
+            .applied_transactions_newest_first(4)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .map(|applied| serde_json::to_value(&applied.transaction.actions).unwrap())
+            .collect();
+    let sent_as = |operation: &str, mut sent: Value| {
+        sent["operation"] = json!(operation);
+        json!([sent])
+    };
+    assert_eq!(
+        recorded_actions_oldest_first,
+        vec![
+            sent_as("import_asset", import),
+            sent_as("relocate_asset", relocate),
+            sent_as("set_asset_settings", set_settings),
+            sent_as("delete_asset", delete),
+        ]
+    );
 }
 
 #[tokio::test]

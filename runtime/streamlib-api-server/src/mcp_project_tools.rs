@@ -13,8 +13,8 @@ use rmcp::service::RequestContext;
 use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectOperation, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectSettingsOperation, ProjectTransactionAuthor, ProjectTransactionLineage,
+    AppliedProjectTransaction, ProjectRepositoryRefusal, ProjectSettingsAction,
+    ProjectTransactionAuthor,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DeleteProjectToolResult, DuplicateProjectToolResult, ProjectSettingsTransactionToolResult,
@@ -94,10 +94,6 @@ struct DeleteProjectToolArguments {
     project_directory: PathBuf,
 }
 
-/// The one change a project-settings tool asks of the project as it is now.
-type ProjectSettingsChangeAskedOfTheProject =
-    Box<dyn FnOnce(&ProjectRepository) -> ProjectSettingsOperation + Send>;
-
 #[tool_router(router = project_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
@@ -118,12 +114,7 @@ impl LocalApiMcpServerHandler {
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
-            Box::new(
-                move |project_repository| ProjectSettingsOperation::SetProjectName {
-                    from: project_repository.project_file().name.clone(),
-                    to: name,
-                },
-            ),
+            ProjectSettingsAction::SetProjectName { name },
         )
         .await
     }
@@ -147,12 +138,7 @@ impl LocalApiMcpServerHandler {
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
-            Box::new(
-                move |project_repository| ProjectSettingsOperation::SetProjectDescription {
-                    from: project_repository.project_file().description.clone(),
-                    to: description,
-                },
-            ),
+            ProjectSettingsAction::SetProjectDescription { description },
         )
         .await
     }
@@ -184,18 +170,13 @@ impl LocalApiMcpServerHandler {
             project_directory,
             the_author_of_a_change(author, &tool_call_request_context),
             idempotency_key,
-            Box::new(
-                move |project_repository| ProjectSettingsOperation::SetProjectCover {
-                    from: project_repository.project_file().cover,
-                    to: cover,
-                },
-            ),
+            ProjectSettingsAction::SetProjectCover { cover },
         )
         .await
     }
 
     #[tool(
-        description = "Duplicate a project into `into`, a folder that does not exist yet, as a project of its own: every file a copy of it carries, its `imports/` included, and its whole history, so its edits can still be undone in the copy, under a new project UUID and the name `<name> copy`, the duplicate recorded as a commit on its history by `author`. Its `.venv` and the rest of its `.tatolab/` stay behind, and the duplicate is not run: `run_project` runs it. Answers the duplicate's `project_directory`, `project`, `project_name` and `commit`. Refused, nothing left at `into`, for a relative `into`, one that exists, and one inside the project."
+        description = "Duplicate a project into `into`, a folder that does not exist yet, as a project of its own: every file a copy of it carries, its `imports/` included, and its whole history, so its edits can still be undone in the copy, under a new project UUID and the name `<name> copy`, the duplicate recorded as a commit on its history by `author`. Its `.venv` and the rest of its `.tatolab/` stay behind, and the duplicate is not started: `start_project` starts it. Answers the duplicate's `project_directory`, `project`, `project_name` and `commit`. Refused, nothing left at `into`, for a relative `into`, one that exists, and one inside the project."
     )]
     async fn duplicate_project(
         &self,
@@ -261,7 +242,7 @@ impl LocalApiMcpServerHandler {
         project_directory: PathBuf,
         author: ProjectTransactionAuthor,
         idempotency_key: Option<String>,
-        change: ProjectSettingsChangeAskedOfTheProject,
+        action: ProjectSettingsAction,
     ) -> ToolCallAnswer {
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
         let answered = self
@@ -270,14 +251,8 @@ impl LocalApiMcpServerHandler {
                 project_directory,
                 move |project_repository| {
                     let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
-                    let operation = ProjectOperation::ProjectSettings(change(project_repository));
                     let outcome = project_repository
-                        .apply_project_operations(
-                            &author,
-                            idempotency_key.as_ref(),
-                            vec![operation],
-                            ProjectTransactionLineage::NewEdit,
-                        )
+                        .apply_project_settings_action(&author, idempotency_key.as_ref(), action)
                         .inspect_err(|_| {
                             project_repositories.announce_a_refused_action(
                                 project_repository.project_file().project,

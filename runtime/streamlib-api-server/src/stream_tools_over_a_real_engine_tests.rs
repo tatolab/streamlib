@@ -11,7 +11,7 @@
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
-//! `run_project` loads an empty stream — and the tests that run a project's
+//! `start_project` loads an empty stream — and the tests that run a project's
 //! graph document end to end are gated on `hardware-tests`.
 
 use std::path::{Path, PathBuf};
@@ -28,10 +28,10 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
-    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream, RunProjectRequest,
-    Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment, StreamListing,
-    StreamLocation, StreamRecord, StreamRecordAsRead, StreamRecordsInTheStateDirectory,
-    StreamRenameOutcome,
+    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
+    ProjectStartOrReloadRequest, Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment,
+    StreamListing, StreamLocation, StreamRecord, StreamRecordAsRead,
+    StreamRecordsInTheStateDirectory, StreamRenameOutcome,
 };
 use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
 use uuid::Uuid;
@@ -355,7 +355,7 @@ async fn tool_call_over_the_connection(
 /// answers every run with.
 const ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS: &str = "R-empty-1";
 
-/// A runtime whose `run_project` loads an empty stream under the project
+/// A runtime whose `start_project` and `reload_project` load an empty stream under the project
 /// folder's name, standing in for an id, without reading or starting it — a
 /// GPU-free stand-in for the engine's own run — answering
 /// [`ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS`], and hands every other call to the engine.
@@ -435,7 +435,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn ids_of_the_loaded_streams(&self) -> Vec<String> {
         self.engine.ids_of_the_loaded_streams()
     }
-    fn run_project(&self, request: RunProjectRequest) -> Result<StreamActionQueued> {
+    fn start_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
         let stream_id = request
             .project_directory
             .file_name()
@@ -450,6 +450,9 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             action_id: ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS.to_string(),
             project_directory: request.project_directory,
         })
+    }
+    fn reload_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
+        self.start_project(request)
     }
     fn create_project(
         &self,
@@ -573,7 +576,7 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_it_and_lists_running
     let run = tool_answer(
         &tool_call_over_the_connection(
             &client,
-            "run_project",
+            "start_project",
             a_run_request_of_the_project_in("camera"),
         )
         .await,
@@ -610,7 +613,7 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_the_local_api_stoppi
     tool_answer(
         &tool_call_over_the_connection(
             &client,
-            "run_project",
+            "start_project",
             a_run_request_of_the_project_in("camera"),
         )
         .await,
@@ -1206,7 +1209,7 @@ async fn a_run_of_a_folder_that_is_no_project_fails_its_action_saying_why() {
 }
 
 /// `describe_stream_action`'s answer for the run of `project_directory` that
-/// `run_project` queued, once it has finished.
+/// `start_project` queued, once it has finished.
 async fn the_run_of_the_project_once_finished(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     project_directory: &Path,
@@ -1214,7 +1217,7 @@ async fn the_run_of_the_project_once_finished(
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": project_directory }),
         )
         .await,
@@ -1227,8 +1230,10 @@ async fn the_run_of_the_project_once_finished(
     .await
 }
 
-/// [`the_run_of_the_project_once_finished`], the run queued over `connection`.
+/// [`the_run_of_the_project_once_finished`], the start or reload `start_or_reload_tool_name`
+/// names queued over `connection`.
 async fn the_run_over_the_connection_once_finished(
+    start_or_reload_tool_name: &str,
     connection: &RunningService<RoleClient, ()>,
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     project_directory: &Path,
@@ -1236,7 +1241,7 @@ async fn the_run_over_the_connection_once_finished(
     let queued = tool_answer(
         &tool_call_over_the_connection(
             connection,
-            "run_project",
+            start_or_reload_tool_name,
             json!({ "project_directory": project_directory }),
         )
         .await,
@@ -1458,10 +1463,10 @@ async fn create_project_with_a_relative_directory_is_refused() {
     assert!(!Path::new("a-relative-project").exists());
 }
 
-/// `run_project` answers its action at once, and the action is followed to `done` with the
+/// `start_project` answers its action at once, and the action is followed to `done` with the
 /// stream of the graph document that does not load failed.
 #[tokio::test(flavor = "multi_thread")]
-async fn run_project_queues_a_run_followed_by_describe_stream_action() {
+async fn start_project_queues_a_load_followed_by_describe_stream_action() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -1471,7 +1476,7 @@ async fn run_project_queues_a_run_followed_by_describe_stream_action() {
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": project.path() }),
         )
         .await,
@@ -1527,7 +1532,7 @@ exec sleep 30
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": project.path() }),
         )
         .await,
@@ -1593,7 +1598,7 @@ exec sleep 30
 /// An action the runtime never queued, and a relative project directory, are refused
 /// saying so.
 #[tokio::test(flavor = "multi_thread")]
-async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_hold() {
+async fn describe_stream_action_and_start_project_refuse_what_the_runtime_cannot_hold() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
 
@@ -1613,7 +1618,7 @@ async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_h
     let relative = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "run_project",
+            "start_project",
             json!({ "project_directory": "desk" }),
         )
         .await,
@@ -1630,14 +1635,14 @@ async fn describe_stream_action_and_run_project_refuse_what_the_runtime_cannot_h
 // ============================================================================
 
 /// A project run over a `/mcp/stdio` connection is recorded and runs on once
-/// the connection drops, and stop_project, run_project and remove_project act on it through the
+/// the connection drops, and stop_project, start_project and remove_project act on it through the
 /// tools.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn a_run_project_end_to_end_outlives_its_connection_through_stop_run_and_remove() {
+async fn a_started_project_end_to_end_outlives_its_connection_through_stop_start_and_remove() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
     let camera_stream_id = project.stream_id_of("camera");
@@ -1645,6 +1650,7 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_run_and_r
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
     let run = the_run_over_the_connection_once_finished(
+        "start_project",
         &client,
         &engine.operations_on_the_loaded_streams(),
         project.path(),
@@ -1687,7 +1693,7 @@ async fn a_run_project_end_to_end_outlives_its_connection_through_stop_run_and_r
             json!("stopped"),
         ),
         (
-            "run_project",
+            "start_project",
             json!({ "project_directory": project.path() }),
             json!("running"),
         ),
@@ -1741,6 +1747,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     };
 
     the_run_over_the_connection_once_finished(
+        "start_project",
         &first_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -1750,6 +1757,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
 
     project.write_an_unloadable_graph_document("camera");
     let bad_save = the_run_over_the_connection_once_finished(
+        "reload_project",
         &first_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -1772,6 +1780,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
 
     project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
     let replaced = the_run_over_the_connection_once_finished(
+        "reload_project",
         &other_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -1785,6 +1794,7 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     project.remove_the_graph_document("camera");
     project.write_the_graph_document(the_graph_of_a_stream_named("studio"));
     the_run_over_the_connection_once_finished(
+        "reload_project",
         &first_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -1970,11 +1980,71 @@ fn an_agent_named(name: &str) -> Value {
 /// Five edits sent as one `transact` are one commit: the graph document keeps them, so a
 /// fresh runtime loading it finds them, and one `undo` reverses all five, on the document and
 /// on the running stream.
+/// The graph actions a `transact` is sent, and the one action a single-operation tool is sent,
+/// are what their commits record, field for field, once the mode, the author and the key that
+/// carry them are set aside.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_action_sent_over_mcp_is_the_action_its_commit_records() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let transacted_actions = json!([
+        { "operation": "add_node", "stream": stream_asset, "type": sink_type.as_str(),
+          "name": "monitor", "as": "monitor" },
+        { "operation": "connect", "stream": stream_asset,
+          "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+          "target": { "node": "monitor", "port": "video" } },
+    ]);
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({
+                "author": an_agent_named("alice"), "idempotency_key": "wire-monitor",
+                "operations": transacted_actions,
+            }),
+        )
+        .await,
+    )
+    .expect("the transaction applies");
+    let rename = json!({ "stream": stream_asset, "node": SOURCE_NODE_UUID, "name": "camera" });
+    let mut rename_sent = rename.clone();
+    rename_sent["author"] = an_agent_named("alice");
+    tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "rename_node",
+            rename_sent,
+        )
+        .await,
+    )
+    .expect("the rename applies");
+
+    let recorded_actions_oldest_first: Vec<Value> =
+        streamlib_project_repository::ProjectRepository::open(project.path())
+            .expect("the project opens")
+            .applied_transactions_newest_first(2)
+            .expect("history reads")
+            .into_iter()
+            .rev()
+            .map(|applied| serde_json::to_value(&applied.transaction.actions).unwrap())
+            .collect();
+    let mut rename_as_recorded = rename;
+    rename_as_recorded["operation"] = json!("rename_node");
+    assert_eq!(
+        recorded_actions_oldest_first,
+        vec![transacted_actions, json!([rename_as_recorded])]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_reverses_them() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
 
     let applied = tool_answer(
@@ -1984,16 +2054,16 @@ async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_re
             json!({
                 "author": an_agent_named("alice"),
                 "operations": [
-                    { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+                    { "operation": "add_node", "stream": stream_asset, "type": sink_type.as_str(),
                       "name": "monitor", "as": "monitor" },
-                    { "operation": "connect", "stream": stream_id,
+                    { "operation": "connect", "stream": stream_asset,
                       "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                       "target": { "node": "monitor", "port": "video" } },
-                    { "operation": "rename_node", "stream": stream_id,
+                    { "operation": "rename_node", "stream": stream_asset,
                       "node": SOURCE_NODE_UUID, "name": "camera" },
-                    { "operation": "set_studio_fields", "stream": stream_id,
+                    { "operation": "set_studio_fields", "stream": stream_asset,
                       "node": SOURCE_NODE_UUID, "studio": { "position": [120, 40] } },
-                    { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+                    { "operation": "add_node", "stream": stream_asset, "type": sink_type.as_str(),
                       "name": "spare" },
                 ],
             }),
@@ -2066,6 +2136,7 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
@@ -2078,7 +2149,7 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     };
     let add_a_sink_as = |author: &str, name: &str| {
         json!({
-            "stream": stream_id, "type": sink_type.as_str(), "name": name,
+            "stream": stream_asset, "type": sink_type.as_str(), "name": name,
             "author": an_agent_named(author),
         })
     };
@@ -2091,7 +2162,7 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     call(
         "rename_node",
         json!({
-            "stream": stream_id, "node": alice_first, "name": "alice-renamed",
+            "stream": stream_asset, "node": alice_first, "name": "alice-renamed",
             "author": an_agent_named("alice"),
         }),
     )
@@ -2102,16 +2173,18 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-renamed", "source"]
     );
-    call("undo", undo_by("alice")).await;
+    let alice_undo = call("undo", undo_by("alice")).await;
     assert_eq!(
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-first", "source"]
     );
-    call("redo", undo_by("alice")).await;
+    assert_eq!(alice_undo.get("undo_state"), None, "{alice_undo}");
+    let alice_redo = call("redo", undo_by("alice")).await;
     assert_eq!(
         sorted_node_names_in(&project.the_graph_document_of("main")),
         ["alice-renamed", "source"]
     );
+    assert_eq!(alice_redo["undo_state"], "applied", "{alice_redo}");
     assert_eq!(
         sorted_node_names_in(&engine.the_live_graph_of(&stream_id)),
         ["alice-renamed", "source"],
@@ -2138,7 +2211,8 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
 async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let editing_connection = rmcp_client_over_the_upgraded_stream(&served).await;
     let listening_connection = rmcp_client_over_the_upgraded_stream(&served).await;
@@ -2173,7 +2247,7 @@ async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
         &editing_connection,
         "remove_node",
         json!({
-            "stream": stream_id, "node": absent_node, "author": an_agent_named("alice"),
+            "stream": stream_asset, "node": absent_node, "author": an_agent_named("alice"),
             "idempotency_key": "remove-gesture",
         }),
     )
@@ -2183,7 +2257,7 @@ async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
         &editing_connection,
         "rename_node",
         json!({
-            "stream": stream_id, "node": absent_node, "name": "glow", "mode": "live",
+            "stream": stream_asset, "node": absent_node, "name": "glow", "mode": "live",
             "author": an_agent_named("bob"),
         }),
     )
@@ -2222,7 +2296,7 @@ async fn a_refused_graph_edit_is_read_back_from_the_project_change_feed() {
     assert_eq!(refused_before_it["idempotency_key"], "remove-gesture");
     assert_eq!(
         refused_before_it["operations"],
-        json!([{ "operation": "remove_node", "stream": stream_id, "node": absent_node }])
+        json!([{ "operation": "remove_node", "stream": stream_asset, "node": absent_node }])
     );
     assert_eq!(
         refused_before_it["refusal"], refused["structuredContent"]["refusal"],
@@ -2258,6 +2332,7 @@ async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
@@ -2269,7 +2344,7 @@ async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
         }
     };
     let add_the_sink = json!({
-        "stream": stream_id, "type": sink_type.as_str(), "name": "sink",
+        "stream": stream_asset, "type": sink_type.as_str(), "name": "sink",
         "author": an_agent_named("alice"), "idempotency_key": "add-sink-gesture",
     });
 
@@ -2421,10 +2496,11 @@ async fn an_imported_graph_generator_runs_as_a_fragment_and_a_rerun_keeps_each_n
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let import_the_look = || {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
         let arguments = json!({
-            "stream": stream_id, "generator": LOOK_GENERATOR, "author": an_agent_named("alice"),
+            "stream": stream_asset, "generator": LOOK_GENERATOR, "author": an_agent_named("alice"),
         });
         async move {
             tool_answer(
@@ -2508,7 +2584,8 @@ async fn an_import_under_the_name_of_a_node_that_is_no_fragment_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
-    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     std::fs::write(
         project.path().join("generator-run.json"),
         json!({
@@ -2525,7 +2602,7 @@ async fn an_import_under_the_name_of_a_node_that_is_no_fragment_is_refused() {
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "import_graph_generator",
-            json!({ "stream": stream_id, "generator": LOOK_GENERATOR, "name": "source" }),
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR, "name": "source" }),
         )
         .await,
     )
@@ -2547,12 +2624,13 @@ async fn refresh_fragments_reruns_the_fragments_a_changed_module_defines() {
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     project.next_look_run_places(a_source_into_a_sink_fragment(false));
     tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "import_graph_generator",
-            json!({ "stream": stream_id, "generator": LOOK_GENERATOR }),
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR }),
         )
         .await,
     )
@@ -2604,6 +2682,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
     let project = a_project_whose_main_stream_holds_one_source()
         .with_a_generator_run_printed_from_generator_run_json();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let sink_type = StreamToolsTestSink::processor_class_import_path();
     project.next_look_run_places(json!({
         "nodes": [
@@ -2620,7 +2699,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "import_graph_generator",
-            json!({ "stream": stream_id, "generator": LOOK_GENERATOR }),
+            json!({ "stream": stream_asset, "generator": LOOK_GENERATOR }),
         )
         .await,
     )
@@ -2632,7 +2711,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
             engine.operations_on_the_loaded_streams(),
             "connect",
             json!({
-                "stream": stream_id,
+                "stream": stream_asset,
                 "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                 "target": { "node": look, "port": "video" },
             }),
@@ -2661,6 +2740,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
     let call = |tool_name: &'static str, arguments: Value| {
         let operations = engine.operations_on_the_loaded_streams();
         async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
@@ -2668,7 +2748,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
 
     let added = call(
         "add_group",
-        json!({ "stream": stream_id, "title": "sources", "description": "every camera",
+        json!({ "stream": stream_asset, "title": "sources", "description": "every camera",
                 "colour": "#3b82f6", "nodes": [SOURCE_NODE_UUID],
                 "author": an_agent_named("alice") }),
     )
@@ -2681,7 +2761,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
     assert_eq!(added["added_groups"][0]["title"], "sources", "{added}");
     call(
         "set_group_fields",
-        json!({ "stream": stream_id, "group": group, "colour": "#22c55e",
+        json!({ "stream": stream_asset, "group": group, "colour": "#22c55e",
                 "author": an_agent_named("alice") }),
     )
     .await
@@ -2711,7 +2791,7 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
 
     let removed = call(
         "remove_group",
-        json!({ "stream": stream_id, "group": group, "author": an_agent_named("alice") }),
+        json!({ "stream": stream_asset, "group": group, "author": an_agent_named("alice") }),
     )
     .await
     .expect("the group is taken out");
@@ -2761,6 +2841,7 @@ impl ProjectWithGraphDocuments {
                     name: "arm maintainer".to_owned(),
                 },
                 None,
+                Vec::new(),
                 vec![streamlib_project_repository::ProjectOperation::StreamGraph(
                     streamlib_project_repository::StreamGraphOperationOnAStream {
                         stream: self.stream_asset_of("main"),
@@ -2839,6 +2920,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
         .to_owned();
     let cell = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let stream_asset = cell.stream_asset_of("main");
     let arm_stream = arm.stream_asset_of("main").to_string();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations = engine.operations_on_the_loaded_streams();
@@ -2865,7 +2947,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
 
     let used = call(
         "use_dependency_stream",
-        json!({ "stream": stream_id, "project": arm.project, "dependency_stream": arm_stream,
+        json!({ "stream": stream_asset, "project": arm.project, "dependency_stream": arm_stream,
                 "name": "arm", "author": an_agent_named("alice") }),
     )
     .await
@@ -2893,7 +2975,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
     );
     let placed_again = call(
         "use_dependency_stream",
-        json!({ "stream": stream_id, "project": arm.project, "dependency_stream": arm_stream,
+        json!({ "stream": stream_asset, "project": arm.project, "dependency_stream": arm_stream,
                 "name": "arm", "author": an_agent_named("alice") }),
     )
     .await
@@ -2997,7 +3079,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
 
     call(
         "remove_node",
-        json!({ "stream": stream_id, "node": fragment, "author": an_agent_named("alice") }),
+        json!({ "stream": stream_asset, "node": fragment, "author": an_agent_named("alice") }),
     )
     .await
     .expect("the fragment is taken out");
@@ -3103,8 +3185,159 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     );
 }
 
+/// Write `manifest` as the `tatolab_view.json` of `views/<view_folder_name>/` in `project_directory`.
+fn a_view_folder_in(project_directory: &Path, view_folder_name: &str, manifest: &Value) {
+    let folder = project_directory.join("views").join(view_folder_name);
+    std::fs::create_dir_all(&folder).expect("the view's folder");
+    std::fs::write(folder.join("tatolab_view.json"), manifest.to_string()).expect("its manifest");
+}
+
+/// Project `cell` brings the view `deck` and imports project `levels`, which brings `meter` and a
+/// folder whose manifest is not JSON: each is listed under the project bringing it, and the one
+/// that does not open says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let levels = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    std::fs::write(
+        levels.path().join("tatolab-project.json"),
+        json!({ "project": levels.project, "name": "levels", "dependencies": [] }).to_string(),
+    )
+    .expect("the import's project file names it");
+    a_view_folder_in(
+        levels.path(),
+        "meter",
+        &json!({ "contract": "1.0", "title": "Meter", "entry": "index.html", "placement": "area" }),
+    );
+    let broken_folder = levels.path().join("views/broken");
+    std::fs::create_dir_all(&broken_folder).expect("the broken view's folder");
+    std::fs::write(broken_folder.join("tatolab_view.json"), "{").expect("a manifest cut short");
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let deck_manifest = json!({
+        "contract": "1.0", "title": "DJ Deck", "description": "Two decks and a crossfader.",
+        "icon": "icon.svg", "preview": "preview.png", "entry": "index.html", "placement": "node",
+        "inputs": [{ "name": "waveform", "family": "channels" }],
+        "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+    });
+    a_view_folder_in(cell.path(), "deck", &deck_manifest);
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    let added = call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": levels.path().display().to_string(),
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("levels is imported");
+    let folder = added["dependency"]["folder"].clone();
+
+    let listed = call(
+        "list_project_views",
+        json!({ "project_directory": cell.path() }),
+    )
+    .await
+    .expect("the cell's views are listed");
+
+    assert_eq!(listed["project"], json!(cell.project), "{listed}");
+    assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
+    let views = listed["views"].as_array().expect("a list of views");
+    assert_eq!(views.len(), 3, "{listed}");
+    assert_eq!(
+        views[0],
+        json!({
+            "view_type": format!("{TEST_PROJECT_NAME}:deck"),
+            "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
+            "view_folder_in_the_project": "views/deck",
+            "opens": true, "not_opened_because": null,
+            "title": "DJ Deck", "description": "Two decks and a crossfader.",
+            "icon": "icon.svg", "preview": "preview.png", "placement": "node",
+            "inputs": [{ "name": "waveform", "family": "channels", "description": null, "range": null }],
+            "outputs": [{ "name": "crossfader", "family": "array", "description": null, "range": [-1.0, 1.0] }],
+            "manifest": deck_manifest,
+        })
+    );
+    assert_eq!(views[1]["view_type"], "levels:broken", "{listed}");
+    assert_eq!(views[1]["opens"], false, "{listed}");
+    assert_eq!(views[1]["import_folder"], folder, "{listed}");
+    assert!(
+        views[1]["not_opened_because"]
+            .as_str()
+            .is_some_and(|why| why.starts_with("`tatolab_view.json` is not JSON: ")),
+        "{listed}"
+    );
+    assert_eq!(views[2]["view_type"], "levels:meter", "{listed}");
+    assert_eq!(views[2]["project"], json!(levels.project), "{listed}");
+    assert_eq!(views[2]["project_name"], "levels", "{listed}");
+    assert_eq!(views[2]["placement"], "area", "{listed}");
+    assert_eq!(
+        views[2]["view_folder_in_the_project"],
+        json!(format!(
+            "imports/{}/views/meter",
+            folder.as_str().expect("a folder name")
+        )),
+        "{listed}"
+    );
+}
+
 /// A listing whose interpreter prints no listing is refused naming the project, in the
 /// runtime's own words.
+/// The UUID the graph document of the view-node test gives its `deck`.
+const DECK_NODE_UUID: &str = "decdecde-cdec-4dec-8dec-decdecdecdec";
+
+/// A graph document holding a node of the project's view `deck` loads it with the view's ports,
+/// and a panel's write onto it is live data alone: refused while the node does not run, and the
+/// graph document on disk keeps nothing of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_a_write_records_nothing()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    register_the_stream_tools_test_source_once();
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"].as_array_mut().unwrap().push(json!({
+        "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
+        "config": { "bpm": 128 },
+    }));
+    let project = ProjectWithGraphDocuments::holding(graph);
+    a_view_folder_in(
+        project.path(),
+        "deck",
+        &json!({
+            "contract": "1.0", "title": "Deck", "entry": "index.html", "placement": "node",
+            "inputs": [{ "name": "waveform", "family": "channels" }],
+            "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+        }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let document_before = project.the_graph_document_of("main");
+
+    let live_graph = engine.the_live_graph_of(&stream_id);
+    let deck = the_node_named(&live_graph, "deck");
+    assert_eq!(deck["id"], DECK_NODE_UUID, "{deck}");
+    assert_eq!(deck["type"], format!("{TEST_PROJECT_NAME}:deck"), "{deck}");
+    assert!(
+        deck.to_string().contains("waveform") && deck.to_string().contains("crossfader"),
+        "the view node takes the view's ports: {deck}"
+    );
+
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "write_studio_view_output",
+            json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
+                    "value": 0.5 }),
+        )
+        .await,
+    )
+    .expect_err("a node not running publishes nothing");
+    assert!(
+        refusal.starts_with("write_studio_view_output failed:") && refusal.contains("not running"),
+        "{refusal}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -3165,7 +3398,8 @@ async fn an_edit_to_a_stream_reaches_each_loaded_stream_holding_it_at_any_depth(
         "top",
         &["left"],
     ));
-    let main_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let main_asset = cell.stream_asset_of("main");
     let left_id = engine.a_stream_loaded_from_its_graph_document(&cell, "left");
     let top_id = engine.a_stream_loaded_from_its_graph_document(&cell, "top");
     let main_in_top = |engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory| {
@@ -3179,7 +3413,7 @@ async fn an_edit_to_a_stream_reaches_each_loaded_stream_holding_it_at_any_depth(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "add_node",
-            json!({ "stream": main_id, "type": sink_type.as_str(), "name": "wrist",
+            json!({ "stream": main_asset, "type": sink_type.as_str(), "name": "wrist",
                     "author": an_agent_named("alice") }),
         )
         .await,
@@ -3224,12 +3458,13 @@ async fn a_stream_fragment_that_would_close_a_cycle_is_refused_naming_each_strea
         &["main"],
     ));
     let main_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let main_asset = cell.stream_asset_of("main");
 
     let refusal = tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),
             "add_node",
-            json!({ "stream": main_id, "type": STREAM_FRAGMENT_NODE_TYPE, "name": "left",
+            json!({ "stream": main_asset, "type": STREAM_FRAGMENT_NODE_TYPE, "name": "left",
                     "config": { "stream": { "asset": cell.stream_asset_of("left") } },
                     "author": an_agent_named("alice") }),
         )
@@ -3244,5 +3479,179 @@ async fn a_stream_fragment_that_would_close_a_cycle_is_refused_naming_each_strea
     assert_eq!(
         sorted_node_names_in(&engine.the_live_graph_of(&main_id)),
         ["source"]
+    );
+}
+
+/// Each file of `directory` outside its `.venv`, zipped into `archive` under `top_folder/`, as a
+/// GitHub archive wraps a repository.
+fn zip_the_project_under_a_top_folder(directory: &Path, archive: &Path, top_folder: &str) {
+    use std::io::Write;
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(archive).expect("the archive"));
+    let mut directories = vec![directory.to_path_buf()];
+    while let Some(reading) = directories.pop() {
+        for entry in std::fs::read_dir(&reading).expect("the folder reads") {
+            let entry = entry.expect("the entry reads");
+            if entry.file_name() == ".venv" {
+                continue;
+            }
+            if entry.file_type().expect("the entry's type").is_dir() {
+                directories.push(entry.path());
+                continue;
+            }
+            let relative = entry
+                .path()
+                .strip_prefix(directory)
+                .expect("the entry is in the project")
+                .to_string_lossy()
+                .into_owned();
+            writer
+                .start_file(
+                    format!("{top_folder}/{relative}"),
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .expect("the entry starts");
+            writer
+                .write_all(&std::fs::read(entry.path()).expect("the file reads"))
+                .expect("the entry is written");
+        }
+    }
+    writer.finish().expect("the archive finishes");
+}
+
+/// A project zipped as a GitHub archive, unpacked by `import_project` into `project_directory`,
+/// with the stub venv a run finds there: what it answered.
+async fn a_project_imported_from_a_zip_into(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    zipped: &ProjectWithGraphDocuments,
+    project_directory: &Path,
+) -> Value {
+    let archive = project_directory.with_extension("zip");
+    zip_the_project_under_a_top_folder(zipped.path(), &archive, "cell-main");
+    let imported = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "import_project",
+            json!({ "source": archive, "project_directory": project_directory }),
+        )
+        .await,
+    )
+    .expect("the zip is imported");
+    let interpreter = project_directory.join(".venv/bin/python");
+    std::fs::create_dir_all(interpreter.parent().expect("the venv's bin"))
+        .expect("the venv's bin directory");
+    write_an_executable_script_from_a_child_process(
+        &interpreter,
+        STUB_VENV_INTERPRETER_ANSWERING_THE_PROBE,
+    );
+    imported
+}
+
+/// The graph of the stream `main` holding one node with its UUID, as the runtime writes it.
+fn the_graph_of_main_with_a_node_uuid() -> Value {
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"][0]["id"] = json!(Uuid::new_v4());
+    graph
+}
+
+/// A project unpacked by `import_project` loads its stream under the new project's UUID and
+/// folder, never the zipped project's, so the same zip imported twice is two streams.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_imported_from_a_zip_of_one_loads_its_stream_as_a_project_of_its_own() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let zipped = ProjectWithGraphDocuments::holding(the_graph_of_main_with_a_node_uuid());
+    let imported_under = tempfile::tempdir().expect("a folder to import into");
+    let imported_under = std::fs::canonicalize(imported_under.path()).expect("the folder resolves");
+    let project_directory = imported_under.join("cell");
+
+    let imported = a_project_imported_from_a_zip_into(
+        operations_on_the_loaded_streams,
+        &zipped,
+        &project_directory,
+    )
+    .await;
+    let finished =
+        the_run_of_the_project_once_finished(operations_on_the_loaded_streams, &project_directory)
+            .await;
+
+    assert_eq!(imported["project_directory"], json!(project_directory));
+    assert_eq!(imported["name"], TEST_PROJECT_NAME);
+    assert_ne!(imported["project"], json!(zipped.project.to_string()));
+    assert!(
+        imported["commit"]
+            .as_str()
+            .is_some_and(|commit| !commit.is_empty())
+    );
+    let stream_id = the_one_stream_of(&finished)["stream"]
+        .as_str()
+        .expect("the stream's id")
+        .to_owned();
+    assert_ne!(stream_id, zipped.stream_id_of("main"));
+    let listing = the_listing_of(operations_on_the_loaded_streams, &stream_id).await;
+    assert_eq!(
+        listing["location"],
+        json!({
+            "project_directory": project_directory,
+            "project": imported["project"],
+            "stream_asset": zipped.stream_asset_of("main"),
+        }),
+        "{listing}"
+    );
+}
+
+/// A project unpacked by `import_project` runs its stream.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+async fn a_project_imported_from_a_zip_of_one_runs_its_stream() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let zipped = ProjectWithGraphDocuments::holding(the_graph_of_main_with_a_node_uuid());
+    let imported_under = tempfile::tempdir().expect("a folder to import into");
+    let imported_under = std::fs::canonicalize(imported_under.path()).expect("the folder resolves");
+    let project_directory = imported_under.join("cell");
+
+    a_project_imported_from_a_zip_into(
+        operations_on_the_loaded_streams,
+        &zipped,
+        &project_directory,
+    )
+    .await;
+    let finished =
+        the_run_of_the_project_once_finished(operations_on_the_loaded_streams, &project_directory)
+            .await;
+
+    assert_eq!(finished["state"], "done", "{finished}");
+    assert_eq!(
+        the_one_stream_of(&finished)["state"],
+        "running",
+        "{finished}"
+    );
+}
+
+/// `import_project` into a folder that already exists is refused in the runtime's own words.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_imported_into_a_folder_that_exists_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let zipped = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let unpacked_under = tempfile::tempdir().expect("a folder to import into");
+    let archive = unpacked_under.path().join("cell-main.zip");
+    zip_the_project_under_a_top_folder(zipped.path(), &archive, "cell-main");
+
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "import_project",
+            json!({ "source": archive, "project_directory": unpacked_under.path() }),
+        )
+        .await,
+    )
+    .expect_err("an existing folder is refused");
+
+    assert!(
+        refusal.contains("import_project failed") && refusal.contains("already exists"),
+        "{refusal}"
     );
 }

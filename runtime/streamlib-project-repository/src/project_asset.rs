@@ -150,31 +150,6 @@ impl ProjectRelativeAssetPath {
     pub fn on_disk_under(&self, project_directory: &Path) -> PathBuf {
         project_directory.join(&self.0)
     }
-
-    /// The same file name under another directory of the project.
-    pub fn moved_into_directory(&self, directory: &str) -> Result<Self, ProjectRepositoryRefusal> {
-        let directory = directory.trim_end_matches('/');
-        if directory.is_empty() {
-            Self::parse(self.file_name())
-        } else {
-            Self::parse(&format!("{directory}/{}", self.file_name()))
-        }
-    }
-
-    /// The same directory under another file name.
-    pub fn renamed_to(&self, file_name: &str) -> Result<Self, ProjectRepositoryRefusal> {
-        if file_name.contains('/') {
-            return Err(ProjectRepositoryRefusal::AssetPathRefused {
-                path: file_name.to_owned(),
-                why: "a new file name holds no `/`; moving an asset is `move_asset`",
-            });
-        }
-        if self.directory().is_empty() {
-            Self::parse(file_name)
-        } else {
-            Self::parse(&format!("{}/{file_name}", self.directory()))
-        }
-    }
 }
 
 impl TryFrom<String> for ProjectRelativeAssetPath {
@@ -446,21 +421,6 @@ mod tests {
                 "`{refused}` should be refused"
             );
         }
-    }
-
-    #[test]
-    fn a_rename_keeps_the_folder_and_a_move_keeps_the_file_name() {
-        let path = ProjectRelativeAssetPath::parse("media/intro.mp4").unwrap();
-        assert_eq!(
-            path.renamed_to("opening.mp4").unwrap().as_str(),
-            "media/opening.mp4"
-        );
-        assert_eq!(
-            path.moved_into_directory("archive/2026").unwrap().as_str(),
-            "archive/2026/intro.mp4"
-        );
-        assert_eq!(path.moved_into_directory("").unwrap().as_str(), "intro.mp4");
-        assert!(path.renamed_to("elsewhere/opening.mp4").is_err());
     }
 
     #[test]
