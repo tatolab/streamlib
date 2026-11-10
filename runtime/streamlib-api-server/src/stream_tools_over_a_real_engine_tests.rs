@@ -3226,12 +3226,6 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     .await
     .expect("levels is imported");
     let folder = added["dependency"]["folder"].clone();
-    let import_directory = cell
-        .path()
-        .canonicalize()
-        .expect("the cell on disk")
-        .join("imports")
-        .join(folder.as_str().expect("a folder name"));
 
     let listed = call(
         "list_project_views",
@@ -3249,7 +3243,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
         json!({
             "view_type": format!("{TEST_PROJECT_NAME}:deck"),
             "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
-            "folder": cell.path().canonicalize().expect("the cell on disk").join("views/deck"),
+            "view_folder_in_the_project": "views/deck",
             "opens": true, "not_opened_because": null,
             "title": "DJ Deck", "description": "Two decks and a crossfader.",
             "icon": "icon.svg", "preview": "preview.png", "placement": "node",
@@ -3272,14 +3266,72 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     assert_eq!(views[2]["project_name"], "levels", "{listed}");
     assert_eq!(views[2]["placement"], "area", "{listed}");
     assert_eq!(
-        views[2]["folder"],
-        json!(import_directory.join("views/meter")),
+        views[2]["view_folder_in_the_project"],
+        json!(format!(
+            "imports/{}/views/meter",
+            folder.as_str().expect("a folder name")
+        )),
         "{listed}"
     );
 }
 
 /// A listing whose interpreter prints no listing is refused naming the project, in the
 /// runtime's own words.
+/// The UUID the graph document of the view-node test gives its `deck`.
+const DECK_NODE_UUID: &str = "decdecde-cdec-4dec-8dec-decdecdecdec";
+
+/// A graph document holding a node of the project's view `deck` loads it with the view's ports,
+/// and a panel's write onto it is live data alone: refused while the node does not run, and the
+/// graph document on disk keeps nothing of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_a_write_records_nothing()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    register_the_stream_tools_test_source_once();
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"].as_array_mut().unwrap().push(json!({
+        "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
+        "config": { "bpm": 128 },
+    }));
+    let project = ProjectWithGraphDocuments::holding(graph);
+    a_view_folder_in(
+        project.path(),
+        "deck",
+        &json!({
+            "contract": "1.0", "title": "Deck", "entry": "index.html", "placement": "node",
+            "inputs": [{ "name": "waveform", "family": "channels" }],
+            "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+        }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let document_before = project.the_graph_document_of("main");
+
+    let live_graph = engine.the_live_graph_of(&stream_id);
+    let deck = the_node_named(&live_graph, "deck");
+    assert_eq!(deck["id"], DECK_NODE_UUID, "{deck}");
+    assert_eq!(deck["type"], format!("{TEST_PROJECT_NAME}:deck"), "{deck}");
+    assert!(
+        deck.to_string().contains("waveform") && deck.to_string().contains("crossfader"),
+        "the view node takes the view's ports: {deck}"
+    );
+
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "write_studio_view_output",
+            json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
+                    "value": 0.5 }),
+        )
+        .await,
+    )
+    .expect_err("a node not running publishes nothing");
+    assert!(
+        refusal.starts_with("write_studio_view_output failed:") && refusal.contains("not running"),
+        "{refusal}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_type_listing_the_interpreter_does_not_print_is_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
