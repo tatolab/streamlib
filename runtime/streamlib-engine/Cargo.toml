@@ -45,17 +45,17 @@ machine-directories-under-a-test-root = [
 [dependencies]
 # The surface-share wires (a Unix socket on Linux, raw Mach on macOS) and the
 # published frame id grammar, shared with the helper-process clients.
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.50" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.51" }
 # Processor schema types (shared with macros for code generation)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.50", features = ["utoipa"] }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.51", features = ["utoipa"] }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
 # re-exports them at `core::error`.
-streamlib-error = { path = "../../sdk/streamlib-error", version = "0.68.50" }
+streamlib-error = { path = "../../sdk/streamlib-error", version = "0.68.51" }
 
 # Procedural macros
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.50" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.51" }
 
 # Plugin ABI wire-protocol header. Dep direction reversed in #877:
 # streamlib-plugin-abi no longer depends on streamlib (the SDK), so the
@@ -64,12 +64,12 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.50" }
 # `STREAMLIB_ABI_VERSION` from this crate directly.
 
 # Shared iceoryx2 payload types (for cross-process IPC)
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.68.50" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.68.51" }
 
 # What a running runtime leaves on disk for its clients — STREAMLIB_HOME, the
 # runtime directory, the state directory and the JSONL runtime log — defined once
 # for the engine that writes it and the engine-free CLI that reads it.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.50" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.51" }
 
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery
@@ -77,7 +77,7 @@ streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contra
 # Consumer* RHI types (Linux), and a slim ConsumerRhiError. streamlib
 # re-exports the primitives so existing in-tree call sites (e.g.
 # `crate::core::rhi::TextureFormat`) keep working unchanged.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.50" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.51" }
 
 # Core dependencies (always included)
 thiserror.workspace = true
@@ -101,7 +101,7 @@ anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
 cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
 uuid = { version = "1.11", features = ["v4", "v5", "serde"] }  # UUIDs: a node's in its graph document, a pixel buffer pool's
 libloading = "0.8"  # Opens shared libraries at run time
-streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.50" }  # Compiles kernel sources at run time
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.51" }  # Compiles kernel sources at run time
 sha2.workspace = true  # SHA-256 hashing (escalate content hashing)
 # A project's files — its project file and its stream assets' graph documents — read and written
 # without its history, so the engine links no libgit2.
@@ -159,7 +159,7 @@ rspirv-reflect = { workspace = true }
 # host side. streamlib re-exports for in-tree consumers; subprocess
 # cdylibs depend on it directly so the FullAccess capability boundary
 # is enforced by the type system.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.50" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.51" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
@@ -197,11 +197,11 @@ objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "objc
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The viewer's frame import, which the viewer test reads an Image frame through.
-streamlib-gpu-frame-import-client = { path = "../streamlib-gpu-frame-import-client", version = "0.68.50" }
+streamlib-gpu-frame-import-client = { path = "../streamlib-gpu-frame-import-client", version = "0.68.51" }
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against
 # the surface-share service. Tests only: the engine's library code carries no
 # surface-adapter types.
-streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.68.50" }
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.68.51" }
 
 [[bench]]
 name = "logging"
@@ -276,7 +276,7 @@ path = "tests/texture_crosses_to_a_helper_on_an_iosurface.rs"
 [build-dependencies]
 serde_json = { workspace = true }
 # Compiles the engine's own shaders for `include_bytes!`.
-streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.50" }
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.51" }
 # Reads the manifests of the crates the engine links through path dependencies,
 # whose edits rotate the engine build id.
 toml = { workspace = true }
