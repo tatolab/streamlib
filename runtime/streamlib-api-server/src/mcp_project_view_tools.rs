@@ -14,6 +14,7 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListProjectViewsToolResult, ProjectViewDeclaredPort, ProjectViewListed,
+    WriteStudioViewOutputToolResult,
 };
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
@@ -25,6 +26,22 @@ use crate::mcp_project_asset_tools::ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION
 struct ListProjectViewsToolArguments {
     #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct WriteStudioViewOutputToolArguments {
+    #[schemars(description = "The stream id of the stream holding the view node.")]
+    stream: String,
+    #[schemars(description = "The view node's UUID, as `graph` lists it under `id`.")]
+    node: String,
+    #[schemars(description = "The view node's output port the value is published on.")]
+    port: String,
+    #[schemars(
+        description = "The value, as the port's family carries it: a Records port takes a JSON object; an Array port a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels port a number, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
+    )]
+    value: serde_json::Value,
 }
 
 fn the_declared_port_on_the_wire(port: &TatolabViewDeclaredPort) -> ProjectViewDeclaredPort {
@@ -84,7 +101,7 @@ fn the_view_on_the_wire(
 #[tool_router(router = project_view_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project name>:<view folder>`, which a `tatolab.studio:StudioView` node's `view_type` names; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, a `family`, a `description` and an Array port's `range`; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists."
+        description = "List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project name>:<view folder>`, which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, a `family`, a `description` and an Array port's `range`; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists."
     )]
     async fn list_project_views(
         &self,
@@ -111,5 +128,29 @@ impl LocalApiMcpServerHandler {
             )
             .await?;
         serialized_tool_result("list_project_views", &listed)
+    }
+
+    #[tool(
+        description = "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. A write is live data: the last value written is what a reader keeps, many panels may write one node and the last write wins, and nothing is recorded in the graph document or the project's history. Array, Channels and Records outputs are written; an Image or Packets output is refused. Refused for a node of another type, a node that is not running, and a value its port's family does not take."
+    )]
+    async fn write_studio_view_output(
+        &self,
+        Parameters(WriteStudioViewOutputToolArguments {
+            stream,
+            node,
+            port,
+            value,
+        }): Parameters<WriteStudioViewOutputToolArguments>,
+    ) -> ToolCallAnswer {
+        let stream_operations =
+            self.the_stream_a_tool_call_names("write_studio_view_output", &stream)?;
+        stream_operations
+            .write_a_value_onto_an_output_of_a_view_node(node.clone(), port.clone(), value)
+            .await
+            .map_err(|refusal| format!("write_studio_view_output failed: {refusal}"))?;
+        serialized_tool_result(
+            "write_studio_view_output",
+            &WriteStudioViewOutputToolResult { stream, node, port },
+        )
     }
 }
