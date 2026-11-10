@@ -60,7 +60,7 @@ fn each_folder_of_an_import_nearest_first(project_directory: &Path, project: Uui
 
 /// Whether `folder` names one folder inside `imports/`: one normal path component, never an
 /// absolute path, `.` or `..`.
-fn is_one_folder_name(folder: &str) -> bool {
+pub(crate) fn is_one_folder_name(folder: &str) -> bool {
     let mut components = Path::new(folder).components();
     matches!(
         (components.next(), components.next()),

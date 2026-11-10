@@ -21,8 +21,10 @@ mod project_repository;
 mod project_repository_refusal;
 mod project_stream_document;
 mod project_transaction;
+mod project_views;
 mod stream_fragment_references;
 mod stream_graph_document;
+mod tatolab_view_manifest;
 
 pub use canonical_project_json::canonical_project_json_bytes;
 pub use project_asset::{
@@ -66,6 +68,10 @@ pub use project_transaction::{
     ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
     StreamGraphOperationOnAStream,
 };
+pub use project_views::{
+    PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,
+    TATOLAB_VIEW_MANIFEST_FILE_NAME, every_view_a_project_and_its_imports_bring, the_view_type_of,
+};
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
     graph_document_with_each_stream_fragment_reference_resolved,
@@ -82,3 +88,8 @@ pub use stream_graph_document::{
 /// The directory inside a project that holds what the runtime keeps for it: history, content and
 /// staged imports.
 pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";
+pub use tatolab_view_manifest::{
+    TatolabViewAcceptedFiles, TatolabViewCapability, TatolabViewDeclaredPort, TatolabViewManifest,
+    TatolabViewPlacement, VIEW_CONTRACT_READ_MAJOR, VIEW_CONTRACT_READ_MINOR,
+    is_a_path_inside_the_views_folder, read_tatolab_view_manifest,
+};
