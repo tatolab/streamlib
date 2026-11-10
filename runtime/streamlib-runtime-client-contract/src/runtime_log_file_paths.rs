@@ -7,9 +7,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// `<project_directory>/.streamlib/logs/`, where a project's one log lives.
+/// `<project_directory>/.tatolab/logs/`, where a project's one log lives.
 pub fn project_log_directory(project_directory: &Path) -> PathBuf {
-    project_directory.join(".streamlib").join("logs")
+    project_directory.join(".tatolab").join("logs")
 }
 
 /// The file name of a project log's active segment; a rotated one is
@@ -17,7 +17,7 @@ pub fn project_log_directory(project_directory: &Path) -> PathBuf {
 pub const PROJECT_LOG_ACTIVE_SEGMENT_FILE_NAME: &str = "project.jsonl";
 
 /// Path of the active JSONL segment of the project in `project_directory`:
-/// `<project_directory>/.streamlib/logs/project.jsonl`, appended to across the runtime's runs.
+/// `<project_directory>/.tatolab/logs/project.jsonl`, appended to across the runtime's runs.
 pub fn project_log_path(project_directory: &Path) -> PathBuf {
     project_log_directory(project_directory).join(PROJECT_LOG_ACTIVE_SEGMENT_FILE_NAME)
 }
@@ -117,11 +117,11 @@ mod tests {
 
         assert_eq!(
             active_segment_path,
-            Path::new("/projects/camera-app/.streamlib/logs/project.jsonl")
+            Path::new("/projects/camera-app/.tatolab/logs/project.jsonl")
         );
         assert_eq!(
             rotated_runtime_log_segment_path(&active_segment_path, 4),
-            Path::new("/projects/camera-app/.streamlib/logs/project.4.jsonl")
+            Path::new("/projects/camera-app/.tatolab/logs/project.4.jsonl")
         );
         assert_eq!(
             rotated_runtime_log_segment_sequence(&active_segment_path, "project.4.jsonl"),

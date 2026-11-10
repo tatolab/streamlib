@@ -2,7 +2,7 @@
 
 This is the **durable interface contract** for logs emitted by the
 StreamLib runtime. Every line of every segment of a project's log, under the
-project's `.streamlib/logs/` (see [Files and rotation](#files-and-rotation)), and
+project's `.tatolab/logs/` (see [Files and rotation](#files-and-rotation)), and
 of the runtime's own log is one serialized [`RuntimeLogEvent`][rs]. Downstream
 consumers — the local API's `logs` tool, `tatolab logs`, which renders each record
 with the runtime's own `format_event_pretty` from the
@@ -68,7 +68,7 @@ record once the stream is removed or the runtime restarts.
 ## Files and rotation
 
 A project's log is one or more **segments**, all in
-`<project_directory>/.streamlib/logs/`:
+`<project_directory>/.tatolab/logs/`:
 
 | Segment | File name |
 | --- | --- |
@@ -76,9 +76,8 @@ A project's log is one or more **segments**, all in
 | Rotated | `project.<seq>.jsonl` |
 
 - The active segment is appended to across the runtime's runs; one runtime runs
-  per machine, so a project's log has one writer. Segments a stream wrote before
-  the log was the project's, `<runtime_id>-<stream>-<started_at_millis>.jsonl`,
-  are neither read nor removed.
+  per machine, so a project's log has one writer. A log an earlier runtime kept
+  under `<project_directory>/.streamlib/logs/` is neither read nor removed.
 - The route opens the active segment when the first stream or load of the project
   enters it, and closes it when the last one is done with it. As each stream
   unloads, its own records are flushed and `fdatasync`ed once the readers of its

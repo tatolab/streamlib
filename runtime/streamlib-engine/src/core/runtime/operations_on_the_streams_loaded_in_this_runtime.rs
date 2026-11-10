@@ -10,8 +10,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeT
 
 use super::operations::RuntimeOperations;
 use super::{
-    CreateProjectRequest, MachineName, ProjectCreationQueued, RunProjectRequest, Runner,
-    StreamAction, StreamActionQueued, StreamListing, StreamRenameOutcome,
+    CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectPausedOrResumed,
+    RunProjectRequest, Runner, StreamAction, StreamActionQueued, StreamListing,
+    StreamRenameOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::context::StreamClockReading;
@@ -107,6 +108,12 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::remove_project`].
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
+
+    /// [`Runner::pause_project`].
+    fn pause_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
+
+    /// [`Runner::resume_project`].
+    fn resume_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
 
     /// [`Runner::rename_stream`].
     fn rename_stream(&self, stream_id: &str, display_name: &str) -> Result<StreamRenameOutcome>;
@@ -224,6 +231,14 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
         Runner::stop_project(self, project_directory)
+    }
+
+    fn pause_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
+        Runner::pause_project(self, project_directory)
+    }
+
+    fn resume_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
+        Runner::resume_project(self, project_directory)
     }
 
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
