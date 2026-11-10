@@ -1,226 +1,93 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::BTreeMap;
-
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::*;
 
-/// The JSON Schema the view SDK writes from its Zod schema, recorded from tatolab-app's
-/// `packages/tato-app-view-sdk/tatolab_view.schema.json`; a change there is recorded here again.
-const VIEW_SDK_TATOLAB_VIEW_JSON_SCHEMA: &str =
-    include_str!("../view-contract/tatolab_view.schema.json");
+/// The manifests the view SDK's Zod schema is tested against, with how it judges each, recorded
+/// from tatolab-app's `packages/tato-app-view-sdk/tatolab_view_contract_examples.json`; a change
+/// there is recorded here again.
+const VIEW_SDK_TATOLAB_VIEW_CONTRACT_EXAMPLES: &str =
+    include_str!("../view-contract/tatolab_view_contract_examples.json");
 
-/// What a JSON Schema says of a value's shape: its fields, which are required, whether others
-/// are refused, and the names an enum allows. Patterns, bounds and defaults are left out.
-#[derive(Debug, PartialEq)]
-enum JsonSchemaShape {
-    AnyValue,
-    Scalar(&'static str),
-    Enumeration(Vec<String>),
-    Array(Box<JsonSchemaShape>),
-    Object {
-        properties: BTreeMap<String, JsonSchemaShape>,
-        required: Vec<String>,
-        closed: bool,
-    },
+#[derive(Deserialize)]
+struct TatolabViewContractExamples {
+    examples: Vec<TatolabViewContractExample>,
 }
 
-fn the_schema_a_reference_names<'root>(root: &'root Value, reference: &str) -> &'root Value {
-    let pointer = reference
-        .strip_prefix('#')
-        .expect("a reference inside the document");
-    root.pointer(pointer)
-        .unwrap_or_else(|| panic!("the schema holds {reference}"))
+#[derive(Deserialize)]
+struct TatolabViewContractExample {
+    named: String,
+    manifest: Value,
+    opens: bool,
+    refused_at: Option<String>,
+    reads_as: Option<Value>,
 }
 
-fn the_shape_of(schema: &Value, root: &Value) -> JsonSchemaShape {
-    let Some(schema_object) = schema.as_object() else {
-        return JsonSchemaShape::AnyValue;
-    };
-    if let Some(reference) = schema_object.get("$ref").and_then(Value::as_str) {
-        return the_shape_of(the_schema_a_reference_names(root, reference), root);
-    }
-    for alternatives_key in ["allOf", "anyOf", "oneOf"] {
-        if let Some(alternatives) = schema_object
-            .get(alternatives_key)
-            .and_then(Value::as_array)
-        {
-            let not_null: Vec<&Value> = alternatives
-                .iter()
-                .filter(|alternative| alternative.get("type") != Some(&json!("null")))
-                .collect();
-            if let [only] = not_null.as_slice() {
-                return the_shape_of(only, root);
-            }
-            let alternative_shapes: Vec<JsonSchemaShape> = not_null
-                .iter()
-                .map(|alternative| the_shape_of(alternative, root))
-                .collect();
-            if alternative_shapes
-                .iter()
-                .all(|shape| matches!(shape, JsonSchemaShape::Enumeration(_)))
-            {
-                let mut names: Vec<String> = alternative_shapes
-                    .into_iter()
-                    .flat_map(|shape| match shape {
-                        JsonSchemaShape::Enumeration(names) => names,
-                        _ => Vec::new(),
-                    })
-                    .collect();
-                names.sort();
-                return JsonSchemaShape::Enumeration(names);
-            }
-        }
-    }
-    if let Some(allowed) = schema_object.get("enum").and_then(Value::as_array) {
-        let mut names: Vec<String> = allowed
-            .iter()
-            .filter_map(|name| name.as_str().map(str::to_owned))
-            .collect();
-        names.sort();
-        return JsonSchemaShape::Enumeration(names);
-    }
-    if let Some(constant) = schema_object.get("const").and_then(Value::as_str) {
-        return JsonSchemaShape::Enumeration(vec![constant.to_owned()]);
-    }
-    let type_name = match schema_object.get("type") {
-        Some(Value::String(type_name)) => type_name.as_str(),
-        Some(Value::Array(type_names)) => type_names
-            .iter()
-            .filter_map(Value::as_str)
-            .find(|type_name| *type_name != "null")
-            .unwrap_or("null"),
-        _ => return JsonSchemaShape::AnyValue,
-    };
-    match type_name {
-        "object" => {
-            let Some(properties) = schema_object.get("properties").and_then(Value::as_object)
-            else {
-                return JsonSchemaShape::Scalar("object");
-            };
-            let mut required: Vec<String> = schema_object
-                .get("required")
-                .and_then(Value::as_array)
-                .map(|required| {
-                    required
-                        .iter()
-                        .filter_map(|name| name.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default();
-            required.sort();
-            JsonSchemaShape::Object {
-                properties: properties
-                    .iter()
-                    .map(|(name, property)| (name.clone(), the_shape_of(property, root)))
-                    .collect(),
-                required,
-                closed: schema_object.get("additionalProperties") == Some(&json!(false)),
-            }
-        }
-        "array" => {
-            let items = schema_object
-                .get("prefixItems")
-                .and_then(|prefix_items| prefix_items.get(0))
-                .or_else(|| schema_object.get("items"))
-                .unwrap_or(&Value::Bool(true));
-            JsonSchemaShape::Array(Box::new(the_shape_of(items, root)))
-        }
-        "string" => JsonSchemaShape::Scalar("string"),
-        "number" | "integer" => JsonSchemaShape::Scalar("number"),
-        "boolean" => JsonSchemaShape::Scalar("boolean"),
-        _ => JsonSchemaShape::AnyValue,
-    }
-}
-
-/// The fields the runtime reads as any JSON value and checks by hand.
-const FIELDS_THE_RUNTIME_READS_AS_ANY_JSON_VALUE: [&str; 1] = ["tatolab_view.json.settings"];
-
-/// Every place the runtime's shape differs from the view SDK's, by field path.
-fn every_drift_between(
-    runtime_shape: &JsonSchemaShape,
-    view_sdk_shape: &JsonSchemaShape,
-    field_path: &str,
-    drifts: &mut Vec<String>,
-) {
-    match (runtime_shape, view_sdk_shape) {
-        (JsonSchemaShape::AnyValue, _)
-            if FIELDS_THE_RUNTIME_READS_AS_ANY_JSON_VALUE.contains(&field_path) => {}
-        (JsonSchemaShape::Array(runtime_items), JsonSchemaShape::Array(view_sdk_items)) => {
-            every_drift_between(
-                runtime_items,
-                view_sdk_items,
-                &format!("{field_path}[]"),
-                drifts,
-            )
-        }
-        (
-            JsonSchemaShape::Object {
-                properties: runtime_properties,
-                required: runtime_required,
-                closed: runtime_closed,
-            },
-            JsonSchemaShape::Object {
-                properties: view_sdk_properties,
-                required: view_sdk_required,
-                closed: view_sdk_closed,
-            },
-        ) => {
-            if runtime_required != view_sdk_required {
-                drifts.push(format!(
-                    "{field_path}: the runtime requires {runtime_required:?}, the view SDK {view_sdk_required:?}"
-                ));
-            }
-            if runtime_closed != view_sdk_closed {
-                drifts.push(format!(
-                    "{field_path}: the runtime refuses other fields: {runtime_closed}, the view SDK: {view_sdk_closed}"
-                ));
-            }
-            for name in runtime_properties
-                .keys()
-                .chain(view_sdk_properties.keys())
-                .collect::<std::collections::BTreeSet<_>>()
-            {
-                let property_path = format!("{field_path}.{name}");
-                match (runtime_properties.get(name), view_sdk_properties.get(name)) {
-                    (Some(runtime_property), Some(view_sdk_property)) => every_drift_between(
-                        runtime_property,
-                        view_sdk_property,
-                        &property_path,
-                        drifts,
-                    ),
-                    (Some(_), None) => drifts.push(format!(
-                        "{property_path}: the runtime reads it, the view SDK has no such field"
-                    )),
-                    (None, _) => drifts.push(format!(
-                        "{property_path}: the view SDK declares it, the runtime does not read it"
-                    )),
-                }
-            }
-        }
-        _ if runtime_shape == view_sdk_shape => {}
-        _ => drifts.push(format!(
-            "{field_path}: the runtime reads {runtime_shape:?}, the view SDK declares {view_sdk_shape:?}"
-        )),
+/// `value` with every `null` field left out and every number as an `f64`, as the view SDK's
+/// reading of a manifest is written.
+fn as_the_view_sdk_writes_a_reading(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .filter(|(_, field)| !field.is_null())
+                .map(|(name, field)| (name, as_the_view_sdk_writes_a_reading(field)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(as_the_view_sdk_writes_a_reading)
+                .collect(),
+        ),
+        Value::Number(number) => json!(number.as_f64()),
+        other => other,
     }
 }
 
 #[test]
-fn the_runtimes_manifest_type_has_the_shape_the_view_sdk_declares() {
-    let view_sdk_schema: Value =
-        serde_json::from_str(VIEW_SDK_TATOLAB_VIEW_JSON_SCHEMA).expect("the recorded schema");
-    let runtime_schema =
-        serde_json::to_value(schemars_0_8::schema_for!(TatolabViewManifest)).expect("its schema");
-    let mut drifts = Vec::new();
-    every_drift_between(
-        &the_shape_of(&runtime_schema, &runtime_schema),
-        &the_shape_of(&view_sdk_schema, &view_sdk_schema),
-        "tatolab_view.json",
-        &mut drifts,
-    );
-    assert!(drifts.is_empty(), "{drifts:#?}");
+fn the_runtime_judges_every_view_contract_example_as_the_view_sdk_does() {
+    let contract_examples: TatolabViewContractExamples =
+        serde_json::from_str(VIEW_SDK_TATOLAB_VIEW_CONTRACT_EXAMPLES)
+            .expect("the recorded examples");
+    let mut disagreements = Vec::new();
+    for example in contract_examples.examples {
+        let named = &example.named;
+        match (read_tatolab_view_manifest(&example.manifest), example.opens) {
+            (Ok(manifest), true) => {
+                if let Some(reads_as) = example.reads_as {
+                    let read = as_the_view_sdk_writes_a_reading(
+                        serde_json::to_value(&manifest).expect("a manifest serializes"),
+                    );
+                    let reads_as = as_the_view_sdk_writes_a_reading(reads_as);
+                    if read != reads_as {
+                        disagreements.push(format!(
+                            "{named}: the runtime reads {read}, the view SDK {reads_as}"
+                        ));
+                    }
+                }
+            }
+            (Err(because), true) => disagreements.push(format!(
+                "{named}: the view SDK opens it, the runtime refuses it: {because}"
+            )),
+            (Ok(_), false) => disagreements.push(format!(
+                "{named}: the view SDK refuses it, the runtime opens it"
+            )),
+            (Err(because), false) => {
+                if let Some(refused_at) = example.refused_at
+                    && !because.contains(&format!("`{refused_at}`:"))
+                {
+                    disagreements.push(format!(
+                        "{named}: the view SDK refuses it at `{refused_at}`, the runtime: {because}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(disagreements.is_empty(), "{disagreements:#?}");
 }
 
 fn a_node_view_manifest() -> Value {

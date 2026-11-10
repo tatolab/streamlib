@@ -3224,12 +3224,6 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     .await
     .expect("levels is imported");
     let folder = added["dependency"]["folder"].clone();
-    let import_directory = cell
-        .path()
-        .canonicalize()
-        .expect("the cell on disk")
-        .join("imports")
-        .join(folder.as_str().expect("a folder name"));
 
     let listed = call(
         "list_project_views",
@@ -3247,7 +3241,7 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
         json!({
             "view_type": format!("{TEST_PROJECT_NAME}:deck"),
             "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
-            "folder": cell.path().canonicalize().expect("the cell on disk").join("views/deck"),
+            "view_folder_in_the_project": "views/deck",
             "opens": true, "not_opened_because": null,
             "title": "DJ Deck", "description": "Two decks and a crossfader.",
             "icon": "icon.svg", "preview": "preview.png", "placement": "node",
@@ -3270,8 +3264,11 @@ async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
     assert_eq!(views[2]["project_name"], "levels", "{listed}");
     assert_eq!(views[2]["placement"], "area", "{listed}");
     assert_eq!(
-        views[2]["folder"],
-        json!(import_directory.join("views/meter")),
+        views[2]["view_folder_in_the_project"],
+        json!(format!(
+            "imports/{}/views/meter",
+            folder.as_str().expect("a folder name")
+        )),
         "{listed}"
     );
 }
