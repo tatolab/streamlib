@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.68.53](https://github.com/tatolab/streamlib/compare/v0.68.52...v0.68.53) (2026-11-10)
+
+
+### Features
+
+* **graph:** collapse a selection into a subgraph and unlock a fragment ([9fad22a](https://github.com/tatolab/streamlib/commit/9fad22a0107fcac678623f76b07e3be580ffc562))
+* **runtime:** carry only the core first-party modules, as wheels ([1f74ae9](https://github.com/tatolab/streamlib/commit/1f74ae9e17a59868cc9ed2103a57a4a562fffcb9))
+* **runtime:** every first-party module rides the runtime unit as a built wheel ([7d1c71c](https://github.com/tatolab/streamlib/commit/7d1c71c4e8efe82da665a9fc462711d32d4979a6)), closes [#3473](https://github.com/tatolab/streamlib/issues/3473)
+* **runtime:** the core first-party modules ride the runtime unit as wheels ([8549734](https://github.com/tatolab/streamlib/commit/854973490297a44f275e1fa9f52228e4b14de5e1))
+
+
+### Bug Fixes
+
+* **project-repository:** undo a file write back to what was on disk ([a60ae1b](https://github.com/tatolab/streamlib/commit/a60ae1b91345f3c4f64db0de4af0ddef0e44918d))
+* **project-repository:** undo a file write back to what was on disk ([e5cc66d](https://github.com/tatolab/streamlib/commit/e5cc66d307dc1478f9ae62056c0dbb5d59661b58))
+
 ## [0.68.52](https://github.com/tatolab/streamlib/compare/v0.68.51...v0.68.52) (2026-11-10)
 
 
