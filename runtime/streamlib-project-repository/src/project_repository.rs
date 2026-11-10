@@ -45,7 +45,7 @@ use crate::project_transaction::{
     ProjectAssetImportSource, ProjectAssetOperation, ProjectImportFiles, ProjectImportOperation,
     ProjectOperation, ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
     ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
-    StreamGraphOperationOnAStream,
+    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
 
@@ -1458,39 +1458,98 @@ impl ProjectRepository {
         ),
         ProjectRepositoryRefusal,
     > {
-        let mut undoable: Vec<AppliedProjectTransaction> = Vec::new();
-        let mut redoable: Vec<AppliedProjectTransaction> = Vec::new();
+        let mut stacks = UndoAndRedoStacksOfOneAuthor::default();
         let mut transactions = self.applied_transactions_newest_first(usize::MAX)?;
         transactions.reverse();
         for applied in transactions {
-            if applied.transaction.author != *author {
-                continue;
-            }
-            match applied.transaction.lineage() {
-                ProjectTransactionLineage::NewEdit => {
-                    redoable.clear();
-                    undoable.push(applied);
-                }
-                ProjectTransactionLineage::UndoOf(undone) => {
-                    if let Some(position) = undoable
-                        .iter()
-                        .rposition(|held| held.transaction.transaction == undone)
-                    {
-                        redoable.push(undoable.remove(position));
-                    }
-                }
-                ProjectTransactionLineage::RedoOf(redone) => {
-                    if let Some(position) = redoable
-                        .iter()
-                        .rposition(|held| held.transaction.transaction == redone)
-                    {
-                        redoable.remove(position);
-                        undoable.push(applied);
-                    }
-                }
+            if applied.transaction.author == *author {
+                stacks.replay(applied);
             }
         }
-        Ok((undoable, redoable))
+        Ok((stacks.undoable, stacks.redoable))
+    }
+
+    /// Where each edit and each redo in history stands with its author's undo and redo now, by
+    /// transaction; an edit and every redo of it stand together. An undo has no entry.
+    pub fn the_undo_state_of_each_transaction(
+        &self,
+    ) -> Result<HashMap<Uuid, ProjectTransactionUndoState>, ProjectRepositoryRefusal> {
+        let mut stacks_of_each_author: Vec<(
+            ProjectTransactionAuthor,
+            UndoAndRedoStacksOfOneAuthor,
+        )> = Vec::new();
+        let mut edit_each_redo_reapplies: HashMap<Uuid, Uuid> = HashMap::new();
+        let mut transactions = self.applied_transactions_newest_first(usize::MAX)?;
+        transactions.reverse();
+        let mut edits_and_redos_oldest_first: Vec<Uuid> = Vec::new();
+        for applied in transactions {
+            let transaction = applied.transaction.transaction;
+            match applied.transaction.lineage() {
+                ProjectTransactionLineage::NewEdit => {
+                    edits_and_redos_oldest_first.push(transaction)
+                }
+                ProjectTransactionLineage::RedoOf(redone) => {
+                    let edit = edit_each_redo_reapplies
+                        .get(&redone)
+                        .copied()
+                        .unwrap_or(redone);
+                    edit_each_redo_reapplies.insert(transaction, edit);
+                    edits_and_redos_oldest_first.push(transaction);
+                }
+                ProjectTransactionLineage::UndoOf(_) => {}
+            }
+            let position_of_the_author = match stacks_of_each_author
+                .iter()
+                .position(|(author, _)| *author == applied.transaction.author)
+            {
+                Some(position) => position,
+                None => {
+                    stacks_of_each_author.push((
+                        applied.transaction.author.clone(),
+                        UndoAndRedoStacksOfOneAuthor::default(),
+                    ));
+                    stacks_of_each_author.len() - 1
+                }
+            };
+            let stacks = &mut stacks_of_each_author[position_of_the_author].1;
+            stacks.replay(applied);
+        }
+        let mut undo_state_of_each_edit: HashMap<Uuid, ProjectTransactionUndoState> =
+            HashMap::new();
+        for (_, stacks) in &stacks_of_each_author {
+            for (held, undo_state) in stacks
+                .undoable
+                .iter()
+                .map(|held| (held, ProjectTransactionUndoState::Applied))
+                .chain(
+                    stacks
+                        .redoable
+                        .iter()
+                        .map(|held| (held, ProjectTransactionUndoState::UndoneRedoable)),
+                )
+            {
+                let transaction = held.transaction.transaction;
+                let edit = edit_each_redo_reapplies
+                    .get(&transaction)
+                    .copied()
+                    .unwrap_or(transaction);
+                undo_state_of_each_edit.insert(edit, undo_state);
+            }
+        }
+        Ok(edits_and_redos_oldest_first
+            .into_iter()
+            .map(|transaction| {
+                let edit = edit_each_redo_reapplies
+                    .get(&transaction)
+                    .copied()
+                    .unwrap_or(transaction);
+                let undo_state = undo_state_of_each_edit
+                    .get(&edit)
+                    .copied()
+                    .unwrap_or(ProjectTransactionUndoState::UndoneNotRedoable);
+                (transaction, undo_state)
+            })
+            .collect())
     }
 
     /// Write each staged graph document at the path its stream asset holds once the
@@ -2607,4 +2666,42 @@ fn refuse_a_display_name_that_shows_nothing(
         ));
     }
     Ok(trimmed.to_owned())
+}
+
+/// One author's transactions an undo reverses and a redo reapplies, each newest last.
+#[derive(Default)]
+struct UndoAndRedoStacksOfOneAuthor {
+    undoable: Vec<AppliedProjectTransaction>,
+    redoable: Vec<AppliedProjectTransaction>,
+}
+
+impl UndoAndRedoStacksOfOneAuthor {
+    /// Follow `applied`, the author's next transaction: an edit clears what could be redone.
+    fn replay(&mut self, applied: AppliedProjectTransaction) {
+        match applied.transaction.lineage() {
+            ProjectTransactionLineage::NewEdit => {
+                self.redoable.clear();
+                self.undoable.push(applied);
+            }
+            ProjectTransactionLineage::UndoOf(undone) => {
+                if let Some(position) = self
+                    .undoable
+                    .iter()
+                    .rposition(|held| held.transaction.transaction == undone)
+                {
+                    self.redoable.push(self.undoable.remove(position));
+                }
+            }
+            ProjectTransactionLineage::RedoOf(redone) => {
+                if let Some(position) = self
+                    .redoable
+                    .iter()
+                    .rposition(|held| held.transaction.transaction == redone)
+                {
+                    self.redoable.remove(position);
+                    self.undoable.push(applied);
+                }
+            }
+        }
+    }
 }

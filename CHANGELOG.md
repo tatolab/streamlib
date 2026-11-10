@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.48](https://github.com/tatolab/streamlib/compare/v0.68.47...v0.68.48) (2026-11-10)
+
+
+### Features
+
+* **project:** one action vocabulary for MCP, the CLI and history ([b672921](https://github.com/tatolab/streamlib/commit/b672921ba6612ff354f64777d2a3e5a0765c32b2))
+
 ## [0.68.47](https://github.com/tatolab/streamlib/compare/v0.68.46...v0.68.47) (2026-11-10)
 
 

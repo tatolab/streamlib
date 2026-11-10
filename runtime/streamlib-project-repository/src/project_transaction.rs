@@ -421,6 +421,18 @@ pub enum ProjectTransactionLineage {
     RedoOf(Uuid),
 }
 
+/// Where an edit stands with its author's undo and redo now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectTransactionUndoState {
+    /// Its change holds, and its author's undo can reverse it.
+    Applied,
+    /// Undone, and its author's redo can reapply it.
+    UndoneRedoable,
+    /// Undone, and an edit its author made since means no redo reapplies it.
+    UndoneNotRedoable,
+}
+
 /// The operations an undo or a redo applies, and what it is to the transaction it reverses.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectTransactionReversal {
