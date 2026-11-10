@@ -17,12 +17,12 @@ path = "src/lib.rs"
 [dependencies]
 tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.11.0" }
 tracing.workspace = true
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.41" }
-streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.41" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.42" }
+streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.42" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.41" }
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.41" }
+streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.42" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.42" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation.workspace = true
