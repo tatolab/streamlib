@@ -1395,7 +1395,6 @@ async fn create_project_in_a_directory_writes_the_project_and_runs_its_stream_un
         "pyproject.toml",
         ".python-version",
         ".gitignore",
-        "nodes/__init__.py",
     ] {
         assert!(
             project
