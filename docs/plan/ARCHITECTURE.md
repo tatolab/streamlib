@@ -111,7 +111,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
   stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; moq-relays —
   SHIPPED #2866; amended by stream-interface-and-routing-policy: the scaffold's `expose` takes no
-  level; amended by gateway-nodes: the scaffold drops `H264Encoder` and `expose`, and the effect's output is seen in a viewer; amended by first-party-package-index: the starter is one source node, `tatolab-testpattern` from Tatolab's index, and camera projects live in the samples the runtime unit carries]
+  level; amended by gateway-nodes: the scaffold drops `H264Encoder` and `expose`, and the effect's output is seen in a viewer; amended by first-party-package-index: the starter is one source node, `TestPatternSource` from the `tatolab-testpattern` wheel the runtime unit carries, its one dependency `tatolab-stream`, and camera projects live in the samples the runtime unit carries]
   Rejected: a camera in the scaffold, as the default or as a flag — a user whose camera does
   not open meets a failure as the first thing (owner, 2026-10-16).
 - **DECIDED** — The lead demo is an agent building a live visual system while the person
@@ -581,7 +581,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and node names. The one built-in left is `RelayTrackSource`, which is transport — the only
   way a graph reads a relay, its MoQ crates pinned to `tatolabd`'s publisher — not a media
   node. Installing the runtime alone gives other applications no camera. Owner, 2026-11-02.
-  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; amended by gateway-nodes: `RelayTrackSource` leaves the runtime as `tatolab.moq:MoqTrackReceive`, and the runtime ships no transport]
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; amended by gateway-nodes: `RelayTrackSource` leaves the runtime as `tatolab.moq:MoqTrackReceive`, and the runtime ships no transport; amended by first-party-package-index: the runtime unit carries a wheel of each core module and installs it into every project it makes; every other module is a module project]
 - **DECIDED** — The module host table. The lent `tatolab.runtime` implements one
   `#[repr(C)]`, append-only function table, versioned major, minor and size, handed to an
   extension wheel's native half as a named capsule from a node's context. It carries opening,
@@ -950,7 +950,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Externally, packages publish to PyPI beside `tatolab-stream` (owner, 2026-10-08).
   `test-fixtures` remains as the tree's one engine-adjacent Rust crate.
   [consumer-tree-disposition — SHIPPED #2052; extension-model; package-split-and-lend —
-  SHIPPED #2697; amended by first-party-package-index: packages publish to Tatolab's index]
+  SHIPPED #2697; amended by first-party-package-index: the runtime unit carries a wheel of each
+  core module, and every other package becomes a module project a project imports]
 - **DECIDED** — Conversion is a from-scratch rewrite in the current idiom, never an
   in-place upgrade: start from the `tatolab new` scaffold, mine the old directory for
   its logic only, author against today's full surface (delivery profiles, window
@@ -1273,8 +1274,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `config =` gets, publishes an object with no properties and `additionalProperties:
   false`, and refuses a non-empty map naming the key that had nowhere to go. Every
   in-tree config type derives the schema — the built-ins' configs and their enums — and a
-  field's `///` doc is its `description`, a serde default its `default`, a field with neither
-  `required`. Every catalog document, from either language,
+  field's `#[description = …]` under `#[processor_config]`, a literal or a `const`, is its
+  `description`, a serde default its `default`, a field with neither `required`; a doc comment
+  never reaches the document. Every catalog document, from either language,
   is JSON Schema draft 2020-12
   with no `$schema` key: schemars 0.8 emits draft-07, so the Rust seam writes its
   definitions under `$defs` with references pointing there and a tuple's positional
@@ -1296,8 +1298,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   dataclass yields its constructor's inputs — its `init=True` fields and `InitVar`s, a
   `default_factory` field optional with no default, and a default the wire cannot carry
   dropped rather than rewritten — with `additionalProperties: false`, since a dataclass
-  refuses an unknown key and a TypedDict does not; `Annotated[T, "text"]` is a
-  description; a class exposing `model_json_schema()` contributes that document minus
+  refuses an unknown key and a TypedDict does not; `Annotated[T, Description("text")]` is a
+  description, and neither a bare string nor an attribute docstring is one; a class exposing `model_json_schema()` contributes that document minus
   `$schema` and `title`, recognised by the method rather than by importing pydantic; an
   annotation the deriver does not know renders `{}`, a config class of a kind it cannot
   read is accepted with an open schema, and a self-referential class stops at an open
@@ -3764,12 +3766,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
   SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; amended by tatolab-names: the crate
   is `tatolab-stream`; amended by first-party-package-index: the first-party modules publish to
-  Tatolab's index, `tatolab-stream` alone to PyPI]
+  Tatolab's index, `tatolab-stream` alone to PyPI; the core modules ride the runtime unit as
+  wheels, and every other module is released as a module project]
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
-  first-party extensions (`tatolab-webrtc` today) carry one version and are released
-  together, every piece at every release, whether or not it changed. An extension still depends
+  first-party extensions (`tatolab-webrtc` today) carry one version: whatever a release
+  publishes carries that release's version, whether or not it changed. The runtime, `tatolab-stream` and the core modules the
+  runtime unit carries publish first, and a module that fails to build never withholds them
+  (owner, 2026-11-10). An extension still depends
   on `tatolab-stream` by a minimum version, as a third party's package does, and an extension
   that leaves this repository takes its own number. The number is for people, never a
   dependency of a stream: nothing in a stream, its `pyproject.toml` or its graph names a

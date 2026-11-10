@@ -57,6 +57,10 @@ pub struct GraphResponse {
     /// Every labelled group of the stream's own level: a spec key, read by nothing that runs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LabelledNodeGroup>,
+    /// What Tato Studio draws beside the nodes, its canvas notes, under the studio contract: a
+    /// spec key, read by nothing that runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub studio: Option<serde_json::Value>,
 }
 
 /// A labelled group of one level's nodes, which a node joins by naming its `id` as its
@@ -337,6 +341,31 @@ pub enum LinkStateOutput {
 pub struct RegistryResponse {
     /// Every node type this process can add, with its descriptor.
     pub nodes: Vec<ProcessorDescriptorOutput>,
+    /// The five port families, each with its description.
+    pub families: Vec<PortFamilyDescriptorOutput>,
+}
+
+/// One port family, described as a node type is.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PortFamilyDescriptorOutput {
+    /// The family, as a graph, a config and the wire spell it.
+    pub family: crate::core::descriptors::PortFamily,
+    /// What a port of this family carries: CommonMark, as declared.
+    pub description: String,
+}
+
+impl PortFamilyDescriptorOutput {
+    /// Every port family, in declaration order.
+    pub fn every_port_family() -> Vec<Self> {
+        crate::core::descriptors::PortFamily::ALL
+            .into_iter()
+            .map(|family| Self {
+                family,
+                description: family.description().to_string(),
+            })
+            .collect()
+    }
 }
 
 /// Response from `/api/registry` when no stream is named, and the MCP node
@@ -347,6 +376,8 @@ pub struct RegistryResponse {
 pub struct MachineWideRegistryResponse {
     /// The node types compiled into this runtime, which any stream can add.
     pub nodes: Vec<ProcessorDescriptorOutput>,
+    /// The five port families, each with its description.
+    pub families: Vec<PortFamilyDescriptorOutput>,
     /// Each loaded stream's types described in its own interpreter.
     pub streams: Vec<NodeTypesDescribedInOneStreamOutput>,
 }
@@ -1536,7 +1567,8 @@ mod graph_response_top_level_key_rendering_tests {
                 "machine",
                 "nodes",
                 "references",
-                "stream"
+                "stream",
+                "studio"
             ]
         );
     }

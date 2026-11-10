@@ -11,7 +11,16 @@ from typing import Annotated, Any, Iterator
 
 import pytest
 
-from tatolab.stream import Image, ImageFrame, State, Stateful, Time, UnreadMessage, node
+from tatolab.stream import (
+    Description,
+    Image,
+    ImageFrame,
+    State,
+    Stateful,
+    Time,
+    UnreadMessage,
+    node,
+)
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
@@ -27,9 +36,9 @@ from tatolab.stream._node_declaration import (
 )
 
 
-@node.function
+@node.function(description="Map 0..1 onto low..high.")
 def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
-    """Map 0..1 onto low..high."""
+    """The docstring, which the catalog never reads."""
     return low + x * (high - low)
 
 
@@ -399,3 +408,136 @@ def test_a_family_named_on_anything_but_an_unread_message_is_refused_and_other_m
         node.function(scale_by_a_described_level), NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP
     )
     assert signature["inputs"][0]["value_type"] == "float"
+
+
+# ---------------------------------------------------------------------------
+# Port descriptions: `Annotated[T, Description("...")]` on a parameter or an output
+# ---------------------------------------------------------------------------
+
+GAIN_PORT_DESCRIPTION = "The factor `x` is multiplied by."
+
+
+@node.function(description="Scales `x`.")
+def scaled(
+    x: Annotated[float, Description("The value to scale.")],
+    gain: Annotated[float, Description(GAIN_PORT_DESCRIPTION)] = 1.0,
+    offset: Annotated[float | None, Description("Added after scaling.")] = None,
+    bias: Annotated[float, Description("Added last.")] | None = None,
+    undescribed: float = 0.0,
+) -> Annotated[float, Description("`x` times `gain`.")]:
+    """The docstring, never read as a port's description."""
+    return x * gain + (offset or 0.0) + (bias or 0.0) + undescribed
+
+
+def _described_ports(function_node: Any, stamp: str) -> "dict[str, str]":
+    return {port["name"]: port["description"] for port in getattr(function_node, stamp)}
+
+
+def test_a_described_input_carries_its_description_and_an_undescribed_one_the_empty_string():
+    assert _described_ports(scaled, NODE_DECLARATION_INPUT_PORTS_STAMP) == {
+        "x": "The value to scale.",
+        "gain": "The factor `x` is multiplied by.",
+        "offset": "Added after scaling.",
+        "bias": "Added last.",
+        "undescribed": "",
+    }
+
+
+def test_a_description_leaves_the_pin_it_describes_as_it_was():
+    inputs = {
+        each["port"]: each
+        for each in getattr(scaled, NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP)["inputs"]
+    }
+    assert inputs["gain"]["value_type"] == "float"
+    assert inputs["gain"]["default"] == 1.0
+    assert inputs["offset"]["optional"] is True
+    assert inputs["bias"]["optional"] is True
+
+
+def test_the_return_annotation_describes_the_result_output():
+    assert _described_ports(scaled, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == {
+        "result": "`x` times `gain`."
+    }
+
+
+@dataclass(frozen=True)
+class DescribedSplitOutputs:
+    low: Annotated[float, Description("What falls under the threshold.")]
+    high: Annotated[float | None, Description("What reaches it, or nothing.")]
+    flagged: bool
+
+
+@node.function
+def described_split(x: float) -> DescribedSplitOutputs:
+    return DescribedSplitOutputs(low=min(x, 0.5), high=None, flagged=False)
+
+
+def test_each_field_of_a_record_of_outputs_describes_its_own_output():
+    assert _described_ports(described_split, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == {
+        "low": "What falls under the threshold.",
+        "high": "What reaches it, or nothing.",
+        "flagged": "",
+    }
+
+
+@node.function
+def described_stateful(
+    x: float, previous: State[SmoothedValue]
+) -> Stateful[Annotated[float, Description("The smoothed value.")], SmoothedValue]:
+    smoothed = (previous.value + x) / 2.0
+    return smoothed, SmoothedValue(smoothed)
+
+
+def test_a_stateful_output_is_described_inside_stateful():
+    assert _described_ports(described_stateful, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == {
+        "result": "The smoothed value."
+    }
+
+
+@node.shader(
+    "float4 tinted(ImageInput image, float amount) { return image.pixel * amount; }"
+)
+def tinted(
+    image: Annotated[ImageFrame, Description("The picture tinted.")], amount: float
+) -> Annotated[ImageFrame, Description("The tinted picture.")]: ...
+
+
+def test_a_shader_nodes_ports_are_described_the_same_way():
+    assert _described_ports(tinted, NODE_DECLARATION_INPUT_PORTS_STAMP) == {
+        "image": "The picture tinted.",
+        "amount": "",
+    }
+    assert _described_ports(tinted, NODE_DECLARATION_OUTPUT_PORTS_STAMP) == {
+        "result": "The tinted picture."
+    }
+
+
+def time_described(now: Annotated[Time, Description("The read's time.")]) -> float:
+    return float(now)
+
+
+def record_described_as_a_whole(x: float) -> Annotated[DescribedSplitOutputs, Description("Both halves.")]:
+    return DescribedSplitOutputs(low=x, high=None, flagged=False)
+
+
+def described_twice(
+    x: Annotated[float, Description("One."), Description("Two.")],
+) -> float:
+    return x
+
+
+@pytest.mark.parametrize(
+    ("function", "refusal"),
+    [
+        (time_described, "only a port takes one"),
+        (record_described_as_a_whole, "describe each output where it is typed"),
+        (described_twice, "it takes one"),
+    ],
+)
+def test_a_description_where_no_one_port_is_typed_is_refused(function: Any, refusal: str):
+    with pytest.raises(TypeError, match=refusal):
+        node.function(function)
+
+
+def test_a_docstring_never_stands_in_for_a_function_nodes_description():
+    assert getattr(described_split, NODE_DECLARATION_DESCRIPTION_STAMP) == ""

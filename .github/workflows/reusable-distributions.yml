@@ -1,10 +1,13 @@
 name: Distributions
 
 # The release channel: release-please cuts a GitHub release, and this publishes
-# `tatolab-stream` to PyPI and every first-party module to Tatolab's own package
-# index, https://get.tatolab.com/simple/, at that release's version. A project
-# names that index, so a stream's venv resolves `tatolab-*` from it and
-# everything else from PyPI. The engine wheel is not published: a processor
+# the core of it at that release's version — the runtime, `tatolab-stream` to
+# PyPI and the core modules the runtime unit carries to Tatolab's own package
+# index, https://get.tatolab.com/simple/. Every other first-party module
+# publishes after it, from reusable-module-distributions.yml, and a module that
+# fails to build never withholds the core. A project names that index for the
+# modules the runtime does not carry, takes its core modules from the wheels the
+# runtime unit carries, and everything else from PyPI. The engine wheel is not published: a processor
 # interpreter borrows the runtime from the runtime unit's lend, so no stream's
 # venv installs it.
 #
@@ -12,11 +15,11 @@ name: Distributions
 # release and served with install.sh from get.tatolab.com.
 #
 # Every distribution carries the repository's one version and releases on its
-# one tag, and both uploads wait for every one of them, for the macOS proof of
+# one tag, and both uploads wait for every core distribution, for the macOS proof of
 # the runtime unit, for the Linux runtime tarball and for the credentials that
 # publish it, so nothing uploads unless everything built. The Linux runtime
 # publishes after both, because a stream it scaffolds locks the `tatolab-stream`
-# PyPI holds and the `tatolab-testpattern` and `tatolab-ops` the index holds. A failed publish is
+# PyPI holds; its core modules are wheels the tarball itself carries. A failed publish is
 # recovered by re-running the original run's failed job: PyPI and the index both
 # skip a file they hold byte for byte, and the Linux runtime overwrites a partial
 # upload.
@@ -30,10 +33,8 @@ name: Distributions
 # false; every other run is a dry run unless dispatched with `dry_run` unticked,
 # which is how a release whose distributions were never built or uploaded is
 # published by hand. A partially failed upload is recovered by re-running the
-# original run's failed job instead: a new dispatch rebuilds the module wheels,
-# whose compiled `_native` differs byte for byte from the files the index
-# already holds, so their upload fails on a hash mismatch. A dry run builds and
-# checks every distribution, writes the index pages for this run's wheels, and
+# original run's failed job. A dry run builds and
+# checks every core distribution, writes the index pages for this run's wheels, and
 # uploads nothing.
 on:
   workflow_call:
@@ -44,7 +45,7 @@ on:
         required: false
         default: ""
       dry_run:
-        description: "Build and check every distribution without uploading"
+        description: "Build and check every core distribution without uploading"
         type: boolean
         required: false
         default: true
@@ -55,7 +56,7 @@ on:
         type: string
         required: false
       dry_run:
-        description: "Build and check every distribution without uploading"
+        description: "Build and check every core distribution without uploading"
         type: boolean
         required: false
         default: true
@@ -117,39 +118,23 @@ jobs:
             fi
           done
 
-      # What a user's `uv sync` gives a scaffolded stream: this run's
-      # `tatolab-stream` and the numpy the scaffold declares, and nothing of
-      # the runtime. Importing a node runs its decorator and boots no engine, so
-      # this needs no GPU. The project is the scaffold template the runtime
-      # embeds and writes on `tatolab new`, laid out as it writes it, so no
-      # runtime has to be running here.
-      - name: A scaffolded stream's nodes import beside this run's tatolab-stream
+      # This run's `tatolab-stream` installs on its own, nothing of the runtime
+      # with it, and carries its licence text.
+      - name: This run's tatolab-stream installs and carries its licence
         run: |
-          python3 -m venv /tmp/scaffold-venv
+          python3 -m venv /tmp/tatolab-stream-venv
           # `--no-index` keeps `tatolab-stream` to this run's build, so its one
           # dependency comes from PyPI first.
-          /tmp/scaffold-venv/bin/pip install 'msgpack>=1.0'
-          /tmp/scaffold-venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
-          /tmp/scaffold-venv/bin/pip install 'numpy>=2.1'
+          /tmp/tatolab-stream-venv/bin/pip install 'msgpack>=1.0'
+          /tmp/tatolab-stream-venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
           # BUSL-1.1's parameters are in its text, not its SPDX id, so the text
           # has to reach what a user installs. Read through importlib.metadata,
           # so a licence present in the checkout and absent from the wheel fails.
-          /tmp/scaffold-venv/bin/python -c "
+          /tmp/tatolab-stream-venv/bin/python -c "
           from importlib.metadata import distribution
           license_text = distribution('tatolab-stream').read_text('licenses/LICENSE') or ''
           assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
           "
-
-          cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
-          mv /tmp/scaffold-check/python-version /tmp/scaffold-check/.python-version
-          mv /tmp/scaffold-check/gitignore /tmp/scaffold-check/.gitignore
-          test -f /tmp/scaffold-check/streams/main.graph.json
-          test -f /tmp/scaffold-check/nodes/halftone_lens_effect.py
-          test -f /tmp/scaffold-check/nodes/brightness_meter.py
-          cd /tmp/scaffold-check && /tmp/scaffold-venv/bin/python -c '
-          from nodes.brightness_meter import BrightnessMeter
-          from nodes.halftone_lens_effect import HalftoneLensEffect
-          '
 
       # `release-distribution-tatolab-stream` is what publish-to-pypi uploads;
       # every other `release-distribution-*` artifact goes to Tatolab's index.
@@ -162,88 +147,15 @@ jobs:
             sdk/tatolab-stream/dist/*.tar.gz
           if-no-files-found: error
 
-  # An extension is a standalone project built from the same ref. A named block
-  # rather than a matrix over a JSON array: an empty `include` is a matrix
-  # expansion failure, and a second extension is one more block like this one.
-  # Its install check resolves `tatolab-stream` from this run's distribution,
-  # which is why it waits for it.
-  build-tatolab-webrtc-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/streamlib-webrtc
-      extension_distribution_name: tatolab-webrtc
-      extension_import_package_name: tatolab.webrtc
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-
-  build-tatolab-microphone-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-microphone
-      extension_distribution_name: tatolab-microphone
-      extension_import_package_name: tatolab.microphone
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-
-  build-tatolab-speaker-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-speaker
-      extension_distribution_name: tatolab-speaker
-      extension_import_package_name: tatolab.speaker
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-
-  # The codec modules: the scaffold depends on tatolab-h264, and tatolab-h265 is
-  # its H.265 twin.
-  build-tatolab-h264-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/streamlib-h264
-      extension_distribution_name: tatolab-h264
-      extension_import_package_name: tatolab.h264
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-      extension_build_needs_the_slang_compiler: true
-
-  build-tatolab-h265-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/streamlib-h265
-      extension_distribution_name: tatolab-h265
-      extension_import_package_name: tatolab.h265
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-      extension_build_needs_the_slang_compiler: true
-
-  # A user's `uv sync` resolves `tatolab-stream` from PyPI, and
-  # `tatolab-testpattern` and `tatolab-ops` from the index the scaffold names, where every earlier
-  # release is a candidate. This run's distributions are in neither yet, so the
-  # `tatolab` index is pointed at an index tree built from this run's wheels the
-  # way the release builds the real one, `tatolab-stream` joins PyPI as
-  # find-links, and the scaffold must lock the ones just built — a scaffold that
-  # capped a version or named another index would lock something else.
+  # A user's `uv sync` resolves `tatolab-stream` from PyPI, where every earlier
+  # release is a candidate, and its core modules from the wheels the runtime
+  # unit carries. This run's `tatolab-stream` is not on PyPI yet, so it
+  # joins PyPI as find-links, and the scaffold must lock the one just built — a
+  # scaffold that capped its version would lock something else.
   lock-the-scaffold-against-this-runs-distributions:
-    name: A scaffolded stream locks the distributions this run built
+    name: A scaffolded stream locks the tatolab-stream this run built
     needs:
       - build-tatolab-stream-distribution
-      - build-tatolab-testpattern-distribution
-      - build-tatolab-ops-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -266,72 +178,31 @@ jobs:
       - name: The index tree is one uv resolves from
         run: python3 scripts/test_tatolab_package_index.py -v
 
-      - name: Collect the tatolab-stream, tatolab-testpattern and tatolab-ops this run built
+      - name: Collect the tatolab-stream this run built
         uses: actions/download-artifact@v7
         with:
-          pattern: release-distribution-tatolab-{stream,testpattern,ops}
-          path: /tmp/this-runs-distributions
-          merge-multiple: true
+          name: release-distribution-tatolab-stream
+          path: /tmp/this-runs-tatolab-stream
 
-      - name: The scaffold locks this run's tatolab-stream and tatolab-testpattern
+      - name: The scaffold locks this run's tatolab-stream
         run: |
           set -euo pipefail
-          mkdir /tmp/this-runs-tatolab-stream
-          mv /tmp/this-runs-distributions/tatolab_stream-* /tmp/this-runs-tatolab-stream/
-          python3 scripts/tatolab_package_index.py add-wheels /tmp/this-runs-index /tmp/this-runs-distributions/*.whl
-          python3 scripts/tatolab_package_index.py write-pages /tmp/this-runs-index
           cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
-          # A command-line index of the same name stands in for the one the
-          # project names.
-          (cd /tmp/scaffold-check && UV_FIND_LINKS=/tmp/this-runs-tatolab-stream \
-            uv lock --index "tatolab=file:///tmp/this-runs-index/simple/")
+          (cd /tmp/scaffold-check && UV_FIND_LINKS=/tmp/this-runs-tatolab-stream uv lock)
           built_version="$(python3 -c "
           import tomllib
           print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
           ")"
-          for distribution_name in tatolab-stream tatolab-testpattern; do
-            locked_version="$(python3 - "$distribution_name" <<'EOF'
-          import sys
+          locked_version="$(python3 <<'EOF'
           import tomllib
           lock = tomllib.load(open('/tmp/scaffold-check/uv.lock', 'rb'))
-          print(next(package['version'] for package in lock['package'] if package['name'] == sys.argv[1]))
+          print(next(package['version'] for package in lock['package'] if package['name'] == 'tatolab-stream'))
           EOF
-            )"
-            if [ "$locked_version" != "$built_version" ]; then
-              echo "::error::a scaffolded stream locks $distribution_name $locked_version, not the $built_version this run built"
-              exit 1
-            fi
-          done
-
-  # Linux and macOS: V4L2 and AVFoundation.
-  build-tatolab-camera-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-camera
-      extension_distribution_name: tatolab-camera
-      extension_import_package_name: tatolab.camera
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-
-  # Linux only. build.rs fetches rive-runtime with git and builds it with
-  # clang; premake needs libuuid's headers.
-  build-tatolab-rive-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-rive
-      extension_distribution_name: tatolab-rive
-      extension_import_package_name: tatolab.rive
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-      extension_build_needs_the_shader_compilers: true
-      extension_build_extra_dnf_packages: clang git libuuid-devel
-      extension_builds_for_macos: false
+          )"
+          if [ "$locked_version" != "$built_version" ]; then
+            echo "::error::a scaffolded stream locks tatolab-stream $locked_version, not the $built_version this run built"
+            exit 1
+          fi
 
   # Pure Python, so one wheel serves every platform. A wheel only, as for every
   # extension: an sdist would archive LICENSE as the symlink it is here.
@@ -512,60 +383,6 @@ jobs:
           path: packages/tatolab-testpattern/dist/*.whl
           if-no-files-found: error
 
-  # Linux only at run time — both of its doors are Linux's — so a manylinux
-  # wheel only.
-  build-tatolab-virtualcamera-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-virtualcamera
-      extension_distribution_name: tatolab-virtualcamera
-      extension_import_package_name: tatolab.virtualcamera
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-      extension_builds_for_macos: false
-
-  build-tatolab-opus-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-opus
-      extension_distribution_name: tatolab-opus
-      extension_import_package_name: tatolab.opus
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-
-  build-tatolab-moq-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-moq
-      extension_distribution_name: tatolab-moq
-      extension_import_package_name: tatolab.moq
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-
-  # The node side of a web page source: its wheel carries no browser, which is
-  # the shared browser host the runtime unit ships.
-  build-tatolab-browser-distribution:
-    needs: build-tatolab-stream-distribution
-    permissions:
-      contents: read
-    uses: ./.github/workflows/reusable-extension-wheel.yml
-    with:
-      extension_package_directory: packages/tatolab-browser
-      extension_distribution_name: tatolab-browser
-      extension_import_package_name: tatolab.browser
-      ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: release-distribution-tatolab-stream
-      extension_builds_for_macos: false
-
   # macOS is a supported floor, so a macOS-only regression in the runtime unit
   # blocks the release exactly as a Linux one does, though nothing it builds is
   # uploaded.
@@ -583,15 +400,12 @@ jobs:
     with:
       ref: ${{ inputs.tag_name }}
 
-  # The stream `tatolab new` scaffolds imports `tatolab.h264` and
-  # `tatolab.testpattern`, so the machines are given the distributions this run
-  # built, as a user's `uv sync` would.
+  # The stream `tatolab new` scaffolds imports `tatolab.testpattern`, a wheel
+  # the tarball carries.
   check-the-linux-runtime-tarball-on-machines-with-no-vulkan-driver:
     name: The Linux runtime tarball starts a stream on machines with no Vulkan driver
     needs:
       - build-linux-runtime-tarball
-      - build-tatolab-h264-distribution
-      - build-tatolab-testpattern-distribution
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -609,23 +423,10 @@ jobs:
           name: linux-runtime-tarball
           path: ${{ runner.temp }}/linux-runtime-tarball
 
-      - name: Collect the manylinux tatolab-h264 wheel this run built
-        uses: actions/download-artifact@v7
-        with:
-          name: release-distribution-tatolab-h264-manylinux
-          path: ${{ runner.temp }}/first-party-module-distributions
-
-      - name: Collect the tatolab-testpattern distribution this run built
-        uses: actions/download-artifact@v7
-        with:
-          name: release-distribution-tatolab-testpattern
-          path: ${{ runner.temp }}/first-party-module-distributions
-
       - name: The tarball starts a stream on machines with no Vulkan driver
         run: >-
           bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
-          "$RUNNER_TEMP/first-party-module-distributions"
 
   # Before PyPI or the index takes anything: an upload whose index and Linux
   # runtime could not then be published would leave the release half out.
@@ -657,18 +458,7 @@ jobs:
     if: ${{ !cancelled() && !failure() }}
     needs:
       - build-tatolab-stream-distribution
-      - build-tatolab-webrtc-distribution
-      - build-tatolab-microphone-distribution
-      - build-tatolab-speaker-distribution
-      - build-tatolab-opus-distribution
-      - build-tatolab-moq-distribution
-      - build-tatolab-browser-distribution
       - build-tatolab-testpattern-distribution
-      - build-tatolab-virtualcamera-distribution
-      - build-tatolab-h264-distribution
-      - build-tatolab-h265-distribution
-      - build-tatolab-camera-distribution
-      - build-tatolab-rive-distribution
       - build-tatolab-compositor-distribution
       - build-tatolab-ops-distribution
       - lock-the-scaffold-against-this-runs-distributions
@@ -739,22 +529,11 @@ jobs:
   # pages are written from what the bucket holds, so a later run's pages always
   # list an earlier run's wheels.
   publish-to-the-tatolab-package-index:
-    name: Publish the first-party modules to get.tatolab.com/simple/
+    name: Publish the core modules to get.tatolab.com/simple/
     if: ${{ !cancelled() && !failure() }}
     needs:
       - build-tatolab-stream-distribution
-      - build-tatolab-webrtc-distribution
-      - build-tatolab-microphone-distribution
-      - build-tatolab-speaker-distribution
-      - build-tatolab-opus-distribution
-      - build-tatolab-moq-distribution
-      - build-tatolab-browser-distribution
       - build-tatolab-testpattern-distribution
-      - build-tatolab-virtualcamera-distribution
-      - build-tatolab-h264-distribution
-      - build-tatolab-h265-distribution
-      - build-tatolab-camera-distribution
-      - build-tatolab-rive-distribution
       - build-tatolab-compositor-distribution
       - build-tatolab-ops-distribution
       - lock-the-scaffold-against-this-runs-distributions
@@ -786,7 +565,7 @@ jobs:
           version: ${{ env.PINNED_UV_VERSION }}
           enable-cache: false
 
-      - name: Collect every first-party module wheel this run built
+      - name: Collect every core module wheel this run built
         uses: actions/download-artifact@v7
         with:
           pattern: release-distribution-*

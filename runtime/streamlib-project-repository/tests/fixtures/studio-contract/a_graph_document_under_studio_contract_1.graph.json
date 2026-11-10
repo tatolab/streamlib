@@ -1,0 +1,38 @@
+{
+  "asset": "6f1c2a9e-4b3d-4e8a-9c71-0d2e5f8a1b34",
+  "nodes": [
+    {
+      "id": "0b7e4c1a-2d3f-4a5b-8c6d-9e0f1a2b3c4d",
+      "name": "camera",
+      "type": "nodes.camera:Camera",
+      "config": {},
+      "studio": {
+        "contract": 1,
+        "position": [120, 40],
+        "group": "2c6a1f7e-93b4-4d0a-8e15-b6f0c3a9d421",
+        "comment": "the rig's front camera",
+        "colour": "#3b82f6",
+        "collapsed": false,
+        "metadata": { "zoom": 1.5 }
+      }
+    }
+  ],
+  "links": [],
+  "groups": [
+    {
+      "id": "2c6a1f7e-93b4-4d0a-8e15-b6f0c3a9d421",
+      "title": "sources"
+    }
+  ],
+  "studio": {
+    "contract": 1,
+    "notes": [
+      {
+        "id": "7d3e9a1b-5c2f-4e8d-a6b0-1f2e3d4c5b6a",
+        "text": "Swap the camera for the rig's second one before the demo.",
+        "position": [40, 300],
+        "size": [240, 120]
+      }
+    ]
+  }
+}

@@ -2,10 +2,10 @@
 name = "tatolab-stream-project"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream>=0.54.2", "tatolab-testpattern>=0.68.18", "numpy>=2.1"]
+dependencies = ["tatolab-stream>=0.54.2"]
 
-# Tatolab's own index serves every first-party module; `tatolab-stream` and every
-# other name it does not serve fall through to PyPI.
+# Tatolab's own index serves the first-party modules the runtime does not carry;
+# `tatolab-stream` and every other name it does not serve fall through to PyPI.
 [[tool.uv.index]]
 name = "tatolab"
 url = "https://get.tatolab.com/simple/"

@@ -70,6 +70,11 @@ pub struct GraphSnapshot {
     /// Every labelled group of the stream's own level, which nothing that runs reads.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LabelledNodeGroup>,
+
+    /// What Tato Studio draws beside the nodes, its canvas notes, under the studio contract;
+    /// nothing that runs reads it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub studio: Option<serde_json::Value>,
 }
 
 /// The spec keys a graph document is read through, before its keys are checked.
@@ -88,6 +93,8 @@ struct GraphSnapshotAsWritten {
     links: Vec<GraphSnapshotLink>,
     #[serde(default)]
     groups: Vec<LabelledNodeGroup>,
+    #[serde(default)]
+    studio: Option<serde_json::Value>,
 }
 
 /// One JSON object of a graph document: the graph, a node, a link or a link
@@ -115,6 +122,7 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "nodes",
         "links",
         "groups",
+        "studio",
     ],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
     live_keys: &["extensions", "machine", "references", "runtime_name"],
@@ -273,6 +281,7 @@ impl GraphSnapshot {
             nodes,
             links,
             groups,
+            studio,
         } = GraphSnapshotAsWritten::deserialize(&graph_document)
             .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
         let mut graph = Self {
@@ -283,6 +292,7 @@ impl GraphSnapshot {
             nodes,
             links,
             groups,
+            studio,
         };
         refuse_a_group_of_no_uuid_or_one_uuid_twice(&graph.groups, &graph.nodes, "")?;
         graph.name_each_link_end_by_its_nodes_name()?;
@@ -407,6 +417,7 @@ impl GraphSnapshot {
     ) -> Result<GraphSnapshotWithGraphOnlyNodesResolved> {
         let fragments = Self {
             groups: Vec::new(),
+            studio: None,
             ..self.clone()
         }
         .with_graph_fragments_flattened(node_types)?;
@@ -423,6 +434,7 @@ impl GraphSnapshot {
                 variables_as_drawn: variables.variables_as_drawn,
                 interface_as_drawn: interface.interface_as_drawn,
                 groups_as_drawn: self.groups.clone(),
+                studio_as_drawn: self.studio.clone(),
             },
             values_the_set_variables_hold: variables.values_the_set_variables_hold,
         })
@@ -519,13 +531,14 @@ impl GraphSnapshot {
 }
 
 /// What the graph holds that runs nothing, as drawn: fragments, variables, interface nodes and
-/// the stream level's labelled groups, so `graph` renders them back.
+/// the stream level's labelled groups and canvas notes, so `graph` renders them back.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GraphOnlyNodesAsDrawn {
     pub fragments_as_drawn: GraphFragmentsAsDrawn,
     pub variables_as_drawn: GraphVariablesAsDrawn,
     pub interface_as_drawn: GraphInterfaceAsDrawn,
     pub groups_as_drawn: Vec<LabelledNodeGroup>,
+    pub studio_as_drawn: Option<serde_json::Value>,
 }
 
 /// A change to a node that a drawn link naming it by name blocks.
@@ -632,6 +645,7 @@ impl GraphOnlyNodesAsDrawn {
         self.variables_as_drawn.render_into(graph_response);
         self.fragments_as_drawn.render_into(graph_response);
         graph_response.groups = self.groups_as_drawn.clone();
+        graph_response.studio = self.studio_as_drawn.clone();
     }
 }
 
@@ -1159,6 +1173,7 @@ mod tests {
             }],
             links: vec![],
             groups: vec![],
+            studio: None,
         };
 
         let serialized = serde_json::to_value(&graph).unwrap();
@@ -1487,7 +1502,7 @@ mod tests {
                 serde_json::json!({"nodes": [], "linkz": []}),
                 [
                     "the graph carries the key `linkz`",
-                    "`asset`, `display_name`, `stream`, `clock`, `nodes`, `links` and `groups`",
+                    "`asset`, `display_name`, `stream`, `clock`, `nodes`, `links`, `groups` and `studio`",
                 ],
             ),
             (

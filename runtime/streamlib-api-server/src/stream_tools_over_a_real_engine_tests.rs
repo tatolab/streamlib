@@ -1525,7 +1525,6 @@ async fn create_project_in_a_directory_writes_the_project_and_runs_its_stream_un
         "pyproject.toml",
         ".python-version",
         ".gitignore",
-        "nodes/__init__.py",
     ] {
         assert!(
             project
@@ -2293,7 +2292,10 @@ async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_re
         .iter()
         .find(|node| node["id"] == SOURCE_NODE_UUID)
         .expect("the source keeps its UUID");
-    assert_eq!(camera["studio"], json!({ "position": [120, 40] }));
+    assert_eq!(
+        camera["studio"],
+        json!({ "contract": 1, "position": [120, 40] })
+    );
 
     let restarted = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let reloaded_stream_id = restarted.a_stream_loaded_from_its_graph_document(&project, "main");
@@ -3026,6 +3028,208 @@ async fn a_labelled_group_survives_a_reload_and_undo_of_its_removal_restores_its
     assert_eq!(source_of(&live)["studio"]["group"], json!(group), "{live}");
 }
 
+/// A canvas note is placed, edited and taken out, each as one transaction kept under the graph
+/// document's `studio` and rendered by `graph`; a fresh runtime loading the document renders it
+/// too, and undo of its removal brings it back. A node's studio fields are held to the studio
+/// contract, a key outside it refused by name.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_canvas_note_survives_a_reload_and_a_node_studio_key_outside_the_contract_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+
+    let added = call(
+        "add_note",
+        json!({ "stream": stream_asset, "text": "check the exposure",
+                "position": [40, 300], "size": [240, 120],
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the note is placed");
+    let note = added["added_notes"][0]["note"]
+        .as_str()
+        .expect("add_note answers the note's UUID")
+        .to_owned();
+    call(
+        "set_note_fields",
+        json!({ "stream": stream_asset, "note": note, "text": "check the white balance",
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the note's fields are set");
+
+    let the_studio_as = json!({ "contract": 1, "notes": [{
+        "id": note, "text": "check the white balance",
+        "position": [40, 300], "size": [240, 120] }] });
+    assert_eq!(
+        project.the_graph_document_of("main")["studio"],
+        the_studio_as
+    );
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(live["studio"], the_studio_as, "{live}");
+    let restarted = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let reloaded_stream_id = restarted.a_stream_loaded_from_its_graph_document(&project, "main");
+    let reloaded = restarted.the_live_graph_of(&reloaded_stream_id);
+    assert_eq!(reloaded["studio"], the_studio_as, "{reloaded}");
+
+    call(
+        "remove_note",
+        json!({ "stream": stream_asset, "note": note, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the note is taken out");
+    assert!(
+        project
+            .the_graph_document_of("main")
+            .get("studio")
+            .is_none()
+    );
+    assert!(engine.the_live_graph_of(&stream_id).get("studio").is_none());
+    call(
+        "undo",
+        json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the undo applies");
+    assert_eq!(
+        project.the_graph_document_of("main")["studio"],
+        the_studio_as
+    );
+    assert_eq!(
+        engine.the_live_graph_of(&stream_id)["studio"],
+        the_studio_as
+    );
+
+    let refusal = call(
+        "set_studio_fields",
+        json!({ "stream": stream_asset, "node": SOURCE_NODE_UUID,
+                "studio": { "position": [10, 20], "zoom": 2 } }),
+    )
+    .await
+    .expect_err("a key outside the studio contract is refused");
+    assert!(refusal.contains("`studio.zoom`"), "{refusal}");
+    call(
+        "set_studio_fields",
+        json!({ "stream": stream_asset, "node": SOURCE_NODE_UUID,
+                "studio": { "position": [10, 20], "metadata": { "zoom": 2 } } }),
+    )
+    .await
+    .expect("a client's own key under `metadata` is kept");
+    let source = project.the_graph_document_of("main")["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == SOURCE_NODE_UUID)
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        source["studio"],
+        json!({ "contract": 1, "position": [10, 20], "metadata": { "zoom": 2 } })
+    );
+}
+
+/// A sink collapsed into a subgraph runs inside it, fed through the subgraph's port from the
+/// same source, its UUID kept; unlocking the subgraph gives back the sink linked straight to
+/// the source, and undoing the unlock and the collapse gives back the exact earlier document.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_collapsed_selection_runs_the_same_nodes_and_its_undo_restores_the_exact_document() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    let added = call(
+        "transact",
+        json!({ "operations": [
+            { "operation": "add_node", "stream": stream_asset, "as": "sink", "name": "pass-sink",
+              "type": StreamToolsTestSink::processor_class_import_path().as_str() },
+            { "operation": "connect", "stream": stream_asset,
+              "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+              "target": { "node": "sink", "port": "video" } },
+        ], "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the sink is placed and linked");
+    let sink = added["added_nodes"][0]["node"].as_str().unwrap().to_owned();
+    let before_the_collapse = project.the_graph_document_of("main");
+
+    let collapsed = call(
+        "collapse_selection_into_subgraph",
+        json!({ "stream": stream_asset, "nodes": [sink], "name": "sub",
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the selection collapses");
+
+    assert_eq!(collapsed["added_nodes"][0]["name"], "sub", "{collapsed}");
+    let subgraph = collapsed["added_nodes"][0]["node"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let document = project.the_graph_document_of("main");
+    assert_eq!(sorted_node_names_in(&document), ["source", "sub"]);
+    assert_eq!(
+        links_by_node_name_in(&document),
+        ["source/video -> sub/pass-sink-video"]
+    );
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(
+        links_by_node_name_in(&live),
+        ["source/video -> sub/pass-sink-video"],
+        "{live}"
+    );
+    let live_subgraph = the_node_named(&live, "sub");
+    assert_eq!(
+        the_node_names_a_fragment_places(&live_subgraph),
+        ["pass-sink", "pass-sink-video"],
+        "{live_subgraph}"
+    );
+    assert_eq!(
+        the_node_named(&live_subgraph["fragment"], "pass-sink")["id"],
+        json!(sink),
+        "{live_subgraph}"
+    );
+
+    call(
+        "unlock_generator_fragment",
+        json!({ "stream": stream_asset, "fragment": subgraph, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the subgraph unlocks");
+    let unlocked = project.the_graph_document_of("main");
+    assert_eq!(sorted_node_names_in(&unlocked), ["pass-sink", "source"]);
+    assert_eq!(
+        links_by_node_name_in(&unlocked),
+        ["source/video -> pass-sink/video"]
+    );
+    assert_eq!(
+        links_by_node_name_in(&engine.the_live_graph_of(&stream_id)),
+        ["source/video -> pass-sink/video"]
+    );
+
+    for _ in 0..2 {
+        call(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the undo applies");
+    }
+    assert_eq!(project.the_graph_document_of("main"), before_the_collapse);
+    assert_eq!(
+        links_by_node_name_in(&engine.the_live_graph_of(&stream_id)),
+        ["source/video -> pass-sink/video"]
+    );
+}
+
 impl ProjectWithGraphDocuments {
     /// Add a [`StreamToolsTestSink`] named `name` to this project's stream `main` as one
     /// committed transaction, answering the commit that records it.
@@ -3056,7 +3260,7 @@ impl ProjectWithGraphDocuments {
                                     config: json!({}),
                                     pins: serde_json::Map::new(),
                                     exposed_config_fields: Vec::new(),
-                                    studio: serde_json::Map::new(),
+                                    studio: Default::default(),
                                     fragment: None,
                                 },
                                 links: Vec::new(),

@@ -7,6 +7,32 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::stream_graph_fragment_fold::StreamGraphFragmentFold;
+use crate::stream_graph_studio_contract::{
+    StreamGraphDocumentNote, StreamGraphNodeStudioFields, StreamGraphNoteFields,
+    a_documents_studio_holding, the_notes_of_a_documents_studio,
+};
+
+/// The import path a graph names `GraphInput` by, in the built-in node module.
+pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
+
+/// The import path a graph names `GraphOutput` by, in the built-in node module.
+pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
+
+/// The config key an interface node names the port it declares under.
+pub const GRAPH_INTERFACE_PORT_CONFIG_KEY: &str = "port";
+
+/// The config key an interface node names its port's family under.
+pub const GRAPH_INTERFACE_FAMILY_CONFIG_KEY: &str = "family";
+
+/// The one port an interface node has: a `GraphOutput`'s input, a
+/// `GraphInput`'s output.
+pub const GRAPH_INTERFACE_VALUE_PORT_NAME: &str = "value";
+
+/// Whether `node_type` is `GraphInput` or `GraphOutput`.
+pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
+    matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
+}
 
 /// One node as a stream's graph document holds it: the spec keys a load reads.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -27,9 +53,9 @@ pub struct StreamGraphDocumentNode {
     /// The config fields the node takes as inputs too, each an input of the field's name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exposed_config_fields: Vec<String>,
-    /// What the studio draws the node with.
-    #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub studio: Map<String, Value>,
+    /// What the studio draws the node with, under the `studio` contract.
+    #[serde(default, skip_serializing_if = "StreamGraphNodeStudioFields::is_empty")]
+    pub studio: Box<StreamGraphNodeStudioFields>,
     /// The stored output of the graph generator `type` names, on a fragment alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fragment: Option<Box<Value>>,
@@ -109,6 +135,10 @@ const STUDIO_GROUP_KEY: &str = "group";
 /// The graph document's key holding its labelled groups.
 const GROUPS_KEY: &str = "groups";
 
+/// The graph document's key holding its own `studio` object: the canvas items that are not
+/// nodes.
+const DOCUMENT_STUDIO_KEY: &str = "studio";
+
 /// What a fragment node holds of its graph generator's run: the generator, the promoted
 /// settings it ran with and the graph it built.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -160,8 +190,8 @@ pub enum StreamGraphOperation {
     /// The node's studio fields were replaced whole.
     SetStudioFields {
         node: Uuid,
-        from: Map<String, Value>,
-        to: Map<String, Value>,
+        from: Box<StreamGraphNodeStudioFields>,
+        to: Box<StreamGraphNodeStudioFields>,
     },
     /// The fragment node's generator was run again, and its stored output replaced whole.
     RefreshFragment {
@@ -193,6 +223,20 @@ pub enum StreamGraphOperation {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         nodes: Vec<Uuid>,
     },
+    /// The canvas note was placed.
+    AddNote { note: StreamGraphDocumentNote },
+    /// The canvas note's text, position and size were replaced whole.
+    SetNoteFields {
+        note: Uuid,
+        from: StreamGraphNoteFields,
+        to: StreamGraphNoteFields,
+    },
+    /// The canvas note was taken out.
+    RemoveNote { note: StreamGraphDocumentNote },
+    /// The fold's plain nodes and their links were replaced with its fragment node.
+    FoldIntoFragment { fold: StreamGraphFragmentFold },
+    /// The fold's fragment node was replaced with the plain nodes and links it stands for.
+    UnfoldFragment { fold: StreamGraphFragmentFold },
 }
 
 impl StreamGraphOperation {
@@ -246,6 +290,15 @@ impl StreamGraphOperation {
                 from: to,
                 to: from,
             },
+            Self::AddNote { note } => Self::RemoveNote { note },
+            Self::RemoveNote { note } => Self::AddNote { note },
+            Self::SetNoteFields { note, from, to } => Self::SetNoteFields {
+                note,
+                from: to,
+                to: from,
+            },
+            Self::FoldIntoFragment { fold } => Self::UnfoldFragment { fold },
+            Self::UnfoldFragment { fold } => Self::FoldIntoFragment { fold },
         }
     }
 
@@ -279,6 +332,19 @@ impl StreamGraphOperation {
             Self::RemoveGroup { group, .. } => {
                 format!("remove_group {} {}", group.id, group.fields.title)
             }
+            Self::AddNote { note } => format!("add_note {}", note.id),
+            Self::SetNoteFields { note, .. } => format!("set_note_fields {note}"),
+            Self::RemoveNote { note } => format!("remove_note {}", note.id),
+            Self::FoldIntoFragment { fold } => format!(
+                "fold_into_fragment {} {}",
+                fold.fragment_node().unwrap_or_default(),
+                fold.fragment_name()
+            ),
+            Self::UnfoldFragment { fold } => format!(
+                "unfold_fragment {} {}",
+                fold.fragment_node().unwrap_or_default(),
+                fold.fragment_name()
+            ),
         }
     }
 
@@ -293,7 +359,13 @@ impl StreamGraphOperation {
             | Self::SetStudioFields { node, .. }
             | Self::RefreshFragment { node, .. }
             | Self::SetExposedConfigFields { node, .. } => Some(*node),
-            Self::AddGroup { .. } | Self::SetGroupFields { .. } | Self::RemoveGroup { .. } => None,
+            Self::FoldIntoFragment { fold } | Self::UnfoldFragment { fold } => fold.fragment_node(),
+            Self::AddGroup { .. }
+            | Self::SetGroupFields { .. }
+            | Self::RemoveGroup { .. }
+            | Self::AddNote { .. }
+            | Self::SetNoteFields { .. }
+            | Self::RemoveNote { .. } => None,
         }
     }
 
@@ -312,6 +384,20 @@ impl StreamGraphOperation {
             Self::RefreshFragment { node, to, .. } => {
                 configs.push((*node, &to.config));
                 push_the_config_of_each_node_at_every_level(&to.fragment, &mut configs);
+            }
+            Self::FoldIntoFragment { fold } => {
+                push_the_config_of_each_of_the_nodes_at_every_level(
+                    std::slice::from_ref(&fold.fragment.value),
+                    &mut configs,
+                );
+            }
+            Self::UnfoldFragment { fold } => {
+                for node in &fold.nodes {
+                    push_the_config_of_each_of_the_nodes_at_every_level(
+                        std::slice::from_ref(&node.value),
+                        &mut configs,
+                    );
+                }
             }
             _ => {}
         }
@@ -461,6 +547,44 @@ impl StreamGraphDocument {
             .collect()
     }
 
+    /// Every canvas note of the graph, as its `studio.notes` holds them.
+    pub fn notes(&self) -> Result<Vec<StreamGraphDocumentNote>, String> {
+        the_notes_of_a_documents_studio(self.every_other_key.get(DOCUMENT_STUDIO_KEY))
+    }
+
+    /// The canvas note whose UUID is `note`.
+    pub fn note(&self, note: Uuid) -> Result<StreamGraphDocumentNote, String> {
+        let notes = self.notes()?;
+        notes
+            .iter()
+            .find(|held| held.id == note)
+            .cloned()
+            .ok_or_else(|| {
+                let held: Vec<String> = notes.iter().map(|held| held.id.to_string()).collect();
+                if held.is_empty() {
+                    format!("the graph holds no note {note}; it holds no note at all")
+                } else {
+                    format!(
+                        "the graph holds no note {note}. It holds: {}",
+                        held.join(", ")
+                    )
+                }
+            })
+    }
+
+    fn set_the_notes(&mut self, notes: &[StreamGraphDocumentNote]) -> Result<(), String> {
+        match a_documents_studio_holding(notes)? {
+            Some(studio) => {
+                self.every_other_key
+                    .insert(DOCUMENT_STUDIO_KEY.to_owned(), studio);
+            }
+            None => {
+                self.every_other_key.remove(DOCUMENT_STUDIO_KEY);
+            }
+        }
+        Ok(())
+    }
+
     fn set_the_groups(&mut self, groups: &[StreamGraphDocumentGroup]) -> Result<(), String> {
         if groups.is_empty() {
             self.every_other_key.remove(GROUPS_KEY);
@@ -607,6 +731,19 @@ impl StreamGraphDocument {
                 Ok(())
             }
             StreamGraphOperation::Connect { link } => self.connect(link),
+            StreamGraphOperation::FoldIntoFragment { fold } => self
+                .swap_values_on_the_streams_level(
+                    &fold.nodes,
+                    &fold.links,
+                    std::slice::from_ref(&fold.fragment),
+                    &fold.fragment_links,
+                ),
+            StreamGraphOperation::UnfoldFragment { fold } => self.swap_values_on_the_streams_level(
+                std::slice::from_ref(&fold.fragment),
+                &fold.fragment_links,
+                &fold.nodes,
+                &fold.links,
+            ),
             StreamGraphOperation::Disconnect { link } => {
                 let index = self
                     .link_values()
@@ -678,7 +815,7 @@ impl StreamGraphDocument {
                 if to.is_empty() {
                     node_object.remove("studio");
                 } else {
-                    node_object.insert("studio".to_owned(), Value::Object(to.clone()));
+                    node_object.insert("studio".to_owned(), Value::Object(to.to_map()));
                 }
                 Ok(())
             }
@@ -759,6 +896,33 @@ impl StreamGraphDocument {
                 }
                 Ok(())
             }
+            StreamGraphOperation::AddNote { note } => {
+                let mut notes = self.notes()?;
+                if notes.iter().any(|held| held.id == note.id) {
+                    return Err(format!(
+                        "the graph already holds note {}; a note's UUID is never reused",
+                        note.id
+                    ));
+                }
+                notes.push(note.clone());
+                self.set_the_notes(&notes)
+            }
+            StreamGraphOperation::SetNoteFields { note, to, .. } => {
+                self.note(*note)?;
+                let mut notes = self.notes()?;
+                for held in &mut notes {
+                    if held.id == *note {
+                        held.fields = to.clone();
+                    }
+                }
+                self.set_the_notes(&notes)
+            }
+            StreamGraphOperation::RemoveNote { note } => {
+                self.note(note.id)?;
+                let mut notes = self.notes()?;
+                notes.retain(|held| held.id != note.id);
+                self.set_the_notes(&notes)
+            }
         }
     }
 
@@ -778,7 +942,7 @@ impl StreamGraphDocument {
         Ok(())
     }
 
-    fn why_no_node_has(&self, node: Uuid) -> String {
+    pub(crate) fn why_no_node_has(&self, node: Uuid) -> String {
         let held: Vec<String> = self
             .node_objects()
             .map(|node_object| {
@@ -800,7 +964,7 @@ impl StreamGraphDocument {
         }
     }
 
-    fn node_objects(&self) -> impl Iterator<Item = &Map<String, Value>> {
+    pub(crate) fn node_objects(&self) -> impl Iterator<Item = &Map<String, Value>> {
         self.node_values.iter().filter_map(Value::as_object)
     }
 
@@ -813,21 +977,25 @@ impl StreamGraphDocument {
             .ok_or(why_none)
     }
 
-    fn node_values_mut(&mut self) -> &mut Vec<Value> {
+    pub(crate) fn node_values_mut(&mut self) -> &mut Vec<Value> {
         &mut self.node_values
     }
 
-    fn link_values(&self) -> &[Value] {
+    pub(crate) fn node_values_of_the_level(&self) -> &[Value] {
+        &self.node_values
+    }
+
+    pub(crate) fn link_values(&self) -> &[Value] {
         &self.link_values
     }
 
-    fn link_values_mut(&mut self) -> &mut Vec<Value> {
+    pub(crate) fn link_values_mut(&mut self) -> &mut Vec<Value> {
         &mut self.link_values
     }
 
     /// `link` with each end's node by UUID, an end naming its node by name resolved through
     /// the nodes the document holds.
-    fn link_read_from(&self, link: &Value) -> Option<StreamGraphDocumentLink> {
+    pub(crate) fn link_read_from(&self, link: &Value) -> Option<StreamGraphDocumentLink> {
         let end = |end_key: &str| -> Option<StreamGraphDocumentLinkEnd> {
             let end = link.get(end_key)?;
             let named = end.get("node")?.as_str()?;
@@ -848,7 +1016,7 @@ impl StreamGraphDocument {
     }
 }
 
-fn node_uuid_of(node_object: &Map<String, Value>) -> Option<Uuid> {
+pub(crate) fn node_uuid_of(node_object: &Map<String, Value>) -> Option<Uuid> {
     node_object
         .get("id")
         .and_then(Value::as_str)
@@ -863,7 +1031,7 @@ fn studio_group_of(node_object: &Map<String, Value>) -> Option<Uuid> {
         .and_then(|group| Uuid::parse_str(group).ok())
 }
 
-fn node_name_of(node_object: &Map<String, Value>) -> Option<&str> {
+pub(crate) fn node_name_of(node_object: &Map<String, Value>) -> Option<&str> {
     node_object.get("name").and_then(Value::as_str)
 }
 
@@ -1153,7 +1321,7 @@ mod tests {
             config: json!({}),
             pins: Map::new(),
             exposed_config_fields: Vec::new(),
-            studio: Map::new(),
+            studio: Default::default(),
             fragment: None,
         }
     }
@@ -1212,8 +1380,13 @@ mod tests {
             },
             StreamGraphOperation::SetStudioFields {
                 node: sink.id,
-                from: Map::new(),
-                to: json!({"position": [10, 20]}).as_object().unwrap().clone(),
+                from: Default::default(),
+                to: Box::new(
+                    StreamGraphNodeStudioFields::try_from(
+                        json!({"position": [10, 20]}).as_object().unwrap().clone(),
+                    )
+                    .unwrap(),
+                ),
             },
             StreamGraphOperation::SetExposedConfigFields {
                 node: sink.id,
@@ -1552,8 +1725,13 @@ mod tests {
         document
             .apply(&StreamGraphOperation::SetStudioFields {
                 node: sink.id,
-                from: Map::new(),
-                to: json!({"position": [10, 20]}).as_object().unwrap().clone(),
+                from: Default::default(),
+                to: Box::new(
+                    StreamGraphNodeStudioFields::try_from(
+                        json!({"position": [10, 20]}).as_object().unwrap().clone(),
+                    )
+                    .unwrap(),
+                ),
             })
             .unwrap();
         let sources = a_group_titled("sources");
@@ -1595,10 +1773,13 @@ mod tests {
         assert!(document.groups().unwrap().is_empty());
         assert!(document.nodes_of_the_group(sources.id).is_empty());
         assert_eq!(
-            document.node(sink.id).unwrap().studio,
-            json!({"position": [10, 20]}).as_object().unwrap().clone()
+            *document.node(sink.id).unwrap().studio,
+            StreamGraphNodeStudioFields::try_from(
+                json!({"position": [10, 20]}).as_object().unwrap().clone()
+            )
+            .unwrap()
         );
-        assert_eq!(document.node(source.id).unwrap().studio, Map::new());
+        assert!(document.node(source.id).unwrap().studio.is_empty());
         document.apply(&removal.inverse()).unwrap();
         assert_eq!(
             document.canonical_bytes().unwrap(),

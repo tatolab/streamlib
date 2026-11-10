@@ -13,6 +13,8 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Any, Final, Generic, Optional, TypeVar, Union, overload
 
+from ._description import refuse_a_description_that_is_not_a_string
+
 if TYPE_CHECKING:
     from ._node_context_protocols import ChannelsBlock, PacketsUnit
     from .array_frame import ArrayFrame
@@ -42,31 +44,49 @@ class PortFamily(Generic[_PortFamilyReadType]):
     Its type parameter is what a read through a port of the family returns.
     """
 
-    __slots__ = ("_declaration_name", "_wire_name")
+    __slots__ = ("_declaration_name", "_wire_name", "_description")
 
-    def __init__(self, declaration_name: str) -> None:
+    def __init__(self, declaration_name: str, *, description: str) -> None:
         self._declaration_name = declaration_name
         self._wire_name = declaration_name.lower()
+        self._description = refuse_a_description_that_is_not_a_string(
+            description, f"PortFamily({declaration_name!r})"
+        )
 
     @property
     def declaration_name(self) -> str:
         """The name a declaration spells this family by, such as `Image`."""
         return self._declaration_name
 
+    @property
+    def description(self) -> str:
+        """What a port of this family carries, as the node catalog describes it."""
+        return self._description
+
     def __repr__(self) -> str:
         return self._declaration_name
 
 
-Image: Final[PortFamily[ImageFrame]] = PortFamily("Image")
-"""A GPU surface with its size, pixel format and colour."""
-Array: Final[PortFamily[ArrayFrame]] = PortFamily("Array")
-"""Named tensors, on the GPU or the CPU."""
-Channels: Final[PortFamily[ChannelsBlock]] = PortFamily("Channels")
-"""Named sample channels at one rate."""
-Packets: Final[PortFamily[PacketsUnit]] = PortFamily("Packets")
-"""Encoded units of one codec."""
-Records: Final[PortFamily["dict[str, Any]"]] = PortFamily("Records")
-"""A dict per message, keyed by the declared names."""
+Image: Final[PortFamily[ImageFrame]] = PortFamily(
+    "Image",
+    description="A GPU surface with its size, pixel format and colour.",
+)
+Array: Final[PortFamily[ArrayFrame]] = PortFamily(
+    "Array",
+    description="Named tensors, on the GPU or the CPU.",
+)
+Channels: Final[PortFamily[ChannelsBlock]] = PortFamily(
+    "Channels",
+    description="Named sample channels at one rate.",
+)
+Packets: Final[PortFamily[PacketsUnit]] = PortFamily(
+    "Packets",
+    description="Encoded units of one codec.",
+)
+Records: Final[PortFamily["dict[str, Any]"]] = PortFamily(
+    "Records",
+    description="One record per message, a value under each declared name.",
+)
 
 _PORT_FAMILIES: Final = (Image, Array, Channels, Packets, Records)
 _FAMILIES_WITH_NAMES: Final = (Array, Channels, Records)

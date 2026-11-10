@@ -22,7 +22,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{
     GraphResponse, MachineWideGraphResponse, MachineWideRegistryResponse,
     NodeTypeAnInstalledModuleDeclaresOutput, NodeTypesDescribedInOneStreamOutput,
-    ProcessorDescriptorOutput, RegistryResponse,
+    PortFamilyDescriptorOutput, ProcessorDescriptorOutput, RegistryResponse,
 };
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
@@ -216,6 +216,7 @@ pub(crate) fn machine_wide_registry_response(
 ) -> MachineWideRegistryResponse {
     MachineWideRegistryResponse {
         nodes: node_catalog_response(&PROCESSOR_REGISTRY.list_registered()).nodes,
+        families: PortFamilyDescriptorOutput::every_port_family(),
         streams: operations_on_the_loaded_streams
             .ids_of_the_loaded_streams()
             .into_iter()
@@ -334,6 +335,7 @@ pub(crate) fn node_catalog_response(node_catalog: &[ProcessorDescriptor]) -> Reg
             .iter()
             .map(ProcessorDescriptorOutput::from)
             .collect(),
+        families: PortFamilyDescriptorOutput::every_port_family(),
     }
 }
 

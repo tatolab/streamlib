@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.68.55](https://github.com/tatolab/streamlib/compare/v0.68.54...v0.68.55) (2026-11-10)
+
+
+### Bug Fixes
+
+* **project-repository:** refuse a canvas note key the studio contract does not take ([03cfeeb](https://github.com/tatolab/streamlib/commit/03cfeeb816b5ac889724e45c64471f30e6ff6415))
+
+## [0.68.54](https://github.com/tatolab/streamlib/compare/v0.68.53...v0.68.54) (2026-11-10)
+
+
+### Features
+
+* **project:** hold a node's studio fields to a versioned contract and keep canvas notes ([f904035](https://github.com/tatolab/streamlib/commit/f904035196834d5616fabaef1b77df3f4558c658))
+
+## [0.68.53](https://github.com/tatolab/streamlib/compare/v0.68.52...v0.68.53) (2026-11-10)
+
+
+### Features
+
+* **graph:** collapse a selection into a subgraph and unlock a fragment ([9fad22a](https://github.com/tatolab/streamlib/commit/9fad22a0107fcac678623f76b07e3be580ffc562))
+* **runtime:** carry only the core first-party modules, as wheels ([1f74ae9](https://github.com/tatolab/streamlib/commit/1f74ae9e17a59868cc9ed2103a57a4a562fffcb9))
+* **runtime:** every first-party module rides the runtime unit as a built wheel ([7d1c71c](https://github.com/tatolab/streamlib/commit/7d1c71c4e8efe82da665a9fc462711d32d4979a6)), closes [#3473](https://github.com/tatolab/streamlib/issues/3473)
+* **runtime:** the core first-party modules ride the runtime unit as wheels ([8549734](https://github.com/tatolab/streamlib/commit/854973490297a44f275e1fa9f52228e4b14de5e1))
+
+
+### Bug Fixes
+
+* **project-repository:** undo a file write back to what was on disk ([a60ae1b](https://github.com/tatolab/streamlib/commit/a60ae1b91345f3c4f64db0de4af0ddef0e44918d))
+* **project-repository:** undo a file write back to what was on disk ([e5cc66d](https://github.com/tatolab/streamlib/commit/e5cc66d307dc1478f9ae62056c0dbb5d59661b58))
+
+## [0.68.52](https://github.com/tatolab/streamlib/compare/v0.68.51...v0.68.52) (2026-11-10)
+
+
+### Features
+
+* **scaffold:** a new project starts with one test pattern source ([6e93e44](https://github.com/tatolab/streamlib/commit/6e93e44e27ecbbc0c967218d604c94274edc525f))
+
+## [0.68.51](https://github.com/tatolab/streamlib/compare/v0.68.50...v0.68.51) (2026-11-10)
+
+
+### Features
+
+* **project:** create, delete and name streams as project transactions ([acca57e](https://github.com/tatolab/streamlib/commit/acca57e584c30677ef4ea63abc16e9de27f85254))
+
 ## [0.68.50](https://github.com/tatolab/streamlib/compare/v0.68.49...v0.68.50) (2026-11-10)
 
 

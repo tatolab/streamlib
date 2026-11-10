@@ -25,6 +25,10 @@ import inspect
 import typing
 from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
 
+from ._description import (
+    description_and_annotation_without_it,
+    refuse_a_description_that_is_not_a_string,
+)
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._function_node_side_effect_check import refuse_a_function_node_body_with_side_effects
 from ._node_config_schema import (
@@ -123,7 +127,9 @@ def declare_function_node(
             if config_class is None
             else derive_config_class_json_schema(config_class)
         ),
-        declaration_stamps["description"]: description or inspect.getdoc(function) or "",
+        declaration_stamps["description"]: refuse_a_description_that_is_not_a_string(
+            description, f"@node.function on {function.__name__}"
+        ),
         declaration_stamps["category"]: category or function.__module__,
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
@@ -248,7 +254,19 @@ class _FunctionNodeSignatureReading:
                 f"{self._function_name}'s parameter `{parameter.name}` has no type, so nothing "
                 f"names the pin's family. To fix: annotate it, `{parameter.name}: float`."
             )
-        annotation = annotations[parameter.name]
+        port_description, annotation = self._port_description_and_annotation_without_it(
+            annotations[parameter.name], f"input `{parameter.name}`"
+        )
+        if port_description is not None and (
+            annotation is Time
+            or typing.get_origin(annotation) is State
+            or parameter.name == "config"
+        ):
+            raise TypeError(
+                f"{self._function_name}'s parameter `{parameter.name}` carries a "
+                f"`Description`, and only a port takes one. To fix: drop it, or describe "
+                f"the node with `@node.function(description=...)`."
+            )
         if annotation is Time:
             self._read_time_parameter(parameter)
         elif typing.get_origin(annotation) is State:
@@ -256,7 +274,27 @@ class _FunctionNodeSignatureReading:
         elif parameter.name == "config":
             self._read_config_parameter(annotation)
         else:
-            self._read_input_pin(parameter, annotation)
+            self._read_input_pin(parameter, annotation, port_description or "")
+
+    def _port_description_and_annotation_without_it(
+        self, annotation: Any, what_it_types: str
+    ) -> "tuple[Optional[str], Any]":
+        """The `Description` on a port's annotation, also on `T` of `T | None`, and the annotation without it."""
+        described = f"{self._function_name}'s {what_it_types}"
+        description, annotation_without_it = description_and_annotation_without_it(
+            annotation, described
+        )
+        if description is not None:
+            return description, annotation_without_it
+        value_annotation, optional = _value_annotation_and_whether_optional(annotation)
+        if not optional:
+            return None, annotation
+        description, value_annotation_without_it = description_and_annotation_without_it(
+            value_annotation, described
+        )
+        if description is None:
+            return None, annotation
+        return description, Optional[value_annotation_without_it]
 
     def _read_time_parameter(self, parameter: inspect.Parameter) -> None:
         if self._time_parameter is not None:
@@ -308,7 +346,9 @@ class _FunctionNodeSignatureReading:
         self._config_parameter = "config"
         self.config_class = annotation
 
-    def _read_input_pin(self, parameter: inspect.Parameter, annotation: Any) -> None:
+    def _read_input_pin(
+        self, parameter: inspect.Parameter, annotation: Any, port_description: str
+    ) -> None:
         port_name = self._cast_port_name(parameter.name)
         value_annotation, optional = _value_annotation_and_whether_optional(annotation)
         if optional and parameter.default is not None:
@@ -335,7 +375,7 @@ class _FunctionNodeSignatureReading:
         self._signature_inputs.append(signature_input)
         input_port: "dict[str, Any]" = {
             "name": port_name,
-            "description": "",
+            "description": port_description,
             "delivery_profile": "newest",
             "family": dict(family_declaration),
         }
@@ -362,6 +402,19 @@ class _FunctionNodeSignatureReading:
     def _read_return(
         self, return_annotation: Any
     ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
+        returned_description, returned_without_it = self._port_description_and_annotation_without_it(
+            return_annotation, "return annotation"
+        )
+        if returned_description is not None and (
+            typing.get_origin(returned_without_it) is Stateful
+            or _is_a_record_of_outputs(returned_without_it)
+        ):
+            raise TypeError(
+                f"{self._function_name}'s return annotation carries a `Description` on what "
+                f"is not one output. To fix: describe each output where it is typed, "
+                f"`field: Annotated[T, Description(\"...\")]` on the record, or "
+                f"`Stateful[Annotated[T, Description(\"...\")], Record]`."
+            )
         if return_annotation is type(None):
             raise TypeError(
                 f"{self._function_name} returns `None`, so it has no output and computes "
@@ -410,7 +463,7 @@ class _FunctionNodeSignatureReading:
             and dataclasses.is_dataclass(output_annotation)
             and output_annotation not in _families_by_read_type()
         ):
-            field_annotations = typing.get_type_hints(output_annotation)
+            field_annotations = typing.get_type_hints(output_annotation, include_extras=True)
             return self._output_ports_named(
                 [(field.name, field_annotations[field.name]) for field in dataclasses.fields(output_annotation)],
                 fields_of=output_annotation,
@@ -422,8 +475,11 @@ class _FunctionNodeSignatureReading:
     ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
         output_ports: "list[dict[str, Any]]" = []
         signature_outputs: "list[dict[str, Any]]" = []
-        for output_name, output_annotation in outputs:
+        for output_name, described_output_annotation in outputs:
             port_name = self._cast_port_name(output_name)
+            port_description, output_annotation = self._port_description_and_annotation_without_it(
+                described_output_annotation, f"output `{output_name}`"
+            )
             value_annotation, may_hand_out_nothing = _value_annotation_and_whether_optional(
                 output_annotation
             )
@@ -444,7 +500,11 @@ class _FunctionNodeSignatureReading:
                     "dtype": "f64",
                 }
             output_ports.append(
-                {"name": port_name, "description": "", "family": family_declaration}
+                {
+                    "name": port_name,
+                    "description": port_description or "",
+                    "family": family_declaration,
+                }
             )
             signature_outputs.append(
                 {
@@ -537,6 +597,14 @@ def _families_by_read_type() -> "dict[Any, tuple[str, str]]":
         ChannelsBlock: ("channels_block", "channels"),
         PacketsUnit: ("packets_unit", "packets"),
     }
+
+
+def _is_a_record_of_outputs(annotation: Any) -> bool:
+    return (
+        isinstance(annotation, type)
+        and dataclasses.is_dataclass(annotation)
+        and annotation not in _families_by_read_type()
+    )
 
 
 def _value_annotation_and_whether_optional(annotation: Any) -> "tuple[Any, bool]":

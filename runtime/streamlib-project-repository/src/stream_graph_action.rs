@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use crate::StudioCanvasPair;
+
 /// How a graph action's `stream` is described to its caller.
 pub const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.";
 /// How a graph action's `node` is described to its caller.
@@ -37,6 +39,21 @@ pub const DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION: &str = "The imported project,
 pub const DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION: &str = "The imported project's stream, by its stream asset's UUID, the `asset` its graph document under `imports/<folder>/` holds.";
 /// How `use_dependency_stream`'s `name` is described to its caller.
 pub const DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. Any node of that name already in the graph refuses the placement.";
+
+/// How a node's `studio` is described to its caller.
+pub const NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION: &str = "What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name.";
+/// How a note action's `note` is described to its caller.
+pub const NOTE_ARGUMENT_DESCRIPTION: &str =
+    "The canvas note, by the UUID `graph` lists under `notes` and `add_note` answers.";
+/// How a note's `text` is described to its caller.
+pub const NOTE_TEXT_ARGUMENT_DESCRIPTION: &str =
+    "What the note says, for the next person who reads the graph.";
+/// How a note's `position` is described to its caller.
+pub const NOTE_POSITION_ARGUMENT_DESCRIPTION: &str =
+    "Where the note's top-left corner sits on the canvas, an `[x, y]` pair of numbers.";
+/// How a note's `size` is described to its caller.
+pub const NOTE_SIZE_ARGUMENT_DESCRIPTION: &str =
+    "The note's width and height on the canvas, a `[width, height]` pair of numbers.";
 
 /// One end of a link a graph action names: a node and one of its ports.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,7 +112,7 @@ pub enum StreamGraphAction {
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
             schemars(
-                description = "What the studio draws the node with: canvas position, group, comment, colour."
+                description = NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION
             )
         )]
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,7 +223,7 @@ pub enum StreamGraphAction {
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
             schemars(
-                description = "What the studio draws the node with: canvas position, group, comment, colour."
+                description = NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION
             )
         )]
         studio: Map<String, Value>,
@@ -300,6 +317,83 @@ pub enum StreamGraphAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
+    /// Move nodes of the stream's own level, and the links between them, into one new
+    /// authored fragment, each link that crossed the selection carried through a `GraphInput`
+    /// or `GraphOutput` inside it.
+    CollapseSelectionIntoSubgraph {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "The nodes collapsed, each as `node` names one, all of the stream's own level and none of its own `GraphInput` or `GraphOutput` nodes."
+            )
+        )]
+        nodes: Vec<String>,
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "The subgraph node's name, lowercase URL-safe, refused when a node outside the selection has it."
+            )
+        )]
+        name: String,
+        #[serde(rename = "as")]
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "A label later operations of the same transaction name the subgraph node by, before its UUID is known."
+            )
+        )]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
+    /// Replace a fragment node of the stream's own level with the nodes and links it places,
+    /// as plain nodes no refresh reaches.
+    UnlockGeneratorFragment {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(
+            feature = "mcp-tool-json-schema",
+            schemars(
+                description = "The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's."
+            )
+        )]
+        fragment: String,
+    },
+    /// Place a canvas note on the stream's graph, answering the UUID the runtime makes for it.
+    AddNote {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION))]
+        text: String,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_POSITION_ARGUMENT_DESCRIPTION, with = "[f64; 2]"))]
+        position: StudioCanvasPair,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_SIZE_ARGUMENT_DESCRIPTION, with = "[f64; 2]"))]
+        size: StudioCanvasPair,
+    },
+    /// Set a canvas note's text, position or size.
+    SetNoteFields {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_ARGUMENT_DESCRIPTION))]
+        note: String,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_POSITION_ARGUMENT_DESCRIPTION, with = "Option<[f64; 2]>"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        position: Option<StudioCanvasPair>,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_SIZE_ARGUMENT_DESCRIPTION, with = "Option<[f64; 2]>"))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<StudioCanvasPair>,
+    },
+    /// Take a canvas note off the stream's graph.
+    RemoveNote {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_ARGUMENT_DESCRIPTION))]
+        note: String,
+    },
     /// Take out a labelled group, its nodes left ungrouped.
     RemoveGroup {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
@@ -329,7 +423,12 @@ impl StreamGraphAction {
             | Self::AddGroup { stream, .. }
             | Self::SetGroupFields { stream, .. }
             | Self::RemoveGroup { stream, .. }
-            | Self::UseDependencyStream { stream, .. } => *stream,
+            | Self::UseDependencyStream { stream, .. }
+            | Self::CollapseSelectionIntoSubgraph { stream, .. }
+            | Self::UnlockGeneratorFragment { stream, .. }
+            | Self::AddNote { stream, .. }
+            | Self::SetNoteFields { stream, .. }
+            | Self::RemoveNote { stream, .. } => *stream,
         }
     }
 }

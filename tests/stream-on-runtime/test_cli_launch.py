@@ -14,13 +14,14 @@ The MVP minute is measured here too, with every processor in its own processor
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
 live inside the startup budget their interpreters cost, and the edit loop —
 `dev` loading the stream again on each save — reports a bad save and loads the
-next good one, on the same runtime. The scaffold opens no window, so live video
-is the count of frames its effect wrote, read off `graph`, and the tests that
-measure it run on the software device.
+next good one, on the same runtime. The starter opens no window, so live video
+is the count of frames its source wrote while a viewer held its port open, read
+off `graph`, and the tests that measure it run on the software device.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -34,15 +35,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from mcp.client.client import Client
+from mcp.client.stdio import StdioServerParameters
+from mcp.types import TextContent
 
 from conftest import (
     TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE,
+    PrivateMachineDirectories,
     TatolabdUnderTest,
     TatolabRunOrDevOnTheRuntime,
     a_tcp_port_free_on_loopback,
 )
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
-from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
+from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY, RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import (
     GRAPH_DOCUMENTS_DIRECTORY_NAME,
     TatolabRunOfAProject,
@@ -69,12 +74,9 @@ LOCAL_API_SOCKET_FILE_MODE = 0o600
 SCAFFOLD_OBSERVATION_WINDOW_SECONDS = 12.0
 # The save has to land on a stream that is already running, not one still booting.
 SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS = SCAFFOLD_OBSERVATION_WINDOW_SECONDS / 2
-# Measured as the frames the effect wrote, effect in its own interpreter: 360
-# frames in 12.0s — 30fps, the source's full rate, so the helper hop (escalate
-# acquire + surface-share checkout per frame) costs the demo no frames at all.
-# The floor keeps a third of that, which is still well above the ~4fps a
-# pathologically slow per-frame edit manages, so it fails on a regression and
-# not on a slow machine.
+# The source writes at 30fps, 360 frames in 12.0s. The floor keeps a third of
+# that, well above a slideshow, so it fails on a regression and not on a slow
+# machine.
 MINIMUM_FRAMES_FOR_LIVE_VIDEO = 120
 
 #: The test pattern module's node type, which the suite venv installs.
@@ -124,16 +126,15 @@ def main(stream_builder: StreamBuilder) -> None:
 '''
 
 LIVE_HELPER_MARKER_NAME = "LIVE"
-SCAFFOLDED_METER_REPORT = re.compile(r"brightness\b.*\bmean=")
-# The meter reports once a second, so the observation window holds about a
-# dozen. Both bounds are loose on purpose: the floor catches a meter that
-# stopped after its first frame, the ceiling one that reports per frame
-# (~360 in the window), and neither is a claim about wake latency.
-MINIMUM_METER_REPORTS = 5
-MAXIMUM_METER_REPORTS = 2 * int(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
-SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/halftone_lens_effect.py"
-SCAFFOLDED_EFFECT_NODE_NAME = "halftonelenseffect"
-SCAFFOLDED_EFFECT_OUTPUT_PORT = "video_to_downstream"
+STARTER_SOURCE_NODE_NAME = "testpatternsource"
+STARTER_SOURCE_OUTPUT_PORT = "video"
+
+# The edit loop's project: one test pattern source read by the reporter, the
+# node module each save edits.
+STREAM_WITH_THE_REPORTER_READING_ONE_TEST_PATTERN_SOURCE = (
+    STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE % 1
+)
+EDITED_NODE_MODULE_PATH = FIRST_FRAME_REPORTER_MODULE.name
 
 # How long a loaded stream's source has to write its first bag on `video`.
 FIRST_BAG_WRITTEN_TIMEOUT_SECONDS = 30.0
@@ -587,93 +588,111 @@ def the_first_streams_output(tatolabd: TatolabdUnderTest, stream_id: str) -> str
     return tatolabd.stderr_text.split(the_first_streams_stop, 1)[0] + the_first_streams_stop
 
 
-def frames_the_scaffolded_effect_wrote(tatolabd: TatolabdUnderTest, stream_id: str) -> int:
-    """The bags the running scaffold's effect has written on its output, read off `graph`."""
-    [effect_node] = [
-        graph_node
-        for graph_node in tatolabd.local_api_client().graph(stream=stream_id)["nodes"]
-        if graph_node["name"] == SCAFFOLDED_EFFECT_NODE_NAME
-    ]
-    return effect_node["components"]["metrics"]["written_bags_by_output_port"][
-        SCAFFOLDED_EFFECT_OUTPUT_PORT
-    ]
+def frames_written_on_a_port_while_a_viewer_holds_it(
+    runtime_unit: RuntimeUnitUnderTest,
+    private_machine_directories: PrivateMachineDirectories,
+    stream_id: str,
+    node_name: str,
+    port: str,
+    seconds_held: float,
+) -> int:
+    """The bags `node_name` wrote on `port` while a viewer held the port open for
+    `seconds_held`, as Tato Studio's viewer does, read off `graph` before the viewer
+    lets go.
+
+    A port is written only once something reads it, so a stream that links nothing
+    publishes nothing until a viewer opens it."""
+    tatolab_mcp = StdioServerParameters(
+        command=str(runtime_unit.tatolab_executable),
+        args=["mcp"],
+        env=private_machine_directories.environment,
+    )
+
+    def tool_answer(result: Any) -> Any:
+        assert result.is_error is False, result.content
+        stated = result.content[0]
+        assert isinstance(stated, TextContent), result.content
+        return json.loads(stated.text)
+
+    async def held_viewer() -> int:
+        async with Client(tatolab_mcp) as client:
+            graph = tool_answer(await client.call_tool("graph", {"stream": stream_id}))
+            [viewed_node] = [node for node in graph["nodes"] if node["name"] == node_name]
+            tool_answer(
+                await client.call_tool(
+                    "open_viewer",
+                    {"stream": stream_id, "node_id": viewed_node["id"], "port": port},
+                )
+            )
+            await asyncio.sleep(seconds_held)
+            graph = tool_answer(await client.call_tool("graph", {"stream": stream_id}))
+            [viewed_node] = [node for node in graph["nodes"] if node["name"] == node_name]
+            return viewed_node["components"]["metrics"]["written_bags_by_output_port"][port]
+
+    return asyncio.run(asyncio.wait_for(held_viewer(), seconds_held + NODE_READY_TIMEOUT_SECONDS))
 
 
 def test_the_scaffolded_app_reaches_a_running_graph(
+    runtime_unit: RuntimeUnitUnderTest,
+    private_machine_directories: PrivateMachineDirectories,
     make_scaffolded_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """What `tatolab new` writes must actually run, frame after frame.
 
-    Run exactly as scaffolded:
-    `new` has the runtime write the scaffold and load its graph document, so the
-    graph the local API renders carries the stream's id and the nodes it holds. A listed stream alone proves almost nothing here:
-    it is listed whether or not `process()` ever succeeds, so the assertions
-    that carry this test are the ones on the run's own records. `process()
-    failed` catches an effect that raises every frame; the count of frames
-    the effect wrote catches an effect that is correct but so slow the demo is
-    a slideshow. The meter's line is the logic half of the first minute: a
-    fan-out reader that never reports is a graph that carries the picture and
-    drops the rest.
+    Run exactly as scaffolded: `new` has the runtime write the starter and load its
+    graph document, one test pattern source. A listed stream alone proves almost
+    nothing here: it is listed whether or not the source ever writes, so the
+    assertion that carries this test is the count of frames the source wrote on
+    `video` while a viewer read it, which catches a source that is correct but so
+    slow the first minute is a slideshow.
     """
     tatolabd = start_tatolabd()
     app_directory = make_scaffolded_tatolab_project(tatolabd)
     local_api = tatolabd.local_api_client()
 
     stream_id = stream_id_of_the_project(app_directory)
-    live_graph = local_api.call_tool("graph", {"stream": stream_id})
+    live_graph = local_api.await_every_node_running(stream=stream_id)
     assert live_graph["stream"] == stream_id, (
         f"the runtime must render the stream it was loaded as; graph was {live_graph}"
     )
-    assert {graph_node["name"] for graph_node in live_graph["nodes"]} == {
-        "testpatternsource",
-        SCAFFOLDED_EFFECT_NODE_NAME,
-        "brightnessmeter",
-    }
+    assert [graph_node["name"] for graph_node in live_graph["nodes"]] == [
+        STARTER_SOURCE_NODE_NAME
+    ]
 
-    # Long enough for the source to have driven many frames through the effect.
-    time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
-    frames_written = frames_the_scaffolded_effect_wrote(tatolabd, stream_id)
+    frames_written = frames_written_on_a_port_while_a_viewer_holds_it(
+        runtime_unit,
+        private_machine_directories,
+        stream_id,
+        STARTER_SOURCE_NODE_NAME,
+        STARTER_SOURCE_OUTPUT_PORT,
+        SCAFFOLD_OBSERVATION_WINDOW_SECONDS,
+    )
     queued_stop = local_api.call_tool("stop_project", {"project_directory": str(app_directory)})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
 
     stream_output = the_first_streams_output(tatolabd, stream_id)
-    assert_the_effect_carried_live_video(
+    assert_the_stream_carried_live_video(
         tatolabd, stream_output, frames_written, "the app `tatolab new` writes"
     )
-    meter_reports = len(SCAFFOLDED_METER_REPORT.findall(stream_output))
-    assert meter_reports >= MINIMUM_METER_REPORTS, (
-        f"the scaffolded meter logged a brightness {meter_reports} times in "
-        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s; standard error ended:\n{tatolabd.recent_stderr()}"
-    )
-    assert meter_reports <= MAXIMUM_METER_REPORTS, (
-        f"the scaffolded meter logged a brightness {meter_reports} times in "
-        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is per frame, not once a second"
-    )
 
 
-def assert_the_effect_carried_live_video(
+def assert_the_stream_carried_live_video(
     tatolabd: TatolabdUnderTest, output: str, frames_written: int, what_ran: str
 ) -> None:
     """Require one stream to have carried live video, not a slideshow: the
-    frames its effect wrote while it ran, and its records once it stopped.
-
-    The effect's written count is the honest measure — an effect can be
-    correct and still leave the demo at roughly 4 frames a second, which is
-    what editing the write-combined mapping in place through a strided view
-    produced.
-    """
+    frames it wrote while it ran, and its records once it stopped."""
     process_failures = [line for line in output.splitlines() if "process() failed" in line]
     assert not process_failures, (
         f"{what_ran}: a node failed a live frame; standard error ended:\n"
         f"{tatolabd.recent_stderr()}"
     )
     assert frames_written >= MINIMUM_FRAMES_FOR_LIVE_VIDEO, (
-        f"{what_ran}'s effect wrote only {frames_written} frames in "
+        f"{what_ran} wrote only {frames_written} frames in "
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
     )
-    # Every reader in the scaffold drains its listener, so this guards the
-    # run's records rather than the undrained-listener regression, which
+    # A viewer drains its listener, so this guards the run's records rather
+    # than the undrained-listener regression, which
     # `an_undrained_listener_is_delivered_every_send_and_drains_the_whole_count`
     # in `iceoryx2/output.rs` locks.
     # The text iceoryx2 logs for a notify that did not reach a listener.
@@ -743,40 +762,17 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     )
 
 
-def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
-    """The edit the demo asks for, made to the source `new` wrote.
-
-    Applied to the scaffold's own source rather than replacing it with a copy:
-    a copy would keep passing after the scaffold changed underneath it, proving
-    something about a module `new` no longer writes.
-    """
-    edited = scaffolded_effect_source
-    for anchor, replacement in (
-        (
-            "    RuntimeContextLimitedAccess,\n    node,\n",
-            "    RuntimeContextLimitedAccess,\n    log,\n    node,\n",
-        ),
-        (
-            '    video_from_upstream = Input(Image, delivery="newest")',
-            '    announced = False\n\n    video_from_upstream = Input(Image, delivery="newest")',
-        ),
-        (
-            "        ctx.outputs.write(",
-            "        if not self.announced:\n"
-            "            self.announced = True\n"
-            '            log.info("MARKER:EDITED_EFFECT")\n'
-            "        ctx.outputs.write(",
-        ),
-    ):
-        # Named one at a time, and required to be unique: a scaffold that grew
-        # a second copy of an anchor would take the edit twice, and a scaffold
-        # that dropped one would otherwise fail somewhere downstream of here.
-        assert edited.count(anchor) == 1, (
-            f"the scaffolded effect module carries {edited.count(anchor)} copies of "
-            f"the anchor {anchor!r} this edit needs exactly one of"
-        )
-        edited = edited.replace(anchor, replacement, 1)
-    return edited
+def the_reporter_edited(reporter_source: str) -> str:
+    """The reporter with one more marker on its first frame, applied to its own
+    source so the edit fails here, not downstream, if the reporter changes."""
+    anchor = '        log.info(f"MARKER:LIVE {os.getpid()}")\n'
+    assert reporter_source.count(anchor) == 1, (
+        f"the reporter carries {reporter_source.count(anchor)} copies of the anchor "
+        f"{anchor!r} this edit needs exactly one of"
+    )
+    return reporter_source.replace(
+        anchor, anchor + '        log.info("MARKER:EDITED_NODE")\n', 1
+    )
 
 
 def node_ids_of(graph: "dict[str, Any]") -> "list[str]":
@@ -785,7 +781,7 @@ def node_ids_of(graph: "dict[str, Any]") -> "list[str]":
 
 
 def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
-    make_scaffolded_tatolab_project: "Callable[..., Path]",
+    make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The MVP edit loop: `dev` queuing another load of the project on every save.
@@ -798,10 +794,15 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     is only meaningful if the second follows: a loop that survives a bad save by
     ignoring the file entirely would pass the first alone.
     """
+    app_directory = make_tatolab_project(
+        {
+            "stream.py": STREAM_WITH_THE_REPORTER_READING_ONE_TEST_PATTERN_SOURCE,
+            EDITED_NODE_MODULE_PATH: FIRST_FRAME_REPORTER_MODULE.read_text(encoding="utf-8"),
+        }
+    )
     tatolabd = start_tatolabd()
-    app_directory = make_scaffolded_tatolab_project(tatolabd)
-    effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
-    last_good_effect_source = effect_module.read_text()
+    edited_node_module = app_directory / EDITED_NODE_MODULE_PATH
+    last_good_node_source = edited_node_module.read_text()
     stream_id = stream_id_of_the_project(app_directory)
     local_api = tatolabd.local_api_client()
 
@@ -813,7 +814,7 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     )
 
     time.sleep(SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS)
-    effect_module.write_text("def process(self ctx:\n    this does not parse\n")
+    edited_node_module.write_text("def process(self ctx:\n    this does not parse\n")
     dev.await_stderr_containing(
         DEV_QUEUING_ANOTHER_LOAD_AFTER_A_SAVE, timeout=NODE_READY_TIMEOUT_SECONDS
     )
@@ -822,7 +823,7 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     assert bad_saves_failed_stream[0] == stream_id, bad_saves_failed_stream
     await_dev_printed(dev, f"the stream `{stream_id}` failed: ", timeout=NODE_READY_TIMEOUT_SECONDS)
     await_dev_printed(dev, "SyntaxError", timeout=NODE_READY_TIMEOUT_SECONDS)
-    assert "halftone_lens_effect.py" in dev.stdout_text, dev.stdout_text[-4000:]
+    assert EDITED_NODE_MODULE_PATH in dev.stdout_text, dev.stdout_text[-4000:]
     assert dev.process.poll() is None, (
         f"a bad save must not take `dev` down; standard error ended:\n{dev.recent_stderr()}"
     )
@@ -833,9 +834,9 @@ def test_the_edit_loop_survives_a_bad_save_and_runs_a_good_one(
     assert (listed["stream"], listed["state"]) == (stream_id, "failed"), listed
     assert "SyntaxError" in listed["failed_because"], listed
 
-    effect_module.write_text(the_scaffolded_effect_edited(last_good_effect_source))
+    edited_node_module.write_text(the_reporter_edited(last_good_node_source))
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=3)
-    tatolabd.await_marker("EDITED_EFFECT", timeout=NODE_READY_TIMEOUT_SECONDS)
+    tatolabd.await_marker("EDITED_NODE", timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(
         ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2
     )

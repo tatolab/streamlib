@@ -29,7 +29,7 @@ use super::project_stream_action_queue::{
     StreamActionWorkingOnAStream, StreamOfAStreamAction, a_stream_action_not_held,
 };
 use super::project_venv_made_with_the_runtime_unit_uv::{
-    ProjectVenvNotMade, every_first_party_module_folder_in,
+    ProjectVenvNotMade, every_first_party_module_wheel_in,
     lock_the_projects_python_requirements_with_the_runtime_unit_uv,
     make_the_projects_venv_current_with_the_runtime_unit_uv, the_projects_venv_interpreter,
 };
@@ -2379,20 +2379,20 @@ impl Runner {
                 lock_the_projects_python_requirements_with_the_runtime_unit_uv(
                     project_directory,
                     runtime_unit_uv,
-                    &self.first_party_module_folders_this_runtime_carries(),
+                    &self.first_party_module_wheels_this_runtime_carries(),
                 )
             }
             None => Ok(()),
         }
     }
 
-    /// Each first-party module folder beside this runtime's lend, none when it was handed no lend.
-    fn first_party_module_folders_this_runtime_carries(&self) -> Vec<PathBuf> {
+    /// Each first-party module wheel beside this runtime's lend, none when it was handed no lend.
+    fn first_party_module_wheels_this_runtime_carries(&self) -> Vec<PathBuf> {
         self.engine_resources_shared_by_every_stream
             .processor_interpreter_lend_directory
             .get()
             .and_then(first_party_modules_directory_beside_the_lend)
-            .map(|directory| every_first_party_module_folder_in(&directory))
+            .map(|directory| every_first_party_module_wheel_in(&directory))
             .unwrap_or_default()
     }
 
@@ -2424,7 +2424,7 @@ impl Runner {
         make_the_projects_venv_current_with_the_runtime_unit_uv(
             project_directory,
             runtime_unit_uv,
-            &self.first_party_module_folders_this_runtime_carries(),
+            &self.first_party_module_wheels_this_runtime_carries(),
             is_interrupted,
         )
     }
@@ -6382,9 +6382,6 @@ mod tests {
         for scaffolded_file in [
             PROJECT_FILE_NAME,
             "streams/main.graph.json",
-            "nodes/__init__.py",
-            "nodes/halftone_lens_effect.py",
-            "nodes/brightness_meter.py",
             "pyproject.toml",
             ".python-version",
             ".gitignore",

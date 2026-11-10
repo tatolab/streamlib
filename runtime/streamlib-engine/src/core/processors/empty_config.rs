@@ -65,18 +65,18 @@ impl schemars::JsonSchema for EmptyConfig {
     }
 
     fn json_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        schemars::schema::SchemaObject {
+        let schema: schemars::schema::Schema = schemars::schema::SchemaObject {
             instance_type: Some(schemars::schema::InstanceType::Object.into()),
-            metadata: Some(Box::new(schemars::schema::Metadata {
-                description: Some("This node declares no configuration.".to_string()),
-                ..Default::default()
-            })),
             object: Some(Box::new(schemars::schema::ObjectValidation {
                 additional_properties: Some(Box::new(schemars::schema::Schema::Bool(false))),
                 ..Default::default()
             })),
             ..Default::default()
         }
-        .into()
+        .into();
+        crate::core::descriptors::schema_carrying_the_declared_description(
+            schema,
+            "This node declares no configuration.",
+        )
     }
 }

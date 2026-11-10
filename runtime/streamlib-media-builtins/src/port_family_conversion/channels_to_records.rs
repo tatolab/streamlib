@@ -20,12 +20,12 @@ const CHANNELS_INPUT_PORT: &str = "channels";
 const RECORDS_OUTPUT_PORT: &str = "records";
 
 /// Configuration for [`ChannelsToRecords`].
+#[streamlib::sdk::processor_config]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
 pub struct ChannelsToRecordsConfig {
-    /// The key each channel's value is written under, in the block's channel
-    /// order.
+    #[description = "The key each channel's value is written under, in the block's channel order."]
     pub channel_names: Vec<String>,
 }
 

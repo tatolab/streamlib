@@ -621,6 +621,15 @@ pub struct GraphTransactionAddedGroup {
     pub title: String,
 }
 
+/// A canvas note a graph transaction placed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphTransactionAddedNote {
+    /// The stream it was placed in, by stream id.
+    pub stream: String,
+    /// The UUID the runtime made for it.
+    pub note: String,
+}
+
 /// A link a graph transaction made, with the state the stream's graph reads it in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphTransactionConnectedLink {
@@ -660,6 +669,9 @@ pub struct GraphTransactionToolResult {
     /// Each labelled group it made.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub added_groups: Vec<GraphTransactionAddedGroup>,
+    /// Each canvas note it placed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_notes: Vec<GraphTransactionAddedNote>,
 }
 
 /// What a project's transactions resource holds: its newest transactions and the actions refused
@@ -730,6 +742,19 @@ pub struct ReadProjectFileToolResult {
 pub struct ProjectFileTransactionToolResult {
     /// The file written.
     pub path: String,
+    /// The transaction's UUID.
+    pub transaction: String,
+    /// The commit on the project history's `main` that records it.
+    pub commit: String,
+}
+
+/// The `create_node_file` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreateNodeFileToolResult {
+    /// The file created.
+    pub path: String,
+    /// The node type the file declares, `<module>:<class>`, as `add_node` takes it.
+    pub node_type: String,
     /// The transaction's UUID.
     pub transaction: String,
     /// The commit on the project history's `main` that records it.

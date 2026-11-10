@@ -23,17 +23,17 @@ const ARRAY_INPUT_PORT: &str = "array";
 const CHANNELS_OUTPUT_PORT: &str = "channels";
 
 /// Configuration for [`ArrayToChannels`].
+#[streamlib::sdk::processor_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
 pub struct ArrayToChannelsConfig {
-    /// The names of the channels `channels` carries, one per row of the
-    /// attribute.
+    #[description = "The names of the channels `channels` carries, one per row of the attribute."]
     pub channel_names: Vec<String>,
-    /// The sample rate `channels` states, in samples per second per channel.
+    #[description = "The sample rate `channels` states, in samples per second per channel."]
     pub sample_rate: u32,
-    /// The attribute of each Array frame read as the block's samples.
     #[serde(default = "default_samples_attribute_name")]
+    #[description = "The attribute of each Array frame read as the block's samples."]
     pub attribute: String,
 }
 

@@ -13,7 +13,10 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
 use streamlib_processor_schema::ProcessorSchema;
 
-use crate::grammar::{ParsedPort, ParsedProcessorAttr, PortDirection};
+use crate::grammar::{
+    DeclaredDescription, ParsedPort, ParsedProcessorAttr, PortDirection,
+    declared_description_str_expression,
+};
 use syn::ItemStruct;
 use syn::spanned::Spanned;
 
@@ -54,6 +57,7 @@ pub fn generate_from_parsed_processor_attr(
     let output_link_module = generate_port_marker_module(PortDirection::Output, &parsed.outputs);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
+        &ProcessorDeclaredDescriptions::of(parsed),
         &node_type_minted(parsed.built_in_node, &schema.name),
         &config_type,
         &config_field_name,
@@ -318,6 +322,7 @@ fn node_type_minted(built_in_node: bool, processor_class_short_name: &str) -> To
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
+    declared_descriptions: &ProcessorDeclaredDescriptions<'_>,
     node_type_minted: &TokenStream,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
@@ -326,7 +331,6 @@ fn generate_processor_impl_from_schema(
     use streamlib_processor_schema::ProcessorSchemaExecution;
 
     let processor_class_short_name = &schema.name;
-    let description = schema.description.as_deref().unwrap_or("Processor");
 
     // Derive execution mode from schema
     let (
@@ -397,7 +401,8 @@ fn generate_processor_impl_from_schema(
 
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
-    let descriptor_impl = generate_descriptor_from_schema(schema, description, config_type);
+    let descriptor_impl =
+        generate_descriptor_from_schema(schema, declared_descriptions, config_type);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -565,6 +570,28 @@ fn generate_from_config_from_schema(
     }
 }
 
+/// The node's and each port's declared description, beside the schema the
+/// descriptor is emitted from: a `const` description has no text the schema
+/// could carry.
+struct ProcessorDeclaredDescriptions<'parsed> {
+    node: Option<&'parsed DeclaredDescription>,
+    inputs: Vec<Option<&'parsed DeclaredDescription>>,
+    outputs: Vec<Option<&'parsed DeclaredDescription>>,
+}
+
+impl<'parsed> ProcessorDeclaredDescriptions<'parsed> {
+    fn of(parsed: &'parsed ParsedProcessorAttr) -> Self {
+        let of_ports = |ports: &'parsed [ParsedPort]| {
+            ports.iter().map(|port| port.description.as_ref()).collect()
+        };
+        Self {
+            node: parsed.description.as_ref(),
+            inputs: of_ports(&parsed.inputs),
+            outputs: of_ports(&parsed.outputs),
+        }
+    }
+}
+
 /// Generate descriptor method from schema.
 ///
 /// `config_type` is the processor's `Config` type — the declared `config =`
@@ -572,18 +599,20 @@ fn generate_from_config_from_schema(
 /// descriptor carries.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
-    description: &str,
+    declared_descriptions: &ProcessorDeclaredDescriptions<'_>,
     config_type: &TokenStream,
 ) -> TokenStream {
+    let description = declared_description_str_expression(declared_descriptions.node);
     let repository = "https://github.com/tatolab/streamlib";
 
     // iceoryx2-based input ports
     let ipc_input_ports: Vec<TokenStream> = schema
         .inputs
         .iter()
-        .map(|p| {
+        .zip(&declared_descriptions.inputs)
+        .map(|(p, declared_description)| {
             let port_name = &p.name;
-            let port_desc = p.description.as_deref().unwrap_or("");
+            let port_desc = declared_description_str_expression(*declared_description);
             let delivery_profile_tokens = match p.delivery_profile.as_deref() {
                 Some(value) => quote! { ::std::option::Option::Some(#value.to_string()) },
                 None => quote! { ::std::option::Option::None },
@@ -614,9 +643,10 @@ fn generate_descriptor_from_schema(
     let ipc_output_ports: Vec<TokenStream> = schema
         .outputs
         .iter()
-        .map(|p| {
+        .zip(&declared_descriptions.outputs)
+        .map(|(p, declared_description)| {
             let port_name = &p.name;
-            let port_desc = p.description.as_deref().unwrap_or("");
+            let port_desc = declared_description_str_expression(*declared_description);
             let family_tokens = port_family_declaration_tokens(&p.family);
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
@@ -1560,6 +1590,14 @@ mod processor_struct_emit_tests {
         }
     }
 
+    fn no_declared_descriptions() -> ProcessorDeclaredDescriptions<'static> {
+        ProcessorDeclaredDescriptions {
+            node: None,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
     fn rendered_descriptor() -> String {
         rendered_descriptor_for_config_type(&quote! {
             __streamlib_sdk::processors::EmptyConfig
@@ -1569,7 +1607,7 @@ mod processor_struct_emit_tests {
     fn rendered_descriptor_for_config_type(config_type: &TokenStream) -> String {
         render_token_stream_without_whitespace(generate_descriptor_from_schema(
             &minimal_schema(),
-            "a probe",
+            &no_declared_descriptions(),
             config_type,
         ))
     }
@@ -1582,7 +1620,7 @@ mod processor_struct_emit_tests {
                     paced_by_real_time,
                     ..minimal_schema()
                 },
-                "a probe",
+                &no_declared_descriptions(),
                 &quote! { __streamlib_sdk::processors::EmptyConfig },
             ))
         };
@@ -1600,6 +1638,7 @@ mod processor_struct_emit_tests {
         let schema = minimal_schema();
         render_token_stream_without_whitespace(generate_processor_impl_from_schema(
             &schema,
+            &no_declared_descriptions(),
             &node_type_minted(built_in_node, &schema.name),
             &quote! { __streamlib_sdk::processors::EmptyConfig },
             &None,

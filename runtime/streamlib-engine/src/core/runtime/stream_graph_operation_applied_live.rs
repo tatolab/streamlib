@@ -17,7 +17,7 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 impl LoadedStreamInThisRuntime {
     /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
     /// it as applied: an added node under the name it took. An operation on a node no
-    /// processor runs as, a fragment's above all, or on a labelled group, is applied to the
+    /// processor runs as, a fragment's above all, or on a labelled group or a canvas note, is applied to the
     /// graph as drawn and the live graph reconciled to it.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
@@ -36,7 +36,7 @@ impl LoadedStreamInThisRuntime {
                     })?,
                     node.config.clone(),
                 )
-                .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone())
+                .with_pins_and_studio_fields(node.pins.clone(), node.studio.to_map())
                 .with_exposed_config_fields(node.exposed_config_fields.clone())
                 .with_node_uuid(node.id);
                 if !node.name.is_empty() {
@@ -102,13 +102,18 @@ impl LoadedStreamInThisRuntime {
                 })
             }
             StreamGraphOperation::SetStudioFields { node, from, to } => {
-                self.set_studio_fields(&self.the_processor_of_the_node(node)?, to.clone())?;
+                self.set_studio_fields(&self.the_processor_of_the_node(node)?, to.to_map())?;
                 Ok(StreamGraphOperation::SetStudioFields { node, from, to })
             }
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }
             | StreamGraphOperation::SetGroupFields { .. }
-            | StreamGraphOperation::RemoveGroup { .. } => {
+            | StreamGraphOperation::RemoveGroup { .. }
+            | StreamGraphOperation::FoldIntoFragment { .. }
+            | StreamGraphOperation::UnfoldFragment { .. }
+            | StreamGraphOperation::AddNote { .. }
+            | StreamGraphOperation::SetNoteFields { .. }
+            | StreamGraphOperation::RemoveNote { .. } => {
                 self.apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                     .await
             }
@@ -139,7 +144,12 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }
             | StreamGraphOperation::SetGroupFields { .. }
-            | StreamGraphOperation::RemoveGroup { .. } => true,
+            | StreamGraphOperation::RemoveGroup { .. }
+            | StreamGraphOperation::FoldIntoFragment { .. }
+            | StreamGraphOperation::UnfoldFragment { .. }
+            | StreamGraphOperation::AddNote { .. }
+            | StreamGraphOperation::SetNoteFields { .. }
+            | StreamGraphOperation::RemoveNote { .. } => true,
             other => other.node().is_some_and(no_processor_runs_as),
         }
     }

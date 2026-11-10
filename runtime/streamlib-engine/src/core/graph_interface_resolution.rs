@@ -26,30 +26,14 @@ use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, PortDirection, Result};
 
-/// The import path a graph names `GraphInput` by, in the built-in node module.
-pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
-
-/// The import path a graph names `GraphOutput` by, in the built-in node module.
-pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
-
-/// The config key an interface node names the port it declares under.
-pub const GRAPH_INTERFACE_PORT_CONFIG_KEY: &str = "port";
-
-/// The config key an interface node names its port's family under.
-pub const GRAPH_INTERFACE_FAMILY_CONFIG_KEY: &str = "family";
-
-/// The one port an interface node has: a `GraphOutput`'s input, a
-/// `GraphInput`'s output.
-pub const GRAPH_INTERFACE_VALUE_PORT_NAME: &str = "value";
+pub use streamlib_project_repository::{
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, is_a_graph_interface_node_type,
+};
 
 /// The component key an interface node, and a drawn link with an end on one,
 /// renders what it declares under.
 pub const GRAPH_INTERFACE_COMPONENT_KEY: &str = "graph_interface";
-
-/// Whether `node_type` is `GraphInput` or `GraphOutput`.
-pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
-    matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
-}
 
 /// Which way a declared port faces the graph that adds this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,6 +267,7 @@ impl GraphSnapshot {
                 nodes: runtime_nodes,
                 links: runtime_links,
                 groups: self.groups.clone(),
+                studio: self.studio.clone(),
             },
             interface_as_drawn: GraphInterfaceAsDrawn {
                 interface_nodes,

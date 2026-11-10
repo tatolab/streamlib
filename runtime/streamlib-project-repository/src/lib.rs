@@ -26,6 +26,8 @@ mod project_views;
 mod stream_fragment_references;
 mod stream_graph_action;
 mod stream_graph_document;
+mod stream_graph_fragment_fold;
+mod stream_graph_studio_contract;
 mod tatolab_view_manifest;
 
 pub use canonical_project_json::canonical_project_json_bytes;
@@ -93,14 +95,26 @@ pub use stream_graph_action::{
     GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
-    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
+    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
+    NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
+    NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
 };
 pub use stream_graph_document::{
+    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
     StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, asset_references_made_references_into_the_import,
     assets_a_node_config_references, fragment_with_each_node_uuid_kept_by_its_name,
+    is_a_graph_interface_node_type,
+};
+pub use stream_graph_fragment_fold::{
+    AUTHORED_FRAGMENT_NODE_TYPE, StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,
+};
+pub use stream_graph_studio_contract::{
+    STUDIO_CONTRACT_VERSION, StreamGraphDocumentNote, StreamGraphNodeStudioFields,
+    StreamGraphNoteFields, StudioCanvasPair,
 };
 
 /// The directory inside a project that holds what the runtime keeps for it: history, content and

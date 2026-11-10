@@ -93,7 +93,7 @@ fn a_node(name: &str) -> StreamGraphDocumentNode {
         config: json!({}),
         pins: Map::new(),
         exposed_config_fields: Vec::new(),
-        studio: Map::new(),
+        studio: Default::default(),
         fragment: None,
     }
 }

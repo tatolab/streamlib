@@ -1,0 +1,30 @@
+{
+  "asset": "6f1c2a9e-4b3d-4e8a-9c71-0d2e5f8a1b34",
+  "nodes": [
+    {
+      "id": "0b7e4c1a-2d3f-4a5b-8c6d-9e0f1a2b3c4d",
+      "name": "camera",
+      "type": "nodes.camera:Camera",
+      "config": {},
+      "studio": {
+        "position": [120, 40],
+        "colour": "#3b82f6",
+        "group": "sources",
+        "zoom": 1.5
+      }
+    },
+    {
+      "id": "1c8f5d2b-3e4a-4b6c-9d7e-0f1a2b3c4d5e",
+      "name": "display",
+      "type": "nodes.display:Display",
+      "config": {},
+      "studio": { "position": "left", "collapsed": true }
+    }
+  ],
+  "links": [
+    {
+      "source": { "node": "0b7e4c1a-2d3f-4a5b-8c6d-9e0f1a2b3c4d", "port": "video" },
+      "target": { "node": "1c8f5d2b-3e4a-4b6c-9d7e-0f1a2b3c4d5e", "port": "video" }
+    }
+  ]
+}

@@ -34,6 +34,7 @@ FUNCTION_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.function"
 SHADER_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.shader"
 RUST_FUNCTION_NODE_DECLARATION = f"{SDK_MODULE_NAME}.node.rust_function"
 GRAPH_GENERATOR_DECORATOR = f"{SDK_MODULE_NAME}.graph_generator"
+DESCRIPTION_DECLARATION = f"{SDK_MODULE_NAME}.Description"
 INPUT_PORT_DECLARATION = f"{SDK_MODULE_NAME}.Input"
 OUTPUT_PORT_DECLARATION = f"{SDK_MODULE_NAME}.Output"
 
@@ -153,6 +154,7 @@ class _ModuleDeclarationReading:
         self._module_name = module_name
         self._listed_path = listed_path
         self._sdk_names_by_local_name = _sdk_names_by_local_name(module_tree)
+        self._module_level_strings_by_name = _module_level_strings_by_name(module_tree)
         self._classes_by_name = {
             statement.name: statement
             for statement in module_tree.body
@@ -238,9 +240,8 @@ class _ModuleDeclarationReading:
             qualname,
             "process",
             declaration=node_class,
-            description=_keyword_string(decorator, "description")
-            or (inspect.cleandoc(ast.get_docstring(node_class, clean=False) or "")),
-            category=_keyword_string(decorator, "category"),
+            description=self._keyword_string(decorator, "description"),
+            category=self._keyword_string(decorator, "category"),
             inputs=inputs,
             outputs=outputs,
         )
@@ -254,7 +255,7 @@ class _ModuleDeclarationReading:
         return {
             "name": _port_name_as_cast(attribute_name),
             "family": family,
-            "description": _keyword_string(port_declaration, "description"),
+            "description": self._keyword_string(port_declaration, "description"),
             "annotation": None,
         }
 
@@ -275,9 +276,8 @@ class _ModuleDeclarationReading:
             qualname,
             kind,
             declaration=function,
-            description=_keyword_string(decorator, "description")
-            or inspect.cleandoc(ast.get_docstring(function, clean=False) or ""),
-            category=_keyword_string(decorator, "category"),
+            description=self._keyword_string(decorator, "description"),
+            category=self._keyword_string(decorator, "category"),
             inputs=inputs,
             outputs=self._function_outputs(function.returns),
         )
@@ -312,12 +312,58 @@ class _ModuleDeclarationReading:
         function_port: dict[str, Any] = {
             "name": _port_name_as_cast(spelling),
             "family": _function_port_family(annotation),
-            "description": "",
+            "description": self._described_text_of(annotation),
             "annotation": None if annotation is None else ast.unparse(annotation),
         }
         if pin_default is not None:
             function_port.update(_default_as_listed(pin_default, literal_key="pin_default"))
         return function_port
+
+    def _keyword_string(self, call: Optional[ast.expr], keyword_name: str) -> str:
+        if not isinstance(call, ast.Call):
+            return ""
+        for keyword in call.keywords:
+            if keyword.arg == keyword_name:
+                return self._string_value_of(keyword.value)
+        return ""
+
+    def _string_value_of(self, expression: ast.expr) -> str:
+        """A string literal, or a module-level name bound to one; the empty string otherwise."""
+        if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+            return expression.value
+        if isinstance(expression, ast.Name):
+            return self._module_level_strings_by_name.get(expression.id, "")
+        return ""
+
+    def _described_text_of(self, annotation: Optional[ast.expr]) -> str:
+        """The text of the `Description(...)` an annotation carries, also on `T` of `T | None`."""
+        if annotation is None:
+            return ""
+        if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+            try:
+                return self._described_text_of(ast.parse(annotation.value, mode="eval").body)
+            except SyntaxError:
+                return ""
+        if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+            return self._described_text_of(annotation.left) or self._described_text_of(
+                annotation.right
+            )
+        if not isinstance(annotation, ast.Subscript):
+            return ""
+        type_name = _annotated_type_name(annotation)
+        arguments = _subscript_arguments(annotation)
+        if type_name == _OPTIONAL_ANNOTATION and arguments:
+            return self._described_text_of(arguments[0])
+        if type_name != _ANNOTATED_ANNOTATION or not arguments:
+            return ""
+        for metadata in arguments[1:]:
+            if (
+                isinstance(metadata, ast.Call)
+                and self._sdk_name_of(metadata.func) == DESCRIPTION_DECLARATION
+                and metadata.args
+            ):
+                return self._string_value_of(metadata.args[0])
+        return self._described_text_of(arguments[0])
 
     def _read_rust_function_node_assignment(self, statement: ast.Assign | ast.AnnAssign) -> None:
         targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
@@ -408,17 +454,26 @@ def _dotted_name_of(expression: ast.expr) -> Optional[str]:
     return None
 
 
-def _keyword_string(call: Optional[ast.expr], keyword_name: str) -> str:
-    if not isinstance(call, ast.Call):
-        return ""
-    for keyword in call.keywords:
-        if (
-            keyword.arg == keyword_name
-            and isinstance(keyword.value, ast.Constant)
-            and isinstance(keyword.value.value, str)
-        ):
-            return keyword.value.value
-    return ""
+def _module_level_strings_by_name(module_tree: ast.Module) -> dict[str, str]:
+    """Each name the module binds once at its top level to a string literal, by that name."""
+    strings_by_name: dict[str, str] = {}
+    names_bound_more_than_once: set[str] = set()
+    for statement in module_tree.body:
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+            target, value = statement.targets[0], statement.value
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            target, value = statement.target, statement.value
+        else:
+            continue
+        if not isinstance(target, ast.Name):
+            continue
+        if target.id in strings_by_name:
+            names_bound_more_than_once.add(target.id)
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            strings_by_name[target.id] = value.value
+    for name in names_bound_more_than_once:
+        strings_by_name.pop(name, None)
+    return strings_by_name
 
 
 def _port_name_as_cast(spelling: str) -> str:

@@ -53,6 +53,17 @@ impl PortFamily {
         }
     }
 
+    /// What a port of this family carries: CommonMark, served as written.
+    pub fn description(self) -> &'static str {
+        match self {
+            PortFamily::Image => "A GPU surface with its size, pixel format and colour.",
+            PortFamily::Array => "Named tensors, on the GPU or the CPU.",
+            PortFamily::Channels => "Named sample channels at one rate.",
+            PortFamily::Packets => "Encoded units of one codec.",
+            PortFamily::Records => "One record per message, a value under each declared name.",
+        }
+    }
+
     /// Whether a port of this family states names: channel names, attribute
     /// names or record keys.
     pub fn has_names(self) -> bool {
@@ -621,6 +632,29 @@ pub fn refusal_of_required_names(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `tatolab.stream` declares each family with the description the catalog
+    /// serves, so its reference never says something the runtime does not.
+    #[test]
+    fn the_python_sdk_declares_each_family_with_the_description_the_runtime_serves() {
+        let python_port_families = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../tatolab-stream/tatolab/stream/_port_family_declaration.py"
+        ))
+        .expect("the Python SDK's port family declarations are in this repository");
+        for family in PortFamily::ALL {
+            let declaration = format!(
+                "PortFamily(\n    \"{}\",\n    description=\"{}\",\n)",
+                family.declaration_name(),
+                family.description()
+            );
+            assert!(
+                python_port_families.contains(&declaration),
+                "`tatolab.stream.{}` must be declared as `{declaration}`",
+                family.declaration_name()
+            );
+        }
+    }
 
     fn endpoint<'a>(
         node_name: &'a str,

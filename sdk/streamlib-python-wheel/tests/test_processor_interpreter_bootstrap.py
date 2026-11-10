@@ -44,10 +44,8 @@ DESCRIBED_NODES_SOURCE = '''
 from tatolab.stream import AudioWindowContract, Channels, Input, Output, Packets, node
 
 
-@node.process(scheduling="high")
+@node.process(scheduling="high", description="Relays each audio window as a frame.")
 class WindowedRelay:
-    """Relays each audio window as a frame."""
-
     audio_from_upstream = Input(
         Channels,
         delivery="ordered",
