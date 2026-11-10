@@ -1018,7 +1018,7 @@ impl LocalApiMcpServerHandler {
                         },
                     );
                 }
-                refusal
+                Box::new(refusal)
             })
         })
         .await
@@ -1027,7 +1027,7 @@ impl LocalApiMcpServerHandler {
         })?;
         match applied {
             Ok(applied) => serialized_tool_result(tool_name, &applied),
-            Err(refusal) => Ok(a_tool_result_of_the_refusal(refusal)),
+            Err(refusal) => Ok(a_tool_result_of_the_refusal(*refusal)),
         }
     }
 
@@ -1087,7 +1087,7 @@ impl LocalApiMcpServerHandler {
                         },
                     );
                 }
-                refusal
+                Box::new(refusal)
             })
         })
         .await
@@ -1096,7 +1096,7 @@ impl LocalApiMcpServerHandler {
         })?;
         match applied {
             Ok(applied) => serialized_tool_result(tool_name, &applied),
-            Err(refusal) => Ok(a_tool_result_of_the_refusal(refusal)),
+            Err(refusal) => Ok(a_tool_result_of_the_refusal(*refusal)),
         }
     }
 }
@@ -1121,7 +1121,7 @@ pub(crate) struct WhatAGraphOperationNames {
 /// was refused when one was.
 pub(crate) struct GraphTransactionRefusal {
     refused_operation_index: Option<usize>,
-    what_the_refused_operation_names: WhatAGraphOperationNames,
+    what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
     runtime_words: String,
 }
 
@@ -1133,7 +1133,7 @@ impl GraphTransactionRefusal {
     ) -> Self {
         Self {
             refused_operation_index: Some(refused_operation_index),
-            what_the_refused_operation_names,
+            what_the_refused_operation_names: Box::new(what_the_refused_operation_names),
             runtime_words,
         }
     }
@@ -1141,14 +1141,14 @@ impl GraphTransactionRefusal {
     fn of_the_whole_transaction(runtime_words: String) -> Self {
         Self {
             refused_operation_index: None,
-            what_the_refused_operation_names: WhatAGraphOperationNames::default(),
+            what_the_refused_operation_names: Box::default(),
             runtime_words,
         }
     }
 
     /// The refusal of the action the tool `tool_name` was sent, as the wire carries it.
     fn into_the_refusal_on_the_wire(self, tool_name: &str) -> ProjectActionRefusalOnTheWire {
-        let what_the_refused_operation_names = self.what_the_refused_operation_names;
+        let what_the_refused_operation_names = *self.what_the_refused_operation_names;
         ProjectActionRefusalOnTheWire {
             action: tool_name.to_owned(),
             refused_operation_index: self.refused_operation_index,
