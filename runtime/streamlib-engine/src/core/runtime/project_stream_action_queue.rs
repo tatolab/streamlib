@@ -30,6 +30,9 @@ pub enum StreamActionKind {
     Stop,
     /// Unloads every stream of a project and forgets every record of it.
     Remove,
+    /// Unloads and forgets every stream of a project as `Remove` does, then moves its folder
+    /// to the Trash.
+    Delete,
     /// Re-loads, at the runtime's start, a project's streams neither stopped
     /// nor failed.
     ReloadAtStart,
@@ -42,6 +45,7 @@ impl StreamActionKind {
             Self::Load => "load",
             Self::Stop => "stop",
             Self::Remove => "remove",
+            Self::Delete => "delete",
             Self::ReloadAtStart => "reload_at_start",
         }
     }
@@ -49,7 +53,7 @@ impl StreamActionKind {
     /// Whether the action unloads the streams it works on, so a listing shows
     /// them stopping rather than preparing.
     pub fn unloads_its_streams(self) -> bool {
-        matches!(self, Self::Stop | Self::Remove)
+        matches!(self, Self::Stop | Self::Remove | Self::Delete)
     }
 }
 

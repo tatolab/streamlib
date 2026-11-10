@@ -116,6 +116,8 @@ impl NewProjectScaffold {
         let project_file = TatolabProjectFile {
             project: self.project,
             name: self.project_name.clone(),
+            description: None,
+            cover: None,
             created_with_runtime: Some(THIS_RUNTIME_VERSION.to_owned()),
             dependencies: Vec::new(),
         };

@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
 use crate::project_file::ProjectImport;
+#[cfg(feature = "history")]
+use crate::project_file::TatolabProjectFile;
 use crate::project_file_access::ProjectRelativeFilePath;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::stream_graph_document::StreamGraphOperation;
@@ -105,6 +107,46 @@ pub enum ProjectAction {
     Asset(ProjectAssetAction),
     /// An action on one of the project's stream graphs.
     StreamGraph(crate::stream_graph_action::StreamGraphAction),
+    /// An action on how people see the project.
+    Settings(ProjectSettingsAction),
+}
+
+/// One action on how people see a project, as every caller sends it and history records it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ProjectSettingsAction {
+    /// Name the project `name`.
+    SetProjectName { name: String },
+    /// Describe the project as `description`, `None` for none.
+    SetProjectDescription { description: Option<String> },
+    /// Make the media asset `cover` the project's cover, `None` for none.
+    SetProjectCover { cover: Option<Uuid> },
+}
+
+#[cfg(feature = "history")]
+impl ProjectSettingsAction {
+    /// The operation this action records against `project_file` as it is now.
+    pub(crate) fn operation_against(
+        &self,
+        project_file: &TatolabProjectFile,
+    ) -> ProjectSettingsOperation {
+        match self.clone() {
+            Self::SetProjectName { name } => ProjectSettingsOperation::SetProjectName {
+                from: project_file.name.clone(),
+                to: name,
+            },
+            Self::SetProjectDescription { description } => {
+                ProjectSettingsOperation::SetProjectDescription {
+                    from: project_file.description.clone(),
+                    to: description,
+                }
+            }
+            Self::SetProjectCover { cover } => ProjectSettingsOperation::SetProjectCover {
+                from: project_file.cover,
+                to: cover,
+            },
+        }
+    }
 }
 
 /// One action on a project's assets, as every caller sends it and history records it.
@@ -461,6 +503,58 @@ impl ProjectStreamDocumentOperation {
     }
 }
 
+/// One change to how people see a project, a field of `tatolab-project.json`, recorded with
+/// its value before and after.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ProjectSettingsOperation {
+    /// The project's name went from `from` to `to`.
+    SetProjectName { from: String, to: String },
+    /// The project's description went from `from` to `to`, `None` for none.
+    SetProjectDescription {
+        from: Option<String>,
+        to: Option<String>,
+    },
+    /// The project's cover went from the image asset `from` to `to`, `None` for none.
+    SetProjectCover {
+        from: Option<Uuid>,
+        to: Option<Uuid>,
+    },
+}
+
+impl ProjectSettingsOperation {
+    /// The operation that undoes this one.
+    pub fn inverse(&self) -> Self {
+        match self.clone() {
+            Self::SetProjectName { from, to } => Self::SetProjectName { from: to, to: from },
+            Self::SetProjectDescription { from, to } => {
+                Self::SetProjectDescription { from: to, to: from }
+            }
+            Self::SetProjectCover { from, to } => Self::SetProjectCover { from: to, to: from },
+        }
+    }
+
+    /// Set the field this operation changes in `project_file` to its value after.
+    #[cfg(feature = "history")]
+    pub(crate) fn write_into(&self, project_file: &mut TatolabProjectFile) {
+        match self {
+            Self::SetProjectName { to, .. } => project_file.name = to.clone(),
+            Self::SetProjectDescription { to, .. } => project_file.description = to.clone(),
+            Self::SetProjectCover { to, .. } => project_file.cover = *to,
+        }
+    }
+
+    /// The operation as a commit's summary line names it.
+    #[cfg(feature = "history")]
+    pub(crate) fn summary(&self) -> String {
+        match self {
+            Self::SetProjectName { to, .. } => format!("rename_project {to}"),
+            Self::SetProjectDescription { .. } => "set_project_description".to_owned(),
+            Self::SetProjectCover { .. } => "set_project_cover".to_owned(),
+        }
+    }
+}
+
 /// One change to one stream's graph: the stream by its asset's UUID, and the operation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StreamGraphOperationOnAStream {
@@ -485,6 +579,8 @@ pub enum ProjectOperation {
     StreamDocument(ProjectStreamDocumentOperation),
     /// A file of the project that is no asset written or taken out.
     File(ProjectFileOperation),
+    /// A change to how people see the project.
+    ProjectSettings(ProjectSettingsOperation),
 }
 
 impl ProjectOperation {
@@ -506,6 +602,9 @@ impl ProjectOperation {
                 Self::StreamDocument(stream_document_operation.inverse())
             }
             Self::File(file_operation) => Self::File(file_operation.inverse_at(parent_commit)),
+            Self::ProjectSettings(project_settings_operation) => {
+                Self::ProjectSettings(project_settings_operation.inverse())
+            }
         }
     }
 
@@ -518,6 +617,9 @@ impl ProjectOperation {
             Self::Import(import_operation) => import_operation.summary(),
             Self::StreamDocument(stream_document_operation) => stream_document_operation.summary(),
             Self::File(file_operation) => file_operation.summary(),
+            Self::ProjectSettings(project_settings_operation) => {
+                project_settings_operation.summary()
+            }
         }
     }
 }
@@ -531,6 +633,18 @@ pub enum ProjectTransactionLineage {
     UndoOf(Uuid),
     /// The redo of the transaction this names, itself an edit or a redo.
     RedoOf(Uuid),
+}
+
+/// Where an edit stands with its author's undo and redo now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectTransactionUndoState {
+    /// Its change holds, and its author's undo can reverse it.
+    Applied,
+    /// Undone, and its author's redo can reapply it.
+    UndoneRedoable,
+    /// Undone, and an edit its author made since means no redo reapplies it.
+    UndoneNotRedoable,
 }
 
 /// The operations an undo or a redo applies, and what it is to the transaction it reverses.

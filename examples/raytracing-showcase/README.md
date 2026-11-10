@@ -159,7 +159,7 @@ despite that is the section below: one clock, not one cadence.
 Nothing here needs a camera, a microphone, or any other device. It needs a GPU
 with `VK_KHR_ray_tracing_pipeline` (an RTX-class or RDNA2+ card) — so Linux
 only, since MoltenVK exposes no ray tracing — and says so by refusing at
-`setup()` rather than pretending. `tatolab dev` and `tatolab run` print the
+`setup()` rather than pretending. `tatolab dev` and `tatolab start` print the
 cross-floor check's warning for the three ray-tracing constructors; the stream
 starts anyway.
 
@@ -203,8 +203,8 @@ The runtime makes the project's `.venv` on its first load: it installs `tatolab-
 needs nothing built. The runtime itself is not on pip.
 
 `tatolab dev` follows the project's log and loads the project again on every
-saved edit; `tatolab run` queues the load and returns. Ctrl-C ends `tatolab dev`
-and leaves the stream loaded; `tatolab stop <stream>` stops it.
+saved edit; `tatolab start` queues the load and returns, and `tatolab reload` re-reads a project that already runs. Ctrl-C ends `tatolab dev`
+and leaves the stream loaded; `tatolab stop` stops it.
 
 Then watch `splitscreencompositor`'s `split_screen_frame_to_downstream` in Tato
 Studio's viewer.
