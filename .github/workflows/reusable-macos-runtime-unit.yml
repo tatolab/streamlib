@@ -68,7 +68,7 @@ jobs:
 
       # Stages the Vulkan loader and MoltenVK, builds the release wheel at the
       # deployment target the maturin project pins, lays out its lend, builds
-      # `tatolabd` and `tatolab` into `bin/`. It refuses a lend missing a driver
+      # `tatolabd`, `tatolab` and `tatolab-video-poster-frame` into `bin/`. It refuses a lend missing a driver
       # file, and a wheel carrying anything beside `tatolab/runtime/` and its
       # `.dist-info`.
       - name: Build the runtime unit
@@ -92,11 +92,11 @@ jobs:
 
       # The linker signs an arm64 executable ad hoc; one whose signature is
       # missing or broken is killed by the kernel before its first instruction.
-      - name: tatolabd, tatolab and uv are signed
+      - name: tatolabd, tatolab, tatolab-video-poster-frame and uv are signed
         run: |
           codesign --verify --strict --verbose=1 \
             target/tatolab-runtime/bin/tatolabd target/tatolab-runtime/bin/tatolab \
-            target/tatolab-runtime/bin/uv
+            target/tatolab-runtime/bin/tatolab-video-poster-frame target/tatolab-runtime/bin/uv
 
       # Against the lend a processor interpreter borrows, from a venv holding
       # `tatolab-stream` and pytest and nothing of the runtime: the lend is the

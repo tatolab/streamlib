@@ -13,7 +13,15 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetAudioFactsOnTheWire, AssetMediaFactsOnTheWire, AssetVideoFactsOnTheWire,
 };
 
-use crate::{AssetMediaFactsReadFromTheFile, AssetMediaFactsUnreadable, milliseconds_of_ticks};
+use crate::first_video_sync_sample::{
+    FirstVideoSyncSampleAsAnnexB, LARGEST_SYNC_SAMPLE_READ_BYTES, PosterFrameVideoCodec,
+    annex_b_access_unit_of_a_length_prefixed_sample, parameter_sets_of_an_avc_configuration_record,
+    parameter_sets_of_an_hevc_configuration_record,
+};
+use crate::{
+    AssetMediaFactsReadFromTheFile, AssetMediaFactsReadersOfThisRuntime, AssetMediaFactsUnreadable,
+    milliseconds_of_ticks,
+};
 
 /// The largest `moov` box read into memory; a sample table past it is not a file Studio plays.
 const LARGEST_MOVIE_BOX_READ_BYTES: u64 = 64 * 1024 * 1024;
@@ -262,6 +270,7 @@ fn facts_of_a_track(track: &[u8]) -> Option<TrackFactsInAMovie> {
 
 pub(crate) fn read_an_iso_base_media_file(
     movie_file_path: &Path,
+    readers: &AssetMediaFactsReadersOfThisRuntime,
 ) -> Result<AssetMediaFactsReadFromTheFile, AssetMediaFactsUnreadable> {
     let mut file = File::open(movie_file_path).map_err(|why| {
         AssetMediaFactsUnreadable::because(format!("the file could not be opened: {why}"))
@@ -295,10 +304,181 @@ pub(crate) fn read_an_iso_base_media_file(
     if media_facts.duration_ms.is_none() {
         media_facts.duration_ms = longest_track_ms.filter(|ms| *ms > 0);
     }
+    let video_coded_in_a_poster_frame_codec = media_facts
+        .video
+        .as_ref()
+        .and_then(|video| video.codec.as_deref())
+        .and_then(PosterFrameVideoCodec::of_wire_name)
+        .is_some();
+    let preview_picture = match &readers.video_poster_frame_helper {
+        Some(helper) if video_coded_in_a_poster_frame_codec => {
+            match helper.poster_frame_of_a_video_file(movie_file_path) {
+                Ok(poster_frame) => Some(poster_frame),
+                Err(why) => {
+                    tracing::warn!(path = %movie_file_path.display(), %why, "a video's facts read and its poster frame did not decode; it has no preview");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
     Ok(AssetMediaFactsReadFromTheFile {
         media_facts,
-        preview_picture: None,
+        preview_picture,
     })
+}
+
+/// A visual sample entry's fields before its child boxes (ISO/IEC 14496-12 §12.1.3).
+const VISUAL_SAMPLE_ENTRY_FIELDS_BYTES: usize = 78;
+
+/// The 1-based number of a track's first sync sample: the first `stss` entry, or sample 1 when
+/// the track has no `stss`, since then every sample is a sync sample.
+fn first_sync_sample_number_of(sample_table: &[u8]) -> Option<u32> {
+    match child(sample_table, b"stss") {
+        Some(sync_samples) => read_u32(sync_samples, 8).filter(|number| *number > 0),
+        None => Some(1),
+    }
+}
+
+/// Where sample `sample_number` (1-based) sits in the file and its byte length, from a track's
+/// `stsz`, `stsc` and `stco` or `co64`.
+fn file_offset_and_len_of_a_sample(sample_table: &[u8], sample_number: u32) -> Option<(u64, u32)> {
+    let sample_sizes = child(sample_table, b"stsz")?;
+    let uniform_sample_size = read_u32(sample_sizes, 4)?;
+    let sample_count = read_u32(sample_sizes, 8)?;
+    if sample_number == 0 || sample_number > sample_count {
+        return None;
+    }
+    let size_of = |number: u32| -> Option<u32> {
+        if uniform_sample_size != 0 {
+            Some(uniform_sample_size)
+        } else {
+            read_u32(sample_sizes, 12 + (number as usize - 1) * 4)
+        }
+    };
+    let chunk_offset_of = |chunk_number: u32| -> Option<u64> {
+        let index = chunk_number.checked_sub(1)? as usize;
+        if let Some(chunk_offsets) = child(sample_table, b"stco") {
+            read_u32(chunk_offsets, 8 + index * 4).map(u64::from)
+        } else {
+            read_u64(child(sample_table, b"co64")?, 8 + index * 8)
+        }
+    };
+    let sample_to_chunk = child(sample_table, b"stsc")?;
+    let entry_count = read_u32(sample_to_chunk, 4)? as usize;
+    let mut first_sample_of_the_run = 1u32;
+    for entry in 0..entry_count {
+        let first_chunk = read_u32(sample_to_chunk, 8 + entry * 12)?;
+        let samples_per_chunk = read_u32(sample_to_chunk, 12 + entry * 12)?;
+        if samples_per_chunk == 0 {
+            return None;
+        }
+        let next_first_chunk = if entry + 1 < entry_count {
+            Some(read_u32(sample_to_chunk, 8 + (entry + 1) * 12)?)
+        } else {
+            None
+        };
+        let samples_in_the_run = next_first_chunk
+            .map(|next| u64::from(next.saturating_sub(first_chunk)) * u64::from(samples_per_chunk));
+        let sample_index_in_the_run = u64::from(sample_number - first_sample_of_the_run);
+        if samples_in_the_run.is_none_or(|samples| sample_index_in_the_run < samples) {
+            let chunk_number = first_chunk.checked_add(
+                u32::try_from(sample_index_in_the_run / u64::from(samples_per_chunk)).ok()?,
+            )?;
+            let first_sample_of_the_chunk = sample_number
+                - u32::try_from(sample_index_in_the_run % u64::from(samples_per_chunk)).ok()?;
+            let mut offset = chunk_offset_of(chunk_number)?;
+            for preceding in first_sample_of_the_chunk..sample_number {
+                offset = offset.checked_add(u64::from(size_of(preceding)?))?;
+            }
+            return Some((offset, size_of(sample_number)?));
+        }
+        first_sample_of_the_run =
+            first_sample_of_the_run.checked_add(u32::try_from(samples_in_the_run?).ok()?)?;
+    }
+    None
+}
+
+/// The first sync sample of the movie file at `movie_file_path`'s first H.264 or H.265 track.
+pub(crate) fn first_video_sync_sample_of_a_movie_file(
+    movie_file_path: &Path,
+) -> Result<FirstVideoSyncSampleAsAnnexB, AssetMediaFactsUnreadable> {
+    let mut file = File::open(movie_file_path).map_err(|why| {
+        AssetMediaFactsUnreadable::because(format!("the file could not be opened: {why}"))
+    })?;
+    let movie = the_movie_box_of(&mut file)?;
+    let no_sync_sample = || {
+        AssetMediaFactsUnreadable::because(
+            "it holds no H.264 or H.265 track whose first sync sample the runtime can find",
+        )
+    };
+    for track in boxes_in(&movie)
+        .into_iter()
+        .filter(|found| &found.box_type == b"trak")
+    {
+        let Some(media) = child(track.body, b"mdia") else {
+            continue;
+        };
+        if child(media, b"hdlr").and_then(|handler| handler.get(8..12)) != Some(b"vide") {
+            continue;
+        }
+        let Some(sample_table) = child(media, b"minf").and_then(|minf| child(minf, b"stbl")) else {
+            continue;
+        };
+        let Some((sample_entry_type, sample_entry)) =
+            child(sample_table, b"stsd").and_then(first_sample_entry_of)
+        else {
+            continue;
+        };
+        let Some(sample_entry_children) = sample_entry.get(VISUAL_SAMPLE_ENTRY_FIELDS_BYTES..)
+        else {
+            continue;
+        };
+        let (codec, parameter_sets) = match &sample_entry_type {
+            b"avc1" | b"avc3" => (
+                PosterFrameVideoCodec::H264,
+                child(sample_entry_children, b"avcC")
+                    .and_then(parameter_sets_of_an_avc_configuration_record),
+            ),
+            b"hvc1" | b"hev1" => (
+                PosterFrameVideoCodec::H265,
+                child(sample_entry_children, b"hvcC")
+                    .and_then(parameter_sets_of_an_hevc_configuration_record),
+            ),
+            _ => continue,
+        };
+        let parameter_sets = parameter_sets.ok_or_else(no_sync_sample)?;
+        let (sample_offset, sample_len) = first_sync_sample_number_of(sample_table)
+            .and_then(|number| file_offset_and_len_of_a_sample(sample_table, number))
+            .ok_or_else(no_sync_sample)?;
+        let sample_len = usize::try_from(sample_len).unwrap_or(usize::MAX);
+        if sample_len > LARGEST_SYNC_SAMPLE_READ_BYTES {
+            return Err(AssetMediaFactsUnreadable::because(format!(
+                "its first sync sample is {sample_len} bytes, past the {LARGEST_SYNC_SAMPLE_READ_BYTES} the runtime reads"
+            )));
+        }
+        let mut sample = vec![0u8; sample_len];
+        file.seek(SeekFrom::Start(sample_offset))
+            .and_then(|_| file.read_exact(&mut sample))
+            .map_err(|why| {
+                AssetMediaFactsUnreadable::because(format!(
+                    "its first sync sample did not read: {why}"
+                ))
+            })?;
+        let annex_b_access_unit =
+            annex_b_access_unit_of_a_length_prefixed_sample(&parameter_sets, &sample).ok_or_else(
+                || {
+                    AssetMediaFactsUnreadable::because(
+                        "its first sync sample's NAL unit lengths run past the sample",
+                    )
+                },
+            )?;
+        return Ok(FirstVideoSyncSampleAsAnnexB {
+            codec,
+            annex_b_access_unit,
+        });
+    }
+    Err(no_sync_sample())
 }
 
 #[cfg(test)]
@@ -407,7 +587,7 @@ pub(crate) mod iso_base_media_test_files {
 mod tests {
     use super::iso_base_media_test_files::*;
     use super::*;
-    use crate::read_the_media_facts_of_an_asset_file;
+    use crate::{AssetMediaFactsReadersOfThisRuntime, read_the_media_facts_of_an_asset_file};
 
     #[test]
     fn a_box_whose_largesize_runs_past_the_end_of_memory_ends_the_scan() {
@@ -427,7 +607,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mp4 = directory.path().join("intro.mp4");
         std::fs::write(&mp4, an_h264_and_aac_mp4_of_42_seconds()).unwrap();
-        let read = read_the_media_facts_of_an_asset_file(&mp4).unwrap();
+        let read = read_the_media_facts_of_an_asset_file(
+            &mp4,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
+        .unwrap();
         assert_eq!(read.media_facts.duration_ms, Some(42_000));
         assert_eq!(
             read.media_facts.video,
@@ -454,7 +638,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mp4 = directory.path().join("broken.mp4");
         std::fs::write(&mp4, a_box(b"ftyp", b"isom")).unwrap();
-        let refused = read_the_media_facts_of_an_asset_file(&mp4).unwrap_err();
+        let refused = read_the_media_facts_of_an_asset_file(
+            &mp4,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
+        .unwrap_err();
         assert!(refused.0.contains("no movie box"), "{refused}");
     }
 }

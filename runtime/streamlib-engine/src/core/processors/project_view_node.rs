@@ -69,12 +69,7 @@ pub(crate) fn the_node_type_of_a_project_view(
         node_type,
         manifest.description.clone().unwrap_or_default(),
     )
-    .with_config_schema(
-        manifest
-            .settings
-            .clone()
-            .unwrap_or_else(|| serde_json::json!({ "type": "object" })),
-    );
+    .with_config_schema(the_config_schema_of_a_view_node(manifest.settings.as_ref()));
     descriptor.inputs = manifest
         .inputs
         .iter()
@@ -86,6 +81,20 @@ pub(crate) fn the_node_type_of_a_project_view(
         .map(the_port_a_view_declares)
         .collect();
     Ok(descriptor)
+}
+
+/// The config schema a node of a view takes: the view's `settings`, closed to the settings it
+/// declares unless `additionalProperties` says otherwise; a view declaring none takes none.
+fn the_config_schema_of_a_view_node(settings: Option<&JsonValue>) -> JsonValue {
+    let mut config_schema = settings
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "type": "object", "properties": {} }));
+    if let Some(declaration) = config_schema.as_object_mut() {
+        declaration
+            .entry("additionalProperties")
+            .or_insert(JsonValue::Bool(false));
+    }
+    config_schema
 }
 
 fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {

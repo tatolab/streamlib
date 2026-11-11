@@ -80,7 +80,7 @@ pub(crate) fn preview_picture_of(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_the_media_facts_of_an_asset_file;
+    use crate::{AssetMediaFactsReadersOfThisRuntime, read_the_media_facts_of_an_asset_file};
 
     fn a_png_of(directory: &Path, file_name: &str, width: u32, height: u32) -> std::path::PathBuf {
         let path = directory.join(file_name);
@@ -93,12 +93,10 @@ mod tests {
     #[test]
     fn an_image_reads_its_size_and_a_preview_scaled_to_fit_its_longest_edge() {
         let directory = tempfile::tempdir().unwrap();
-        let read = read_the_media_facts_of_an_asset_file(&a_png_of(
-            directory.path(),
-            "wide.png",
-            2400,
-            1200,
-        ))
+        let read = read_the_media_facts_of_an_asset_file(
+            &a_png_of(directory.path(), "wide.png", 2400, 1200),
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
         .unwrap();
         assert_eq!(
             read.media_facts.image,
@@ -118,9 +116,11 @@ mod tests {
     #[test]
     fn a_small_image_keeps_its_size_in_the_preview() {
         let directory = tempfile::tempdir().unwrap();
-        let read =
-            read_the_media_facts_of_an_asset_file(&a_png_of(directory.path(), "icon.png", 64, 32))
-                .unwrap();
+        let read = read_the_media_facts_of_an_asset_file(
+            &a_png_of(directory.path(), "icon.png", 64, 32),
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
+        .unwrap();
         let preview = read.preview_picture.unwrap();
         assert_eq!((preview.pixel_width, preview.pixel_height), (64, 32));
     }
@@ -130,6 +130,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let not_an_image = directory.path().join("cover.png");
         std::fs::write(&not_an_image, b"plain text, not a PNG").unwrap();
-        assert!(read_the_media_facts_of_an_asset_file(&not_an_image).is_err());
+        assert!(
+            read_the_media_facts_of_an_asset_file(
+                &not_an_image,
+                &AssetMediaFactsReadersOfThisRuntime::default()
+            )
+            .is_err()
+        );
     }
 }

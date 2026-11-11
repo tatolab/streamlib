@@ -976,6 +976,9 @@ pub struct ReadProjectFileToolResult {
     pub byte_len: u64,
     /// The file's bytes, standard base64 with padding.
     pub content_base64: String,
+    /// The SHA-256 of the file's bytes, lowercase hex, which a `write_project_file` sends back
+    /// as `expected_sha256`.
+    pub content_sha256: String,
 }
 
 /// The `write_project_file` tool's result.
@@ -983,6 +986,9 @@ pub struct ReadProjectFileToolResult {
 pub struct ProjectFileTransactionToolResult {
     /// The file written.
     pub path: String,
+    /// The SHA-256 of the bytes written, lowercase hex, which the next `write_project_file`
+    /// sends back as `expected_sha256`.
+    pub content_sha256: String,
     /// The transaction's UUID.
     pub transaction: String,
     /// The commit on the project history's `main` that records it.
