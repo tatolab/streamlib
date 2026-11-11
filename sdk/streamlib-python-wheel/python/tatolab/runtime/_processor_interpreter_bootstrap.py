@@ -1408,7 +1408,7 @@ class HelperProcessLifecycle:
         self._config_as_last_applied: "dict[str, Any]" = {}
         self._config_its_node_was_last_handed: "dict[str, Any]" = {}
         self._exposed_config_values_last_refused: "dict[str, Any]" = {}
-        self._process_is_raising = False
+        self._whether_the_parent_last_took_process_as_raising: "Optional[bool]" = False
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -1707,10 +1707,10 @@ class HelperProcessLifecycle:
         """Send the parent what `process()` raised when a run of raises begins,
         and `None` when a clean call ends one, so the graph shows the node
         raising while it keeps running; a call that ends as the last one did
-        sends nothing. A report the parent refused is sent again on the next
-        call, since the parent records each one in place of the last."""
+        sends nothing. After a report the parent refused or did not answer,
+        what it holds is unknown, so the next call sends its own outcome."""
         process_is_raising = raised is not None
-        if process_is_raising == self._process_is_raising:
+        if process_is_raising == self._whether_the_parent_last_took_process_as_raising:
             return
         try:
             self._bridge.request_from_parent(
@@ -1727,8 +1727,9 @@ class HelperProcessLifecycle:
                 "call tells it again",
                 error=str(refusal),
             )
+            self._whether_the_parent_last_took_process_as_raising = None
             return
-        self._process_is_raising = process_is_raising
+        self._whether_the_parent_last_took_process_as_raising = process_is_raising
 
     def _take_the_config_fields_its_node_exposes_as_inputs(self, exposed_config_fields: "list[str]") -> None:
         """Read each of `exposed_config_fields` from the input port of its name, in place of those read before."""

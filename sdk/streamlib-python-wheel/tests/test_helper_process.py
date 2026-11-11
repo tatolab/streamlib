@@ -1134,6 +1134,60 @@ def test_a_raise_report_the_parent_refused_is_sent_again_on_the_next_call(stand_
     RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0] = False
 
 
+def test_a_clean_call_after_a_refused_raise_report_tells_the_parent_it_runs_cleanly(stand_in_parent):
+    """A raise report the parent refused may or may not have been applied, so
+    the clean call after it sends `null` rather than nothing.
+
+    Fail-without-fix: the helper keeps its record of the parent as clean, the
+    clean call sends nothing, and a report applied despite its error answer
+    stays on the graph.
+    """
+    from helper_process_probes import RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES
+
+    RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0] = True
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
+
+    def the_next_frame_other_than_a_log() -> dict:
+        while True:
+            frame = stand_in_parent.receive()
+            assert frame is not None, "the helper sent the parent nothing"
+            if frame.get("op") != "log":
+                return frame
+
+    refused = the_next_frame_other_than_a_log()
+    assert refused["op"] == "set_process_raising_because"
+    RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0] = False
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": refused["request_id"],
+            "result": "error",
+            "message": "the escalate queue is full",
+        }
+    )
+
+    ran_cleanly = the_next_frame_other_than_a_log()
+    assert ran_cleanly["op"] == "set_process_raising_because"
+    assert ran_cleanly["raising_because"] is None
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": ran_cleanly["request_id"], "result": "ok"}
+    )
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    answers = [the_next_frame_other_than_a_log()["rpc"] for _ in range(2)]
+    assert answers == ["stopped", "done"]
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 @pytest.mark.skipif(sys.platform == "linux", reason="Linux adopts the fd rather than refusing")
 def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
     """The method exists on every floor, so the stub is one, and off Linux it
