@@ -52,7 +52,7 @@ SampleAndHold = "tatolab.ops:SampleAndHold"
 Feedback = "tatolab.ops:Feedback"
 Gate = "tatolab.ops:Gate"
 HoldFrame = "tatolab.ops:HoldFrame"
-ImageFile = "tatolab.ops:ImageFile"
+ImageFile = "tatolab.ops.image_file:ImageFile"
 
 [project.urls]
 Homepage = "https://tatolab.com"
