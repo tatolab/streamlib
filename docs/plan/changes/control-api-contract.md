@@ -117,7 +117,7 @@ change touches the entries listed under MODIFIED and no OPEN entry.
   (owner, 2026-11-10).
 - **The agent surface.** The MCP adapter is generated from the registry's `agent` exposure. It
   lists a small core set (`describe_runtime`, `list_streams`, `graph`, `logs`, `transact`,
-  `start_project`, `stop_project`, `undo`) and three discovery tools that reach every other
+  the playback verbs, `undo`) and three discovery tools that reach every other
   operation: `list_operation_groups`, `describe_operations` and `call_operation`. Each tool's
   description is the registry's agent usage note, with an `outputSchema` and read-only or
   destructive annotations. Resources and prompts stay, hand-written prompts beside generated
@@ -160,10 +160,11 @@ change touches the entries listed under MODIFIED and no OPEN entry.
 ## Order
 
 1. Registry and dispatcher for a handful of operations (`describe_runtime`, `list_streams`,
-   `graph`, `start_project`, `add_node`, `connect`, `transact`), the contract file and its
-   `--check`, the JSON-RPC adapter, and the generated TypeScript client in the runtime unit.
+   `graph`, `add_node`, `connect`, `transact`), the contract file and its `--check`, the
+   JSON-RPC adapter with `discover`, and the generated TypeScript client in the runtime unit.
+   The lifecycle verbs wait for the playback change (#3543), which renames them.
 2. Every remaining operation moves into the registry; the MCP adapter is generated from it;
-   `discover` and the contract-version gate.
+   the contract-version gate.
 3. `origin` and `author.account` on the transaction record.
 4. Generated reference docs and the Python client.
 5. Agent evals.
