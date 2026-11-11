@@ -98,6 +98,11 @@ CONTROL_TOOL_NAMES = {
     "remove_dependency",
     "use_dependency_stream",
     "list_project_node_types",
+    "rename_project",
+    "set_project_description",
+    "set_project_cover",
+    "duplicate_project",
+    "delete_project",
     "list_project_views",
     "write_studio_view_output",
 }

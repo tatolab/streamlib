@@ -189,6 +189,7 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
         "stream_asset": stream_asset_held_at(graph_document_path_of(project_directory, "main")),
     }, listed
 
+    (project_directory / "nodes").mkdir()
     (project_directory / "nodes" / "raising_node.py").write_text(
         NODE_MODULE_THAT_RAISES_AS_IT_IMPORTS, encoding="utf-8"
     )

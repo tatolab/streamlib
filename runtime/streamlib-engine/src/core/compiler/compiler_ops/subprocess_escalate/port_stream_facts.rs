@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use super::failure_the_node_reported_of_itself::FailureTheNodeReportedOfItself;
+use super::process_raising_the_node_reports::ProcessRaisingTheNodeReports;
 use super::shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -24,14 +25,15 @@ use crate::core::output_port_stream_facts::{
 /// What the node a helper-placed processor runs for reaches beside the GPU: its
 /// own output ports' stream facts, the upstream ones its inbound links
 /// reach, the helper's leases on the runtime's shared native services, the
-/// failure the node reported of itself, and what its output links keep of its
-/// output frames.
+/// failure the node reported of itself, what its `process()` raises, and what
+/// its output links keep of its output frames.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
     pub(crate) stream_facts_of_its_output_ports: Arc<StreamFactsOfOutputPorts>,
     pub(crate) upstream_stream_facts_by_its_inbound_links: Arc<UpstreamStreamFactsByInboundLink>,
     pub(crate) shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
     pub(crate) failure_the_node_reported_of_itself: Arc<FailureTheNodeReportedOfItself>,
+    pub(crate) process_raising_the_node_reports: Arc<ProcessRaisingTheNodeReports>,
     pub(crate) output_frames_kept_by_its_output_links:
         Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
 }

@@ -59,6 +59,7 @@ pub fn run_processor_loop(
                 None,
                 &pause_gate,
                 &runtime_ctx,
+                &state,
                 &step_progress,
             );
             if step_progress.stands_outside_the_step_barrier() {
@@ -81,6 +82,7 @@ pub fn run_processor_loop(
                 shutdown_wake_fd,
                 &pause_gate,
                 &runtime_ctx,
+                &state,
                 &step_progress,
             );
             run_reactive_scheduling_loop(id.as_str(), &mut host);
@@ -224,6 +226,7 @@ fn dispatch_processor_scheduling_callback(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     runtime_ctx: &RuntimeContext,
+    state: &ObservableProcessorState,
     step_progress: &StepProgressOfOneNode,
     callback: ProcessorSchedulingCallback,
     counted_on_the_step_ledger: bool,
@@ -234,7 +237,9 @@ fn dispatch_processor_scheduling_callback(
         match callback {
             ProcessorSchedulingCallback::OnPause => dispatch_on_pause(id, processor, runtime_ctx),
             ProcessorSchedulingCallback::OnResume => dispatch_on_resume(id, processor, runtime_ctx),
-            ProcessorSchedulingCallback::Process => dispatch_process(id, processor, runtime_ctx),
+            ProcessorSchedulingCallback::Process => {
+                dispatch_process(id, processor, runtime_ctx, state)
+            }
         }
     }
     if counted {
@@ -251,6 +256,7 @@ fn scheduling_loop_host_on_this_thread<'a>(
     #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
     pause_gate: &'a AtomicBool,
     runtime_ctx: &'a RuntimeContext,
+    state: &'a ObservableProcessorState,
     step_progress: &'a StepProgressOfOneNode,
 ) -> ProcessorSchedulingLoopHostOnAnEngineThread<'a, impl FnMut(ProcessorSchedulingCallback, bool)>
 {
@@ -267,6 +273,7 @@ fn scheduling_loop_host_on_this_thread<'a>(
                 id,
                 processor,
                 runtime_ctx,
+                state,
                 step_progress,
                 callback,
                 counted_on_the_step_ledger,
@@ -423,6 +430,7 @@ fn run_manual_mode(
                 failure_the_node_reported_of_itself,
                 has_failed_unrecoverably,
                 why_the_helper_process_died_on_its_own,
+                why_process_is_raising_as_its_helper_reports,
             ) = {
                 let mut processor = processor.lock();
                 processor.detect_and_clean_up_after_an_out_of_process_helper_that_died();
@@ -430,8 +438,10 @@ fn run_manual_mode(
                     processor.failure_the_node_reported_of_itself(),
                     processor.has_failed_unrecoverably(),
                     processor.why_the_out_of_process_helper_died_on_its_own(),
+                    processor.why_process_is_raising_as_its_helper_reports(),
                 )
             };
+            state.note_why_process_is_raising(why_process_is_raising_as_its_helper_reports);
             match (
                 failure_the_node_reported_of_itself,
                 has_failed_unrecoverably,
@@ -586,11 +596,16 @@ fn dispatch_process(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     runtime_ctx: &RuntimeContext,
+    state: &ObservableProcessorState,
 ) {
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
     let mut guard = processor.lock();
-    if let Err(e) = guard.process(&limited_ctx) {
-        tracing::warn!("[{}] process() failed: {}", id, e);
+    match guard.process(&limited_ctx) {
+        Ok(()) => state.note_that_process_ran_cleanly(),
+        Err(e) => {
+            tracing::warn!("[{}] process() failed: {}", id, e);
+            state.note_that_process_raised(|| format!("process() failed: {e}"));
+        }
     }
 }
 

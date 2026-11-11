@@ -16,7 +16,7 @@ from typing import Annotated, Optional, TypedDict
 
 import pydantic
 
-from tatolab.stream import RuntimeContextFullAccess, log, node
+from tatolab.stream import Description, RuntimeContextFullAccess, log, node
 
 
 def _report(processor_name: str, config: object) -> None:
@@ -26,16 +26,16 @@ def _report(processor_name: str, config: object) -> None:
 
 
 class TypedDictProbeConfig(TypedDict, total=False):
-    width: Annotated[int, "How wide the probe pretends its frames are."]
+    width: Annotated[int, Description("How wide the probe pretends its frames are.")]
 
 
 @dataclasses.dataclass
 class DataclassProbeConfig:
-    width: Annotated[int, "How wide the probe pretends its frames are."] = 640
-    label: Annotated[str, "What to call this probe."] = "unlabelled"
+    width: Annotated[int, Description("How wide the probe pretends its frames are.")] = 640
+    label: Annotated[str, Description("What to call this probe.")] = "unlabelled"
     # A null default has to survive the msgpack hop the document takes into
     # Rust, which is the one value on this class that could be dropped there.
-    fallback: Annotated[Optional[str], "Where the probe falls back to."] = None
+    fallback: Annotated[Optional[str], Description("Where the probe falls back to.")] = None
 
 
 class ModelProbeConfig(pydantic.BaseModel):
@@ -62,7 +62,7 @@ class DataclassConfiguredProbe:
 
 @node.process(execution="manual")
 class ModelConfiguredProbe:
-    """Configured by a model, and described by this docstring alone."""
+    """Configured by a model; this docstring is no description."""
 
     def __init__(self, config: ModelProbeConfig) -> None:
         self.config = config
