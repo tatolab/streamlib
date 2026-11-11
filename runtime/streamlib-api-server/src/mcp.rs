@@ -281,6 +281,12 @@ impl LocalApiMcpServerHandler {
         answered: Result<ControlOperationAnswer, ControlOperationRefusal>,
     ) -> ToolCallAnswer {
         match answered {
+            Ok(ControlOperationAnswer::Discover(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::SubscribeProjectChanges(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
             Ok(ControlOperationAnswer::DescribeRuntime(result)) => {
                 serialized_tool_result(tool_name, &result)
             }
@@ -295,6 +301,9 @@ impl LocalApiMcpServerHandler {
                 crate::mcp_stream_graph_tools::a_tool_result_of_the_refusal(*refusal),
             ),
             Err(ControlOperationRefusal::Failed(why)) => Err(why),
+            Err(ControlOperationRefusal::ContractVersionMismatch(mismatch)) => {
+                Err(format!("{tool_name} failed: {mismatch}"))
+            }
         }
     }
 
@@ -326,6 +335,7 @@ pub(crate) fn control_request_origin_of_an_mcp_tool_call(
         client_name: tool_call_request_context
             .client_info()
             .map(|client| client.name),
+        project_change_subscriptions: None,
     }
 }
 
@@ -1878,9 +1888,16 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn every_registered_operation_is_a_tool_carrying_its_registry_usage_note() {
+    async fn every_operation_on_the_agent_surface_is_a_tool_carrying_its_registry_usage_note() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        for declaration in streamlib_control_contract::CONTROL_OPERATIONS {
+        for declaration in streamlib_control_contract::CONTROL_OPERATIONS
+            .iter()
+            .filter(|declaration| {
+                declaration
+                    .exposures
+                    .contains(&streamlib_control_contract::ControlOperationExposure::Agent)
+            })
+        {
             let tool = tools
                 .iter()
                 .find(|tool| tool["name"] == declaration.method_name)

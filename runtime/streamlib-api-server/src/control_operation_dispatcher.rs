@@ -4,6 +4,7 @@
 //! The one dispatcher every adapter calls: it runs a registered operation against the runtime
 //! and answers its result or its refusal, holding no adapter's wire shape.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -12,18 +13,21 @@ use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, StreamActionStep, StreamListingState, StreamLocation,
 };
 use streamlib_control_contract::{
-    AddNodeRequest, ControlOperationCall, DescribeRuntimeRequest, GraphEditMode, GraphRequest,
-    ListStreamsRequest, OneLinkGraphEditRequest, ProjectTransactionAuthorArgument,
-    ProjectTransactionAuthorKindArgument, TransactRequest,
+    AddNodeRequest, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, ControlContractVersionMismatch,
+    ControlOperationCall, DescribeRuntimeRequest, DiscoverRequest, DiscoverResult, GraphEditMode,
+    GraphRequest, ListStreamsRequest, OneLinkGraphEditRequest, ProjectTransactionAuthorArgument,
+    ProjectTransactionAuthorKindArgument, SubscribeProjectChangesRequest,
+    SubscribeProjectChangesResult, TransactRequest,
 };
 use streamlib_project_repository::{
     ProjectRepositoriesOpenInThisRuntime, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
     StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CaptureDeviceOnTheWire, DescribeRuntimeToolResult, GraphTransactionToolResult,
-    ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState,
-    ProjectActionRefusalOnTheWire, StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET, CaptureDeviceOnTheWire,
+    DescribeRuntimeToolResult, GraphTransactionToolResult, ListStreamsToolResult,
+    ListStreamsToolResultStream, ListedStreamState, ProjectActionRefusalOnTheWire,
+    StreamActionStepOnTheWire, StreamLocationOnTheWire,
 };
 use uuid::Uuid;
 
@@ -43,11 +47,42 @@ const AUTHOR_NAME_OF_AN_UNNAMED_CLIENT: &str = "an MCP client";
 pub(crate) struct ControlRequestOrigin {
     /// The name the client gave itself, if it gave one.
     pub(crate) client_name: Option<String>,
+    /// The project change subscriptions of the connection it arrived on, when that connection
+    /// stays open to be sent notifications.
+    pub(crate) project_change_subscriptions: Option<Arc<ProjectChangeSubscriptionsOfOneConnection>>,
+}
+
+/// The projects one open connection is sent `project_changed` notifications for.
+#[derive(Debug, Default)]
+pub(crate) struct ProjectChangeSubscriptionsOfOneConnection {
+    subscribed_projects: parking_lot::Mutex<BTreeSet<Uuid>>,
+}
+
+impl ProjectChangeSubscriptionsOfOneConnection {
+    /// Whether the connection subscribed to `project`.
+    pub(crate) fn holds(&self, project: Uuid) -> bool {
+        self.subscribed_projects.lock().contains(&project)
+    }
+
+    /// Every project the connection subscribed to.
+    pub(crate) fn every_subscribed_project(&self) -> Vec<Uuid> {
+        self.subscribed_projects.lock().iter().copied().collect()
+    }
+
+    fn subscribe_to(&self, projects: Vec<Uuid>) -> Vec<Uuid> {
+        let mut subscribed_projects = self.subscribed_projects.lock();
+        subscribed_projects.extend(projects);
+        subscribed_projects.iter().copied().collect()
+    }
 }
 
 /// What a registered operation answers when it is not refused.
 #[derive(Debug)]
 pub(crate) enum ControlOperationAnswer {
+    /// `discover`'s.
+    Discover(DiscoverResult),
+    /// `subscribe_project_changes`'.
+    SubscribeProjectChanges(SubscribeProjectChangesResult),
     /// `describe_runtime`'s.
     DescribeRuntime(DescribeRuntimeToolResult),
     /// `list_streams`'s.
@@ -65,9 +100,12 @@ pub(crate) enum ControlOperationRefusal {
     RefusedAction(Box<ProjectActionRefusalOnTheWire>),
     /// The operation could not be carried out, in the runtime's own words.
     Failed(String),
+    /// The client was built against another contract version than the runtime serves.
+    ContractVersionMismatch(ControlContractVersionMismatch),
 }
 
 /// The runtime's services every operation reaches.
+#[derive(Clone)]
 pub(crate) struct ControlOperationDispatcher {
     pub(crate) operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     pub(crate) project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
@@ -82,6 +120,13 @@ impl ControlOperationDispatcher {
         request_origin: &ControlRequestOrigin,
     ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
         match call {
+            ControlOperationCall::Discover(DiscoverRequest { contract_version }) => self
+                .discover(contract_version)
+                .map(ControlOperationAnswer::Discover),
+            ControlOperationCall::SubscribeProjectChanges(SubscribeProjectChangesRequest {
+                projects,
+            }) => subscribe_to_project_changes(projects, request_origin)
+                .map(ControlOperationAnswer::SubscribeProjectChanges),
             ControlOperationCall::DescribeRuntime(DescribeRuntimeRequest {}) => {
                 Ok(ControlOperationAnswer::DescribeRuntime(
                     self.operations_on_the_loaded_streams
@@ -169,6 +214,25 @@ impl ControlOperationDispatcher {
                 .await
                 .map(ControlOperationAnswer::GraphTransaction),
         }
+    }
+
+    fn discover(
+        &self,
+        client_contract_version: Option<u32>,
+    ) -> Result<DiscoverResult, ControlOperationRefusal> {
+        refuse_another_contract_version(client_contract_version)?;
+        let this_runtime = self
+            .operations_on_the_loaded_streams
+            .describe_this_runtime();
+        Ok(DiscoverResult {
+            contract_version: CONTROL_CONTRACT_VERSION,
+            runtime_version: this_runtime.version,
+            build_id: this_runtime.build_id,
+            operations: CONTROL_OPERATIONS
+                .iter()
+                .map(|declaration| declaration.method_name.to_owned())
+                .collect(),
+        })
     }
 
     async fn list_streams(&self) -> Result<ListStreamsToolResult, ControlOperationRefusal> {
@@ -297,6 +361,43 @@ impl ControlOperationDispatcher {
     }
 }
 
+/// Refuse a client that names another contract version than the runtime serves.
+pub(crate) fn refuse_another_contract_version(
+    client_contract_version: Option<u32>,
+) -> Result<(), ControlOperationRefusal> {
+    match client_contract_version {
+        Some(client_contract_version) if client_contract_version != CONTROL_CONTRACT_VERSION => {
+            Err(ControlOperationRefusal::ContractVersionMismatch(
+                ControlContractVersionMismatch {
+                    client_contract_version,
+                    runtime_contract_version: CONTROL_CONTRACT_VERSION,
+                },
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn subscribe_to_project_changes(
+    projects: Vec<Uuid>,
+    request_origin: &ControlRequestOrigin,
+) -> Result<SubscribeProjectChangesResult, ControlOperationRefusal> {
+    let Some(project_change_subscriptions) = &request_origin.project_change_subscriptions else {
+        return Err(ControlOperationRefusal::Failed(format!(
+            "subscribe_project_changes failed: it is served only on a connection that stays open \
+             to be sent notifications, `{CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET}`"
+        )));
+    };
+    if projects.is_empty() {
+        return Err(ControlOperationRefusal::Failed(
+            "subscribe_project_changes failed: `projects` names no project".to_owned(),
+        ));
+    }
+    Ok(SubscribeProjectChangesResult {
+        projects: project_change_subscriptions.subscribe_to(projects),
+    })
+}
+
 /// The author a change names: the caller's own, or the agent the request's client named itself.
 pub(crate) fn the_author_of_a_change(
     author: Option<ProjectTransactionAuthorArgument>,
@@ -370,6 +471,7 @@ mod tests {
     fn an_origin_named(client_name: Option<&str>) -> ControlRequestOrigin {
         ControlRequestOrigin {
             client_name: client_name.map(str::to_owned),
+            project_change_subscriptions: None,
         }
     }
 

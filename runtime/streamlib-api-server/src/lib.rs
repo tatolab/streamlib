@@ -3,6 +3,7 @@
 
 mod asset_media_facts_reads;
 mod axum_router_served_until_stopped;
+mod control_json_rpc_adapter;
 mod control_operation_dispatcher;
 #[cfg(test)]
 mod control_plane_stub_support;

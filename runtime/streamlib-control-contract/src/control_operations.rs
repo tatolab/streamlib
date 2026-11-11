@@ -14,9 +14,10 @@ use crate::control_operation::{
     ControlOperationStability,
 };
 use crate::control_operation_requests::{
-    AddNodeRequest, DescribeRuntimeRequest, GraphRequest, ListStreamsRequest,
-    OneLinkGraphEditRequest, TransactRequest,
+    AddNodeRequest, DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListStreamsRequest,
+    OneLinkGraphEditRequest, SubscribeProjectChangesRequest, TransactRequest,
 };
+use crate::control_operation_results::{DiscoverResult, SubscribeProjectChangesResult};
 
 /// The contract's version: bumped only by a breaking change to an operation already in it.
 pub const CONTROL_CONTRACT_VERSION: u32 = 1;
@@ -26,6 +27,41 @@ const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Agent,
     ControlOperationExposure::Public,
 ];
+
+const EVERY_SURFACE_BUT_THE_AGENT_SURFACE: &[ControlOperationExposure] = &[
+    ControlOperationExposure::Studio,
+    ControlOperationExposure::Public,
+];
+
+/// `discover`: the contract a runtime serves, which a client checks before any other call.
+pub struct Discover;
+
+impl ControlOperation for Discover {
+    type Request = DiscoverRequest;
+    type Result = DiscoverResult;
+    const METHOD_NAME: &'static str = "discover";
+    const ONE_LINE_DOC: &'static str = "Answer the contract version this runtime serves, its version and build id, and every method it serves.";
+    const AGENT_USAGE_NOTE: &'static str = "Answer `contract_version`, the version of the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` it was built against; another version is refused naming both, and the client is not served.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+}
+
+/// `subscribe_project_changes`: the connection is sent each change on some projects' feeds.
+pub struct SubscribeProjectChanges;
+
+impl ControlOperation for SubscribeProjectChanges {
+    type Request = SubscribeProjectChangesRequest;
+    type Result = SubscribeProjectChangesResult;
+    const METHOD_NAME: &'static str = "subscribe_project_changes";
+    const ONE_LINE_DOC: &'static str = "Send this connection a `project_changed` notification for each change on the named projects' feeds.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one and each media facts read it finishes is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+}
 
 /// `describe_runtime`: this runtime's version, build and uptime.
 pub struct DescribeRuntime;
@@ -123,6 +159,8 @@ impl ControlOperation for Connect {
 
 /// Every operation the registry holds, in the order the contract file lists them.
 pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
+    ControlOperationDeclaration::of::<Discover>(),
+    ControlOperationDeclaration::of::<SubscribeProjectChanges>(),
     ControlOperationDeclaration::of::<DescribeRuntime>(),
     ControlOperationDeclaration::of::<ListStreams>(),
     ControlOperationDeclaration::of::<Graph>(),
@@ -135,6 +173,10 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
 /// exhaustively, so an operation added here and not served is a compile error.
 #[derive(Debug)]
 pub enum ControlOperationCall {
+    /// A `discover` call.
+    Discover(DiscoverRequest),
+    /// A `subscribe_project_changes` call.
+    SubscribeProjectChanges(SubscribeProjectChangesRequest),
     /// A `describe_runtime` call.
     DescribeRuntime(DescribeRuntimeRequest),
     /// A `list_streams` call.
@@ -193,6 +235,10 @@ impl ControlOperationCall {
     ) -> Result<Self, ControlOperationCallParseRefusal> {
         let params = params.unwrap_or_else(|| Value::Object(Default::default()));
         match method_name {
+            Discover::METHOD_NAME => the_request_of::<Discover>(params).map(Self::Discover),
+            SubscribeProjectChanges::METHOD_NAME => {
+                the_request_of::<SubscribeProjectChanges>(params).map(Self::SubscribeProjectChanges)
+            }
             DescribeRuntime::METHOD_NAME => {
                 the_request_of::<DescribeRuntime>(params).map(Self::DescribeRuntime)
             }
@@ -212,6 +258,8 @@ impl ControlOperationCall {
     /// The method name of the operation called.
     pub fn method_name(&self) -> &'static str {
         match self {
+            Self::Discover(_) => Discover::METHOD_NAME,
+            Self::SubscribeProjectChanges(_) => SubscribeProjectChanges::METHOD_NAME,
             Self::DescribeRuntime(_) => DescribeRuntime::METHOD_NAME,
             Self::ListStreams(_) => ListStreams::METHOD_NAME,
             Self::Graph(_) => Graph::METHOD_NAME,
@@ -282,6 +330,11 @@ mod tests {
     #[test]
     fn every_registered_method_name_parses_to_the_call_of_that_name() {
         let params_of_each_method = [
+            ("discover", serde_json::json!({ "contract_version": 1 })),
+            (
+                "subscribe_project_changes",
+                serde_json::json!({ "projects": ["00000000-0000-0000-0000-000000000001"] }),
+            ),
             ("describe_runtime", serde_json::json!({})),
             ("list_streams", serde_json::json!({})),
             ("graph", serde_json::json!({})),

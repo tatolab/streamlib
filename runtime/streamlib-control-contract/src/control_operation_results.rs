@@ -1,0 +1,47 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! The results of the operations the contract itself defines, rather than the action contract.
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// What `discover` answers: the contract a runtime serves and what it is.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DiscoverResult {
+    /// The contract version this runtime serves.
+    pub contract_version: u32,
+    /// The runtime's crate version.
+    pub runtime_version: String,
+    /// The runtime's build id, `<version>+<git sha>.<per-build nonce>`.
+    pub build_id: String,
+    /// Every method this runtime serves, in registry order.
+    pub operations: Vec<String>,
+}
+
+/// What `subscribe_project_changes` answers: the projects the connection is now sent changes of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscribeProjectChangesResult {
+    /// Every project the connection is subscribed to, by UUID, this call's among them.
+    pub projects: Vec<Uuid>,
+}
+
+/// The `data` of a `discover` refused for a client built against another contract version.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ControlContractVersionMismatch {
+    /// The version the client sent.
+    pub client_contract_version: u32,
+    /// The version this runtime serves.
+    pub runtime_contract_version: u32,
+}
+
+impl std::fmt::Display for ControlContractVersionMismatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the client was built against control contract version {}, and this runtime serves version {}",
+            self.client_contract_version, self.runtime_contract_version
+        )
+    }
+}
