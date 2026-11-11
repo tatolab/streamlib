@@ -385,6 +385,18 @@ fn a_projects_run_log_is_kept_under_its_tatolab_folder_and_no_streamlib_folder_i
     );
 }
 
+/// The one re-load `runtime` queued at its start, once it holds the parked stream stopped.
+fn the_reload_queued_at_the_start_once_ended(
+    runtime: &SpawnedTatolabd,
+    machine_root: &TatolabTestMachineRoot,
+) {
+    let reloads_queued = the_reloads_queued_at_the_start(&runtime.standard_error());
+    assert_eq!(reloads_queued.len(), 1, "{}", runtime.standard_error());
+    let reload_once_ended =
+        the_stream_action_once_ended(&machine_root.local_api_socket_path(), &reloads_queued[0]);
+    assert_eq!(reload_once_ended["state"], "done", "{reload_once_ended}");
+}
+
 /// A recorded stream's record round-trips through the runtime: it stays
 /// owner-only through a runtime, is read again by the next runtime on the
 /// machine, and `remove_project` forgets it.
@@ -413,6 +425,7 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let mut first_runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command(&runtime_unit.tatolabd),
     );
+    the_reload_queued_at_the_start_once_ended(&first_runtime, &machine_root);
     first_runtime.interrupt_and_expect_a_clean_exit();
 
     assert_eq!(the_mode_of(&record_path), 0o600);
@@ -424,6 +437,7 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
     let mut second_runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command(&runtime_unit.tatolabd),
     );
+    the_reload_queued_at_the_start_once_ended(&second_runtime, &machine_root);
     let listed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "list_streams",
