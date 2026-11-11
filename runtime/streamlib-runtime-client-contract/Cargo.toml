@@ -15,6 +15,8 @@ name = "streamlib_runtime_client_contract"
 path = "src/lib.rs"
 
 [features]
+# The JSON Schema of each result type the control contract file describes.
+json-schema = ["dep:schemars"]
 # Test builds only, never a release: the runtime directory, the state directory and the Linux
 # machine runtime lock all move under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be
 # set; the macOS lock is the loopback port TATOLAB_TEST_LOOPBACK_HTTP_PORT names, which must be set
@@ -24,6 +26,7 @@ machine-directories-under-a-test-root = []
 
 [dependencies]
 libc.workspace = true
+schemars = { version = "1.2", features = ["uuid1"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

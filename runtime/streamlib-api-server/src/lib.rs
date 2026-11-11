@@ -3,6 +3,7 @@
 
 mod asset_media_facts_reads;
 mod axum_router_served_until_stopped;
+mod control_operation_dispatcher;
 #[cfg(test)]
 mod control_plane_stub_support;
 mod first_party_package_moves_recorded_in_the_open_projects;
@@ -28,6 +29,7 @@ mod new_node_file_template;
 #[cfg(test)]
 mod project_asset_tools_tests;
 mod state;
+mod stream_graph_transaction_executor;
 #[cfg(test)]
 mod stream_tools_over_a_real_engine_tests;
 #[cfg(test)]

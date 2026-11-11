@@ -1,0 +1,1732 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "StreamLib runtime control API",
+    "version": "1",
+    "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change; an addition is marked by its method's `x-since`.",
+    "x-contract-version": 1
+  },
+  "methods": [
+    {
+      "name": "describe_runtime",
+      "summary": "Describe this runtime: its version, its build id, how long it has been up and where it logs.",
+      "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/DescribeRuntimeRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "describe_runtime_result",
+        "schema": {
+          "$ref": "#/components/schemas/DescribeRuntimeToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "list_streams",
+      "summary": "List every stream the runtime holds, by stream id, with its location and state.",
+      "description": "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `paused` (loaded with its project paused by `pause_project`, until `resume_project`), `preparing` (an action that loads it — a `start_project` or `reload_project` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_project` or a `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until a `start_project` or `reload_project` of its project retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `stop_project` then `start_project` of its project asks.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ListStreamsRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "list_streams_result",
+        "schema": {
+          "$ref": "#/components/schemas/ListStreamsToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "stream",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "graph",
+      "summary": "Export a loaded stream's live graph, or every loaded stream's, with each node's and link's state.",
+      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/GraphRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "graph_result",
+        "schema": true
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "experimental",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "transact",
+      "summary": "Apply operations on one project's stream graphs as one transaction, whole or not at all.",
+      "description": "Apply operations on the graphs of one project's loaded streams as one transaction by its `author`: applied in order, whole or not at all, to each running stream, and with `mode` `commit`, the default, written to each stream's graph document and recorded as one commit on the project's history, which `undo` reverses as one. Answers `mode`, the `transaction` and `commit` recording a committed edit, each operation as applied, `added_nodes` with each new node's UUID and the name it took, and `connected_links` with each new link's `state` — `pending`, `wired`, or `error` with its `error_reason`. Refused whole, in the runtime's own words, with nothing changed. A config value `{\"asset\": \"<uuid>\"}` must name an asset the project holds. An `add_node` may give its node an `as`, which later operations of the same transaction name the node by. The transaction is announced on the project's change feed, the resource `list_assets` names as `transactions_resource_uri`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/TransactRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "transact_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "add_node",
+      "summary": "Add a node to a loaded stream's graph by its type's import path, as one transaction.",
+      "description": "Add a node to a loaded stream's graph by its type's import path, as one transaction, the runtime making the node's UUID. A Python type is named `module:QualifiedClassName` and must be importable by the stream's own interpreter — a module in the stream's project, or a package installed in its venv: the runtime never imports it, and describes it in that interpreter the first time it is added; each add spawns it in its own processor interpreter, which imports the module fresh. The type's port declaration is read when it is first described and kept; to change a type's ports, add it under a new class name.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AddNodeRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "add_node_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "connect",
+      "summary": "Link an output port to an input port in one loaded stream, as one transaction.",
+      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/OneLinkGraphEditRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "connect_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    }
+  ],
+  "x-notifications": [],
+  "components": {
+    "schemas": {
+      "ProjectActionRefusalOnTheWire": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The action refused, by the name of the tool it was sent to."
+          },
+          "refused_operation_index": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0,
+            "description": "The position, from 0, of the operation refused among those the action sent, when one was."
+          },
+          "refused_node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node the refused operation names, as the caller named it: a UUID or an `as` label."
+          },
+          "refused_link": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefusedGraphLinkOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The link the refused operation names."
+          },
+          "refused_field": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node's input or config field the refused operation names."
+          },
+          "runtime_words": {
+            "type": "string",
+            "description": "Why, in the runtime's own words, never rewritten."
+          }
+        },
+        "required": [
+          "action",
+          "runtime_words"
+        ],
+        "description": "What a refused action answers under `refusal` in its tool result's `structuredContent`,\nbeside the same words as the result's text."
+      },
+      "RefusedGraphLinkOnTheWire": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/GraphLinkEndOnTheWire",
+            "description": "The output port the link carries from."
+          },
+          "target": {
+            "$ref": "#/components/schemas/GraphLinkEndOnTheWire",
+            "description": "The input port the link carries into."
+          }
+        },
+        "required": [
+          "source",
+          "target"
+        ],
+        "description": "The link a refused operation names, each end as the caller named it."
+      },
+      "GraphLinkEndOnTheWire": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "The node's UUID."
+          },
+          "port": {
+            "type": "string",
+            "description": "The port's name."
+          }
+        },
+        "required": [
+          "node",
+          "port"
+        ],
+        "description": "One end of a link a graph tool names: a node by its UUID and one of its ports."
+      },
+      "DescribeRuntimeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "`describe_runtime`'s params: none."
+      },
+      "DescribeRuntimeToolResult": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "The runtime's crate version."
+          },
+          "build_id": {
+            "type": "string",
+            "description": "`<crate version>+<git sha>.<per-build nonce>`, the build the helper check compares."
+          },
+          "up_for_ms": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "Monotonic milliseconds since this runtime's engine started; a restart resets it."
+          },
+          "runtime_log_directory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The folder the runtime's own log is written to, absolute for `tatolabd`; `None` when it\nkeeps none."
+          }
+        },
+        "required": [
+          "version",
+          "build_id",
+          "up_for_ms"
+        ],
+        "description": "The `describe_runtime` tool's result."
+      },
+      "ListStreamsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "`list_streams`'s params: none."
+      },
+      "ListStreamsToolResult": {
+        "type": "object",
+        "properties": {
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListStreamsToolResultStream"
+            },
+            "description": "Every stream the runtime holds."
+          }
+        },
+        "required": [
+          "streams"
+        ],
+        "description": "The `list_streams` tool's result."
+      },
+      "ListStreamsToolResultStream": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream's id; every tool naming the stream takes it."
+          },
+          "display_name": {
+            "type": "string",
+            "description": "The label the stream is shown under."
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StreamLocationOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the stream's code lives; `null` for a record an earlier runtime wrote."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ListedStreamState",
+            "description": "Whether it is running, stopped or failed."
+          },
+          "node_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0,
+            "description": "How many nodes its loaded graph holds; `null` when it is not loaded."
+          },
+          "failed_because": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it is failed; `null` when it is not."
+          },
+          "capture_devices_whose_access_was_never_asked_for": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaptureDeviceOnTheWire"
+            },
+            "description": "Each capture device a node of the loaded stream refused because nobody has asked the user\nfor its access — the runtime re-loaded it on its own at its start — once each; a\n`stop_project` then `start_project` of its project asks. Empty when it is not loaded."
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stream action preparing it, as `describe_stream_action` takes it; `null` unless it\nis `preparing`."
+          },
+          "step": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StreamActionStepOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The step that action is on; `null` while it waits in its project's queue, and unless the\nstream is `preparing`."
+          }
+        },
+        "required": [
+          "stream",
+          "display_name",
+          "state",
+          "capture_devices_whose_access_was_never_asked_for"
+        ],
+        "description": "One stream of a [`ListStreamsToolResult`]."
+      },
+      "StreamLocationOnTheWire": {
+        "type": "object",
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project directory's absolute path, symlinks resolved, as of the stream's last load."
+          },
+          "project": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The project's UUID, from its `tatolab-project.json`."
+          },
+          "stream_asset": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream asset's UUID, from its graph document."
+          }
+        },
+        "required": [
+          "project_directory",
+          "project",
+          "stream_asset"
+        ],
+        "description": "Where a stream lives, as the local API reports it: its project directory, resolved, its\nproject's UUID and its stream asset's UUID."
+      },
+      "ListedStreamState": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "running",
+            "description": "Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next\nstart."
+          },
+          {
+            "type": "string",
+            "const": "stopped",
+            "description": "Stopped with its project, nothing running, until `start_project`; its graph is loaded to\nread and edit while `node_count` is set, and not loaded when it is null."
+          },
+          {
+            "type": "string",
+            "const": "paused",
+            "description": "Loaded with its project paused: its processors process nothing until `resume_project`."
+          },
+          {
+            "type": "string",
+            "const": "failed",
+            "description": "Skipped at the runtime's start until a `reload_project` of its project retries it."
+          },
+          {
+            "type": "string",
+            "const": "preparing",
+            "description": "A stream action of its project that loads it is queued or under way on it."
+          },
+          {
+            "type": "string",
+            "const": "stopping",
+            "description": "A stream action of its project that unloads it is queued or under way on it."
+          }
+        ],
+        "description": "The state of one stream `list_streams` lists."
+      },
+      "CaptureDeviceOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "camera",
+            "description": "The camera."
+          },
+          {
+            "type": "string",
+            "const": "microphone",
+            "description": "The microphone."
+          }
+        ],
+        "description": "A capture device the platform gates behind a privacy prompt, as `list_streams` spells it."
+      },
+      "StreamActionStepOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "making_the_venv",
+            "description": "Making the project's `.venv` with the runtime's uv."
+          },
+          {
+            "type": "string",
+            "const": "reading_the_graph_documents",
+            "description": "Reading the project's file and each stream asset's graph document."
+          },
+          {
+            "type": "string",
+            "const": "starting",
+            "description": "Loading and starting the streams the graph documents hold."
+          },
+          {
+            "type": "string",
+            "const": "stopping",
+            "description": "Unloading the streams it works on."
+          }
+        ],
+        "description": "The step a running stream action is on."
+      },
+      "GraphRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The loaded stream whose graph to export, by the stream id `list_streams` reports. Omit it for every loaded stream's graph under the machine's name."
+          }
+        },
+        "description": "`graph`'s params."
+      },
+      "TransactRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StreamGraphAction"
+            },
+            "description": "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_generator_fragment` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "operations"
+        ],
+        "description": "`transact`'s params."
+      },
+      "StreamGraphAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "type": {
+                "type": "string",
+                "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The node's name, a label: cast to lowercase URL-safe and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …"
+              },
+              "config": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true,
+                "description": "The node's config, as the keys its type's schema declares."
+              },
+              "pins": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true,
+                "description": "The value on each unlinked input, by input name."
+              },
+              "exposed_config_fields": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
+              },
+              "studio": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true,
+                "description": "What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name."
+              },
+              "as": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A label later operations of the same transaction name the node by, before its UUID is known."
+              },
+              "operation": {
+                "type": "string",
+                "const": "add_node"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "type"
+            ],
+            "description": "Place a node, answering the UUID the runtime makes for it."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "node": {
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+              },
+              "operation": {
+                "type": "string",
+                "const": "remove_node"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "node"
+            ],
+            "description": "Take a node out, with every link it has."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "source": {
+                "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+                "description": "The output port the link carries from."
+              },
+              "target": {
+                "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+                "description": "The input port the link carries into."
+              },
+              "operation": {
+                "type": "string",
+                "const": "connect"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "source",
+              "target"
+            ],
+            "description": "Link an output port to an input port."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "source": {
+                "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+                "description": "The output port the link carries from."
+              },
+              "target": {
+                "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+                "description": "The input port the link carries into."
+              },
+              "operation": {
+                "type": "string",
+                "const": "disconnect"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "source",
+              "target"
+            ],
+            "description": "Take out the link between two ports."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "node": {
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+              },
+              "config": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "The node's new config, as the keys its type's schema declares."
+              },
+              "operation": {
+                "type": "string",
+                "const": "set_node_config"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "node",
+              "config"
+            ],
+            "description": "Replace a node's config whole."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "node": {
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+              },
+              "input": {
+                "type": "string",
+                "description": "The input's name, as `graph` lists it under the node's `ports.inputs`."
+              },
+              "value": {
+                "description": "The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off."
+              },
+              "operation": {
+                "type": "string",
+                "const": "set_pin_value"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "node",
+              "input"
+            ],
+            "description": "Set the value on one of a node's inputs."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "node": {
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+              },
+              "name": {
+                "type": "string",
+                "description": "The node's new name: cast to lowercase URL-safe, refused when another node has it."
+              },
+              "operation": {
+                "type": "string",
+                "const": "rename_node"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "node",
+              "name"
+            ],
+            "description": "Give a node another name."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "node": {
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+              },
+              "studio": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name."
+              },
+              "operation": {
+                "type": "string",
+                "const": "set_studio_fields"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "node",
+              "studio"
+            ],
+            "description": "Replace a node's studio fields whole."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "generator": {
+                "type": "string",
+                "description": "The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import."
+              },
+              "config": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true,
+                "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults."
+              },
+              "as": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A label later operations of the same transaction name the fragment node by, before its UUID is known."
+              },
+              "operation": {
+                "type": "string",
+                "const": "import_graph_generator"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "generator"
+            ],
+            "description": "Run one of the project's graph generators and place what it builds as a fragment, or\nrefresh the fragment of that name with a fresh run."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "node": {
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+              },
+              "exposed_config_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
+              },
+              "operation": {
+                "type": "string",
+                "const": "set_exposed_config_fields"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "node",
+              "exposed_config_fields"
+            ],
+            "description": "Replace the config fields a node takes as inputs whole."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "title": {
+                "type": "string",
+                "description": "The group's title, which Tato Studio draws on its frame."
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the group's nodes do, for the next person who reads the graph."
+              },
+              "colour": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The colour Tato Studio draws the group's frame with, e.g. `#3b82f6`."
+              },
+              "nodes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The nodes that join it, each as `node` names one; a node of another group is refused."
+              },
+              "operation": {
+                "type": "string",
+                "const": "add_group"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "title",
+              "nodes"
+            ],
+            "description": "Make a labelled group of nodes of the stream's own level."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "group": {
+                "type": "string",
+                "description": "The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers."
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The group's title, which Tato Studio draws on its frame."
+              },
+              "description": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the group's nodes do, for the next person who reads the graph."
+              },
+              "colour": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The colour Tato Studio draws the group's frame with, e.g. `#3b82f6`."
+              },
+              "operation": {
+                "type": "string",
+                "const": "set_group_fields"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "group"
+            ],
+            "description": "Set a labelled group's title, description or colour."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "project": {
+                "type": "string",
+                "description": "The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`."
+              },
+              "dependency_stream": {
+                "type": "string",
+                "description": "The imported project's stream, by its stream asset's UUID, the `asset` its graph document under `imports/<folder>/` holds."
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. Any node of that name already in the graph refuses the placement."
+              },
+              "as": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A label later operations of the same transaction name the fragment node by, before its UUID is known."
+              },
+              "operation": {
+                "type": "string",
+                "const": "use_dependency_stream"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "project",
+              "dependency_stream"
+            ],
+            "description": "Place a stream of an imported project as a fragment node referencing it."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "nodes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The nodes collapsed, each as `node` names one, all of the stream's own level and none of its own `GraphInput` or `GraphOutput` nodes."
+              },
+              "name": {
+                "type": "string",
+                "description": "The subgraph node's name, lowercase URL-safe, refused when a node outside the selection has it."
+              },
+              "as": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "A label later operations of the same transaction name the subgraph node by, before its UUID is known."
+              },
+              "operation": {
+                "type": "string",
+                "const": "collapse_selection_into_subgraph"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "nodes",
+              "name"
+            ],
+            "description": "Move nodes of the stream's own level, and the links between them, into one new\nauthored fragment, each link that crossed the selection carried through a `GraphInput`\nor `GraphOutput` inside it."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "fragment": {
+                "type": "string",
+                "description": "The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's."
+              },
+              "operation": {
+                "type": "string",
+                "const": "unlock_generator_fragment"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "fragment"
+            ],
+            "description": "Replace a fragment node of the stream's own level with the nodes and links it places,\nas plain nodes no refresh reaches."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "text": {
+                "type": "string",
+                "description": "What the note says, for the next person who reads the graph."
+              },
+              "position": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "Where the note's top-left corner sits on the canvas, an `[x, y]` pair of numbers."
+              },
+              "size": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "The note's width and height on the canvas, a `[width, height]` pair of numbers."
+              },
+              "operation": {
+                "type": "string",
+                "const": "add_note"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "text",
+              "position",
+              "size"
+            ],
+            "description": "Place a canvas note on the stream's graph, answering the UUID the runtime makes for it."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "note": {
+                "type": "string",
+                "description": "The canvas note, by the UUID `graph` lists under `notes` and `add_note` answers."
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What the note says, for the next person who reads the graph."
+              },
+              "position": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "Where the note's top-left corner sits on the canvas, an `[x, y]` pair of numbers."
+              },
+              "size": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "The note's width and height on the canvas, a `[width, height]` pair of numbers."
+              },
+              "operation": {
+                "type": "string",
+                "const": "set_note_fields"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "note"
+            ],
+            "description": "Set a canvas note's text, position or size."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "note": {
+                "type": "string",
+                "description": "The canvas note, by the UUID `graph` lists under `notes` and `add_note` answers."
+              },
+              "operation": {
+                "type": "string",
+                "const": "remove_note"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "note"
+            ],
+            "description": "Take a canvas note off the stream's graph."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "stream": {
+                "type": "string",
+                "format": "uuid",
+                "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "group": {
+                "type": "string",
+                "description": "The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers."
+              },
+              "operation": {
+                "type": "string",
+                "const": "remove_group"
+              }
+            },
+            "required": [
+              "operation",
+              "stream",
+              "group"
+            ],
+            "description": "Take out a labelled group, its nodes left ungrouped."
+          }
+        ],
+        "description": "One action on a stream's graph, as every caller sends it and history records it."
+      },
+      "StreamGraphActionLinkEnd": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+          },
+          "port": {
+            "type": "string",
+            "description": "The port's name, as `graph` lists it under the node's `ports`."
+          }
+        },
+        "required": [
+          "node",
+          "port"
+        ],
+        "description": "One end of a link a graph action names: a node and one of its ports."
+      },
+      "GraphEditMode": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "commit",
+            "description": "Applied, written to the graph document and recorded in history."
+          },
+          {
+            "type": "string",
+            "const": "live",
+            "description": "Applied to the running stream alone."
+          }
+        ],
+        "description": "Whether a graph edit is kept."
+      },
+      "ProjectTransactionAuthorArgument": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ProjectTransactionAuthorKindArgument",
+            "description": "`person` or `agent`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The author's name as history shows it."
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ],
+        "description": "A change's author as a caller names it."
+      },
+      "ProjectTransactionAuthorKindArgument": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "person",
+            "description": "A person, through the studio or the CLI."
+          },
+          {
+            "type": "string",
+            "const": "agent",
+            "description": "An agent."
+          }
+        ],
+        "description": "Who a change is by, as a caller names it."
+      },
+      "GraphTransactionToolResult": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "`commit`, written to the graph documents and recorded in history, or `live`, applied\nto the running streams alone."
+          },
+          "transaction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transaction's UUID; absent on a live one, which history never records."
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit on the project history's `main` that records it; absent on a live one."
+          },
+          "operations": {
+            "type": "array",
+            "items": true,
+            "description": "Each operation as applied, in order, tagged by its `operation`, its `stream` by\nstream id."
+          },
+          "added_nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphTransactionAddedNode"
+            },
+            "description": "Each node it added."
+          },
+          "connected_links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphTransactionConnectedLink"
+            },
+            "description": "Each link it made."
+          },
+          "added_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphTransactionAddedGroup"
+            },
+            "description": "Each labelled group it made."
+          },
+          "added_notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphTransactionAddedNote"
+            },
+            "description": "Each canvas note it placed."
+          }
+        },
+        "required": [
+          "mode",
+          "operations",
+          "added_nodes",
+          "connected_links"
+        ],
+        "description": "The result of a graph tool: the transaction it applied, committed or live."
+      },
+      "GraphTransactionAddedNode": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream it was added to, by stream id."
+          },
+          "node": {
+            "type": "string",
+            "description": "The UUID the runtime made for it."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name it took."
+          },
+          "as": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `as` its `add_node` gave it, which later operations of the transaction named it by."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "name"
+        ],
+        "description": "A node a graph transaction added."
+      },
+      "GraphTransactionConnectedLink": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream it was made in, by stream id."
+          },
+          "source": {
+            "$ref": "#/components/schemas/GraphLinkEndOnTheWire",
+            "description": "The output port it carries from."
+          },
+          "target": {
+            "$ref": "#/components/schemas/GraphLinkEndOnTheWire",
+            "description": "The input port it carries into."
+          },
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`pending`, `wired` or `error`; absent when the graph could not be read after it."
+          },
+          "error_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a link reading `error` will carry nothing, in the refusing end's own words."
+          }
+        },
+        "required": [
+          "stream",
+          "source",
+          "target"
+        ],
+        "description": "A link a graph transaction made, with the state the stream's graph reads it in."
+      },
+      "GraphTransactionAddedGroup": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream it was made in, by stream id."
+          },
+          "group": {
+            "type": "string",
+            "description": "The UUID the runtime made for it."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title."
+          }
+        },
+        "required": [
+          "stream",
+          "group",
+          "title"
+        ],
+        "description": "A labelled group a graph transaction made."
+      },
+      "GraphTransactionAddedNote": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream it was placed in, by stream id."
+          },
+          "note": {
+            "type": "string",
+            "description": "The UUID the runtime made for it."
+          }
+        },
+        "required": [
+          "stream",
+          "note"
+        ],
+        "description": "A canvas note a graph transaction placed."
+      },
+      "AddNodeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "type": {
+            "type": "string",
+            "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node's name, a label: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`) and refused when another node has it. Omit it for the type's short name, cast, with the next free `-2`, `-3` …"
+          },
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The node's config, as the keys its type's schema declares. Omit for none."
+          },
+          "pins": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The value on each unlinked input, by input name."
+          },
+          "exposed_config_fields": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
+          },
+          "studio": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "type"
+        ],
+        "description": "`add_node`'s params."
+      },
+      "OneLinkGraphEditRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "source": {
+            "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+            "description": "The output port the link carries from: a node's UUID and its output port's name."
+          },
+          "target": {
+            "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+            "description": "The input port the link carries into: a node's UUID and its input port's name."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "source",
+          "target"
+        ],
+        "description": "The params of an edit naming one link: `connect`'s, and `disconnect`'s."
+      }
+    }
+  }
+}

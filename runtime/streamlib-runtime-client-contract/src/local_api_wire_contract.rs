@@ -38,6 +38,7 @@ pub struct LogsToolResult {
 /// Where a stream lives, as the local API reports it: its project directory, resolved, its
 /// project's UUID and its stream asset's UUID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct StreamLocationOnTheWire {
     /// The project directory's absolute path, symlinks resolved, as of the stream's last load.
     pub project_directory: PathBuf,
@@ -126,6 +127,7 @@ pub struct ProjectSettingsTransactionToolResult {
 
 /// The `list_streams` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListStreamsToolResult {
     /// Every stream the runtime holds.
     pub streams: Vec<ListStreamsToolResultStream>,
@@ -133,6 +135,7 @@ pub struct ListStreamsToolResult {
 
 /// One stream of a [`ListStreamsToolResult`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListStreamsToolResultStream {
     /// The stream's id; every tool naming the stream takes it.
     pub stream: String,
@@ -160,6 +163,7 @@ pub struct ListStreamsToolResultStream {
 
 /// A capture device the platform gates behind a privacy prompt, as `list_streams` spells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum CaptureDeviceOnTheWire {
     /// The camera.
@@ -180,6 +184,7 @@ impl CaptureDeviceOnTheWire {
 
 /// The state of one stream `list_streams` lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ListedStreamState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
@@ -299,6 +304,7 @@ impl StreamActionStateOnTheWire {
 
 /// The step a running stream action is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum StreamActionStepOnTheWire {
     /// Making the project's `.venv` with the runtime's uv.
@@ -524,6 +530,7 @@ pub struct SetStreamClockScaleToolResult {
 
 /// The `describe_runtime` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DescribeRuntimeToolResult {
     /// The runtime's crate version.
     pub version: String,
@@ -799,6 +806,7 @@ pub struct AssetMediaFactsReadOnTheWire {
 /// What a refused action answers under `refusal` in its tool result's `structuredContent`,
 /// beside the same words as the result's text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectActionRefusalOnTheWire {
     /// The action refused, by the name of the tool it was sent to.
     pub action: String,
@@ -820,6 +828,7 @@ pub struct ProjectActionRefusalOnTheWire {
 
 /// The link a refused operation names, each end as the caller named it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct RefusedGraphLinkOnTheWire {
     /// The output port the link carries from.
     pub source: GraphLinkEndOnTheWire,
@@ -829,6 +838,7 @@ pub struct RefusedGraphLinkOnTheWire {
 
 /// One end of a link a graph tool names: a node by its UUID and one of its ports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphLinkEndOnTheWire {
     /// The node's UUID.
     pub node: String,
@@ -838,6 +848,7 @@ pub struct GraphLinkEndOnTheWire {
 
 /// A node a graph transaction added.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphTransactionAddedNode {
     /// The stream it was added to, by stream id.
     pub stream: String,
@@ -852,6 +863,7 @@ pub struct GraphTransactionAddedNode {
 
 /// A labelled group a graph transaction made.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphTransactionAddedGroup {
     /// The stream it was made in, by stream id.
     pub stream: String,
@@ -863,6 +875,7 @@ pub struct GraphTransactionAddedGroup {
 
 /// A canvas note a graph transaction placed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphTransactionAddedNote {
     /// The stream it was placed in, by stream id.
     pub stream: String,
@@ -872,6 +885,7 @@ pub struct GraphTransactionAddedNote {
 
 /// A link a graph transaction made, with the state the stream's graph reads it in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphTransactionConnectedLink {
     /// The stream it was made in, by stream id.
     pub stream: String,
@@ -889,6 +903,7 @@ pub struct GraphTransactionConnectedLink {
 
 /// The result of a graph tool: the transaction it applied, committed or live.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphTransactionToolResult {
     /// `commit`, written to the graph documents and recorded in history, or `live`, applied
     /// to the running streams alone.

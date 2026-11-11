@@ -24,6 +24,9 @@ cannot follow the packages tree out of the repo.
 > MCP hosts reach it, and whether it is reachable from other machines are OPEN in the plan, so the
 > HTTP surface this record describes stands until that entry is decided.
 
+> Amended 2026-11-10 by `control-api-contract.md`: the operation registry, not the MCP tool set, is
+> the canonical control vocabulary; MCP is one adapter over the runtime's one dispatcher.
+
 Node discovery is a per-user on-disk registry — one JSON file per live node in the OS's
 standard per-user runtime directory — written only by control-plane-hosting runtimes and
 pruned only when both liveness signals (a control round-trip and a process check) fail.
