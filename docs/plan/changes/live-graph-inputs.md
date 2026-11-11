@@ -35,7 +35,8 @@
 ## ADDED
 
 - **A top-level `GraphInput` is a running node.** At the stream's top level, interface resolution
-  keeps each `GraphInput` and its links in the graph the runtime runs. It runs as a reactive source
+  keeps each Array, Channels or Records `GraphInput` and its links in the graph the runtime runs;
+  an Image or Packets Input, which no client writes, resolves out as now. It runs as a reactive source
   processor with one output, `value`, of the family its config declares. `GraphOutput` and every
   interface node inside a fragment still resolve out exactly as now: a fragment's Input is where
   the placing graph's link enters, and an Output is where a port leaves.
