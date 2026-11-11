@@ -58,10 +58,13 @@ second one next to it.
 
 ## Open forks for the owner
 
-1. **Where kept values are saved.** Recommended: a store in the project under `.tatolab/`, outside
-   Git history, because a control moved at 60 Hz would flood history. "Save as default" stays a
-   separate, deliberate `set_node_config` commit. The other path: commit each settled value to
-   history, debounced, which makes values undoable but noisy.
+1. **Where kept values are saved — settled.** Under `.tatolab/`, outside Git history. Memory is
+   the truth at full rate: a DJ dragging a slider changes the value as often as it moves, and
+   readers take each change. One writer per project flushes the latest value of each changed key to
+   the file on a debounce, the way a log writer batches, so writes never run at the slider's rate
+   or race each other; Stop, close and a clean shutdown flush at once. A crash loses at most one
+   debounce window. "Save as default" stays a separate `set_node_config` commit (owner,
+   2026-11-11).
 2. **The default lifetime — settled.** A function node's `State` resets at Stop, as stateless
    nodes and today's nodes expect; a Graph Input keeps (owner, 2026-11-11).
 3. **Values the board cannot hold.** The board holds numbers. A Records Graph Input holds
@@ -80,6 +83,6 @@ showing which controls are kept, and save-as-default in Studio.
 
 ## Exit
 
-Graduates through `/align` once the owner settles forks 1 and 3. It amends playback-controls'
+Graduates through `/align` once the owner settles fork 3. It amends playback-controls'
 "Stop forgets function-node state" and live-graph-inputs' "gone on the next load", so the delta
 is a change proposal against both.
