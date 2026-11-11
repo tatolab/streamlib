@@ -14,16 +14,14 @@ use streamlib_surface_client::{
 };
 
 use crate::{
-    GpuPoolClaimTablesOfThisImporter, GpuPoolSlotFrameClaimOfThisImporter,
-    PixelBufferPoolSlotOfAViewer, SurfaceShareConnectionOfThisImporter,
-    pool_slots_a_reply_lists_as_retired,
+    GpuPoolClaimTablesOfThisImporter, GpuPoolSlotFrameClaimOfThisImporter, GpuPoolSlotOfAViewer,
+    SurfaceShareConnectionOfThisImporter, pool_slots_a_reply_lists_as_retired,
 };
 
 /// A viewer's importer of the frames a runtime's GPU pools publish, over the
 /// surface-sharing address `open_viewer` answered.
 pub struct GpuPoolFrameImporterOfAViewer {
-    surface_share_connection:
-        SurfaceShareConnectionOfThisImporter<Arc<PixelBufferPoolSlotOfAViewer>>,
+    surface_share_connection: SurfaceShareConnectionOfThisImporter<Arc<GpuPoolSlotOfAViewer>>,
     gpu_pool_claim_tables: GpuPoolClaimTablesOfThisImporter,
 }
 
@@ -33,7 +31,7 @@ pub struct GpuPoolFrameHeldByAViewer {
     frame: GpuPoolSlotFrameDescriptorBody,
     #[cfg(target_os = "macos")]
     _iosurface_use_count_claim: crate::apple::IOSurfaceUseCountClaimOfAViewer,
-    pool_slot: Arc<PixelBufferPoolSlotOfAViewer>,
+    pool_slot: Arc<GpuPoolSlotOfAViewer>,
     _claim: Arc<GpuPoolSlotFrameClaimOfThisImporter>,
 }
 
@@ -44,7 +42,7 @@ impl GpuPoolFrameHeldByAViewer {
     }
 
     /// The pool slot's memory the frame lies in.
-    pub fn pool_slot(&self) -> &PixelBufferPoolSlotOfAViewer {
+    pub fn pool_slot(&self) -> &GpuPoolSlotOfAViewer {
         &self.pool_slot
     }
 }
@@ -112,7 +110,7 @@ impl GpuPoolFrameImporterOfAViewer {
     fn the_pool_slot_imported(
         &self,
         pool_slot_key: &str,
-    ) -> Result<Arc<PixelBufferPoolSlotOfAViewer>, String> {
+    ) -> Result<Arc<GpuPoolSlotOfAViewer>, String> {
         let imports = self
             .surface_share_connection
             .pool_slot_imports_by_pool_slot();
@@ -139,7 +137,7 @@ impl GpuPoolFrameImporterOfAViewer {
                  {refusal}"
             ));
         }
-        let imported = Arc::new(PixelBufferPoolSlotOfAViewer::from_the_import_reply(
+        let imported = Arc::new(GpuPoolSlotOfAViewer::from_the_import_reply(
             pool_slot_key,
             &reply,
             received_handles,

@@ -25,8 +25,7 @@ mod pool_slot_imports_by_pool_slot;
 
 #[cfg(target_os = "macos")]
 pub use apple::{
-    PixelBufferPoolSlotOfAViewer, SurfaceShareConnectionOfThisImporter,
-    SurfaceShareTransferredHandle,
+    GpuPoolSlotOfAViewer, SurfaceShareConnectionOfThisImporter, SurfaceShareTransferredHandle,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_pool_claim_tables_of_this_importer::{
@@ -39,7 +38,7 @@ pub use gpu_pool_frame_importer_of_a_viewer::{
 };
 #[cfg(target_os = "linux")]
 pub use linux::{
-    PixelBufferPoolSlotOfAViewer, SurfaceShareConnectionOfThisImporter,
+    DmaBufPlaneOfAGpuPoolSlotOfAViewer, GpuPoolSlotOfAViewer, SurfaceShareConnectionOfThisImporter,
     SurfaceShareTransferredHandle,
 };
 pub use pool_slot_imports_by_pool_slot::{

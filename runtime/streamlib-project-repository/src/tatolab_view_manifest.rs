@@ -50,15 +50,9 @@ pub struct TatolabViewManifest {
     /// The JSON Schema of what a view's area remembers, every property giving its `default`.
     #[serde(default, deserialize_with = "a_value_never_written_as_null")]
     pub settings: Option<Value>,
-    /// Whether the view runs on an opaque origin, served only its `capabilities` and `network`.
-    #[serde(default)]
-    pub sandbox: bool,
-    /// The parts of the view contract a sandboxed view asks for.
+    /// What the view declares it uses, which Studio hands the view and asks the system for.
     #[serde(default)]
     pub capabilities: Vec<TatolabViewCapability>,
-    /// The hosts a sandboxed view may reach.
-    #[serde(default)]
-    pub network: Vec<String>,
 }
 
 /// Where a view is shown.
@@ -105,7 +99,7 @@ pub struct TatolabViewAcceptedFiles {
     pub files: Vec<String>,
 }
 
-/// A part of the view contract a sandboxed view may ask for beyond what every view gets.
+/// A part of the view contract, or a device, a view declares it uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum TatolabViewCapability {
     #[serde(rename = "read.selection")]
@@ -283,14 +277,6 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
     {
         issue(field_path, why);
     }
-    for (index, host) in manifest.network.iter().enumerate() {
-        if !is_a_network_host(host) {
-            issue(
-                format!("network[{index}]"),
-                "a host is a lower-case name, with a port if it needs one, and no scheme or wildcard",
-            );
-        }
-    }
     if manifest.placement == TatolabViewPlacement::Area
         && (!manifest.inputs.is_empty() || !manifest.outputs.is_empty())
     {
@@ -366,28 +352,6 @@ fn is_a_file_extension(extension: &str) -> bool {
                 .chars()
                 .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
     })
-}
-
-fn is_a_host_label(label: &str) -> bool {
-    !label.is_empty()
-        && !label.starts_with('-')
-        && !label.ends_with('-')
-        && label.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        })
-}
-
-fn is_a_network_host(host: &str) -> bool {
-    let (name, port) = match host.split_once(':') {
-        Some((name, port)) => (name, Some(port)),
-        None => (host, None),
-    };
-    if let Some(port) = port
-        && (!(1..=5).contains(&port.len()) || !port.bytes().all(|byte| byte.is_ascii_digit()))
-    {
-        return false;
-    }
-    (1..=253).contains(&name.len()) && name.split('.').all(is_a_host_label)
 }
 
 /// The field and why when `settings` is not the JSON Schema of an object whose every property

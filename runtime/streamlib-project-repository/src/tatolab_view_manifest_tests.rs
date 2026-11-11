@@ -99,7 +99,7 @@ fn a_node_view_manifest() -> Value {
         "placement": "node",
         "inputs": [{ "name": "waveform", "family": "channels" }],
         "outputs": [{ "name": "fader", "family": "array", "range": [0, 1] }],
-        "capabilities": ["gpu", "gpu"],
+        "capabilities": ["camera", "camera"],
     })
 }
 
@@ -111,9 +111,8 @@ fn a_node_view_manifest_reads_with_its_defaults_filled_in() {
     assert_eq!(manifest.placement, TatolabViewPlacement::Node);
     assert_eq!(manifest.inputs[0].family, PortFamily::Channels);
     assert_eq!(manifest.outputs[0].range, Some([0.0, 1.0]));
-    assert_eq!(manifest.capabilities, vec![TatolabViewCapability::Gpu]);
+    assert_eq!(manifest.capabilities, vec![TatolabViewCapability::Camera]);
     assert!(manifest.accepts.files.is_empty());
-    assert!(!manifest.sandbox);
 }
 
 #[test]
@@ -127,6 +126,26 @@ fn a_field_the_contract_does_not_know_is_refused_naming_it() {
 }
 
 #[test]
+fn a_sandbox_or_network_hosts_are_refused_since_every_view_runs_with_full_access() {
+    for (field, value) in [
+        ("sandbox", json!(true)),
+        ("network", json!(["example.com"])),
+    ] {
+        let mut manifest = a_node_view_manifest();
+        manifest[field] = value;
+
+        let refusal =
+            read_tatolab_view_manifest(&manifest).expect_err("view contract 1.0 has neither");
+
+        assert!(
+            refusal.starts_with("`tatolab_view.json`:")
+                && refusal.contains(&format!("unknown field `{field}`")),
+            "{refusal}"
+        );
+    }
+}
+
+#[test]
 fn each_way_a_manifest_falls_short_is_named_by_its_field() {
     let refusal = read_tatolab_view_manifest(&json!({
         "contract": "2.0",
@@ -137,7 +156,6 @@ fn each_way_a_manifest_falls_short_is_named_by_its_field() {
             { "name": "Fader", "family": "records", "range": [1, 0] },
             { "name": "Fader", "family": "image" },
         ],
-        "network": ["https://example.com"],
     }))
     .expect_err("nothing about it opens");
 
@@ -149,7 +167,6 @@ fn each_way_a_manifest_falls_short_is_named_by_its_field() {
         "`outputs[1].name`: `Fader` is named twice.",
         "`outputs[0].range`: a range is [lowest, highest], lowest first.",
         "`outputs[0].range`: only an Array port carries a range.",
-        "`network[0]`: a host is a lower-case name",
         "`placement`: an `area` view has no node",
     ] {
         assert!(refusal.contains(expected), "{expected} in {refusal}");
@@ -188,23 +205,5 @@ fn a_path_inside_the_views_folder_has_no_scheme_root_or_parent_step() {
         "data:text/html,x",
     ] {
         assert!(!is_a_path_inside_the_views_folder(outside), "{outside}");
-    }
-}
-
-#[test]
-fn a_network_host_is_a_lower_case_name_with_an_optional_port() {
-    for host in ["example.com", "localhost:8080", "a-b.c0"] {
-        assert!(is_a_network_host(host), "{host}");
-    }
-    for not_a_host in [
-        "Example.com",
-        "*.example.com",
-        "https://x",
-        "-a.com",
-        "a.com:",
-        "a.com:123456",
-        "",
-    ] {
-        assert!(!is_a_network_host(not_a_host), "{not_a_host}");
     }
 }

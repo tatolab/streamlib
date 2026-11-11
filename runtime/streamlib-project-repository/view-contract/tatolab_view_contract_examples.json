@@ -26,9 +26,7 @@
           "type": "object",
           "properties": { "show_beams": { "type": "boolean", "default": true } }
         },
-        "capabilities": ["read.selection", "read.project_assets"],
-        "network": ["fixtures.example.com", "localhost:8080"],
-        "sandbox": true
+        "capabilities": ["read.selection", "read.project_assets", "camera", "microphone"]
       },
       "opens": true
     },
@@ -49,9 +47,7 @@
         "inputs": [],
         "outputs": [],
         "accepts": { "files": [] },
-        "sandbox": false,
-        "capabilities": [],
-        "network": []
+        "capabilities": []
       }
     },
     {
@@ -61,7 +57,7 @@
         "title": "  Deck ",
         "entry": "index.html",
         "placement": "node",
-        "capabilities": ["gpu", "gpu"]
+        "capabilities": ["camera", "camera"]
       },
       "opens": true,
       "reads_as": {
@@ -72,9 +68,7 @@
         "inputs": [],
         "outputs": [],
         "accepts": { "files": [] },
-        "sandbox": false,
-        "capabilities": ["gpu"],
-        "network": []
+        "capabilities": ["camera"]
       }
     },
     {
@@ -348,30 +342,6 @@
       "refused_at": "outputs[0].range"
     },
     {
-      "named": "a network host with a scheme",
-      "manifest": {
-        "contract": "1.0",
-        "title": "Scheme",
-        "entry": "index.html",
-        "placement": "area",
-        "network": ["https://fixtures.example.com"]
-      },
-      "opens": false,
-      "refused_at": "network[0]"
-    },
-    {
-      "named": "a network host with a wildcard",
-      "manifest": {
-        "contract": "1.0",
-        "title": "Wildcard",
-        "entry": "index.html",
-        "placement": "area",
-        "network": ["*.example.com"]
-      },
-      "opens": false,
-      "refused_at": "network[0]"
-    },
-    {
       "named": "an extension without its dot",
       "manifest": {
         "contract": "1.0",
@@ -382,18 +352,6 @@
       },
       "opens": false,
       "refused_at": "accepts.files[0]"
-    },
-    {
-      "named": "a capability the contract does not have",
-      "manifest": {
-        "contract": "1.0",
-        "title": "Everything",
-        "entry": "index.html",
-        "placement": "area",
-        "capabilities": ["read.everything"]
-      },
-      "opens": false,
-      "refused_at": "capabilities[0]"
     },
     {
       "named": "a setting that gives no default",
@@ -411,16 +369,28 @@
       "refused_at": "settings.properties.show_beams.default"
     },
     {
-      "named": "a sandbox that is not true or false",
+      "named": "a capability the contract does not have",
+      "manifest": {
+        "contract": "1.0",
+        "title": "Everything",
+        "entry": "index.html",
+        "placement": "area",
+        "capabilities": ["read.everything"]
+      },
+      "opens": false,
+      "refused_at": "capabilities[0]"
+    },
+    {
+      "named": "a sandbox, which the contract does not have: every view runs with full access",
       "manifest": {
         "contract": "1.0",
         "title": "Sandbox",
         "entry": "index.html",
         "placement": "area",
-        "sandbox": "yes"
+        "sandbox": true
       },
       "opens": false,
-      "refused_at": "sandbox"
+      "refused_at": "tatolab_view.json"
     },
     {
       "named": "a description written as null",

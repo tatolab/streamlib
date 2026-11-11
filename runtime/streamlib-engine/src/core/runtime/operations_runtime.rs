@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use super::LoadedStreamInThisRuntime;
@@ -519,6 +520,20 @@ impl LoadedStreamInThisRuntime {
             live: self.live_commit_context(),
             stream: self.loaded_stream_identity().clone(),
         }
+    }
+
+    /// Update a processor's configuration and compile it right away when the stream runs, so
+    /// a configuration the running processor refuses is refused here, and the node keeps the
+    /// configuration it holds.
+    pub(super) async fn update_processor_config_compiled_right_away<C: Serialize>(
+        &self,
+        processor_id: &ProcessorUniqueId,
+        config: C,
+    ) -> Result<()> {
+        self.log_a_processor_config_update_for_the_next_commit(processor_id, config)?;
+        commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
     }
 
     fn tokio_runtime_variant(&self) -> &TokioRuntimeVariant {

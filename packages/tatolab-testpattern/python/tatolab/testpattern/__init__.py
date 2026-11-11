@@ -272,6 +272,10 @@ class TestPatternSource:
             f"TestPatternSource: rendering {self._config.width}x{self._config.height} on the GPU"
         )
 
+    def configure(self, config: TestPatternSourceConfig) -> None:
+        """Take a new frame size, rendered from the next frame on."""
+        self._config = config
+
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if (
             self._compute_kernel is None

@@ -3,6 +3,9 @@ paths:
   - "runtime/streamlib-engine/src/vulkan/**"
   - "runtime/streamlib-consumer-rhi/**"
   - "adapters/**"
+  - "runtime/streamlib-gpu-frame-import-client/**"
+  - "runtime/streamlib-surface-client/**"
+  - "runtime/streamlib-engine/src/core/runtime/output_port_viewer.rs"
 ---
 
 # RHI boundary
@@ -21,8 +24,14 @@ paths:
   `GpuContext::texture_cache` — extend it, never spin up a parallel `HashMap<surface_id, …>`.
 - **`TextureRing` is the single decode-output / CPU-upload rotating-texture abstraction** — never
   hand-roll a `Vec<Texture>` + index for that use case.
-- Helper-process Vulkan is import-side only (FD import + bind + map + layout transitions +
-  timeline wait/signal); everything privileged escalates to the parent.
+- **GPU work belongs to the engine.** A process outside the runtime — a helper, Tato Studio's
+  viewer — only imports what the engine hands it: FD import, bind, map, layout transitions,
+  timeline wait/signal. When it needs more — an allocation, a copy, memory in another
+  flavour — the engine does it on its own device and hands back something the process can
+  import, the way a helper escalates an op to its parent. Processes that drove their own
+  Vulkan crashed, and NVIDIA crashes when two devices submit concurrently in one process
+  (`docs/learnings/nvidia-dual-vulkan-device-crash.md`). The one exception is a codec
+  module's owned device, the only submitting device in its own process.
 
 Read before you change:
 - allocation / export / VMA config → `docs/learnings/vma-export-pools.md`,

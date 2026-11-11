@@ -30,9 +30,11 @@ pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 pub mod psnr;
+pub mod sign_the_carried_packages_with_a_developer_id;
 pub mod source_call_site_scan;
 pub mod stage_browser_host;
 pub mod stage_first_party_modules;
+pub mod stage_runtime_unit_carried_packages;
 pub mod stage_runtime_unit_uv;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
@@ -655,6 +657,11 @@ enum Commands {
         /// unit so, for the integration suite. Never for a release.
         #[arg(long)]
         machine_directories_under_a_test_root: bool,
+        /// Sign every Mach-O inside the carried wheels and the carried Python with this
+        /// `Developer ID Application: …` identity, which a keychain on the search list holds,
+        /// so a bundle carrying them passes Apple's notary. macOS only.
+        #[arg(long)]
+        macos_developer_id_application_identity: Option<String>,
     },
 
     /// Download uv's release archive for this host at its pinned version,
@@ -663,6 +670,12 @@ enum Commands {
     /// `bin/`. A second run whose archive still matches downloads nothing.
     /// See [`stage_runtime_unit_uv`].
     StageRuntimeUnitUv,
+
+    /// Resolve the core modules' third-party requirements and the scaffold's Python for every
+    /// platform the runtime unit ships, download each to learn its sha256, and rewrite
+    /// `xtask/runtime_unit_carried_packages.toml`, which `build-runtime` places in the unit. See
+    /// [`stage_runtime_unit_carried_packages`].
+    PinRuntimeUnitCarriedPackages,
 
     /// Build the browser host and its CEF subprocess from
     /// `packages/tatolab-browser`'s own lockfile against the CEF distribution
@@ -777,15 +790,22 @@ fn main() -> Result<()> {
         Commands::BuildRuntime {
             release,
             machine_directories_under_a_test_root,
+            macos_developer_id_application_identity,
         } => build_runtime::run(
             &workspace_root()?,
             build_runtime::RuntimeUnitBuildProfile::from_release_flag(release),
             build_runtime::RuntimeUnitMachineDirectories::from_machine_directories_under_a_test_root_flag(
                 machine_directories_under_a_test_root,
             ),
+            macos_developer_id_application_identity.as_deref(),
         )?,
         Commands::StageRuntimeUnitUv => {
             stage_runtime_unit_uv::stage_the_runtime_unit_uv(&workspace_root()?)?;
+        }
+        Commands::PinRuntimeUnitCarriedPackages => {
+            let workspace_root = workspace_root()?;
+            let uv = stage_runtime_unit_uv::stage_the_runtime_unit_uv(&workspace_root)?;
+            stage_runtime_unit_carried_packages::pin_the_carried_packages(&workspace_root, &uv)?;
         }
         Commands::StageBrowserHost => {
             stage_browser_host::stage_the_browser_host(&workspace_root()?)?;

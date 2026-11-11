@@ -149,6 +149,46 @@ pub fn first_party_modules_directory_beside_the_lend(lend_directory: &Path) -> O
     )
 }
 
+/// The directory beside the lend that holds the third-party wheels the core
+/// modules require, for the unit's own platform, which every project's sync
+/// finds through its `.tatolab/carried-wheels` link before any index.
+pub const CARRIED_WHEELS_DIRECTORY_NAME: &str = "carried-wheels";
+
+/// The carried wheels directory beside the lend at `lend_directory`, or
+/// `None` for a lend at the filesystem root.
+pub fn carried_wheels_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(lend_directory.parent()?.join(CARRIED_WHEELS_DIRECTORY_NAME))
+}
+
+/// The directory beside the lend that holds the CPython build the unit carries,
+/// at `<build>/<archive file name>`: the layout uv reads from a
+/// `UV_PYTHON_INSTALL_MIRROR`.
+pub const CARRIED_PYTHON_DOWNLOADS_DIRECTORY_NAME: &str = "python-downloads";
+
+/// The carried Python downloads directory beside the lend at `lend_directory`,
+/// or `None` for a lend at the filesystem root.
+pub fn carried_python_downloads_directory_beside_the_lend(
+    lend_directory: &Path,
+) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(CARRIED_PYTHON_DOWNLOADS_DIRECTORY_NAME),
+    )
+}
+
+/// The file in the carried Python downloads directory that names the carried CPython build and
+/// its sha256 to uv as `UV_PYTHON_DOWNLOADS_JSON_URL`. uv checks every Python download against
+/// a sha256, a mirrored one included, and the macOS unit's archive is re-signed after its pin.
+pub const CARRIED_PYTHON_DOWNLOADS_METADATA_FILE_NAME: &str = "uv-python-downloads.json";
+
+/// The uv download metadata file in `carried_python_downloads_directory`.
+pub fn carried_python_downloads_metadata_file_in(
+    carried_python_downloads_directory: &Path,
+) -> PathBuf {
+    carried_python_downloads_directory.join(CARRIED_PYTHON_DOWNLOADS_METADATA_FILE_NAME)
+}
+
 /// The browser host's executable beside the lend at `lend_directory`, or `None`
 /// for a lend at the filesystem root: in its directory on Linux, inside its
 /// app bundle there on macOS.

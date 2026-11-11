@@ -127,8 +127,11 @@ its own commit, and each time it makes a project's `.venv` it links them into
 `.tatolab/first-party-imports/` and declares each as a uv path source, so they always match the
 runtime and a project never waits on PyPI for them.
 The runtime carries its own uv and makes a project's `.venv` with it whenever `.venv/bin/python`
-does not run, fetching the Python `.python-version` pins when the machine lacks it, so there is no
-setup step.
+does not run, so there is no setup step. It also carries the wheels its core modules need (numba,
+llvmlite, numpy and pillow) and the CPython 3.12 build the scaffold's `.python-version` names, so
+a new project syncs with no network: the runtime installs that Python when the machine has none,
+syncs offline first, and reaches an index only for what it does not carry. To move what it carries,
+run `cargo xtask pin-runtime-unit-carried-packages`.
 
 ### Building the runtime from source
 
