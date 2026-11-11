@@ -23,8 +23,9 @@ use crate::core::processors::{
 
 impl LoadedStreamInThisRuntime {
     /// Hand `value` to the view node whose UUID, as the stream's graph lists it under `id`, is
-    /// `node_id`, which publishes it on its output `port_name`. Refused for a node that is not of
-    /// a view type, that does not run, or whose port does not take the value. The stream's graph
+    /// `node_id`, which publishes it on its output `port_name`. Refused for a stream whose project
+    /// is stopped, and a node that is not of a view type, that does not run, or whose port does
+    /// not take the value. The stream's graph
     /// lock is held across a compile, so the write waits off the async workers.
     pub(crate) async fn hand_a_value_written_by_a_panel_to_a_view_node(
         &self,
@@ -88,6 +89,14 @@ impl LoadedStreamInThisRuntime {
         )> + Send
         + 'static,
     ) -> Result<FoundBesideTheNode> {
+        if self.is_held_stopped() {
+            return Err(Error::Runtime(format!(
+                "the project of the stream `{}` in {} is stopped, so no node of it runs to \
+                 publish on `{port_name}`; `start_project` starts it",
+                self.stream_id(),
+                self.project_directory().display()
+            )));
+        }
         let compiler = Arc::clone(&self.compiler);
         tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {

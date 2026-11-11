@@ -46,13 +46,13 @@ reshapes #3216.
   runtime's version on render (`runtime/streamlib-engine/src/core/runtime/new_project_scaffold.rs:46-56`,
   `:148-157`). Its one stream asset, `streams/main.graph.json`, is `TestPatternSource` →
   `HalftoneLensEffect` → `BrightnessMeter`, the effect and meter in the template's `nodes/`; the
-  encoder and `expose` are already gone (`docs/plan/changes/gateway-nodes.md:137`).
+  encoder and `expose` are already gone (`docs/plan/changes/archive/2026-11-08-gateway-nodes.md:137`).
 - **The release checks the scaffold locks this run's wheels** by passing them to `uv lock` as
   find-links beside PyPI (`reusable-distributions.yml:243-300`).
 - **Samples have no home**: the scaffold entry sends camera projects to "the docs' sample projects
   and, later, an examples folder the app installs" (`ARCHITECTURE.md:104-106`). #3216 plans to
   list `examples/` in the catalog as `git+https://github.com/tatolab/streamlib@<tag>` requirements.
-- **`project-and-assets` is on `main`** (`docs/plan/changes/project-and-assets.md`): a project is
+- **`project-and-assets` is on `main`** (`docs/plan/changes/archive/2026-11-09-project-and-assets.md`): a project is
   a repository of assets with no `stream.py`, and create writes the project file, one stream asset,
   its node modules and the first commit of its history (`project-and-assets.md:160-161`). This
   change sits on top of it: the starter's one stream asset holds one node, and a sample is a
@@ -244,5 +244,3 @@ reshapes how every other first-party module reaches a project:
 - Module authoring, naming (`tatolab-<name>` importing as `tatolab.<name>`) and the one version
   are unchanged.
 - A third party publishes wherever they like; a project names that index the same way.
-- Offline create is not in scope: the core modules' own requirements (`numba` with `llvmlite`,
-  `numpy`, `pillow`) and the Python `.python-version` names still download on the first `uv sync`.

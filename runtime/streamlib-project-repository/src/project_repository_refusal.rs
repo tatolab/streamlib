@@ -67,6 +67,24 @@ pub enum ProjectRepositoryRefusal {
     #[error("the file `{path}` changed since its transaction was recorded")]
     ProjectFileChangedSinceItWasRecorded { path: String },
     #[error(
+        "`{path}` changed since it was read, so this write would overwrite that change; nothing was written. Read the file again to see what it holds now"
+    )]
+    ProjectFileChangedSinceItWasRead {
+        path: String,
+        sha256_read: String,
+        sha256_on_disk_now: String,
+    },
+    #[error(
+        "`{0}` was taken out of the project since it was read; nothing was written. Write it again with no `expected_sha256` to bring it back"
+    )]
+    ProjectFileRemovedSinceItWasRead(String),
+    #[error(
+        "`expected_sha256` `{0}` is not a SHA-256 digest: send the 64 hexadecimal digits `read_project_file` answered as `content_sha256`"
+    )]
+    ExpectedSha256IsNotADigest(String),
+    #[error("`{0}` already holds this content, so the write has nothing to change")]
+    ProjectFileAlreadyHoldsThisContent(String),
+    #[error(
         "the stream asset {0} is a graph document, which graph edits change; its bytes are never replaced"
     )]
     StreamAssetsAreNotReplaced(Uuid),

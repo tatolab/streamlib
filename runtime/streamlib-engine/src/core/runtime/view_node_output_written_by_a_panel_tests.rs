@@ -42,6 +42,17 @@ fn the_deck_manifest() -> Value {
     })
 }
 
+const LEVEL_VIEW_TYPE: &str = "acme-dj:level";
+
+fn the_level_manifest() -> Value {
+    json!({
+        "contract": "1.0", "title": "Level", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "level", "family": "array" }],
+        "settings": { "type": "object",
+                      "properties": { "gain": { "type": "number", "default": 1 } } }
+    })
+}
+
 fn a_view_folder_in(project_directory: &Path, view_folder_name: &str, manifest: &Value) {
     let folder = project_directory
         .join(PROJECT_VIEWS_DIRECTORY)
@@ -75,6 +86,7 @@ impl AStreamOfAProjectBringingViews {
         )
         .unwrap();
         a_view_folder_in(project_directory.path(), "deck", &the_deck_manifest());
+        a_view_folder_in(project_directory.path(), "level", &the_level_manifest());
         a_view_folder_in(
             project_directory.path(),
             "broken",
@@ -293,6 +305,60 @@ fn a_write_the_port_or_node_does_not_take_is_refused_naming_why() {
         .unwrap_err()
         .to_string();
     assert!(refusal.contains("no view its project brings"), "{refusal}");
+}
+
+#[test]
+#[serial]
+fn a_write_onto_a_view_node_of_a_stopped_project_says_the_project_is_stopped_and_how_to_start_it() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
+    let deck_uuid = stream.run(&deck_id);
+    stream
+        .stream
+        .stop_playback_keeping_the_graph()
+        .expect("the stream's playback stops");
+
+    let refusal = stream
+        .write(&deck_uuid, "fader", json!(0.5))
+        .expect_err("a stopped project runs no node to publish")
+        .to_string();
+    assert!(refusal.contains("is stopped"), "{refusal}");
+    assert!(refusal.contains("`start_project` starts it"), "{refusal}");
+    assert!(!refusal.contains("Resource not found"), "{refusal}");
+}
+
+#[test]
+#[serial]
+fn a_view_nodes_config_its_views_settings_do_not_declare_or_type_is_refused_naming_each_key() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let level_id = stream.add_a_node(LEVEL_VIEW_TYPE, "level").unwrap();
+
+    stream
+        .stream
+        .update_processor_config(&level_id, json!({ "gain": 0.5 }))
+        .expect("a setting the view declares, of its type, is taken");
+    let refusal = stream
+        .stream
+        .update_processor_config(&level_id, json!({ "gain": "loud", "colour": 3 }))
+        .expect_err("a setting of the wrong type and one the view does not declare are refused")
+        .to_string();
+    assert!(refusal.contains("`gain`"), "{refusal}");
+    assert!(refusal.contains("\"loud\""), "{refusal}");
+    assert!(refusal.contains("colour"), "{refusal}");
+    assert!(refusal.contains(LEVEL_VIEW_TYPE), "{refusal}");
+
+    let refusal = stream
+        .stream
+        .add_processor(
+            ProcessorSpec::new(
+                ProcessorClassImportPath::new(DECK_VIEW_TYPE).unwrap(),
+                json!({ "bpm": 120 }),
+            )
+            .with_display_name("deck".to_string()),
+        )
+        .expect_err("a view that declares no settings takes none")
+        .to_string();
+    assert!(refusal.contains("bpm"), "{refusal}");
 }
 
 #[test]

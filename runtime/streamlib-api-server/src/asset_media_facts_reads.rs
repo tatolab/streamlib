@@ -13,6 +13,8 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 use streamlib_asset_media_facts::{
     AssetMediaFactsCacheOfAProject, AssetMediaFactsCachedInTheProject,
+    AssetMediaFactsReadersOfThisRuntime, VIDEO_POSTER_FRAME_HELPER_EXECUTABLE_FILE_NAME,
+    VideoPosterFrameHelper,
 };
 use streamlib_project_repository::{
     ProjectAsset, ProjectAssetKind, ProjectRepositoriesOpenInThisRuntime,
@@ -50,10 +52,37 @@ struct AssetMediaFactsReadFinished {
 /// project since it started, held in memory only, since no history records a read.
 pub(crate) struct AssetMediaFactsReadsInThisRuntime {
     project_repositories_open_in_this_runtime: Arc<ProjectRepositoriesOpenInThisRuntime>,
+    readers: AssetMediaFactsReadersOfThisRuntime,
     reads_queued_or_under_way: Mutex<HashSet<(PathBuf, String)>>,
     finished_reads_oldest_first_by_project:
         Mutex<HashMap<Uuid, VecDeque<AssetMediaFactsReadFinished>>>,
     read_queue_to_the_reading_thread: OnceLock<Sender<AssetMediaFactsReadQueued>>,
+}
+
+/// The readers of the runtime unit this process runs from: its poster frame helper when the
+/// unit carries one beside this executable, as `bin/` and a macOS app's `Contents/MacOS` lay it
+/// out.
+pub(crate) fn asset_media_facts_readers_beside_this_executable()
+-> AssetMediaFactsReadersOfThisRuntime {
+    let video_poster_frame_helper = std::env::current_exe()
+        .and_then(std::fs::canonicalize)
+        .ok()
+        .and_then(|this_executable| {
+            Some(
+                this_executable
+                    .parent()?
+                    .join(VIDEO_POSTER_FRAME_HELPER_EXECUTABLE_FILE_NAME),
+            )
+        })
+        .filter(|helper| helper.is_file());
+    if video_poster_frame_helper.is_none() {
+        tracing::info!(
+            "the runtime unit carries no {VIDEO_POSTER_FRAME_HELPER_EXECUTABLE_FILE_NAME} beside this executable, so videos have no poster frame"
+        );
+    }
+    AssetMediaFactsReadersOfThisRuntime {
+        video_poster_frame_helper: video_poster_frame_helper.map(VideoPosterFrameHelper::at),
+    }
 }
 
 /// The thread that reads assets' media facts did not start, so a read cannot be queued.
@@ -73,12 +102,14 @@ pub(crate) enum AssetMediaFactsNow {
 
 impl AssetMediaFactsReadsInThisRuntime {
     /// No read queued, each finished read announced on `project_repositories_open_in_this_runtime`'s
-    /// change feed.
+    /// change feed, and each read by `readers`.
     pub(crate) fn announcing_on(
         project_repositories_open_in_this_runtime: Arc<ProjectRepositoriesOpenInThisRuntime>,
+        readers: AssetMediaFactsReadersOfThisRuntime,
     ) -> Self {
         Self {
             project_repositories_open_in_this_runtime,
+            readers,
             reads_queued_or_under_way: Mutex::default(),
             finished_reads_oldest_first_by_project: Mutex::default(),
             read_queue_to_the_reading_thread: OnceLock::new(),
@@ -207,7 +238,11 @@ impl AssetMediaFactsReadsInThisRuntime {
         let kept = cache
             .cached(&queued.content_sha256, &queued.asset_file_path)
             .unwrap_or_else(|| {
-                cache.read_and_keep(&queued.content_sha256, &queued.asset_file_path)
+                cache.read_and_keep(
+                    &queued.content_sha256,
+                    &queued.asset_file_path,
+                    &self.readers,
+                )
             });
         let media_facts_state = match kept {
             AssetMediaFactsCachedInTheProject::Read { .. } => MEDIA_FACTS_STATE_READ,
@@ -288,9 +323,10 @@ mod tests {
             content_byte_len: 9,
             import_settings: Default::default(),
         };
-        let reads = Arc::new(AssetMediaFactsReadsInThisRuntime::announcing_on(Arc::new(
-            ProjectRepositoriesOpenInThisRuntime::default(),
-        )));
+        let reads = Arc::new(AssetMediaFactsReadsInThisRuntime::announcing_on(
+            Arc::new(ProjectRepositoriesOpenInThisRuntime::default()),
+            AssetMediaFactsReadersOfThisRuntime::default(),
+        ));
         let (read_queue_to_no_thread, no_thread) = channel();
         drop(no_thread);
         assert!(

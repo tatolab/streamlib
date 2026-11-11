@@ -15,14 +15,14 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract, offline-new-projects, playback-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, first-party-package-index, playback-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
   or `curl | sh` on a Linux machine without it — installs `tatolab-stream` from PyPI into an
   ordinary uv-managed venv, runs `tatolab new` then `tatolab dev`, sees Tatolab's sample
-  stream live in their browser within a minute, on every floor — and on the software device
-  once `H264Encoder`'s CPU arm lands (§Media I/O; owner, 2026-10-17) — then points it at their
+  stream live in Tato Studio's viewer within a minute, on every floor and the software device
+  alike, with no encoder and no relay in between — then points it at their
   camera and makes the pipeline theirs by editing the scaffolded node — zero ceremony: no
   manifest, no `main()`, no schema wrangling, a fast edit loop. The
   zero-ceremony clauses bind both floors alike. Apple Silicon is a supported floor, not a
@@ -33,24 +33,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
   runtime-hosting — SHIPPED #2721, #2722; optional-accelerators — SHIPPED #2761, #2763,
-  #2796; moq-relays — SHIPPED #2853, #2864, #2866; amended by runtime-lives-with-tato-studio:
-  the runtime running while Tato Studio runs; amended by gateway-nodes: the sample stream is seen live in Tato Studio's viewer, with no encoder and no relay]
+  #2796; moq-relays — SHIPPED #2853, #2864, #2866; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; amended by runtime-lives-with-tato-studio:
+  the runtime running while Tato Studio runs]
 - **DECIDED** — Terms of the sentence: Tatolab is a pure-Python stream package,
   `tatolab-stream` from PyPI, beside a native runtime — `tatolabd`, the `tatolab` CLI and
   the `tatolab.runtime` portion processor interpreters borrow, one unit never shipped
   through pip (§Packages, the package split and the lend); a stream is a normal Python
   codebase — one venv, one Python version, ordinary PyPI dependencies, nothing dynamically
-  downloaded; `dev`/`run` take a project and load every `@stream` in its `stream.py`, each
-  its own stream — a project's entry is always `stream.py`, and neither verb names a function
-  or a display name — and a directory holding an `app.py` but no `stream.py` is refused naming
-  `stream.py`; nodes are Python classes written in the project or
-  imported from pip-installed packages, and `stream_builder.add` takes the class; the
-  builder is a `StreamBuilder`, its API `add`/`connect`/`expose`.
+  downloaded; a project is a versioned repository of assets (§Processor model) with no
+  `stream.py`, and `start`/`dev` take a project and load each of its stream assets' graph
+  documents as its own stream, naming no function and no display name; nodes are Python
+  classes written in the project or imported from pip-installed packages, added to a graph by
+  their import path; a `@graph_generator` function builds graph on a `StreamBuilder`, whose API
+  is `add`/`connect`/`group`.
   [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2618,
   #2655; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
   #2682; stream-identity-and-persistence — SHIPPED #2962; create-project — SHIPPED #2995;
-  queued-stream-actions — SHIPPED #3004, #3009; amended by stream-interface-and-routing-policy:
-  `add` also takes a `@stream` function as a subgraph; amended by gateway-nodes: the builder's API is `add`/`connect`; `expose` goes; amended by project-and-assets: a load reads the project file and each stream asset's graph document, and no `stream.py` is read]
+  queued-stream-actions — SHIPPED #3004, #3009; stream-interface-and-routing-policy; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; messages fixed as five families, a port's
   family compared at `connect`, with no schema registry and no versions at the code layer;
@@ -91,14 +90,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [macos-capability-parity — SHIPPED #2400, #2403, #2405; package-split-and-lend — SHIPPED
   #2671, #2686; optional-accelerators — SHIPPED #2778, #2780]
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
-  pixel view explicit — and it is the sample stream and only that. `tatolab new` writes one
-  `@stream`, `TestPatternSource` (the branded animation, §Media I/O) → `HalftoneLensEffect`
-  → `H264Encoder` → `expose(…, PUBLIC)`, the source and the encoder imported from the
-  `tatolab-testpattern` and `tatolab-h264` modules, and two nodes, each in its own module under
+  pixel view explicit — and it is the sample stream and only that, seen in Tato Studio's
+  viewer. `tatolab new` writes one stream asset, `TestPatternSource` (the branded animation,
+  §Media I/O) → `HalftoneLensEffect`, the source imported from the `tatolab-testpattern`
+  module, and two nodes, each in its own module under
   `nodes/` — the `HalftoneLensEffect` over a Slang compute kernel, a drifting lens that turns what
   it covers into dots (owner, 2026-10-19), and a numpy `BrightnessMeter` on a fan-out of the
   effect's output that reads the frame through `frame.cpu()` and logs its mean once a
-  second, paced on `ctx.time`, the stream's clock — with dependencies `tatolab-stream`, `tatolab-h264`,
+  second, paced on `ctx.time`, the stream's clock — with dependencies `tatolab-stream`,
   `tatolab-testpattern` and `numpy>=2.1`, nothing more, the same on both floors, each
   resolved from PyPI by the project's own `uv sync`. `tatolab new` takes no `--camera` and no
   `--test-pattern`, and no template holds a camera: camera projects live in the docs' sample
@@ -110,8 +109,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   cross-floor check gates the output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
   stream-graph — SHIPPED #2612, #2618; package-split-and-lend — SHIPPED #2693; moq-relays —
-  SHIPPED #2866; amended by stream-interface-and-routing-policy: the scaffold's `expose` takes no
-  level; amended by gateway-nodes: the scaffold drops `H264Encoder` and `expose`, and the effect's output is seen in a viewer; amended by first-party-package-index: the starter is one source node, `TestPatternSource` from the `tatolab-testpattern` wheel the runtime unit carries, its one dependency `tatolab-stream`, and camera projects live in the samples the runtime unit carries]
+  SHIPPED #2866; stream-interface-and-routing-policy; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; amended by first-party-package-index: the starter is one source node, `TestPatternSource` from the `tatolab-testpattern` wheel the runtime unit carries, its one dependency `tatolab-stream`, and camera projects live in the samples the runtime unit carries]
   Rejected: a camera in the scaffold, as the default or as a flag — a user whose camera does
   not open meets a failure as the first thing (owner, 2026-10-16).
 - **DECIDED** — The lead demo is an agent building a live visual system while the person
@@ -131,24 +129,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   it, linking no engine, and every stream verb is a local-API call. `start` sends
   `start_project {project_directory}` and `reload` sends `reload_project`, each of which queues a stream action and answers its action id;
   in the background the runtime makes `<project>/.venv` with the uv it carries whenever
-  `.venv/bin/python` does not run, runs `tatolab.stream`'s compile entry in it with the project
-  as the import root (every `@stream`'s graph as JSON on stdout, a failed compile's traceback in
-  its place), describes the Python types and loads; the compile's cross-floor warnings go to
-  the project's log. The runtime
-  compiles, so an agent loads exactly as the CLI does. `graph`, `logs`, `mcp`, `relays`,
-  `relay` and `--version` speak the local API, and `new` is `create_project`, whose scaffold
+  `.venv/bin/python` does not run, reads the project file and each stream asset's graph
+  document, describes the Python types in the venv's interpreter and loads; the cross-floor
+  check's warnings go to the project's log. A load runs no project code beyond the
+  descriptions, so an agent loads exactly as the CLI does. `graph`, `logs`, `mcp` and
+  `--version` speak the local API, and `new` is `create_project`, whose scaffold
   the runtime writes. Only `<project>/.venv/bin/python` is taken; a relocated venv is refused
   by name until a need appears. Owner, 2026-10-02.
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
   moq-relays — SHIPPED #2871; runtime-description; stream-identity-and-persistence — SHIPPED
   #2965; create-project — SHIPPED #2982, #2995, #3012; queued-stream-actions — SHIPPED #2997,
-  #2998, #3004, #3009; amended by gateway-nodes: the `relays` and `relay` verbs go]
+  #2998, #3004, #3009; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
   socket `@tatolab-runtime`, so a container sharing the host's network is this machine to
   it. On macOS it is the loopback HTTP listener's own socket, `127.0.0.1:4446`, which
   `tatolabd` binds at start, before the state directory, and the listener later serves. No
   file is involved and nothing is created by root, so on macOS a held port refuses the
-  runtime and never leaves it running without the listing. A second `tatolabd`, or any
+  runtime and never leaves it running without the lock. A second `tatolabd`, or any
   squatter, is refused naming its user, pid and executable. On Linux these come from peer
   credentials. On macOS the holder answers its pid on `GET /machine-runtime-lock-holder` and
   the prober reads the user and executable for that pid from libproc. Something on the port
@@ -158,14 +155,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   CLI names the holder too. The state directory is
   `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
   Support/Tatolab/`: `streams/<stream id>.json` per stream, written atomically with mode
-  0600 — the graph compiled at load, its location (the project directory and the stream
-  function as `module:function`), its display name, the interpreter, `stopped` or `failed` and
-  why, its crash count, the owner's exposure rulings and the pending mark of a queued stop,
-  remove or start — and, under `logs/`, the runtime's own log, which belongs to no project. A
+  0600 — its location (its project's UUID and its stream asset's UUID, and where the project sat
+  at its last load), the interpreter, `stopped` or `failed` and why, its crash count, the
+  pending marks of queued stops and removes, and the state each stateful function node held at
+  the stream's last end — and, under `logs/`, the runtime's own log, which belongs to no project. A
   project's log and its streams' pipeline cache stay under the project's `.tatolab/`. Owner,
   2026-10-02, 2026-10-24 and 2026-11-09.
   [runtime-hosting — SHIPPED #2711, #2713; machine-lock-without-administrator — SHIPPED #2929;
-  stream-identity-and-persistence — SHIPPED #2960, #2962]
+  stream-identity-and-persistence — SHIPPED #2960, #2962; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; project-action-contract — SHIPPED #3430, #3436, #3438]
   Rejected: a lock file on macOS — root-owned behind a first-launch administrator prompt, or
   world-writable in `/tmp` or `/Users/Shared` — the first asks a password at first run, the
   second gives the port's guarantee plus a stale file to clean up (owner, 2026-10-24).
@@ -176,8 +173,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test doubles of their Protocols; never a GPU, never the runtime. The runtime suite is Rust —
   the engine crates, `tatolabd` and `tatolab` — fed graph data and native built-ins only, with
   no Python node. The integration suite (`tests/stream-on-runtime/`) runs both on purpose: it
-  starts `tatolabd`, loads each fixture stream with `tatolab start` (the runtime compiling it in
-  the suite project's venv) and drives it over the local API — processor
+  starts `tatolabd`, loads each fixture project's stream assets with `tatolab start` and drives
+  them over the local API — processor
   interpreters, the lend, describe, escalate ops, pixel and device exchange, the CLI end to
   end. The division is structural, not a lint: each CI job installs only what its suite may
   touch, so a stream test reaching for the runtime fails to import. On Linux the
@@ -185,22 +182,21 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the rig only under `rig_only_capability(reason=…)` (the entry above). Testing a user's
   stream without a runtime is separate work. Owner, 2026-10-02. [package-split-and-lend —
   SHIPPED #2686, #2689, #2693; optional-accelerators — SHIPPED #2778, #2780]
-- **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
-  `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
-  stream's graph of nodes and links from the classes it imports (`@node.process`), plus `pyproject.toml`
-  and one venv; a stream may expose ports. Each machine runs one runtime, which runs many streams — written by different people
-  or teams — owns the accelerator when one is
-  present, serves the machine's local API, schedules across streams, sends every exposed
-  port to relays through one publisher, and runs the local relay's two instances as its
-  children. Every Python node keeps its own process, and agents keep changing live graphs.
+- **DECIDED** — A stream is the unit a person runs: a stream asset of a project — its graph
+  document of nodes and links, written by the runtime as people and agents edit it — beside the
+  project's other assets, its node code in Python and one venv. A stream sends data off itself
+  only through gateway nodes it adds. Each machine runs one runtime, which runs many streams —
+  written by different people or teams — owns the accelerator when one is present, serves the
+  machine's local API and schedules across streams; it holds no publisher and runs no relay.
+  Every Python node keeps its own process, and agents' edits to live graphs are kept.
   Owner, 2026-09-30. [one-runtime-per-machine; stream-graph — SHIPPED #2612, #2618, #2655;
-  moq-relays — SHIPPED #2842, #2853; amended by gateway-nodes: a stream sends data off itself only through gateway nodes it adds, and the runtime holds no publisher and runs no relay; amended by project-and-assets: a stream is a graph asset in a project of assets, nodes are written in Python, and agents' edits are kept]
+  moq-relays — SHIPPED #2842, #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — What Tatolab is for: a simple SDK for defining live streams as pipes and
   sharing them with people and agents. Tailscale users are the first customers, and Tatolab
-  builds nothing Tailscale already does — nor reads or configures it: a tailnet reaches a
-  machine's local relay as any network does. Robotics and physical-machine systems are out of
+  builds nothing Tailscale already does — nor reads or configures it: a tailnet reaches
+  whatever relay a person runs, as any network does, and the runtime runs none. Robotics and physical-machine systems are out of
   scope, and Tatolab never replaces a team's own ROS or Zenoh stack. Owner, 2026-10-04 and
-  2026-10-16. [moq-on-the-tailnet; moq-relays — SHIPPED #2842; amended by gateway-nodes: a tailnet reaches whatever relay a person runs, and the runtime runs none]
+  2026-10-16. [moq-on-the-tailnet; moq-relays — SHIPPED #2842; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — The runtime is required, and one runs per machine. It ships as one
   version-matched unit — the runtime, the CLI and the native portion processor interpreters
   borrow — inside Tato Studio, which runs it while the app runs, or through `curl | sh` on a
@@ -230,20 +226,20 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2722; amended by runtime-lives-with-tato-studio: the app starting and stopping its child
   runtime, no installer-registered service]
 - **DECIDED** — How a stream is loaded and kept. `tatolab start` loads it, and the
-  runtime records the graph its function compiled to at that load, the project's venv path and
-  the exposures in its state directory, and re-loads that recorded graph on every start, a
-  crash's restart included. There are no restart policies: a recorded stream always comes back
+  runtime records the stream's location and the project's venv path in its state directory,
+  and re-loads the stream from its graph document on every start, a crash's restart included;
+  the document is the recorded graph, and the record holds none. There are no stream restart policies: a recorded stream always comes back
   unless stopped or failed. `tatolab stop` unloads every stream of a project and remembers each
   as stopped, across restarts too; `tatolab start` starts a stopped project again; `tatolab rm`
   forgets every stream of a project, the only verb that loses one (owner, 2026-10-02,
   2026-10-30 and 2026-11-09).
-  Live edits are never recorded, so
-  the function wins on the next start, and picking up a changed source is a `reload`; a
+  A committed edit is written to the document, so it is kept on the next start, and a live
+  edit is gone on it; picking up a document changed on disk is a `reload`; a
   stream implicated in the runtime's last two crashes in a row — a clean stop of the runtime or
   a manual restart is no crash and resets the count — or one that cannot re-load at start (a
   venv that cannot be made, a type that will not describe) is `failed`, shown with its reason
-  and skipped at start until `tatolab reload` retries it; a first load whose code fails is
-  recorded `failed` too, and a venv whose interpreter does not run is made again rather than
+  and skipped at start until `tatolab reload` retries it; a first load whose document will
+  not load is recorded `failed` too, and a venv whose interpreter does not run is made again rather than
   failing a re-load (owner, 2026-10-02 and 2026-10-29). `tatolab streams` lists all three —
   running, stopped, failed. Where no installer put a runtime, `tatolabd` runs in a terminal or
   as a container's entrypoint; there is no `up` or `down`. One runtime per machine, owned by
@@ -256,45 +252,43 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   without a full runtime is separate work, outside this pivot. Owner, 2026-10-01.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2965; create-project — SHIPPED #2975, #2982;
-  queued-stream-actions — SHIPPED #2999; amended by project-and-assets: the document is the recorded graph, committed edits are kept, and the record holds no graph]
+  queued-stream-actions — SHIPPED #2999; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — The stream actions, as built. `start_project` and `reload_project` record the
   project's streams and load them, whichever connection carries the call, and the streams
   outlive that connection. `start_project`, `reload_project`, `create_project` (the entry
   below), `stop_project` and
   `remove_project` queue a stream action and answer its action id; `describe_stream_action`
   reads one and `cancel_stream_action` ends one. `logs {project_directory, stream?, action?,
-  after}` pages a project's log, `after` a record position. The tools: `list_project_streams` (a
-  project's `@stream` functions), `stop_project` (unload every stream of the project; record
-  each `stopped`), `pause_project` and `resume_project` (pause and resume every loaded stream
-  of the project at once, unqueued), `remove_project` (unload and forget every stream of the
-  project), `rename_stream` (the display name), `list_streams` (id, display name, location,
-  running / paused / preparing / stopping / stopped / failed and why, node count, and each capture device whose
-  access a loaded stream waits on because nobody has asked for it) and `expose_port
-  {stream, node, port, level}`, `level` one of `internal`, `private`, `public`, which sets the
-  port's level live, cutting at once every reader the level no longer allows, and records the
-  owner's ruling on the stream's record — the owner's `expose` wins over the function's
-  `exposed`, which is the default for a port without a ruling. Every tool names a stream by its
-  stream id. A restriction is recorded before it changes live, so a crash can only tighten a
-  port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
+  after}` pages a project's log, `after` a record position. The tools: `list_assets` narrowed
+  to the `kind` `stream` (a project's stream assets, read without running code),
+  `stop_project` (unload every stream of the project; record each `stopped`), `pause_project`
+  and `resume_project` (pause and resume every loaded stream of the project at once, unqueued),
+  `remove_project` (unload and forget every stream of the project), `create_stream
+  {project_directory, path, display_name}` and `delete_stream {project_directory,
+  stream_asset}` (a recorded action each: a created stream loads with the project's others, a
+  deleted one unloads), `set_stream_display_name {stream_asset, display_name}` (a recorded
+  action on the stream's graph document) and `list_streams` (id, display name, location,
+  running / paused / preparing / stopping / stopped / failed and why, node count, and each
+  capture device whose access a loaded stream waits on because nobody has asked for it). A
+  stream action names a stream by its stream id; a graph edit names it by its stream asset's
+  UUID, the same on every machine the project is on. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; create-project — SHIPPED
-  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #3439; amended by playback-controls: `stop_project` ends playback and keeps the project held, readable and editable]
+  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; project-action-contract — SHIPPED #3430, #3436, #3438; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #3439; amended by playback-controls: `stop_project` ends playback and keeps the project held, readable and editable]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
-  **location**: its project directory's absolute path, symlinks resolved, and its stream function
-  as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
-  the location alone, `<folder>-<function>-<hash>`: the project directory's last component and
-  the function's name, each cast as every exposed name is (§Networking), and the first six hex
-  digits of a SHA-256 over the location, folder and function truncated so the id fits the
-  cast's 63 characters with the hash whole; a folder or function casting to nothing is left
-  out, so no spelling refuses a stream. Two locations whose ids would be equal are refused
-  naming both. The stream id is the stream part of the address and of the broadcast
-  (§Networking), the key of the stream's record, the `stream` a record in its project's log
-  carries, and what every local-API tool naming a stream takes. A moved project directory is a
-  new stream. Its **display name** is a label
-  the runtime records, never written in code and never unique: it defaults to the function's
-  name, a created project's stream takes its folder's name, a load never sets one,
-  `rename_stream {stream, display_name}` or `tatolab rename <stream> <display name>` changes it,
-  and a re-load keeps it. A CLI verb's stream
+  **location**: its project's UUID and its stream asset's UUID. Its **stream id** is computed
+  from them, `<project name>-<stream name>-<hash>`: the project's name and the stream asset's
+  name, each cast as every exposed name is (§Networking), and the first six hex digits of a
+  SHA-256 over the two UUIDs, the names truncated so the id fits the cast's 63 characters with
+  the hash whole; a name casting to nothing is left out, so no spelling refuses a stream. Two
+  locations whose ids would be equal are refused naming both. The stream id is the stream part
+  of the address (§Networking) — a gateway names its own broadcast — the key of the stream's
+  record, the `stream` a record in its project's log carries, and what every stream action
+  takes. Moving the project or renaming its document keeps the id. Its **display name** is a
+  label its graph document writes as `display_name`, never unique, the document's file name
+  while it writes none: a created project's stream takes its folder's name,
+  `set_stream_display_name {stream_asset, display_name}` changes it as a recorded action, and
+  a re-load keeps it because the document keeps it. A CLI verb's stream
   argument is a stream id, or a display name exactly one stream holds; omitted, it is the one
   stream recorded from the working directory — stopped and failed included; an ambiguous
   or unmatched argument, or a directory with none or several, is refused listing the
@@ -302,7 +296,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   by id and display name; `list_streams` lists each stream's id, display name, location, state
   (and why, when failed)
   and node count. Owner, 2026-10-27. [stream-identity-and-persistence — SHIPPED #2960, #2962;
-  create-project — SHIPPED #3012; queued-stream-actions — SHIPPED #2997, #3004, #3009; amended by gateway-nodes: the stream id is no broadcast's name; a gateway names its own; amended by project-and-assets: a stream is its project's UUID and its stream asset's UUID, the id `<project name>-<stream name>-<hash>`]
+  create-project — SHIPPED #3012; queued-stream-actions — SHIPPED #2997, #3004, #3009; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; project-action-contract — SHIPPED #3430, #3436, #3438]
   Rejected: a stream named by its function, a second load of the name refused with `--name` the
   way out — every scaffolded `main` collides once every load persists (owner, 2026-10-27).
   Rejected: the display name in the address — a rename would cut off every reader of the
@@ -316,8 +310,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream — and only `stop` / `stop_project` and `rm` / `remove_project` end one, each the whole
   project. A load of a
   location already loaded or recorded replaces that stream under the same id, keeping its
-  display name and the owner's exposure rulings; a load whose code fails records the stream
-  `failed` and never re-loads the previous version. `tatolab start` and `tatolab reload` queue
+  display name; a load whose document will not load records the stream `failed` and never
+  re-loads the previous version. `tatolab start` and `tatolab reload` queue
   the load and return,
   printing its action id and how to follow it (`tatolab logs -f`); it exits 0 once the stream
   action is queued and 1 naming the reason when the call is refused. `tatolab logs -f` follows
@@ -330,8 +324,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: `run` following the stream with Ctrl-C detaching only the terminal — Ctrl-C would
   read as stop; `dev` and `logs -f` follow (owner, 2026-10-27).
 - **DECIDED** — Creating a project. The runtime creates a project in one operation: it writes
-  the embedded scaffold, makes the project's `.venv` with its own uv, then loads and records the
-  scaffold's one stream as every load is. `tatolab new [directory]`, the local-API tool `create_project
+  the embedded scaffold — the project file, one stream asset, the project's `pyproject.toml` and
+  `.python-version` — and the first commit of the project's history, makes the project's `.venv`
+  with its own uv, then loads and records the scaffold's one stream as every load is; there is
+  no `stream.py`. `tatolab new [directory]`, the local-API tool `create_project
   {project_directory}` and Tato Studio's Add stream › Create all call it, and none scaffolds
   or syncs on its own. The tool takes the directory absolute and creates it when it is missing,
   and `new` resolves a relative one against the working directory. With none, the runtime draws an
@@ -341,56 +337,62 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   moves the folder. A directory holding any file the scaffold writes fails the create's
   action with nothing written; a directory that already holds a project is added by loading it.
   The runtime unit carries a pinned uv on both floors; the runtime makes every `.venv` with it,
-  uv taking the Python `.python-version` pins from the machine or fetching it, and makes it
-  whenever `.venv/bin/python` does not run (the entry below).
+  and makes it whenever `.venv/bin/python` does not run (the entry below). uv takes the Python
+  `.python-version` pins from the machine, or else from the runtime unit, which carries the
+  CPython build for the scaffold's version, installed with `uv python install --no-bin` from the
+  unit's mirror with no network; it fetches only a version the unit does not carry. Every sync
+  and lock the runtime runs then tries `uv sync --offline` (`uv lock --offline`) against the
+  wheels the unit carries, linked into the project as `.tatolab/carried-wheels` and named in its
+  `pyproject.toml` as `[tool.uv].find-links`, and against uv's cache, before it runs again
+  without `--offline`, the second run's refusal being the one the action reports in uv's words;
+  so creating and running a new project needs no network and an empty cache, and a dependency a
+  person added syncs offline from uv's cache afterwards. The runtime never prunes uv's cache.
+  Owner, 2026-11-10. Rejected: the index first, the carried wheels only when the online sync
+  fails — every sync would wait on PyPI again (owner, 2026-11-10).
   Create is a queued stream action: the tool and `new` answer at once with its action id, the
   scaffold's stream id and the project directory. Owner, 2026-10-28 and 2026-10-31.
-  [create-project — SHIPPED #2982, #3012]
+  [create-project — SHIPPED #2982, #3012; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; offline-new-projects — SHIPPED #3505, #3508, #3512, #3532]
   Rejected: `hello`, then `hello-2`, `hello-3`, … as the default project — a prototype's
   placeholder (owner, 2026-10-28).
   Rejected: uv from the user's `PATH`, refused when absent — an agent with no terminal could not
   create a project (owner, 2026-10-28).
-- **DECIDED** — Several streams in one project or package: a stream is a decorated function,
-  `@stream def camera_rig(stream_builder: StreamBuilder)`, and a file or a package may define
-  as many as it likes; the bare `setup(stream)` retires rather than living beside it, and a
-  package may ship
-  both runnable streams and composable nodes (owner, 2026-09-30). The display name defaults to
-  the function's and its docstring is the description an agent reads; `run` takes a project
-  and loads every `@stream` in its `stream.py` (owner, 2026-10-28 and 2026-10-30). A package's
-  streams load as the packs OPEN decides. [one-runtime-per-machine; stream-graph — SHIPPED
-  #2618; authoring-names — SHIPPED #2682; stream-identity-and-persistence — SHIPPED #2962;
-  create-project — SHIPPED #2995; queued-stream-actions — SHIPPED #3004, #3009; amended by project-and-assets: a stream is a graph asset of the project; a `@graph_generator` function builds graph, stored as a fragment]
+- **DECIDED** — Several streams in one project: each stream is a graph asset of the project,
+  and a project holds as many as it likes, beside composable node code; a module project may
+  ship both (owner, 2026-09-30). A `@graph_generator` function builds graph, and its output is
+  stored as a fragment (§Processor model), never one-to-one with a stream; `start` takes a
+  project and loads every stream asset in it (owner, 2026-10-28 and 2026-10-30).
+  [one-runtime-per-machine; stream-graph — SHIPPED #2618; authoring-names — SHIPPED #2682;
+  stream-identity-and-persistence — SHIPPED #2962; create-project — SHIPPED #2995;
+  queued-stream-actions — SHIPPED #3004, #3009; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — Loading a project loads every stream in it. Every load — `tatolab start`,
-  `tatolab reload`, `tatolab dev`, `start_project`, `reload_project`, Tato Studio's Add, and create — loads every `@stream` in the
-  project's `stream.py`, each as its own stream: its own location, stream id, display name,
-  record and failure, and `rename` acts on one; the project runs and stops as a whole
-  (`start_project`, `stop_project`). The project compiles once,
-  and a stream whose part of the compile fails is recorded `failed` (the entry below). A
-  re-load of the project replaces each of its streams in place, and a recorded stream of the
-  project whose function `stream.py` no longer defines is unloaded and recorded `failed`,
-  naming the missing function, never forgotten. `dev` follows the project's log and queues a
-  reload on every save. The local-API tool `list_project_streams {project_directory}` answers
-  from the project's last compile with each `@stream` in the project as `module:function`, its
-  docstring, and its stream id and state when loaded; `describe_stream_action` lists every
-  stream a load touched. Owner, 2026-10-28 and 2026-10-30. [create-project — SHIPPED #2995;
-  queued-stream-actions — SHIPPED #2998, #3004, #3009; amended by project-and-assets: every stream asset loads as its own stream and `list_assets` lists them without running code]
+  `tatolab reload`, `tatolab dev`, `start_project`, `reload_project`, Tato Studio's Add, and
+  create — reads `tatolab-project.json` and loads each stream asset as its own stream: its own
+  location, stream id, display name, record and failure; the project runs and stops as a whole
+  (`start_project`, `stop_project`). A stream whose document will not load is recorded `failed`
+  (the entry below). A re-load of the project replaces each of its streams in place, and a
+  stream whose document is gone is unloaded and forgotten, as deleting an asset in an editor
+  removes it. `dev` follows the project's log, re-loads a stream when its document changes on
+  disk, and refreshes every fragment whose generator's module changed. `list_assets` narrowed
+  to the `kind` `stream` lists a project's stream assets without running code;
+  `describe_stream_action` lists every stream a load touched. Owner, 2026-10-28, 2026-10-30
+  and 2026-11-08. [create-project — SHIPPED #2995; queued-stream-actions — SHIPPED #2998,
+  #3004, #3009; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — A load is never refused. Every load — `start`, `reload`, `dev`, `start_project`, `reload_project`,
   `create_project`, Tato Studio's Add, and the runtime's re-load at start — is a
-  queued stream action (the entry below) that takes the project in. A stream whose venv,
-  compile, describe or start fails is recorded `failed`, with the reason in `list_streams` and
+  queued stream action (the entry below) that takes the project in. A load runs no project
+  code except the description of its Python types and a generator a fragment's import or
+  refresh asks for. A stream whose venv, document, describe or start fails is recorded
+  `failed`, with the reason in `list_streams` and
   the traceback in the project's log, and a replaced stream's running version is unloaded.
   What a load's own arguments get wrong fails its action, with the reason in the action and the
   log, never the call:
-  - a directory that does not exist, or a folder with neither `stream.py` nor `pyproject.toml`
-    — the reason in the runtime's own log, since there is no project to log to;
+  - a directory that does not exist, or one holding no `tatolab-project.json` — the reason in
+    the runtime's own log, since there is no project to log to;
   - an id held by another location;
   - create into a directory holding a file the scaffold writes.
 
-  When `stream.py` cannot be imported, or imports and defines no `@stream`, every stream
-  recorded from the project is recorded `failed` with the traceback or the missing `@stream`. A
-  project with none gets one failed record for `stream.py`, its location the project directory
-  with no function, so its id is `<folder>-<hash>`. The next load that imports `stream.py`
-  replaces it with the project's streams. The runtime makes a project's `.venv` as the first step
+  A document that will not parse, or names what the runtime refuses, records that stream
+  `failed` with the reason until a reload of the fixed document replaces it. The runtime makes a project's `.venv` as the first step
   of a load, the runtime's re-load at start and create, whenever `.venv/bin/python`
   does not run. It removes a `.venv` whose interpreter does not run first, and never touches
   one whose interpreter runs. A failed sync records the stream `failed` in uv's own words.
@@ -398,13 +400,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `<project>/.tatolab/logs/` hold every record the project's stream actions and streams
   write, whether or not any stream of it is loaded or recorded. A record carries the action's
   id in `action`, and the stream id in `stream` when a stream wrote it; these are attributes of
-  a record, never where it is kept. The venv's making and the compile write records with no
-  stream. The records keep the log schema's fields, with `action` added. `logs` takes the
+  a record, never where it is kept. The venv's making writes records with no stream. The records keep the log schema's fields, with `action` added. `logs` takes the
   project and reads its log from disk, narrowed to a stream or an action when asked; `logs -f`
   and `dev` follow it, each record shown under the project's folder name. `rm` forgets a
   stream's record and deletes no log; its records age out with the log's rotation. Owner,
   2026-10-29 and 2026-10-30. [create-project — SHIPPED #2975, #2982, #3012; failed-load-logs —
-  SHIPPED #2994; queued-stream-actions — SHIPPED #2997, #2998, #3009; amended by project-and-assets: a document that will not parse records its stream `failed`; a project with no `stream.py` is no failure]
+  SHIPPED #2994; queued-stream-actions — SHIPPED #2997, #2998, #3009; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; project-action-contract — SHIPPED #3430, #3436, #3438]
   Rejected: refusing a load whose code fails, or putting the previous version back — a person or
   an agent could load only finished code (owner, 2026-10-29).
   Rejected: a log per stream, or per load of a stream, or found through a stream's record — a
@@ -413,16 +414,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Every load and unload is a queued stream action. `start_project`, `reload_project`,
   `create_project`, `stop_project`, `remove_project` and the runtime's re-load at start each queue
   one **stream action** and answer at once with its **action id**. The runtime makes the venv,
-  compiles, describes, loads, starts, stops and unloads in the background, and no call waits for
+  reads the documents, describes, loads, starts, stops and unloads in the background, and no call waits for
   what its action does. `tatolab start`, `reload`, `new`, `stop` and `rm` exit 0 once the action
   is queued. A call answers an error only for a malformed request — a missing argument, a
   directory that is not absolute, or a project already in the state the verb asks for (the
   entry below) — and the CLI only for that or a runtime it cannot reach.
   - **Loads take a project.** `tatolab start`, `tatolab reload`, `tatolab dev`, `start_project
     {project_directory}` and `reload_project {project_directory}`
-    load every `@stream` in the project's `stream.py` and take no stream function, no display
-    name and no other entry file; the project runs and stops as a whole afterwards, and one
-    stream is renamed by its own `rename`.
+    load every stream asset of the project and take no stream, no display name and no entry
+    file; the project runs and stops as a whole afterwards.
   - **`stop` stops the whole project.** `tatolab stop [--dir]` and `stop_project
     {project_directory}` unload every loaded stream of the project and record each recorded
     one `stopped`, so the runtime leaves the project stopped across its restarts; `start` /
@@ -453,10 +453,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
     Projects, not streams, are paused (owner, 2026-11-09).
   - **`rm` removes the whole project.** `tatolab rm [--dir]` and `remove_project
     {project_directory}` unload every loaded stream of the project and forget every record of
-    it, deleting no file; no tool removes one stream — a `@stream` in `stream.py` runs, and
-    commenting it out is how a stream leaves (owner, 2026-10-31).
-  - **Steps.** An action runs in order: queued, then making the venv, compiling and starting,
-    or stopping. It ends done, failed with its reason, or cancelled. `describe_stream_action
+    it, deleting no file. One stream leaves its project through `delete_stream`, which deletes
+    its stream asset as a recorded action and unloads it (owner, 2026-10-31 and 2026-11-09).
+  - **Steps.** An action runs in order: queued, then making the venv, reading the documents and
+    starting, or stopping. It ends done, failed with its reason, or cancelled. `describe_stream_action
     {action}` returns its state, its current step, the streams it touched and, when failed,
     why.
   - **States.** While an action works on a stream, `list_streams` and `tatolab streams` show it
@@ -476,21 +476,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
     shutdown ends a running sync and removes its half-made `.venv`. Queued actions are held in
     memory, so a restart forgets them; the re-load at start queues one load per project
     holding a record neither stopped nor failed, and that load loads only those records — a
-    stopped or failed stream of the project stays as recorded. A `run` of the project loads
+    stopped or failed stream of the project stays as recorded. A `start` of the project loads
     all of its streams.
-  - **Attributes are immediate.** `rename_stream` and `expose_port` set an attribute of the
-    record and answer once it is set, never waiting behind an action. A ruling on a stream that
-    is not running applies when it loads.
-  - **Reads.** `list_project_streams` runs no project code: it answers from the project's last
-    compile — each `@stream`, its docstring, and its stream id and state — or that reason when
-    that compile could not import `stream.py`. With a load queued or under way and no compile
-    yet, it answers `preparing` and no streams; a project never loaded answers that it is not
-    loaded.
+  - **Edits are immediate.** `set_stream_display_name`, `create_stream` and `delete_stream` are
+    recorded actions on the project, applied and answered at once, never waiting behind a
+    stream action.
+  - **Reads.** `list_assets` runs no project code: it reads the project's stream assets from
+    disk, whether or not the project is loaded.
   - **The CLI.** `tatolab start` and `tatolab reload` print the action id and how to follow it
     (`tatolab logs -f`). `tatolab dev` follows the project's log and queues a reload on every
     save.
 
-  Owner, 2026-10-30. [queued-stream-actions — SHIPPED #2998, #2999, #3004, #3006, #3009; amended by gateway-nodes: `expose_port` goes, leaving `rename_stream` the one attribute; amended by project-and-assets: loads read stream assets, and a stream leaves through `delete_asset`]
+  Owner, 2026-10-30. [queued-stream-actions — SHIPPED #2998, #2999, #3004, #3006, #3009; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; project-action-contract — SHIPPED #3430, #3436, #3438]
   Rejected: making the venv inside the call that answers the load, bounded, with the client's
   timeouts raised to fit — an asynchronous side effect never sits inside a call that promises
   its final answer (owner, 2026-10-30).
@@ -501,16 +498,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   cancels one, and everything but the sync is fast (owner, 2026-10-30).
   Rejected: `run` naming one stream function, or `--name` at a load — a project is loaded whole,
   and one stream is managed by its own verbs (owner, 2026-10-30).
-  Rejected: `rename_stream` and `expose_port` as queued actions — each sets an attribute of the
-  record, which a stream not yet loaded takes when it loads (owner, 2026-10-30).
-- **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
-  adds nodes, connects them and returns port references is a reusable fragment. The graph
-  stays flat and addresses stay `<machine>/<stream id>/<node>/<port>`; no group label and no nested
-  subgraph is built until an editor or an agent needs to see a fragment as one thing. Across
-  streams, linking to another stream's port is the composition. Owner, 2026-10-01.
-  [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: across streams, a stream reads another's track through gateway nodes; amended by project-and-assets: a generator's output is stored as a fragment, a container in the document]
+  Rejected: a display-name change as a queued action — it is an edit of the project, applied at
+  once (owner, 2026-10-30).
+- **DECIDED** — Composition inside a stream is a fragment: a `@graph_generator` function's
+  stored output, an authored subgraph or another stream placed by reference, each a container in
+  the graph document that flattens at compile (§Processor model). Across streams, a stream reads
+  another's track through gateway nodes (§Networking). Owner, 2026-10-01 and 2026-11-08.
+  [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, gateway-nodes, first-party-package-index, studio-view-nodes)
+## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, first-party-package-index)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -578,24 +574,31 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   engine-only primitive, an OS-facing device or being first-party, and anything a first-party
   module needs from the engine is public engine API: surface import by plane layout, colour
   conversion, the audio device interface, the capture-prompting policy, the helper's stream
-  and node names. The one built-in left is `RelayTrackSource`, which is transport — the only
-  way a graph reads a relay, its MoQ crates pinned to `tatolabd`'s publisher — not a media
-  node. Installing the runtime alone gives other applications no camera. Owner, 2026-11-02.
-  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; amended by gateway-nodes: `RelayTrackSource` leaves the runtime as `tatolab.moq:MoqTrackReceive`, and the runtime ships no transport; amended by first-party-package-index: the runtime unit carries a wheel of each core module and installs it into every project it makes; every other module is a module project]
+  and node names. The runtime ships no transport either: a graph reads a relay through
+  `tatolab.moq:MoqTrackReceive`, a module's node, and the built-ins left are the family
+  conversion nodes (§Processor model). Installing the runtime alone gives other applications
+  no camera. Owner, 2026-11-02 and 2026-11-06.
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; amended by first-party-package-index: the runtime unit carries a wheel of each core module and installs it into every project it makes; every other module is a module project]
 - **DECIDED** — The module host table. The lent `tatolab.runtime` implements one
   `#[repr(C)]`, append-only function table, versioned major, minor and size, handed to an
   extension wheel's native half as a named capsule from a node's context. It carries opening,
   writing, reading and waiting on a port Python handed to native code, from any thread and
-  without the GIL; the port's catalog entry; log records into the helper's log ring; the
+  without the GIL; the port's stream facts; log records into the helper's log ring; the
   monotonic clock and the stream time of one of its instants; the node's stop flag; and host capabilities, among them the audio device
   interface and the virtual camera output stream. Only data-plane verbs and plain, generation-checked handles cross it, never an
-  RHI object, and the engine never calls module code through it. A later Python write to a
+  RHI object. Its one entry the engine calls into module code is the function-node entry: per
+  function node a descriptor (ports, families, config, state) and a C evaluate function taking
+  the input values, config, `now` and its state and returning its outputs, called only in a
+  helper. A later Python write to a
   port handed to native code is refused by name. A module built against minor N loads on any
-  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; virtual-camera-pipewire-door — SHIPPED #3128]
+  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; virtual-camera-pipewire-door — SHIPPED #3128; lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
 - **DECIDED** — `tatolab-module-sdk` is the Rust side of the host table: a published crate
   carrying the table's struct mirror, its layout regression tests, safe Rust wrappers and a
   generated C header, with optional `pyo3` and `napi` features. It depends on no engine crate.
-  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123]
+  Its `#[function_node]` exports a Rust function as the function-node entry directly, for code
+  outside Numba's subset that still needs native speed, held to the function-node contract by
+  review rather than a lint.
+  [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
 - **DECIDED** — A module declares its nodes in a `tatolab.nodes` entry-point group, and a
   node's type is its class's import path in its own distribution (`tatolab.camera:CameraSource`).
   The node catalog lists every installed module's nodes, read in a stream's own interpreter and
@@ -811,12 +814,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — streamlib offers an extension point for an external control client, and runs
   complete without one. [one-runtime-per-machine]
 - **DECIDED** — The package split and the lend. `tatolab-stream`, importing as
-  `tatolab.stream`, is pure Python and is everything a stream module imports: `@stream`,
-  `@node.process` with its `Input` and `Output` port attributes and the five families, the
-  `StreamBuilder` and its references,
-  the built-in node class with its config shape, and the data types; a stream is
-  written, type-checked and
-  compiled with no runtime installed. `tatolab.runtime` is the engine's native part — the
+  `tatolab.stream`, is pure Python and is everything a node or generator module imports:
+  `@node.process` with its `Input` and `Output` port attributes and the five families,
+  `@graph_generator`, the `StreamBuilder` and its references, the built-in node classes with
+  their config shapes, and the data types; node code is written, type-checked and a generator
+  run with no runtime installed. `tatolab.runtime` is the engine's native part — the
   engine, the bindings a node's calls go through while it runs, the processor-interpreter
   bootstrap, and on macOS the bundled Vulkan driver — and ships only with the runtime, never
   through pip. A stream's venv installs `tatolab-stream` and holds no engine; the runtime
@@ -828,28 +830,37 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `-m` from the project directory, and the exact-build handshake stays as the backstop. A
   stream never names a runtime version and nothing of the runtime enters its `pyproject.toml`:
   the runtime loads what it understands and refuses by name anything in a graph it does not —
-  a node type it lacks, a setting it does not know — and a newer runtime loads every graph an
-  older stream recorded. Compiling happens in the project's interpreter, never in the
+  a node type it lacks, a setting it does not know — and a newer runtime loads every graph
+  document an older one wrote. A generator runs in the project's interpreter, never in the
   runtime process. Owner, 2026-10-02. [one-runtime-per-machine; package-split-and-lend —
   SHIPPED #2671, #2673, #2686, #2689, #2693, #2697; authoring-names — SHIPPED #2682]
 - **DECIDED** — `tatolab-stream` as built. A pure build backend, `requires-python >=3.12`,
   depending on what its own modules import and never on the runtime. A module belongs in it
-  exactly when a stream or node module imports it: the declarations (`@node.process`, `@stream`, the
-  `StreamBuilder`, the references, the compile entry), the config schema deriver, the data
+  exactly when a node or generator module imports it: the declarations (`@node.process`,
+  `@graph_generator`, the `StreamBuilder`, the references, the generator entry), the config schema deriver, the data
   types (`ImageFrame` and its colour types, `ArrayFrame`, and the read types' Protocols), the composable pieces (`ClaimedSurfacePixelAccess`,
   `PixelAccessToOneClaimedSurface`, the `ModelInputTensor` family,
-  `NodeOutputTextureRing`), `clock`, `log`, and the cross-floor check the compile entry runs.
+  `NodeOutputTextureRing`), `clock`, `log`, and the cross-floor check the runtime runs over a
+  project.
   `@node.process` registers nothing — it writes the class's declaration stamps — and the proof is the
   stream suite itself, run with no runtime on any path. [package-split-and-lend — SHIPPED
   #2686]
+- **DECIDED** — A project's Tato Studio views live in its `views/<name>/` folders, beside its
+  node code, and a module project's views come with it as an import. A view's contract is the
+  view SDK's in tatolab-app, its Zod schema the guarantee, as `tatolab.stream` is a node's: the
+  runtime reads a view's `tatolab_view.json` itself, with a serde type mirroring the schema, and
+  a CI gate holds that type to the view SDK's example manifests, good and bad, so the runtime
+  opens and refuses each as Zod does, naming the same field. Owner, 2026-11-09 and 2026-11-10.
+  Rejected: checking the serde type against the JSON Schema the view SDK generates — a schema
+  copy is not the contract, and the examples test the behaviour itself (owner, 2026-11-10).
+  [studio-view-nodes — SHIPPED #3446, #3449, #3461]
 - **DECIDED** — Built-in nodes reach Python as plain classes generated from the runtime: `cargo
   xtask generate-built-in-node-classes` writes `tatolab/stream/_built_in_nodes.py` from each
   built-in's descriptor and its config's JSON Schema — its `type`, its doc line, its ports and
-  a `TypedDict` of its config keys, so pyright checks `stream_builder.add(RelayTrackSource,
-  config={"broadcast": "desk/rig.hang", "track": "camera/video"})` — and CI fails when a
-  regeneration differs. `RelayTrackSource` is the one class it writes. One
-  declaration, the Rust one; no native marker class exists. [package-split-and-lend — SHIPPED
-  #2684; amended by gateway-nodes: `RelayTrackSource` leaves it]
+  a `TypedDict` of its config keys, so pyright checks `stream_builder.add(ImageToArray,
+  config={…})` — and CI fails when a regeneration differs. It writes the family conversion
+  nodes. One declaration, the Rust one; no native marker class exists. [package-split-and-lend
+  — SHIPPED #2684; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — What the runtime backs is declared once, in `tatolab.stream`: the contexts,
   `LinkInputDataReader`, `LinkOutputDataWriter`, `NodeLinkDataAccess`, the `GpuContext`
   capabilities, `GpuSurfaceHandle`, the kernels, `MonotonicTimer`, the texture exports,
@@ -876,7 +887,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **OPEN** — How an external control client plugs in, and what it hands the runtime: a
   gateway's relay settings are its node config (§Networking), so it hands the runtime no relay
   credential. Known (2026-10-04): no stream map, router or peer identity exists to push.
-  [one-runtime-per-machine; moq-relays; gateway-nodes]
+  [one-runtime-per-machine; moq-relays]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tato Studio; the app and `curl | sh` ship all three as one
   unit, and users still call the program "the runtime" (owner, 2026-10-02); the bare name `tatolab` is the
@@ -901,16 +912,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   change deletes is deleted, never renamed. The engine's Rust identifiers and the wire keep
   "processor" until the rename step. Owner, 2026-10-02. [tatolab-names; package-split-and-lend
   — SHIPPED #2673]
-- **DECIDED** — The authoring names, with no alias. The object a `@stream` function is handed is
-  a `StreamBuilder`, and the scaffold, the docs and every refusal model the parameter as
-  `stream_builder`: `@stream def main(stream_builder: StreamBuilder)`; the decorator keeps
-  `@stream` and a stream stays the decorated function. A node declares its ports as class
+- **DECIDED** — The authoring names, with no alias. The object a `@graph_generator` function is
+  handed is a `StreamBuilder`, and the docs and every refusal model the parameter as
+  `stream_builder`: `@graph_generator def main(stream_builder: StreamBuilder)`, each parameter
+  after the builder a setting the generator promotes. A node declares its ports as class
   attributes, `Input(…)` and `Output(…)` (§Processor model), and no name it imports shadows
   Python's builtin `input()`. A Rust node's attribute macro keeps `input(…)` / `output(…)`, and
   a node reference keeps `input(name)` / `output(name)`. Rejected: `@incoming` / `@outgoing` for
   ports — vocabulary no Python dataflow or media framework uses; `@input_port` /
   `@output_port` — a word the declaring side alone would carry (owner, 2026-10-06). Owner,
-  2026-10-06. [authoring-names — SHIPPED #2682; strict-port-families — SHIPPED #3203, #3241]
+  2026-10-06. [authoring-names — SHIPPED #2682; strict-port-families — SHIPPED #3203, #3241; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the
   unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,
@@ -927,11 +938,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   that venv. Known (2026-10-30): a load takes a project directory and loads every stream in it,
   so no stream is run out of an installed package by naming its function; a pack's runnable
   streams reach the runtime as a project copied into a directory and loaded as a local one is,
-  and a pack added to a project is a dependency its `stream.py` imports (owner). Undecided: how a
+  and a module added to a project is an import copied into `imports/` (owner). Undecided: how a
   pip-published pack becomes that directory, the registry's owner and standards, a manager UI,
   and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — IN-FLIGHT (→ gateway-nodes, first-party-package-index)
+## Consumers — examples & packages — IN-FLIGHT (→ first-party-package-index)
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
   current authoring idiom, converted gradually and never a contract source: engine
@@ -967,16 +978,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   virtual camera's showcase — one `CameraSource` fanned to a `VirtualCameraSink` and to a
   Python effect feeding a second one, so a graph appears as two named cameras in any other
   application on the machine and both are gone at Ctrl-C. No example opens a window: an
-  example's picture is shared through an exposed `H264Encoder` and watched at `/watch`
-  (owner, 2026-10-20).
+  example's picture is seen in a viewer, and an example that shares one adds gateway nodes
+  (owner, 2026-10-20 and 2026-11-06).
   Rejected: a recording showcase (`CameraSource → H264Encoder` beside `MicrophoneSource →
-  OpusEncoder`, exposed and recorded to MP4 with a MoQ client's fmp4 export) and a codec
-  round-trip showcase (a sender's encoded track read back through `RelayTrackSource →
+  OpusEncoder`, sent and recorded to MP4 with a MoQ client's fmp4 export) and a codec
+  round-trip showcase (a sender's encoded track read back through `MoqTrackReceive →
   H264Decoder`) — the owner chose no showcase for either (owner, 2026-10-20).
   [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059;
-  networking-extension-wheels — SHIPPED #2153; virtual-camera-sink — SHIPPED #2198; amended by gateway-nodes: an example's picture is seen in a viewer, and an example that shares one adds gateway nodes]
+  networking-extension-wheels — SHIPPED #2153; virtual-camera-sink — SHIPPED #2198; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — An example shows a person writing and running a stream: the scaffold's
-  idiom, built-ins, nodes, links and exposure. It never shows engine work. That means no
+  idiom, built-ins, nodes, links and gateway nodes. It never shows engine work. That means no
   engine embedded in a host process, no driving the executor or its async runtime, and no
   reaching into engine internals. Showing an engine to a stream author is irrelevant to
   them and misleads them into thinking they have to do engine work, the way a Tailscale
@@ -1028,7 +1039,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls, kept-node-values; unbuilt: fragments; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ asset-media-facts-and-previews, playback-controls, kept-node-values; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -1048,14 +1059,36 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A port declares its name (the attribute's name), its family with that
   family's keys (below), a description, and on an input its delivery profile, its
   `borrow_quota=`, what it requires (`requires=`, `requires_codec=`, `formats=`) and, on a
-  Channels input, the window contract §Media I/O states. An output port carries its
-  producer-written catalog entry — a hang entry, the section and that section's own fields —
-  documentation `connect` never compares (§Networking, the catalog). In Python the port
+  Channels input, the window contract §Media I/O states. An output port carries its stream
+  facts (below). In Python the port
   attribute types the read and the write; in Rust `#[processor(... input("video", family =
   Image, ...))]` declares the family, the macro refuses a port without one, and the read
   target's `Deserialize` impl validates a by-name cast. [schema-free-ports — SHIPPED #1816,
   #1812; moq-relays — SHIPPED #2821, #2840; strict-port-families — SHIPPED
-  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273; typed-stream-facts — SHIPPED #3286, #3289, #3313]
+- **DECIDED** — A port's stream facts are typed fields its family defines, describing the
+  stream rather than one message. `connect` never compares them and the engine inserts nothing
+  on their account; a mismatch a node cannot handle is that node's refusal in its own words.
+  `ImageStreamFacts` holds `frame_rate` (a rational, `numerator`/`denominator`),
+  `content_light_level` (`max_content_light_level`, `max_frame_average_light_level`, cd/m²) and
+  `mastering_display_colour_volume` (SMPTE ST 2086 in the H.265 SEI's units: three primaries and
+  the white point, `max_display_mastering_luminance`, `min_display_mastering_luminance`).
+  `PacketsStreamFacts` holds `rfc6381_codec` (the codec with profile and level, `avc1.64001f`),
+  `coded_width` and `coded_height` (video), `sample_rate` and `channel_count` (audio), and
+  `codec_configuration_hex` (the codec's out-of-band configuration record — `avcC`, `hvcC`,
+  `OpusHead` — as lowercase hex, absent when the stream carries it in band). Every field is
+  optional. Channels, Array and Records have no stream facts beyond their declared keys: what
+  they carry is stated per message or by name. `Output(Image, rate=…)` declares the frame rate
+  as a literal rational or `from_config(key)`, resolved once the node's config is known, as
+  Channels' `rate=` is, and seeds `frame_rate`. The node that owns an output replaces its facts
+  while running — `ctx.outputs.set_stream_facts(port, facts)` in Python,
+  `OutputWriter::set_stream_facts` in Rust, `output_port_set_stream_facts` in the module C ABI —
+  and a reader asks `ctx.inputs.upstream_stream_facts(port)` for the facts of the output feeding
+  that input, `None` until any are stated; a facts type not the port's family's is refused. The
+  engine depends on no MoQ layout: hang's catalog words exist only in `tatolab-moq`
+  (§Networking). Owner, 2026-11-08. Rejected: a free JSON entry in another project's layout, or
+  caps compared or negotiated at `connect` — a port says what it carries in its own family's
+  typed words, visible as pins and in Properties (owner, 2026-11-08). [typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — A read can name the inbound link it drained. Beside `read_raw`, a reader
   offers a read that returns the message, its stamp and the *inbound link* it arrived on,
   named by the source channel name the link subscribed to — `<lowercased producer
@@ -1185,7 +1218,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   inbound link holding that link's dropped-message count, and the parent reads it whenever
   `graph` renders, without waiting on the child. The last counts a crashed helper wrote stay
   readable; a dead writer can no longer update its entries, so a respawned helper gets a
-  fresh board. A helper's write refused at the ceiling is
+  fresh board, and each wiring still in place keeps its counts cumulative across the restart:
+  the parent adds what the dead helper's board last held to what the new board reads, so a
+  link's losses never go backwards in `graph`, while a reconnect still starts from zero. A helper's write refused at the ceiling is
   counted the same way. The node's `metrics` key then renders for a helper-placed processor
   as it does for an app-process one.
   Five readings the build settled. **An entry is a slot carrying its wiring**: a
@@ -1318,14 +1353,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `ctx.config` is that mapping. [agent-readable-processor-catalog — SHIPPED #2226]
 - **DECIDED** — Port rendering in the control plane is name, description, `family` (the
   family with the keys the port declared), delivery profile, direction, on an audio input that
-  declared one its window contract, and on an output that carries one its `catalog_entry`, in
-  `graph` and `/api/registry` alike. A port that declared no window contract
+  declared one its window contract, on an output its `stream_facts` in the family's own field
+  names, and on a Records port `values_checked: false` — the node catalog's "unchecked" mark —
+  in `graph` and `/api/registry` alike. A port that declared no window contract
   renders no `audio_window` key at all rather than a null. A `match_device` port renders
   the five values its device settled — machine-dependent because the device format is,
   which is truer than a static lie — and renders the sentinel itself while nothing has
   settled it. [schema-free-ports — SHIPPED #1816; audio-port-window-contract — SHIPPED
   #2032, #2034; moq-relays — SHIPPED #2840; strict-port-families — SHIPPED
-  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — A port carries one of five families, each one engine-owned memory layout:
   **Image** — a GPU surface of a pixel format from the engine's texture formats
   (`rgba8_unorm`, `rgba16_float`, …), its size and colour; **Array** — named attributes (`P`, `Cd`, `logits`),
@@ -1429,7 +1465,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   samples; a Packets body carries the codec name; a Records body is zero, its payload the
   runtime's msgpack encoding; an Array body carries the attribute table's row count. Stream
   facts an Image frame does not carry — frame rate, content light level, mastering display —
-  belong on the port's catalog entry, updated through `set_catalog_entry`. Per-frame dynamic
+  are the port's `ImageStreamFacts`. Per-frame dynamic
   HDR (HDR10+, Dolby Vision) is a later descriptor kind, whose metadata rides the sample's
   payload bytes. Owner, 2026-11-06. [strict-port-families — SHIPPED
   #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
@@ -1621,10 +1657,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `@node.process`, `paced_by_real_time` in `#[processor]` — and the node catalog shows it. Such a node
   loads in any stream: it paces on the machine clock, its writes carry stream time, and it
   stands outside the step barrier, which neither waits on it nor balances its links; what a
-  step reads from it follows the reading port's delivery setting. `RelayTrackSource` and the
+  step reads from it follows the reading port's delivery setting. `MoqTrackReceive` and the
   camera, microphone, audio-output and WHIP-publish nodes in `packages/` declare it; a display
   does not, being a view that presents what arrives. Owner, 2026-11-04. [stream-clocks —
-  SHIPPED #3171; amended by gateway-nodes: `MoqTrackReceive` in `tatolab-moq` declares it in place of `RelayTrackSource`]
+  SHIPPED #3171; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: refusing a device node in a scaled or stepped stream — it breaks streams that mix
   devices with a warped clock (owner, 2026-11-04).
 - **DECIDED** — Reactive and continuous execution pace the same on both floors. A reactive
@@ -1676,8 +1712,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; lightweight-node-kinds — SHIPPED
-  #3278, #3280, #3282, #3297, #3305, #3310; amended by lightweight-node-kinds: a shader runs without a
-  process, and an uncompiled Python function node runs in a pool]
+  #3278, #3280, #3282, #3297, #3305, #3310]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
   the checkout lease and the retired-frame refusal are one platform-neutral core both arms
@@ -1814,6 +1849,35 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; macos-platform-floor —
   SHIPPED #2357; macos-capability-parity — SHIPPED #2410; runtime-hosting — SHIPPED #2721,
   #2722]
+- **DECIDED** — A helper that dies on its own is restarted by its node's host. "On its own" is
+  every exit the engine did not ask for — a crash, a signal, an exit of any status — and never
+  one on the shutdown ladder, at node removal, at stream stop, or by the stream's watchdog; a
+  helper on the ladder is never restarted. The death path runs as above (process group down,
+  escalate socket shut, surface-share admission and iceoryx2 nodes reclaimed, pending links
+  refused), then the node waits its backoff and starts again as the same node with a new
+  processor instance: a fresh interpreter re-imports the class and constructs the instance,
+  `setup()` runs on it with the node's current config, the setup command carries every link the
+  node holds, and `run` follows. No lifecycle call ever reaches the dead instance, and the node's
+  id, config, links and place in the graph never change, so nothing upstream or downstream is
+  re-planned. A link `wired` before the death reads `wired` throughout; one still `pending` at the
+  death is refused on the death path, reads `error`, and is left off the new helper's setup
+  command. A frame or message in flight at the death is lost and never replayed, and a Python
+  processor's in-memory state is gone, as at every start. A helper whose escalate socket closed
+  is given 5 s to exit before it is taken to have stopped answering, so a dying helper is
+  restarted rather than failed. The backoff is a monotonic deadline checked in the runner's
+  100 ms poll, never a sleep, so a shutdown during the wait is seen within one poll. Budgets are
+  engine-chosen and not authorable.
+  One restart policy serves every child process the runtime keeps alive:
+  `ChildProcessRestartBackoff` waits 1 s before a start, doubling to 30 s, back to 1 s after a run
+  of 60 s, and counts deaths in a row that each came within 60 s of their start. A helper and the
+  shared native services' children (`SupervisedChildProcess`) give up at the fifth such death; each
+  owner keeps its own loop and asks the type when to start and whether to give up. A node past
+  its crash-loop limit reads `Error` with the last death's reason and stays down while the rest of
+  its stream runs; a restart whose `setup()` refuses, or whose helper refuses the engine's build
+  id, counts as a death in a row and its refusal is the reason. Re-running the project
+  (`reload_project`) starts it with a fresh count; no verb restarts one node. Owner, 2026-11-03.
+  Rejected: never giving up on a helper — a node whose `setup()` always raises would spin every
+  30 s and hide its failure (owner, 2026-11-03). [helper-process-restart — SHIPPED #3111]
 - **DECIDED** — A link onto a helper reads `wired` only once the helper says so. The helper
   answers every `wire_link` it receives with a link-scoped `wired` or `wire_failed` reply,
   `wire_failed` carrying the reason its open failed; the reply rides its own rpc tag, which
@@ -1828,7 +1892,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a helper reads commands only between callbacks, so waiting would put a control-plane call
   behind user code, and the isolation axis settles it over the caller-learns-its-outcome
   one. A helper that dies with a link unconfirmed takes the link down on the same death path
-  the ladder runs; the link never reads `wired`. A link an engine-to-helper wire has not yet
+  the ladder runs; the link never reads `wired`, reads `error`, and a restarted helper's setup
+  command leaves it off. A link an engine-to-helper wire has not yet
   confirmed is never re-planned as unadded.
   [local-transport-hardening — SHIPPED #2265]
 - **DECIDED** — A helper refuses to start unless the engine it imported is its parent's
@@ -1847,11 +1912,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   helper built against a different iceoryx2 patch or a stale wheel on the helper's `sys.path`
   (local-transport-hardening, 2026-09-14).
   [local-transport-hardening — SHIPPED #2262; package-split-and-lend — SHIPPED #2689]
-- **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
-  construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
+- **DECIDED** — The MVP edit loop is `dev`: it re-loads a stream whose graph document changed
+  and refreshes every fragment whose generator's module changed (warm restart is sub-second by
+  construction). Reloading a node on a save of its code is a nicety, not MVP-gating, and when built it is
   processor-granular — stop the processor, respawn its helper (a fresh interpreter
   re-imports the class), rewire its ports — never module-loading machinery.
-  [importable-python-library — SHIPPED #1711; amended by project-and-assets: `dev` re-loads a changed document and refreshes fragments whose generator changed]
+  [importable-python-library — SHIPPED #1711; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — A processor's identity is its class, named by its fully-qualified
   import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust; a built-in
   by its class's import path in `tatolab.stream`, the entry below) —
@@ -1862,8 +1928,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   with an error naming the fix (move the class to an importable module and import it
   from the entry file — one import line). The entry file itself may still run as
   `__main__`; only processor classes may not live there.
-  `@node.process` declares execution, interval, scheduling
-  priority, and description only. Mechanically means at the authoring seam, never from a
+  Every node names its kind — `@node.shader`, `@node.function` or `@node.process` — and a
+  module's `#[function_node]` is a node type too; a function's type is its import path, as a
+  class's is, and bare `@node` does not exist. `@node.process` declares execution, interval,
+  scheduling priority, and description only. Mechanically means at the authoring seam, never from a
   runtime reflection API: Rust captures the type path where the macro expands, because
   `std::any::type_name`'s output format is unspecified across compiler versions and must
   never key a registry; Python joins `__module__` and `__qualname__` with a colon. Nothing
@@ -1872,9 +1940,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   about who may mint an in-process `RuntimeContextFullAccess`, never a placement question.
   [processor-class-identity — SHIPPED #1837, #1839, #1840, #1841;
   helper-process-placement-only — SHIPPED #1714; built-in-node-type; package-split-and-lend —
-  SHIPPED #2684]
+  SHIPPED #2684; lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
 - **DECIDED** — A built-in node's type is the import path of its class in `tatolab.stream` —
-  `tatolab.stream:RelayTrackSource` — the same string in the runtime's registry, on the stream
+  `tatolab.stream:ImageToArray` — the same string in the runtime's registry, on the stream
   library's class, in every graph and over the local API, from Python and from Rust alike. The
   runtime registers each built-in under that string; no table translates it to another name,
   and a built-in's Rust module path never reaches a graph. Every node's type is thus the
@@ -1882,7 +1950,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime's built-ins, and any other is imported in the stream's own interpreter. A type
   changes only when its class's public name does — renaming or moving the runtime's crates
   and modules never changes one — and the first golden graph a runtime is held to already
-  carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend — SHIPPED #2684; amended by gateway-nodes: the example type is a former built-in's: `RelayTrackSource` moves to `tatolab.moq:MoqTrackReceive`]
+  carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend — SHIPPED #2684; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — `@node.process` registers nothing: it writes the class's declaration stamps and
   returns the class, so a declaration is readable with no engine anywhere. A Python node class
   reaches the node catalog when a graph that names it loads — or a live `add_node` names it —
@@ -1906,23 +1974,138 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   out of the import path, because splitting would re-invent an identity grammar.
   [processor-class-identity — SHIPPED #1838, #1841; runtime-mesh — SHIPPED #2282;
   stream-graph — SHIPPED #2614, #2618; runtime-hosting — SHIPPED #2715]
-- **OPEN** — Additional execution flavors to scale processor count (lightweight /
-  green-thread style): intended, do not build until designed; hard constraint — no new
-  configuration dials. [execution-model]
-- **DECIDED** — A graph is data: a stream's `@stream` function compiles to the stream's graph, a
-  serializable description a runtime runs — nodes by class import path with their config and
-  name, the links, and what the stream exposes. It is one shape with what `graph` renders,
-  never a second format: the spec keys are `stream`, `nodes` (each `name`, `type`, `config`),
-  `links` (each `source` and `target`, an end in this stream being `{node, port}` by the
-  node's resolved name, and a source in another stream on the machine naming that stream too)
-  and `exposed` (each `node`, `port`, `level`), and `graph` renders exactly these with its
-  live keys — `id`, `ports`, link state, counters — beside them. A load reads the spec keys
-  and skips the live ones, so `graph`'s own output is a loadable graph; there is no saver,
-  because the render is the export. A load refuses by name a node name two nodes cast to, an
-  unregistered `type`, an end in this stream naming a node or port the graph does not hold,
-  and an exposure naming a node or an output the graph does not hold; a source in another
-  stream is that stream's to hold and is not looked up here.
-  [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2708; amended by gateway-nodes: `exposed` leaves the spec keys; a config value naming another node is a reference edge, which the load checks by the node's name and type and `graph` renders beside the links; amended by project-and-assets: the document is the saved form and the runtime its writer; a node's `id` is a UUID spec key a link end names, and a config value may reference an asset]
+- **DECIDED** — One graph, three node kinds. Every node has the same ports, families, links and
+  `type`; what differs is its kind, declared by a contract about what its code does, and the
+  runtime derives where it runs, with no placement surface and no dial. A **shader**
+  (`@node.shader`, a Slang function) takes Images and values and returns an Image, with no side
+  effects, and runs on the GPU. A **function** node (`@node.function` in Python, or
+  `#[function_node]` in Rust) computes its outputs from its inputs, config, `now` and, if it
+  declares one, its own `State`, and runs inside the node that reads it; it may pass an Image
+  along without reading its pixels. A **process** node (`@node.process`, a class with a
+  lifecycle) may do anything and runs in its own process. A function node with no `State` is
+  stateless (`Lerp`); one that declares it receives the last state and returns the next, which
+  the runtime keeps, so it still replays the same. Every graph node and catalog entry carries
+  `kind`, and a function node its `language`, `python` or `rust`, beside each port's `family`:
+  a family says what flows on a wire, a kind says how a node's code runs. A class is a process;
+  a function node or a shader runs wherever the runtime puts it and never gets a process of its
+  own unless it crashes or stalls its reader. Owner, 2026-11-06. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  Rejected: `@node.stateless` / `@node.stateful` — what decides a process is side effects, not
+  state (owner, 2026-11-06).
+  Rejected: always isolating a function node in its own process (owner, 2026-11-07).
+- **DECIDED** — One run loop. A helper's loop is the engine's own Rust runner, running in the
+  child and calling the Python instance's `process()` in-process; the bootstrap keeps the
+  lifecycle commands, imports and describe, and schedules nothing, so reactive, continuous and
+  the island wake rules are written once. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+- **DECIDED** — How a function node reaches native code. A `@node.function` whose body is typed
+  numeric code (floats, ints, numpy arrays, loops) is compiled by Numba to the module host
+  table's function-node entry at load, cached by a hash of its source, its signature and the
+  Numba version; a module's function nodes, `tatolab-ops`' included, compile on first use and
+  are cached the same way. Compiled state is a typed record Numba can lower; a state outside
+  that, or a body that does not compile, keeps the node in Python, which runs inside its Python
+  reader, or in the stream's one function node pool when no Python class reads it. `graph`
+  shows whether each function node ran compiled. A compiled node runs inside any reader's read,
+  a module's native half included. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  Rejected: per-platform `tatolab-ops` wheels pre-compiled with Numba's `pycc` — deprecated, and
+  no third party could use it (owner, 2026-11-08).
+- **DECIDED** — `tatolab-ops` is a first-party module of `@node.function` functions, bundled with
+  the runtime and built exactly the way a third party builds one, so the runtime still ships no
+  node of its own: math (`Add` … `Modulo`), shaping (`Lerp`, `Clamp`, `Remap`, `Smoothstep`,
+  `Step`), logic (`Compare`, `Switch`, `Select`, `Gate`), values and noise (`Constant`, `Random`,
+  `PerlinNoise`), time (`Lfo`, `Timer`, `Lag`, `Trigger`, `Counter`, `SampleAndHold`), `Feedback`,
+  and images: `HoldFrame`, which keeps one frame with no copy until told to refresh, and
+  `ImageFile`, a `@node.process` that loads a project image asset by UUID and resends its slot
+  to a reader that connects late. `Gate` passes or blocks a message of any family, so a reactive
+  node behind a closed gate does not run; it is the graph's if/else. `tatolab.ops:Feedback` is
+  the one `tatolab-ops` name the engine knows. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  Rejected: rewriting `tatolab-ops` in Rust — it stops showing how a user writes a function node
+  (owner, 2026-11-08).
+- **DECIDED** — Evaluation islands. The compiler groups each connected run of shader and
+  function nodes into an island: inside it a link is a function call, at its edge a link is an
+  ordinary channel with its family, and the graph stays flat — an island is a compile result,
+  never a container. Function nodes a helper reads run inside that helper's read, as a synthetic
+  port of its input mailboxes; shaders run on one native evaluator per stream in `tatolabd`,
+  which owns the device; a stateful function node feeding several readers runs once, in one
+  function-node helper per stream, so one state never has two copies; and an uncompiled Python
+  island a native half reads runs in the pool. The island pass runs between plan and PREPARE,
+  re-runs on every live `connect` and `disconnect` touching only the islands the edit changes,
+  and island nodes skip PREPARE and SPAWN. An island with no source upstream never wakes its
+  reader and is sampled whenever the reader runs, so a reactive reader fed only by sourceless
+  islands is refused at `connect`, naming continuous or interval execution. An island holds the
+  last value of each upstream input and pairs inputs as the latest of each, re-evaluating once
+  per change of inputs or timestamp, memoised, so two readers of one `Random` agree; `now` is
+  the reader's `ctx.time` at the read. A cycle is refused by name unless it closes through
+  `Feedback`, which hands out its input as it was at the last evaluation. A function node reads
+  a class node's output through its own subscription at a hidden input port of its reader, and
+  the island keeps the newest message. A function returning `T | None` hands out nothing on
+  `None`, and that port does not wake its reader. One opaque input type, `UnreadMessage`, takes
+  the family linked into it and can only be handed on or not. A control value on a wire is
+  Channels at an irregular control rate. Links inside an island stay off the step ledger and
+  cannot drop; edge links count and take loss slots as any link. Owner, 2026-11-07 and
+  2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  Rejected: waiting for matching timestamps before an evaluation (owner, 2026-11-07).
+  Rejected: once per pull, as Blueprint does — a per-pull `Random` read twice disagrees (owner,
+  2026-11-07).
+  Rejected: a `delay=True` flag on `@node.function`, any stateful node closing a loop, or the
+  engine inserting the delay itself (owner, 2026-11-08).
+- **DECIDED** — Inputs, pins and config. A value that may change while the stream runs is an
+  input; a value whose change means tearing something down and rebuilding it is config. Every
+  input of every kind has a pin value: an unlinked input takes the value on its pin, else its
+  declared default, and with neither must be linked, refused by name when the stream starts,
+  while during a live edit the node holds and `graph` names the unlinked input. The graph
+  records pins per node beside its config, and an edit to one is live. Any config field may be
+  exposed as a pin through `exposed_config_fields`, set with `set_exposed_config_fields`; a
+  linked config field replaces the config value for that evaluation on a function or shader
+  node, and arrives as a live config update on a process node. Owner, 2026-11-06 and
+  2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  Rejected: exposing a config field by linking to it with no recorded list — the editor has
+  nothing to draw while it is unlinked (owner, 2026-11-08).
+- **DECIDED** — The state board. Each stream has a board of fixed-size state slots, modelled on
+  the loss-count board: a stateful function node keeps its state there, keyed by node, so it
+  survives a helper restart and a re-island, is persisted in the stream record across a reload,
+  and `graph` can show it. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+- **DECIDED** — `@node.shader`. The function's signature declares the ports in the families' read
+  types and its body is a Slang function named for the node; an Image parameter arrives as
+  `ImageInput`, whose `pixel` is this pixel and `sample(uv)` any position, and a float is a push
+  constant. The source reaches `tatolabd` through describe, so no Python runs at evaluation, and
+  a shader takes RGBA Images, refusing others by name. A chain fuses into one kernel, a generic
+  composition of each node's Slang type, splitting where a node samples beyond its own pixel,
+  where extent or format changes, where a non-shader reads the intermediate, where it fans out,
+  or where merged push constants pass 128 bytes; a split chain is still one submission. GPU
+  dispatch submits asynchronously with timeline signalling, so one stream's kernels never wait
+  on another's. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+- **DECIDED** — `@node.function` in Python. The signature is the node, read once at import into
+  the catalog: a plain parameter is an input pin and its default the pin's value; the return is
+  the output `result`, or one output per field of a dataclass; `float`, `int` and `bool` are
+  one-channel Channels, `dict` Records, a read type its family; `config` is one dataclass named
+  by the parameter called `config`; `Time` and `State[...]` are found by type after a bare `*`,
+  with `Stateful[Out, T]` naming what goes out. A class, an untyped parameter, `*args` or
+  `**kwargs`, a mismatched `State`, a lambda, a closure or nested function, `async def`, a
+  generator and `-> None` are refused at import by name with the fix. The side-effect check at
+  decoration refuses calls to `time.*`, `random.*`, `open`, `socket`, `threading`,
+  `os.urandom` and `datetime.now`, `global` and `nonlocal`, closures and referenced mutable
+  globals; it cannot see aliased, dynamic or transitive access. Before each function-node call
+  the helper writes the node to its board as a breadcrumb: a helper that dies with it set, or
+  whose watchdog ends a call that ran past three of its island's frame intervals, moves that
+  node to its own process on restart, counted under `metrics` in `graph`. The pool promotes a
+  node that overruns its frame interval three times running and is respawned with state handed
+  over through the board. Owner, 2026-11-06 and 2026-11-07. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+- **DECIDED** — A graph is data: a stream's graph document is a serializable description a
+  runtime runs and the saved form the runtime writes. It is one canonical JSON shape (sorted
+  keys, two-space indent, one trailing newline) and one shape with what `graph` renders, never a
+  second format. Each node carries `id` (a UUID the runtime generates at insert, a spec key,
+  never reused), `name` (a label), `type`, `kind`, `config`, `pins` (the value on each unlinked
+  input) and `studio` (the studio contract, below); a link end is `{node: <uuid>, port}`; the
+  document also holds variables, Graph Input and Output nodes, fragments, `groups`, its
+  `display_name` and its own `studio` (canvas notes). Live keys — link state, counters, island
+  placement — stay out, and `graph` renders the document plus them, so its output still loads.
+  Saved: structure, config, pin values, studio fields; never saved: data on links, runtime
+  state, a stateful node's `State`. A config value naming another node is a reference edge, and
+  `{"asset": "<uuid>"}` (with `"from": "<project uuid>"` for an import's) one to an asset: the
+  load checks each, by the node's UUID and type or the asset's presence, and `graph` renders
+  them beside the links. A load refuses by name a node with no UUID as its `id` — the runtime
+  is the document's one writer and never mints one in memory — an unregistered `type`, and an
+  end naming a node or port the graph does not hold. Owner, 2026-11-08.
+  [one-runtime-per-machine; stream-graph — SHIPPED #2614, #2618, #2708; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — A project is a versioned repository of assets, and a stream's graph is one of
   them. A project holds a project file, assets — a stream's graph document, media, images, USD,
   FMUs and the rest, one file per asset — and node code; it has no `stream.py`, and a load reads
@@ -1935,19 +2118,48 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   layout; session, 2026-11-10, for the folders, the numbering and free relocation). Every asset and every node instance gets a UUID the runtime generates when it
   is created or placed; its config, state and links follow it, a name is only a label, and every
   reference names a UUID. The runtime is the project's one writer: every change, a graph edit or
-  an asset import alike, is a transaction with an author and an inverse, applied whole or refused
-  whole in the runtime's own words over the local API and MCP, written unless the caller marks a
-  graph edit live, and the unit of undo and history. Each project's history is a Git repository
+  an asset import alike, is one codified, typed and versioned action, parsed and applied through
+  one path whether it comes through MCP, the CLI, Tato Studio or an SDK, and recorded as a
+  transaction with an author and an inverse, applied whole or refused whole, written unless the
+  caller marks a graph edit live, and the unit of undo and history. A recorded transaction
+  carries a `format_version` the runtime writes and reads back — a newer runtime reads and undoes
+  every older version — and an optional `idempotency_key` the caller mints, one per user
+  gesture: a second action under a key the history already holds answers the first transaction
+  instead of applying again, and an action sent without one may apply twice on a retry. A
+  refused action answers a typed refusal — the action, the field or link it refused, and the
+  runtime's own words, which a client shows beside its cause and never rewrites — and the
+  project's change feed carries it tagged `refused`, the latest 100 per project kept in memory
+  and never in history (owner, 2026-11-09 and 2026-11-10). Each project's history is a Git repository
   the runtime writes with a Git engine it carries, never the person's own Git, kept on the machine as
-  the project's database of history and branches; no remote carries it, and a project works
-  fully offline (owner, 2026-11-09). Another project is imported by copying it once, whole, from a folder
-  or a zip into `imports/<folder>/`, copied again only when the person chooses; everything it
-  holds is referenced in its folder and never copied out of it or moved inside it, and a stream
-  fragment holding one of its streams is a reference resolved at each load. Python stays the
+  the project's transaction log on one branch, `main`; no remote carries it, nothing pushes,
+  fetches or clones it, and a project works fully offline (owner, 2026-11-09). Each commit
+  records every file of the project outside a hidden folder (`.tatolab/` and `.git` among them),
+  `node_modules`, `__pycache__` and a Python virtual environment, and no symbolic link — except a
+  media, scene or data asset's bytes, which it records as the asset's sidecar alone, as Git LFS
+  records a pointer: an asset's bytes are the one file at its path, which a node reads, and an
+  undo of a delete or a replace restores the sidecar, the bytes coming back only while the file
+  is still at its path. `import_asset` copies a source on the machine into place once, and an
+  upload a client streams lands in `.tatolab/uploads/` first; a file replaced outside the
+  runtime is unsupported, and the runtime watches no folder, so `replace_asset` swaps an
+  asset's bytes keeping its UUID. A project is self-contained: every file a load reads sits
+  inside its directory, save the runtime's own first-party modules, so copying or zipping the
+  folder carries everything and it opens to the same state anywhere. Another project is
+  imported by copying it once, whole, from a folder or a zip — a GitHub archive downloaded
+  first — into `imports/<folder>/`, with no Git, copied again only when the person chooses;
+  everything it holds is referenced in its folder and never copied out of it or moved inside
+  it. A stream fragment holding one of its streams, or one of this project's, is a reference,
+  `{"stream": {"asset", "from"?}}`, read at each load and flattened in place, each held node's
+  UUID derived as UUIDv5 of the fragment node's UUID and its own, and a stream holding itself
+  is refused by name. Editing an import is opening its folder as its own project, the runtime
+  committing its transactions on both histories. Python stays the
   language of nodes: a `@graph_generator` function, replacing `@stream`, builds graph, and its
   output is stored as a frozen, read-only fragment, never one-to-one with a stream, and nothing writes a graph edit back into Python. Data on links and runtime
   state are never saved. Single player first; the cloud hub, branches, roles and releases build on
-  the same transactions and history. Owner, 2026-11-07 and 2026-11-08. [project-and-assets; amended by self-contained-project-imports: a self-contained project whose history records each media asset as its sidecar alone, with no remote; a module copied once, whole, into imports/ and referenced there; a stream fragment as a reference read at load; no fork and no Git transport]
+  the same transactions and history. Owner, 2026-11-07, 2026-11-08 and 2026-11-09. [project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; self-contained-project-imports — SHIPPED #3402, #3405; project-action-contract — SHIPPED #3430, #3436, #3438]
+  Rejected: a dependency as another project's Git history fetched and pinned at a commit, its asset
+  bytes copied in per commit, its streams pasted as stored copies kept in step by refreshes, and a
+  fork copying an asset out of it — copies drift and make a project's state differ per machine
+  (owner, 2026-11-09).
   Rejected: graph edits written back into `stream.py` through a concrete-syntax-tree rewrite — text
   becomes the meeting point of four writers, a stream with loops or helpers refuses edits, and
   studio data, undo and multi-user editing have no home (owner, 2026-11-07).
@@ -1956,6 +2168,33 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2026-11-09).
   Rejected: a project's history in the person's own Git — many creatives have none installed, and
   each project needs its own history (owner, 2026-11-08).
+- **DECIDED** — An import's Python and node code. The project file lists each import: the
+  module's project UUID, its folder under `imports/`, the source it was copied from, and the
+  version it carried — its history's head commit when copied, informational only and never
+  resolved. A module's Python is the project's: the runtime writes its folder as a uv path
+  source of the project (`[tool.uv.sources] <name> = { path = "imports/<folder>", package =
+  false }`), so `uv sync` rebuilds `.venv` from the lock with the module's requirements and none
+  of its code on the venv's path, and an import whose requirements the lock cannot resolve
+  beside the rest is refused in uv's words, since a project has one interpreter. A node type an
+  import's own code defines is led by its folder, `imports/<folder>/<module>:<qualname>` (nested
+  imports `imports/<folder>/imports/<other>/…`): the load names each such node of a fragment that
+  way, `list_project_node_types` answers it and `add_node` takes it, and an interpreter imports
+  the module with that folder first on `sys.path`, refusing a top-level name already imported
+  from another folder, the project or its venv by naming both. A type the import's code does not
+  define resolves in the project's venv. `.venv` is a cache rebuilt from the lock, and
+  third-party wheels come from uv's cache or the index, each step of the sync reported on the
+  run's action. The runtime unit carries its first-party modules, `tatolab-ops` among them, never
+  copied into a project: each time the runtime makes, syncs or locks a `.venv` it links each into
+  `.tatolab/first-party-imports/<folder>` and declares it in `pyproject.toml` as a requirement and
+  a uv path source through that link, repointed at the runtime's own copy at each load, so any
+  `uv sync` keeps the module and each release gives every project its version; the project file
+  records the runtime version that created it, a record a load under another version logs and
+  never a lock. Owner, 2026-11-09 and 2026-11-10. [self-contained-project-imports — SHIPPED #3402, #3405; amended by
+  first-party-package-index: the unit carries each core module as a wheel, linked as
+  `.tatolab/first-party-imports/<wheel file name>`]
+  Rejected: installing first-party modules into `.venv` behind the project's back, its
+  `pyproject.toml` and `uv.lock` never naming them — any `uv sync` uninstalls them and their
+  requirements and breaks the project's ops (owner, 2026-11-10).
 - **DECIDED** — The runtime refuses by name what a graph holds that it does not understand,
   at load and before a frame flows. Every built-in's config takes
   `#[serde(deny_unknown_fields)]`, and the refusal names the node, its `type` and the setting;
@@ -1978,13 +2217,37 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   graph and a subgraph alike declare each port they offer with a `GraphInput` or `GraphOutput`
   node, named and of one family, the way DaVinci Resolve's Fusion page and Effect House do; there
   is no `expose` verb. Tato Studio shows a graph's Outputs as what it displays, at every level.
-  A subgraph is a fragment, a `@graph_generator` function's stored output (§Product): its extra
-  parameters are promoted config; its Input and Output nodes are its ports, the only ones
-  reachable from the graph that places it; and it flattens at compile, its nodes named under the
-  reference's name (`overlay/comp`). The same generator may instead fill a stream whole. An Output never leaves the machine on its own: sending one is a gateway node's job
-  (§Networking). Owner, 2026-11-03 and 2026-11-06. [stream-interface-and-routing-policy;
-  gateway-nodes; amended by project-and-assets: a subgraph is a fragment; amended by
-  live-graph-inputs: a stream's top-level Inputs run as source nodes a client writes]
+  A subgraph is a fragment, and comes three ways: a `@graph_generator` function's frozen output
+  (§Product), another stream placed by reference, and an authored fragment — a fragment node
+  with no generator, edited like any graph and touched by no refresh, which
+  `collapse_selection_into_subgraph` makes from a selection of nodes, carrying each link that
+  crossed it through a `GraphInput` or `GraphOutput` inside; `unlock_generator_fragment` turns a
+  generator's fragment back into plain nodes of its graph, which no refresh then reaches, each a
+  graph action with an inverse. A fragment's extra parameters are promoted config; its Input and
+  Output nodes are its ports, the only ones reachable from the graph that places it; and it
+  flattens at compile, its nodes named under the reference's name (`overlay/comp`). The same
+  generator may instead fill a stream whole. Inside a fragment, and for every `GraphOutput`, an
+  interface node runs nothing: a fragment's Input is where the placing graph's link enters, and
+  an Output is where a port leaves. At a stream's top level, each Array, Channels or Records
+  `GraphInput` runs: it is a reactive source node with one `value` output of its declared family,
+  linked to every port that reads it. `write_graph_input {stream, input, value}` names the stream
+  by its stream id and the Input by the port name its config declares, and hands `value` to the
+  node, which publishes it stamped with stream time now, the value read per family exactly as
+  `write_studio_view_output` reads one; many clients may write one Input and the last write
+  wins. A write is live data, never recorded, and gone on the next load; it is refused for a
+  stream not running, a name no top-level `GraphInput` declares, a value its family does not
+  take, and an Image or Packets Input, which no client writes and which resolves out. Its config
+  takes an optional `default`, a value of its family refused at load when the family does not
+  take it — and refused, naming the node, on a fragment's Input — published when the node
+  starts, so readers see it until the first write; and an optional `range: [lowest, highest]`,
+  refused on a family that takes no number. The node keeps its current value, the last write or
+  its `default`, hands it to each reader the last send missed, and `graph` renders it on the node
+  beside its running state. A project view and a top-level `GraphInput` are the two node types
+  whose outputs a client writes, through one family encoder and one engine call. An Output never
+  leaves the machine on its own: sending one is a gateway node's job (§Networking). Owner,
+  2026-11-03, 2026-11-06, 2026-11-09 and 2026-11-11; a late reader handed the current value,
+  owner, 2026-11-11; the current value in `graph`, the fragment default's refusal and `range`,
+  session, 2026-11-11. [stream-interface-and-routing-policy; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; project-action-contract — SHIPPED #3430, #3436, #3438; live-graph-inputs — SHIPPED #3540]
   Rejected: `expose` as the way a graph declares its ports — an implicit edge on a node's port in
   place of a node the designer draws (owner, 2026-11-06).
 - **DECIDED** — Variables, as Unreal Blueprints have them: a `SetVariable` node names a value and
@@ -1994,10 +2257,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   names — which it resolves to a reference edge (§Networking). A connection is held as a
   reference to its gateway node, which keeps the live session; it is never a record on a link.
   A variable that holds a port's output carries only the five families (a node reference is
-  not a family value); a decorator port has none, so variables are built
-  once the families have fully replaced the decorators, and the gateway and track nodes after
-  them. Owner, 2026-11-06. [lightweight-node-kinds, which defines variables and the reference
-  edge; gateway-nodes]
+  not a family value). Owner, 2026-11-06. [lightweight-node-kinds — SHIPPED #3242; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a connection carried as a Records value — a live session is not data, and each reader
   would open its own (owner, 2026-11-06).
   Inside a fragment a variable is scoped by level: a setter sets its variable on its own level,
@@ -2009,9 +2269,65 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: one namespace for the whole stream, which refuses a fragment that sets a variable
   placed twice; a fragment's variables private with outer reads only through promoted config
   (owner, 2026-11-09).
-- **OPEN** — Whether a fragment may hold another fragment, a generator placing a generator,
-  without bound, and how a generator that places itself is refused. Any `@graph_generator` may
-  be placed. [stream-interface-and-routing-policy; project-and-assets; IN-FLIGHT → graph-groups-and-nested-fragments]
+- **DECIDED** — A fragment may hold fragments. `graph.add` inside a `@graph_generator` takes
+  another `@graph_generator` as it takes a node class: its keyword arguments are the inner
+  generator's promoted config, and the reference it answers carries the inner fragment's Input
+  and Output ports by name. The import or refresh of the outer fragment runs the inner generator
+  in the same interpreter and stores its output as a fragment inside the outer one; a refresh of
+  the outer re-runs every generator under it, a node keeping its UUID while its path of names is
+  unchanged. A generator already running higher in the same import or refresh is refused when
+  placed again, naming the chain (`look → blur_then_tint → look`), and nothing of that import is
+  written. A fragment nests as deep as the graph document's container limit allows (serde_json's
+  127 nested containers); a deeper one is refused at import, naming the fragment and the depth.
+  A nested fragment flattens at compile under its path of reference names
+  (`look/blur_then_tint/blur`), and `graph` renders it as a container inside its container, so
+  Tato Studio shows one node with the fragment's pins at each level and steps inside with
+  breadcrumbs. Any `@graph_generator` may be placed. Owner, 2026-11-08: a recursion guard by
+  name is enough, and an arbitrary depth cap would refuse a real graph a reader can parse.
+  [stream-interface-and-routing-policy; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; graph-groups-and-nested-fragments — SHIPPED #3329, #3359]
+- **DECIDED** — A labelled group is a record in the graph document — a UUID the runtime
+  generates, a title, a description and a colour — that nodes of one level belong to; it changes
+  nothing that runs, the compiler never reads it, and it is saved like studio fields and
+  rendered under `graph`'s `groups`. Membership lives only on the node, its `studio.group`
+  naming the group's UUID; a group holds no node list, and a `studio.group` that names no group
+  loads with the node ungrouped. `add_group {stream, title, description, colour, nodes}` (answers
+  the UUID and sets each named node's `studio.group`), `set_group_fields` and `remove_group` (its
+  nodes stay, ungrouped; its inverse carries the group and every member's UUID) are
+  transactions, and a node joins or leaves a group through `set_studio_fields`. A group inside a
+  fragment comes only from its generator, through `graph.group(title, nodes, description=,
+  colour=)`, and is read-only like the fragment. Tato Studio draws a group as its Frame, and no
+  second canvas item exists for it. Owner, 2026-11-08 and 2026-11-09. [graph-groups-and-nested-fragments — SHIPPED #3329, #3359; studio-view-nodes — SHIPPED #3446, #3449, #3461]
+- **DECIDED** — A node's `studio` is a versioned contract Tatolab owns: `{contract, position,
+  group, comment, colour, collapsed, metadata}`. The runtime checks every fixed key, refusing a
+  key of the wrong shape or outside the contract by name, and keeps `metadata`, a client's own
+  map, as given; `set_studio_fields` sets the fixed keys and the metadata map. A graph
+  document's own `studio` holds the canvas items that are not nodes: `notes`, each with a UUID,
+  text, position and size, edited by `add_note`, `set_note_fields` and `remove_note`, graph
+  actions with inverses. A new contract version adds keys, and the runtime reads every older
+  one. Owner, 2026-11-09. [studio-view-nodes — SHIPPED #3446, #3449, #3461]
+- **DECIDED** — A view is a node type. Each Tato Studio view a stream's project or one of its
+  imports brings — a `views/<name>/` folder whose manifest opens and whose `placement` is
+  `node` — resolves as a node type of that stream, named by its view type, `<project
+  name>:<view folder>` (`acme-dj:deck`), as a project's Python node classes resolve as types. Its
+  ports are the manifest's declared inputs and outputs, each of its declared family, its
+  description and port descriptions the manifest's, so the node catalog reports them like any
+  node's, and a node of the type takes the view's settings as its config, changed with
+  `set_node_config`. A view that does not open is no type, so a node naming it is refused as an
+  unregistered `type` is; a stream holds one node of each view, and a second is refused naming
+  the node that holds it. Renaming a project rewrites, in the same transaction, the `type` of
+  every node of a view type it brings. A panel reads a view node's inputs through `open_viewer`
+  on the port linked into each, an Image zero-copy — the runtime gives one viewer per port per
+  connection, which Tato Studio's main process fans out to every panel showing the port — and
+  writes with `write_studio_view_output {stream, node, port, value}` to one of its Array,
+  Channels or Records outputs, which the node owns and publishes; a downstream reader keeps the
+  last value, the last of many panels' writes wins, and a write is live data, never recorded.
+  Owner, 2026-11-09 and 2026-11-10.
+  Rejected: one `tatolab.studio:StudioView` type with `config.view_type` naming the view — one
+  node type whose ports change with its config, where every user-defined thing elsewhere is a
+  type of its own (owner, 2026-11-10).
+  Rejected: Studio telling the runtime a view's ports when it places the node — the graph would
+  depend on Studio being open, and an agent-built graph would have no ports (owner, 2026-11-09).
+  [studio-view-nodes — SHIPPED #3446, #3449, #3461; project-action-contract — SHIPPED #3430, #3436, #3438]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
@@ -2030,21 +2346,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   carry their stream on a per-stream topic; the Python node types, described in its own
   interpreter, while built-ins register once for the machine and the node catalog lists both;
   its log file, records routed by stream; shutdown and its escalation, the machine's signal
-  ladder walking every stream at once; the teardown watchdog; exposures; the virtual camera's
+  ladder walking every stream at once; the teardown watchdog; the virtual camera's
   stable id; and the pipeline cache. The process-group table of processor interpreters stays
   one lock-free machine table, each slot tagged with its stream — so one stream's shutdown,
   crash budget or graph change never touches another's. A stream's watchdog, on expiry, kills
   that stream's groups, abandons its threads and unloads it, never recording it `failed`; past
   an engine-chosen bound of abandoned threads in the process, the runtime exits 124. A stream
-  reads another stream's private or public port on the same machine through the local relay's
-  loopback listener and the relay source node (§Networking); no link crosses a stream's edge.
-  `tatolabd` keeps once for the machine the exposed-port publisher, the relay adapters and
-  the local relay's two children (§Networking). Surfaces are shared across every stream's
+  reads another stream's track only through gateway nodes (§Networking); no link crosses a
+  stream's edge, and `tatolabd` keeps no publisher, relay adapter or relay child. Surfaces are shared across every stream's
   processor interpreters on both floors, all being
   the runtime's children. Streams needing conflicting Python
   packages each start from their own venv (the package split and the lend, §Packages). Owner,
   2026-10-01; the surface clause confirmed 2026-10-02. [one-runtime-per-machine;
-  runtime-hosting — SHIPPED #2704, #2715; moq-relays — SHIPPED #2842, #2853, #2855; amended by gateway-nodes: a stream reads another's track only through gateway nodes, and `tatolabd` keeps no publisher, relay adapter or relay child]
+  runtime-hosting — SHIPPED #2704, #2715; moq-relays — SHIPPED #2842, #2853, #2855; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -2056,7 +2370,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   engine ends every stream on the machine, and the runtime restarts and re-loads every stream neither stopped nor failed from
   its persisted graph (§Product); a hang is
   bounded per node by the existing abandon budget and ends only that stream; Python crashes and hangs
-  stay in their own process. "Restart the runtime and the streams come back" means re-loading
+  stay in their own process, and a crashed helper is restarted within its crash-loop limit. "Restart the runtime and the streams come back" means re-loading
   from persisted graphs, never re-attaching — processor interpreters die with their parent by
   construction and surfaces cannot outlive the device's owner — so the runtime keeps each
   stream's graph in its state directory (§Product), the runtime directory staying ephemeral.
@@ -2072,7 +2386,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2704, #2713; stream-identity-and-persistence — SHIPPED #2960,
   #2965]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ slang-shader-compiler)
+## Graphics (RHI / GPU) — SHIPPED (OPEN: a texture registration's layout cell, the remaining graphics capabilities)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
@@ -2100,7 +2414,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   device without it, the module's session construction refuses naming the missing direction. A kernel whose SPIR-V declares a
   subgroup operation the driver does not serve, or uses one in a stage it does not serve,
   refuses at `create_*_kernel` naming the driver, the operation and the stage (MoltenVK serves
-  none in vertex, measured) — the one class of GLSL construct found that MoltenVK cannot serve.
+  none in vertex, measured) — the one class of shader construct found that MoltenVK cannot serve.
   [macos-platform-floor — SHIPPED #2356, #2357, #2374; macos-capability-parity — SHIPPED #2403]
 - **DECIDED** — The engine's kernel primitives are exposable to Python as configured
   blocks: shader/compute source and binding config passed from Python, compiled and
@@ -2250,14 +2564,36 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   capabilities of `GpuContext`, reached the same way by every caller. No kernel capability
   can be absent at runtime, and no application glue supplies one.
   [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777]
-- **DECIDED** — GLSL is the shader source contract: Python passes GLSL text and the
-  engine compiles it at kernel construction, and re-creating an identical kernel is free —
-  compilation is cached under a key covering everything that changes the output (source,
-  stage, entry point, target environment, compiler version), never source alone.
-  Pre-compiled SPIR-V stays accepted as an escape hatch. Authoring a kernel requires no
-  toolchain beyond the installed wheel, for every kernel kind. The wheel carries a C++
-  GLSL compiler (shaderc / glslang). [python-kernel-api; python-kernel-surface —
-  SHIPPED #1775]
+- **DECIDED** — Slang is the shader source contract and the one shader compiler. Python
+  passes Slang text, and the engine compiles it at kernel construction; re-creating an
+  identical kernel is free — compilation is cached under a key covering everything that
+  changes the output (source, stage, entry point, target environment, and the compiler as
+  `slang <version>`, read from the global session at run time), never source alone. The kernel
+  constructors take Slang and nothing else, with no language parameter: GLSL text is refused
+  naming its `#version` line, and a compiler diagnostic names the line of the caller's source
+  in Slang's own words. The entry point is `main` by default and any name is accepted; a vertex
+  shader reads its index as `SV_VulkanVertexID`, since `SV_VertexID` makes Slang declare a
+  capability the engine's device does not enable. Pre-compiled SPIR-V stays accepted as an
+  escape hatch. Authoring a kernel requires no toolchain beyond the installed wheel, for every
+  kernel kind. One module in `core/rhi/` (`slang_shader_source_compiler.rs`) owns every Slang
+  call: it opens `libslang-compiler` by path from beside the engine with `libloading` and calls
+  Slang's COM interfaces through tables declared there, each layout held to Slang's headers by a
+  size test; one global session per process, created on first use; a fresh session per
+  compile, so an edited source never returns an old module; compiles serialised by the module's
+  lock, since a Slang global session is not thread-safe. Settings: SPIR-V 1.4 for Vulkan 1.2,
+  optimisation on, debug info off — Slang keeps binding names without it, and the engine's
+  reflection refuses Slang's debug instructions. The target is a parameter — a stage and a
+  backend — serving every stage the engine has (compute, vertex, fragment, ray tracing) to
+  SPIR-V; another backend, or a material graph's fragment stage, is a later change on the same
+  compiler. The engine's own shaders, `streamlib-vulkan-video`'s and `packages/test-fixtures`'
+  are Slang, compiled by the build scripts through the same library; no GLSL file remains in
+  the engine tree. Reflection, binding by the shader's own names, the push-constant check and
+  the capability refusals read Slang's SPIR-V unchanged. A compile runs at kernel construction
+  or a graph edit (about 40 ms, against shaderc's 4 to 5), never per frame. Owner, 2026-11-06.
+  Rejected: keeping GLSL through Slang's GLSL front end with a `source_language` parameter — one
+  language is one compile path with no front-end gaps (owner, 2026-11-06).
+  [python-kernel-api; python-kernel-surface — SHIPPED #1775; slang-shader-compiler — SHIPPED
+  #3272, #3288]
 - **DECIDED** — Dispatch is synchronous: it returns when the GPU work has retired and
   the writes are visible, and no fence or timeline vocabulary reaches Python. Several
   dispatches batch into one submission with barriers between them and a single fence at
@@ -2399,25 +2735,6 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   flavour to zero live allocations. An allocation an exported raw handle still names stays
   counted against the budget until that handle's holder drops it.
   [shared-pools-bounded-by-memory-budget — SHIPPED #2743]
-- **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, pure wheel
-  Python over `create_compute_kernel`, the processor output texture ring,
-  `copy_surface_to_surface` and dispatch, with no engine, wire or stub change. The user writes
-  one GLSL function, `vec4 effect(vec4 source, ivec2 at)`;
-  `GlslPixelEffect.compile(gpu_full_access, effect_glsl=, dials=)` in `setup()` builds an
-  ordinary compute kernel around it, and `apply_to_frame(gpu_limited_access, frame, dials=)`
-  in `process()` lands the frame with the engine copy, dispatches, and returns the output message
-  (`surface_id`, `width`, `height`, `timestamp_ns`, `color_info`). One single-plane RGBA
-  source, output at its extent in `rgba8_unorm`. Dials are push constants typed `float`,
-  `int`, `vec2` or `vec4`, read as `dials.<name>` and laid out std430 after the template's
-  elapsed-seconds member — `vec3` refused by name, and a block past 128 bytes refused naming
-  the dial that crosses it — declared at compile and supplied at every apply, checked before
-  any GPU work. Pre-declared: `streamlib_extent`, `streamlib_elapsed_seconds` (monotonic, zero
-  at the first apply), `streamlib_source_at` (clamped at the edge) and `streamlib_source_uv`
-  (bilinear). `#line 1` above the body makes a compiler diagnostic name the user's own line.
-  Refusals name the line the user can fix: a missing `effect` signature, a malformed or
-  reserved dial name, a `vec3`, an oversize block, an undeclared, missing or mistyped dial,
-  and a frame the copy refuses. No Rust peer until a Rust consumer names one.
-  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2428]
 - **DECIDED** — Model input is prepared on the GPU by `ModelInputTensorKernel`, pure wheel
   Python over a compute kernel, the tensor side of the processor output pool and binding by
   surface id — no engine or wire change. `ModelInputTensorKernel.compile(gpu_full_access,
@@ -2496,7 +2813,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -2568,8 +2885,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   not wrong pixels, and the alternative costs every reader a re-plug mid-stream. And a
   device-configuration refusal — an `S_FMT` or `REQBUFS` that fails — latches for the
   processor's life, so one transient device failure ends that camera's run; whether a retry
-  is owed, and whether it belongs to this module or to the runtime's restart policy, is
-  undecided.
+  is owed, and whether it belongs to this module or to a restart policy (the runtime has one
+  for helpers only), is undecided.
 - **DECIDED** — First-party modules are written against the same handle-shaped hardware
   primitives third parties get — DMA-BUF / OPAQUE_FD / IOSurface import-export, audio clock, color resolution, and the audio device, video device and video codec
   backend seams — never against private engine guts;
@@ -2634,19 +2951,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The runtime opens no windows: no display built-in, no node-owned window, no
   event pump, no present target or swapchain, no `winit`, and no `DISPLAY`, `WAYLAND_DISPLAY`
   or `XAUTHORITY` handling in `tatolabd`. The virtual camera keeps its compositor,
-  `VulkanOffscreenCompositor`, offscreen only. A person sees a stream in a browser through the
-  preview page (§Networking); the rigs and the codec proof read a port through the local relay
-  as a user does, as tools outside the runtime; a stream's one output off its graph is a track
-  at a relay. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2845; amended by gateway-nodes: a person sees any port in Tato Studio's viewer, and the rigs read a port that the stream under test sends through gateway nodes to a relay the rig starts]
+  `VulkanOffscreenCompositor`, offscreen only. A person sees any port in Tato Studio's viewer;
+  the rigs and the codec proof read a port that the stream under test sends through gateway
+  nodes to a relay the rig starts, as a user does, as tools outside the runtime. Owner,
+  2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2845; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — `TestPatternSource` is the sample stream's source: a branded looping animation
   — colour bars, the potato bouncing corner to corner, "Tatolab stream setup successfully" and
   "sample stream" bottom-right — rendered by one compute dispatch per frame
   into a texture from the node's output pool, the potato and the captions baked into the
   `tatolab-testpattern` module as RGBA overlays, so it needs no device, no permission and no
-  font library, and runs on the software device. It is pure Python and GLSL, built through
+  font library, and runs on the software device. It is pure Python and Slang, built through
   `create_compute_kernel`; its type is `tatolab.testpattern:TestPatternSource`, with its
   config keys and ports unchanged. The branding is content. Owner, 2026-10-16.
-  [moq-relays — SHIPPED #2866; {SHIP[1:-1]}]
+  [moq-relays — SHIPPED #2866; slang-shader-compiler — SHIPPED #3272]
 - **DECIDED** — `H264Encoder` has a CPU arm (unbuilt): until it lands a
   machine without a GPU encoder shares no H.264, and the sample stream is proven on a device
   with one. Where the device's platform arm refuses H.264 encode — the software device among
@@ -2702,13 +3019,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly six surfaces and nowhere else: log record `host_ts`
+  Wall clock is permitted on exactly five surfaces and nowhere else: log record `host_ts`
   and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an action
   was refused, beside the `applied_at` a transaction reads off its commit (owner,
-  2026-11-10) — the local relay certificate's validity — its UTC `notBefore` / `notAfter`,
-  issued and aged by the one file that writes the certificate (owner, 2026-10-17) — and a
-  relay token's expiry — the UTC `iat` / `exp` of the moq.pro JWTs the moq.pro adapter and
-  the live proof's subscribe minter sign (owner, 2026-10-20) — their job is correlating with
+  2026-11-10) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro JWTs the
+  moq.pro gateway and the live proof's subscribe minter sign (owner, 2026-10-20) — their job is correlating with
   the outside world, which monotonic time cannot do. A wall-clock value never enters the
   data plane and is never compared against a media timestamp; another surface is a plan
   change, not a judgement call. The gate enforces the list in the tree it scans — `runtime`,
@@ -2716,12 +3031,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   opt-out attribute: the surfaces read there are a closed set of kinds in the gate, so
   another is a source change that surfaces in review rather than a line quietly appended,
   and an entry whose file stops reading a wall clock is a licence the gate makes you hand
-  back. The relay certificate and token surfaces are read outside its scan, a relay token in
-  `packages/tatolab-moq`. The allowlist is per-file, which is why a data-plane file never joins it — a
+  back. The relay token surface is read outside its scan, in `packages/tatolab-moq`. The allowlist is per-file, which is why a data-plane file never joins it — a
   machine-global unique name comes from the engine's unique-name primitive, never from
   reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
-  SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158]
+  SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — Audio backend: one chain per platform, probed once per process and logged
   once, no configuration dial and no environment override. On Linux, PipeWire-native,
   reached by runtime dlopen — the MIT-licensed PipeWire/SPA headers are vendored, the
@@ -2790,8 +3104,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990]
 - **DECIDED** — The headers are vendored, not taken from the build machine.
   `manylinux_2_28` carries no PipeWire development package, so a system-header build is
-  not reproducible where the wheel is actually built — the same reasoning that pins the
-  GLSL compiler to build-from-source rather than linking whatever sits on the builder.
+  not reproducible where the wheel is actually built — the same reasoning that builds the
+  Slang libraries from their pinned tag on Linux rather than linking whatever sits on the builder.
   MIT-licensed PipeWire and SPA headers land under `vendor/`, untouched and
   unreformatted, and the licence obligations are met by the machinery that already
   reproduces every vendored C/C++ project's own licence text out of the tree. `LICENSE`,
@@ -2987,7 +3301,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   held factory** — a windowed destination wired onto a channel whose creation depth is below
   64 is refused at wire time naming the port, the link, both depths and the fix of
   connecting the windowed consumer before the channel's other links, and it reads a channel
-  only the exposed-port publisher or a lagging helper still holds as readily as a busy one. **A flush counts the
+  only a lagging helper still holds as readily as a busy one. **A flush counts the
   samples no reader had received**, in per-channel samples at the port's declared rate: the
   remainder past the last emitted window's already-delivered overlap, plus the staged source
   frames scaled by the rate ratio and rounded down. Subtracting the overlap is what makes
@@ -3002,7 +3316,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   output is filter delay rather than input; the remainder parked when a port's last link
   disconnects is the designed stop above; and a message `accept` refuses already fails the read
   by name.
-  [audio-port-window-contract — SHIPPED #2033; loss-visibility — SHIPPED #2269; amended by gateway-nodes: the reserved subscriber slot the publisher held goes with it]
+  [audio-port-window-contract — SHIPPED #2033; loss-visibility — SHIPPED #2269]
 - **OPEN** — Whether a windowed port connected live onto a channel created smaller than the
   windowed cap should instead wire at that channel's depth, with its ring overwrites counted.
   Overwrite counting is shipped (§Processor model); until this is decided the connect is
@@ -3077,7 +3391,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
   GOP knobs are ticket-level, like every other node's config. The four video blocks
   are one encode body and one decode body specialised by a codec identity, not four
-  processors — the pair differs in an enumerant, its catalog entry's codec string and a name —
+  processors — the pair differs in an enumerant, its stream facts' codec string and a name —
   and each node is its own port surface, registration and identity. The layering
   wall holds at this fourth device class too: colour conversion into the codec's NV12
   input rides the engine's existing RHI colour converter — the `rgb_to_nv12` stage on
@@ -3111,21 +3425,21 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the coded extent; on Apple, where CoreMedia reports only the cropped extent, a picture past
   the cap is refused. [macos-capability-parity — SHIPPED #2412, #2413; macos-platform-floor —
   SHIPPED #2374]
-- **DECIDED** — An encoded frame is the stack's media frame and nothing around it: a varint
-  timestamp in microseconds, then one Annex-B access unit with its parameter sets inline, which
-  the port's catalog entry signals by carrying no `description`. No pooled-buffer or
-  surface-id carriage for encoded bytes unless a measured need appears. The codec string —
-  parsed from the SPS the arm emits, so no arm's profile is misstated — and the coded extent,
-  before crop, ride the port's catalog entry, which the encoder writes after its first frame;
-  colour rides the bitstream's VUI; a sync point is the envelope's `starts_group`; the
-  timestamp rides the user header like every message's. A message the decoder cannot read is
+- **DECIDED** — An encoded frame is the codec's unit and nothing around it: one Annex-B access
+  unit with its parameter sets inline, which the port's `PacketsStreamFacts` signal by carrying
+  no `codec_configuration_hex`. No pooled-buffer or surface-id carriage for encoded bytes unless
+  a measured need appears. The codec string — parsed from the SPS the arm emits, so no arm's
+  profile is misstated — and the coded extent, before crop, are the port's `PacketsStreamFacts`,
+  which the encoder states after its first sync point; colour rides the bitstream's VUI into the
+  decoder's `ImageFrame`; a sync point is the envelope's `starts_group`; the stamp is the
+  envelope's `timestamp_ns` like every message's. A message the decoder cannot read is
   refused by name, never reshaped — the audio wire codec's doctrine — and a decoded frame is
   an ordinary Image frame; the encoded message is a Packets unit naming its codec. Loss on an ordered encoded link is the engine's per-link count the
   reader exposes as `lost_since_last_read`: a decoder enters a stream only at a
   `starts_group` and, on a message reporting a loss, discards to the next `starts_group` —
   resuming at that message when it itself starts a group. A write the channel ceiling refuses
   makes the encoder's next frame a keyframe, counted in `graph`'s refused-write count. Owner,
-  2026-10-16 and 2026-10-17. [codec-blocks — SHIPPED #2083, #2085; moq-relays — SHIPPED #2850]
+  2026-10-16 and 2026-10-17. [codec-blocks — SHIPPED #2083, #2085; moq-relays — SHIPPED #2850; typed-stream-facts — SHIPPED #3286, #3289, #3313]
   Rejected: a producer sequence inside the payload — a stock player stops on it (owner,
   2026-10-16).
   Rejected: codec-level gap detection — unreliable with hardware decoders (owner, 2026-10-16).
@@ -3148,8 +3462,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   crate's own hardware tests on both floors
   (`runtime/streamlib-owned-device-video-codec-nodes/tests/`). The rig
   is two streams on `tatolabd`, as a deployment builds it (owner, 2026-10-19): the sender
-  (`TestPatternSource` → the encoder) exposes the encoder's port, and the receiver reads that
-  track at the local relay through `RelayTrackSource` and decodes it. The rig reads the
+  (`TestPatternSource` → the encoder) sends the encoder's port through `MoqTrackSend` to a
+  `moq-relay` the rig starts, and the receiver reads that track through `MoqTrackReceive` and
+  decodes it. The rig reads the
   sender's encoded track with `tatolab-read-track`, as any user reads a port, decodes the dump
   with the rig's ffmpeg into PNGs, and measures them with `cargo xtask psnr`, a first-class
   calculation in the proof tooling; the receiver's decode is proven by its decoded-frame count
@@ -3157,7 +3472,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `/verify-live`, and (ii) CI-named GPU-free tests: bitstream parsing, VUI/color translation,
   config resolution, container bytes. Running the rig stays rig-only, and no test reaches into
   a consumer for its fixtures. [codec-blocks — SHIPPED #2084, #2085, #2086; moq-relays —
-  SHIPPED #2860, #2866; amended by gateway-nodes: the sender sends the encoder's port through `MoqTrackSend` to a `moq-relay` the rig starts, and the receiver reads it through `MoqTrackReceive`]
+  SHIPPED #2860, #2866; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
   frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
   chroma plane falls under 30 dB — one floor for every reference, no chroma warn band.
@@ -3221,17 +3536,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   engine-owned fixture stream beside `audio_loopback_stream.py` taking its codec from an
   environment variable, so there is no second rig and no Rust arm to agree with.
   [python-codec-block-api — SHIPPED #2107; moq-relays — SHIPPED #2860]
-- **DECIDED** — An encoded audio packet is the encoded-frame convention applied to audio: the
-  stack's media frame — the varint timestamp in microseconds, then one bare Opus packet as
-  RFC 6716 §3 frames it — every packet opening its own group, so a decoder enters at any. The
-  port's catalog entry is a hang audio entry: `codec` (`"opus"`), `sampleRate` (`48000`,
-  Opus's own clock), `numberOfChannels`, and the `OpusHead` bytes in `description`, whose
-  PreSkip is the encoder's lookahead in 48 kHz samples, which a decoder trims. The stamp rides
-  the user header and names the packet's first sample, carried from the window block the
-  encoder consumed with the timestamped write. `OpusDecoder` reads the channels and the
-  pre-skip from the upstream entry's `OpusHead`, falling back to the packet's TOC for the
-  channels. Owner, 2026-10-16 and 2026-10-17. [opus-mp4-recording-rung — SHIPPED #2125;
-  moq-relays — SHIPPED #2850]
+- **DECIDED** — An encoded audio packet is the encoded-frame convention applied to audio: one
+  bare Opus packet as RFC 6716 §3 frames it, every packet opening its own group, so a decoder
+  enters at any. The port's `PacketsStreamFacts` state `sample_rate` `48000` (Opus's own
+  clock), `channel_count`, and the `OpusHead` bytes as `codec_configuration_hex`, whose PreSkip
+  is the encoder's lookahead in 48 kHz samples, which a decoder trims. The envelope's stamp
+  names the packet's first sample, carried from the window block the encoder consumed with the
+  timestamped write. `OpusDecoder` reads the channels and the pre-skip from
+  `upstream_stream_facts`' `OpusHead`, falling back to the packet's TOC for the channels.
+  Owner, 2026-10-16 and 2026-10-17. [opus-mp4-recording-rung — SHIPPED #2125;
+  moq-relays — SHIPPED #2850; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — `OpusEncoder` is `execution = reactive`, `scheduling = high` like the
   video blocks, input `audio` declaring `delivery_profile = "ordered"` and
   `audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960)` — no
@@ -3241,8 +3555,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   encoder's first-frame pattern: one or two channels through libopus's `Encoder`, three
   to eight through `MSEncoder` with channel mapping family 1 (the standard surround order
   both MP4 and WebRTC accept), more than eight refused by name; a block whose count
-  changes re-mints, as an extent change re-mints video, and the port's catalog entry then
-  names the new count.
+  changes re-mints, as an extent change re-mints video, and the port's stream facts then
+  name the new count.
   Output `encoded_audio`; the `OpusHead`'s pre-skip is the minted encoder's reported lookahead. Config,
   both optional so `{}` is legal: `bitrate_bps` (absent → libopus's automatic rate) and
   `application` (`"audio"`, `"voip"`, `"lowdelay"`; absent → `"audio"`). FEC and DTX off.
@@ -3263,8 +3577,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never for a codec the wheel can carry. It arrives through the `opus` crate over
   `opusic-sys`, whose bundled libopus builds static by default; libopus's notice is a
   `VENDORED_CPP_PROJECTS` entry carried by the `tatolab-opus` wheel, read from the crate's
-  own `COPYING` in the registry checkout — the `shaderc-sys` shape generalised to a second
-  build-script crate rather than a parallel mechanism — and the wheel's portability test is
+  own `COPYING` in the registry checkout — one mechanism for every build-script crate rather
+  than a parallel one — and the wheel's portability test is
   the pass/fail: the extension loads no host library outside the platform's own.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2125]
 - **DECIDED** — `OpusEncoder` and `OpusDecoder` ship as the `tatolab-opus` extension
@@ -3285,7 +3599,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [opus-mp4-recording-rung — SHIPPED #2123, #2124, #2125, #2126, #2127]
 - **DECIDED** — `requires_gpu` and said in the module docstring:
   `test_opus_blocks.py` — a Python known-signal source → `OpusEncoder` → probes →
-  `OpusDecoder` → probes: every message is a media frame opening its own group under the
+  `OpusDecoder` → probes: every message is an Opus packet opening its own group under the
   port's `OpusHead`, packets are 20 ms apart, decoded blocks are 48 kHz `f32` in the
   source's channels.
   [opus-mp4-recording-rung — SHIPPED #2126, #2128]
@@ -3323,7 +3637,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes, typed-stream-facts, display-importable-viewer-frames; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
+## Networking — transport, moq, webrtc — IN-FLIGHT (unbuilt: a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3334,7 +3648,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams at a runtime boundary. [extension-model; networking-extension-wheels — SHIPPED
   #2153]
 - **DECIDED** — The wheel sits on the encoded side of the codec blocks and touches no raw
-  frame, surface or GPU: `WhipPublisher` consumes the media frames `H264Encoder` and
+  frame, surface or GPU: `WhipPublisher` consumes the units `H264Encoder` and
   `OpusEncoder` write; `WhepPlayer` writes the same frames upstream of `H264Decoder` and
   `OpusDecoder`. Audio is in scope from the first
   rung. Both are ordinary processor extensions — `@node.process` classes in the wheel calling the
@@ -3349,15 +3663,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   session's media and there is nothing left to choose. Endpoint and credential configuration
   is ticket-level, as for every built-in's config.
   [extension-model; networking-extension-wheels — SHIPPED #2150, #2151]
-- **DECIDED** — The WebRTC processors carry the stack's media frame as bytes: the publisher
-  reads each track's codec off its upstream port's catalog entry and hands the access unit or
-  packet after its varint timestamp to the wheel's Rust; the player writes that frame and
-  fills what a decoder needs from the stream itself — the extent from the SPS, a sync point
-  from the access unit as the group flag, the audio parameters from the session description
-  — into its ports' catalog entries rather than from config. What crosses a network on a
+- **DECIDED** — The WebRTC processors carry the codec's unit as bytes: the publisher takes each
+  track's codec from its upstream Packets port's declared codec and its extent from
+  `PacketsStreamFacts`, and hands the access unit or packet to the wheel's Rust; the player
+  writes the unit and states what a decoder needs from the stream itself — the extent from the
+  SPS, a sync point from the access unit as the group flag, the audio parameters from the
+  session description — as its ports' stream facts rather than from config. What crosses a network on a
   media track is a bitstream and the description a decoder needs, never a serialised link
   payload. [extension-model; moq-data-tracks — SHIPPED #2172, #2173; moq-relays — SHIPPED
-  #2888]
+  #2888; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — A received stream reaches the graph through the manual-source shape: the wheel's Rust receives on
   its own runtime and a processor-owned thread writes, so no engine seam is added for it. Two
   budgets the wheel lives inside, ticket-level but named here: a helper stops on the shutdown
@@ -3367,7 +3681,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [extension-model; local-transport-hardening — SHIPPED #2264, #2266]
 - **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
-  parsing, and the media frames and catalog entries the player writes checked against the
+  parsing, and the units and stream facts the player writes checked against the
   wire contract. Live,
   rig-only: WHIP publish to Cloudflare Stream and WHEP play back from it, with credentials
   outside the tree, in the fixture-script shape the codec rig set (owner, 2026-09-04).
@@ -3384,14 +3698,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   sessions run in. [networking-extension-wheels — SHIPPED #2150; package-split-and-lend —
   SHIPPED #2673, #2691]
 - **DECIDED** — `WhipPublisher`: `@node.process`, one fan-in input `tracks` (`ordered`) —
-  each inbound link is one RTP track, video or audio by its upstream port's catalog entry,
+  each inbound link is one RTP track, video or audio by its upstream port's declared codec,
   the session's SDP built from the links `inbound_link_names` reports at
   `setup()`; config `url` and optional `bearer_token`. `WhepPlayer`:
   `@node.process(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
   `url` and optional `bearer_token`; `start()` hands `ctx.outputs` to a processor-owned
-  thread that connects, drains the session and writes media frames — a group starting at
+  thread that connects, drains the session and writes units — a group starting at
   each IDR, the stamp from the RTP clock mapped onto the monotonic clock, codec, extent and
-  Opus parameters stated in its ports' catalog entries — and `stop()` closes the session inside the 5 s budget. **No
+  Opus parameters stated as its ports' stream facts — and `stop()` closes the session inside the 5 s budget. **No
   session is minted in `setup()`, and a refused connect is retried rather than ending the
   stream** (2026-09-05, found by the live proof): a WHEP endpoint answers `409 Conflict`
   while the input it fronts has not started publishing, the ordinary state of a player
@@ -3400,7 +3714,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   cannot be dialled again. A write the engine refuses is the one failure not retried: it
   names its port and ends the thread, because reconnecting would spend an endpoint's session
   forever on a write refused every time. [networking-extension-wheels — SHIPPED #2150;
-  moq-relays — SHIPPED #2888]
+  moq-relays — SHIPPED #2888; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — `ci.yml`'s `integration-test-linux` and `integration-test-macos` jobs
   carry the extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
   the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
@@ -3413,23 +3727,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2697]
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by the wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
-  cases), SDP offer construction and answer parsing, and the player's media frames and catalog
-  entries checked against the wire contract on the `wired_link` fixture pattern. Live, rig-only, under
+  cases), SDP offer construction and answer parsing, and the player's units and stream facts
+  checked against the wire contract on the `wired_link` fixture pattern. Live, rig-only, under
   `/verify-live` with a networking arm, two streams on one runtime as the codec rig is: a
   sender publishes `TestPatternSource` → `H264Encoder` and the known signal over WHIP to
   Cloudflare Stream, and a receiver plays the same stream back over WHEP through the decoders
   — credentials read from the environment, absent ones reported as cannot-run, never as pass.
-  The lock reads the receiver's `encoded_video` track at the local relay with
-  `tatolab-read-track`, a tool outside the runtime, decodes it with the rig's ffmpeg and
+  The lock reads the receiver's `encoded_video`, sent through `MoqTrackSend` to a `moq-relay`
+  the rig starts, with `tatolab-read-track`, a tool outside the runtime, decodes it with the rig's ffmpeg and
   scores it with `xtask psnr bar-colors` against its own baseline within ±0.05; the
   receiver's decode is proven by its decoded-frame count in `graph` — the network sits inside
   a path the codec rig already scored, so a mismatch is the wheel's.
-  [networking-extension-wheels — SHIPPED #2153; moq-relays — SHIPPED #2902; amended by gateway-nodes: the receiver's `encoded_video` reaches `tatolab-read-track` through `MoqTrackSend` to a `moq-relay` the rig starts]
+  [networking-extension-wheels — SHIPPED #2153; moq-relays — SHIPPED #2902; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — The address, as built. A port's address is `<machine>/<stream id>/<node>/<port>`,
   every part cast as one address chunk (`core/runtime/address_chunk.rs`, one shared fixture
-  of cases the engine and the pure-Python builder both cast from): the `/watch` path names
-  it, and an exposed port is the track `<node>/<port>` of the broadcast
-  `<machine>/<stream id>.hang`. It carries no processor id; whatever owns the port resolves the
+  of cases the engine and the pure-Python builder both cast from): `graph`, the logs and a
+  viewer name a port by it, and no broadcast or HTTP path is derived from it. It carries no
+  processor id; whatever owns the port resolves the
   node's name when asked. No engine type parses the string form (owner, 2026-10-19). The machine is named as the machine-name entry below
   states and read by `graph`'s top-level `machine`; a stream's id is computed from its location
   at load (§Product).
@@ -3437,36 +3751,36 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
   package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715;
-  stream-identity-and-persistence — SHIPPED #2960; amended by gateway-nodes: `graph`, the logs and a viewer name a port by its address, and no broadcast or `/watch` path is derived from it]
+  stream-identity-and-persistence — SHIPPED #2960; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
   is `{node, port}`, a port of this stream's graph; the graph holds one link collection, which
   every traversal walks. A snapshot whose link end names a stream or a machine is refused by
-  name at load, the refusal naming the relay source node, through which a stream reads
-  another stream's port on this machine or another. In Python `connect(source, destination)`
+  name at load, the refusal naming `MoqTrackReceive`, through which a stream reads another
+  stream's track at a relay, on this machine or another. In Python `connect(source, destination)`
   takes a reference minted by this stream's builder as its source, and a value of any other
   kind is refused naming the spelling that would work. The engine reads no payload to carry a
-  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: the refusal names `MoqTrackReceive`, through which a stream reads another stream's track at a relay]
+  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — Reading across streams is always pulled, and the source is never asked. A
   stream that wants another stream's data reads a track at a relay through a track receive
   node, and that track exists only because the other stream's author added a track send node
   for it; nothing is sent for a track nobody subscribes to. No runtime pushes its output into
   another's input, and no runtime wires two others. Owner, 2026-10-04: a source never wires
   itself into a reader, the way a server never wires its URL into a client's browser; owner,
-  2026-11-06: nothing is shared that the graph does not show. [exposure-levels; gateway-nodes]
+  2026-11-06: nothing is shared that the graph does not show. [exposure-levels; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
   link carries a stamp from another machine, so a many-track sink compares first stamps across tracks with no another-machine refusal. A
-  message read from a relay reaches a graph through the relay source node, which stamps it
+  message read from a relay reaches a graph through `MoqTrackReceive`, which stamps it
   from the track's own timestamp re-based onto this machine's clock — a fixed offset taken
   from the first object, re-anchored on a discontinuity, never per-message arrival time, the
   stack's own player's model — with the timestamped write; a track carrying no timestamp is
   stamped at arrival. The relay's object carries the writer's stamp and the node's doc says
   both. Owner, 2026-10-17. [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643;
-  moq-relays — SHIPPED #2855; amended by gateway-nodes: the node that re-bases a relay track's stamps is `MoqTrackReceive`]
+  moq-relays — SHIPPED #2855; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
-  machines become comparable; until then the per-clock rule above stands, and the relay
-  source node's restated stamp is a local stamp like any relay node's. [runtime-mesh;
+  machines become comparable; until then the per-clock rule above stands, and
+  `MoqTrackReceive`'s restated stamp is a local stamp like any node's. [runtime-mesh;
   cross-runtime-links; moq-relays]
 - **OPEN** — An adaptive jitter buffer: intended, do not build until designed. Direction: a
   playing sink holds what it plays at a steady delay sized from the jitter it measures, the
@@ -3477,7 +3791,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   designer the way TouchDesigner's and Unreal Blueprints' are; the runtime holds no publisher,
   no exposure, no routing policy and no relay of its own, and a stream's graph shows everything
   it sends. Who reads at a relay is that relay's own access rules. Owner, 2026-11-06.
-  [gateway-nodes]
+  [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a publisher in the runtime that forwards a stream's ports to relays on its own —
   data the graph does not show (owner, 2026-11-06).
   Rejected: `expose`, exposure levels or a per-relay routing toggle deciding what leaves the
@@ -3485,7 +3799,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   into (owner, 2026-11-06).
 - **DECIDED** — Networking is a module of gateway nodes, in the Unreal Engine shape. A
   **gateway node** holds one connection to a relay and publishes one broadcast it names; a
-  **track node** declares one outgoing track on a gateway with its catalog entry, and the stream
+  **track node** declares one outgoing track on a gateway, and the stream
   holds it as a graph variable; a **track send node** writes content to a track it names by
   reference, anywhere in the graph, with no wire back to the gateway; a **track receive node**
   reads a remote track through a gateway. A node names another — a track its gateway, a send
@@ -3493,8 +3807,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (`MoqTrackSend(track=camera_track)`): the graph records it as a reference edge, the load
   refuses one naming a node that is missing or of the wrong type, and `graph` renders it beside
   the links. A reference edge carries no data and is never a link. The MoQ nodes are the
-  `tatolab-moq` module, built the way a third party builds one; the WebRTC wheel's nodes are
-  another such module. Owner, 2026-11-06. [gateway-nodes]
+  `tatolab-moq` module, built the way a third party builds one: a Rust-native extension wheel
+  depending on `tatolab-stream` and the module host table and on no engine crate, as
+  `streamlib-webrtc` is, whose nodes are another such module. `MoqGateway` is manual and
+  `paced_by_real_time`, holds one session from its own config and has no data ports; `MoqTrack`
+  (`gateway`, `track`, optional `catalog`) has no data ports, and a second send node on one track
+  is refused at load by name; `MoqTrackSend` has one input `content` of a family with a wire
+  form — Packets, Records, Channels or Array — and a link from an Image port is refused at
+  `connect` naming an encoder, because an Image slot means nothing off the machine.
+  Owner, 2026-11-06. [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a long data wire from every sender to its gateway, or a connection carried on a
   special port — the graph variable is what keeps one connection reusable across the graph
   (owner, 2026-11-06).
@@ -3503,14 +3824,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Tatolab solves no networking problem. Reach between machines, a peer's
   identity, encryption on the wire, NAT and names are a relay's, or the network the user
   already has — a tailnet, a LAN, the internet. The runtime reads, configures and requires
-  nothing of Tailscale: no status, no `tailscale serve`, no certificate, no name; reaching a
-  machine's local relay over a tailnet is a docs page, because the relay listens on the
-  machine and a tailnet reaches the machine. Nothing is built for discovery, certificate
+  nothing of Tailscale: no status, no `tailscale serve`, no certificate, no name. No relay runs
+  on the machine unless a person starts one, and a tailnet reaches whatever relay a connection
+  names. Nothing is built for discovery, certificate
   minting, name claiming or peer authentication, on any network. Owner, 2026-10-16.
-  [one-runtime-per-machine; moq-relays — SHIPPED #2842; amended by gateway-nodes: no relay runs on the machine unless a person starts one, so a tailnet reaches whatever relay a connection names]
+  [one-runtime-per-machine; moq-relays — SHIPPED #2842; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: reading Tailscale's status for the machine's name and the tailnet's machines, and
   having `tatolabd` configure `tailscale serve` — a rights prompt and a manual step on every
-  install, for reach the local relay already gives (owner, 2026-10-16).
+  install, for reach a relay already gives (owner, 2026-10-16).
 - **DECIDED** — The address is `<machine>/<stream id>/<node>/<port>`: the runtime is addressed by
   its machine, and the same string is the address in Python, the CLI, the URL path and the
   graph (owner, 2026-09-30). Collisions (owner,
@@ -3535,33 +3856,26 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2715; stream-identity-and-persistence — SHIPPED #2960]
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. The engine names the machine by its hostname cast and reads
-  nothing of Tailscale; a relay adapter's root prefixes the broadcast at that relay.
-  [runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2842, #2873; amended by gateway-nodes: the root is the connection's, and a gateway node prefixes its broadcast with it]
-- **DECIDED** — The runtime's HTTP is on loopback only and carries what is not real time:
-  the listing of the machine's streams and exposed ports, the preview page, and at
-  `/machine-runtime-lock-holder` the serving runtime's pid, which names the macOS machine
-  lock's holder (§Product). Its paths are
-  the address: `/watch/<machine>/<stream id>` opens the preview on a broadcast with its tracks
-  to pick from, `/watch/<machine>/<stream id>/<node>/<port>` straight onto one track. The listing
-  shows private and public ports; an internal port is listed and not served. The runtime's
-  HTTP serves no media and listens nowhere but loopback; what the local relay's own listener
-  serves over HTTP beside its tracks — its certificate fingerprint, its WebSocket path and the
-  relay program's `/fetch` — is the relay's, under the same grant as the tracks. The read-only
-  MCP, the bounded-sample form and the snapshot form are not built. Owner, 2026-10-16,
-  2026-10-17 and 2026-10-24. [moq-relays — SHIPPED #2860, #2864;
-  machine-lock-without-administrator — SHIPPED #2929; amended by gateway-nodes: the preview page and the `/watch` paths leave it; it carries the listing of the machine's streams and the lock holder's pid]
+  nothing of Tailscale; the root is the connection's, and a gateway node prefixes its broadcast
+  with it at that relay.
+  [runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2842, #2873; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
+- **DECIDED** — The runtime's HTTP is on loopback only and serves one route,
+  `/machine-runtime-lock-holder`, the serving runtime's pid, which names the macOS machine
+  lock's holder (§Product). It serves no media and listens nowhere but loopback.
+  Owner, 2026-10-16, 2026-10-17 and 2026-10-24. [moq-relays — SHIPPED #2860, #2864;
+  machine-lock-without-administrator — SHIPPED #2929; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: live forms over HTTP served by the runtime — MPEG-TS, HLS, raw H.264, fMP4 — and a
   `whep` form (owner, 2026-10-04).
   Rejected: a snapshot form — one PNG of a port's latest frame, the runtime reading the port's
-  payload to make it — a door beside the relay; a frame is seen through the preview page or
-  any MoQ client (owner, 2026-10-17).
+  payload to make it — a door beside the graph; a frame is seen in a viewer or through any MoQ
+  client (owner, 2026-10-17).
 - **DECIDED** — The runtime has no door for verification, and verification gets none. Every
   end-to-end proof — the codec rigs, the audio loopback check, the evidence an agent captures —
   is a deterministic tool outside the runtime that reads a port the way a user does: the stream
   under test sends it through gateway nodes to a relay the rig starts, and the tool reads it as
   a MoQ client, or a person looks at it in a viewer. Nothing of it lives in the engine. The
   engine's internals are proven by unit tests; the engine is never proven by building an app on
-  it. Owner, 2026-10-17 and 2026-11-06. [moq-relays — SHIPPED #2860, #2875; gateway-nodes]
+  it. Owner, 2026-10-17 and 2026-11-06. [moq-relays — SHIPPED #2860, #2875; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: `exchange` kept as an engine-internal verification door, an image-writing built-in
   for the rigs, an MCP image tool — side paths past the product's own nodes, which agents
   reach for over the product's own doors (owner, 2026-10-17).
@@ -3583,7 +3897,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a stream, nodes share data through shared memory, as today. The runtime is never a relay and
   starts none: a person who wants one on the machine runs `moq-relay` and stores a connection to
   it, and a rig starts its own as a fixture. Owner, 2026-10-16 and 2026-11-06. [moq-relays;
-  gateway-nodes]
+  gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: `tatolabd` supervising a bundled local relay — an always-running relay is the
   automatic sharing this removes (owner, 2026-11-06).
   Rejected: embedding `moq-relay` as a library inside `tatolabd` — the runtime would then be a
@@ -3596,7 +3910,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   convention for a catalog they read — and each track node is the track its config names, so four
   cameras and a microphone sent through one gateway are five tracks any client subscribes to by
   name. The relay's own listing is the directory. Two gateways on one connection are two
-  broadcasts. Owner, 2026-10-16 and 2026-11-06. [moq-relays; gateway-nodes]
+  broadcasts. Owner, 2026-10-16 and 2026-11-06. [moq-relays; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: one broadcast per track — it loses multi-track switching and audio beside video,
   the things a broadcast is for (owner, 2026-10-16).
 - **DECIDED** — A message's group boundary is the writer's, in the envelope. `write(port,
@@ -3604,32 +3918,26 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port is one group per message and its author never sees the flag; `starts_group=False`
   continues the group the last message opened. The built-in encoders set it themselves —
   `True` on a keyframe, `False` otherwise — and a node emitting encoded media sets it from its
-  own keyframe knowledge; `OpusEncoder` opens a group per packet. The publisher maps it to the
-  relay's group boundary and reads nothing else; Python and Rust readers see it alike, beside
-  the stamp, and the envelope's stamp is the object's. Owner, 2026-10-16 and 2026-10-17.
-  [moq-relays — SHIPPED #2821, #2850, #2853; amended by gateway-nodes: the track send node maps `starts_group` to the group boundary and drops the rest of a group under backpressure or on a message reporting a loss, as the publisher did]
-- **DECIDED** — The catalog is assembled from port descriptions, never from payloads. An output
-  port's declaration may carry, beside its name and description, its catalog entry in the
-  layout the stack's players read: the section it belongs in — `video`, `audio`, `text`,
-  `json`, `binary` — and that section's own fields, `codec`, `codedWidth` and `codedHeight`,
-  `sampleRate`, `numberOfChannels`, `description` for a decoder's out-of-band setup, and on a
-  data track `mode` (`snapshot` or `stream`) and `mime`. The node that owns the port writes its
-  entry from its config and from what it learns at its first frame — an encoder its codec
-  string and coded extent — and replaces it while running; a built-in's Records port declares
-  `binary`, `mode: snapshot`, `mime: application/msgpack`, and no reader in the runtime
-  consults a data track's `mode`. The
-  publisher merges the entries of a stream's exposed ports into the broadcast's catalog track
-  as text, one entry per track named `<node>/<port>` under its section, and `graph` renders
-  each port's entry. Any reader may read a port's entry — a local node off its inbound link,
-  a remote client off the catalog — and it is documentation a reader follows: `connect`
-  compares nothing, the engine checks nothing against it, and no port is required to carry
-  one. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2840, #2853; amended by gateway-nodes: the gateway merges its track nodes' entries into its broadcast's catalog, a track node's `catalog` replacing its upstream port's entry]
-  Rejected: a port declaration the engine acts on — a media opt-in the publisher reads payloads
-  under — media logic in the adapter path (owner, 2026-10-16).
-  Rejected: an entry in the runtime's own words — a `kind`, a free-text `encoding`, a `cast`
-  import path — for the publisher to translate into the players' layout; a port describes
-  itself in the layout the players read, so one malformed entry breaks its own track and
-  never the broadcast (owner, 2026-10-17).
+  own keyframe knowledge; `OpusEncoder` opens a group per packet. `MoqTrackSend` maps it to the
+  relay's group boundary, reads nothing else, and drops the rest of a group under backpressure
+  or on a message reporting a loss; Python and Rust readers see it alike, beside the stamp, and
+  the envelope's stamp is the object's. Owner, 2026-10-16 and 2026-10-17.
+  [moq-relays — SHIPPED #2821, #2850, #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
+- **DECIDED** — The catalog is assembled from stream facts at the network boundary, never from
+  payloads. `MoqTrack` builds its track's hang catalog entry from the upstream port's family, its
+  declared codec and its stream facts — Image's `frame_rate` and HDR facts, Packets' coded
+  extent, rate, channel count and `codec_configuration_hex` as hang's `description` — and its
+  optional `catalog` config overrides it. `MoqGateway` merges its track nodes' entries into its
+  broadcast's catalog track as text, one entry per track. `MoqTrackSend` wraps each unit in
+  hang's legacy container (a varint microsecond stamp, then the unit) on the way out, and
+  `MoqTrackReceive` unwraps it and states the facts it read from the remote catalog on its
+  output. hang's words exist only in `tatolab-moq` and `tatolab-read-track`. Owner, 2026-10-16,
+  2026-10-17 and 2026-11-08. [moq-relays — SHIPPED #2840, #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
+  Rejected: a port declaration the engine acts on — a media opt-in the runtime reads payloads
+  under — media logic in the transport path (owner, 2026-10-16).
+  Rejected: an entry in the runtime's own words — a `kind` or a free-text `encoding` — for a
+  track node to translate; a port states its family's typed stream facts, which the track node
+  maps to the players' layout (owner, 2026-10-17 and 2026-11-08).
 - **OPEN** — A decoded audio port playable by any MoQ player: intended, do not build until
   designed. Direction: a track fed by a decoded audio port carries an `audio` entry with the `pcm`
   codec and raw interleaved little-endian f32 objects in place of its Channels blocks.
@@ -3642,7 +3950,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   is written again whole for a relay that hands a late subscriber only newer objects —
   Cloudflare's, every second. Signing in
   to a provider and provisioning a relay live in the app or a separate service, never the
-  runtime. Owner, 2026-10-14, 2026-10-20 and 2026-11-06. [moq-relays; gateway-nodes]
+  runtime. Owner, 2026-10-14, 2026-10-20 and 2026-11-06. [moq-relays; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: relay adapters compiled into `tatolabd` — networking is a module, and the runtime
   carries no relay code (owner, 2026-11-06).
 - **DECIDED** — A gateway's URL and credential are config on the gateway node, as every node's
@@ -3650,7 +3958,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   relay instance and no relay secret, and has no relay verbs. No config key is a special secret
   type: a credential kept in a secret store reaches the gateway on the wire, from a node that
   reads the store and writes the gateway's settings as a Records message to its `settings` input,
-  whose values replace the config's. Owner, 2026-11-06. [gateway-nodes]
+  whose values replace the config's. Owner, 2026-11-06. [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a secret config type that `graph` and the logs redact — a special type for one case,
   where a node on the wire already does it (owner, 2026-11-06).
   Rejected: the runtime storing named connections in `relays.json` and the OS secret store for
@@ -3658,7 +3966,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Reading a track is a receive node. `MoqTrackReceive`, in `tatolab-moq`, takes a
   gateway by reference, a broadcast and a track, subscribes, and writes each object's payload
   bytes to its one output as received, stamped from the track's own timestamp re-based onto this
-  machine's clock (the stamps entry above); the track's catalog entry is readable off the node.
+  machine's clock (the stamps entry above); the facts it read from the track's catalog are its
+  output's stream facts.
   What follows it — a decoder, a numpy node, nothing — is the builder's. It is how a stream reads
   another stream's track on this machine or another, and the only way a graph reads a relay;
   nothing in the runtime is built for runtime-to-runtime. Its config is MoQ's own vocabulary:
@@ -3666,7 +3975,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   §Processor model gives a source, each name read exactly as written — `.hang` or not. The
   runtime casts every name it gives and never a name it reads. Owner, 2026-10-16, 2026-10-18 and
   2026-11-06. [moq-relays — SHIPPED #2855, #2858; relay-track-reading — SHIPPED #2898;
-  gateway-nodes]
+  gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
   Rejected: naming the track by a Tatolab address, `track_address`, beside `broadcast` and
   `track` — two ways to name one thing, one of them a term invented where MoQ has one (owner,
   2026-10-18).
@@ -3675,8 +3984,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: the engine subscribing to a relay inside the link machinery, so a link's source
   can name a port on another machine — a MoQ reader in the engine, a second link kind, and a
   stamp-marking question with no answer (owner, 2026-10-16).
-- **DECIDED** — A relay track is read through one relay-track reader, which the relay source
-  node and `tatolab-read-track` share. It receives a track's groups in arrival order and
+- **DECIDED** — A relay track is read through one relay-track reader in `tatolab-moq`, which
+  `MoqTrackReceive` and `tatolab-read-track` share. It receives a track's groups in arrival order and
   releases them in sequence order, holding at a missing sequence. A missing group is given up
   only when its stream is reset after its header arrived, when the track ends, or when newer
   content on the track has run the reader's `max_age` past where the missing group would end,
@@ -3684,52 +3993,75 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   arrived first. A group that arrives in sequence is released at once, so the hold adds no
   latency unless a group is missing. The reader joins at the live edge, replaying no cached
   history, and subscribes with its own `max_age`, so the relay sheds nothing the reader would
-  still take. `max_age` is the reader's: the relay source node's defaults to 100 ms, and
+  still take. `max_age` is the reader's: `MoqTrackReceive`'s defaults to 100 ms, and
   `tatolab-read-track` waits the track's declared retention. It is a transport budget, how late
-  a group may arrive and still be used, and never a playout delay. The relay source node
+  a group may arrive and still be used, and never a playout delay. `MoqTrackReceive`
   writes every group it gives up as a loss its readers count in `lost_since_last_read`, the
   way a link counts one, never as a silent step. Owner, 2026-10-20. [relay-track-reading —
-  SHIPPED #2898, #2900; amended by gateway-nodes: the reader lives in `tatolab-moq`, shared by `MoqTrackReceive` and `tatolab-read-track`]
+  SHIPPED #2898, #2900; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: moq-net's sequence cursor (`.ordered()`) — it steps over a group whose stream lands
   after its successor's, at any budget (session, 2026-10-20).
   Rejected: giving up a missing group when the budget elapses on a clock — waits and sleeps
   never fix realtime streaming (owner, 2026-10-20).
   Rejected: one budget for every reader, the track's 5 s retention — one lost group becomes
   5 s of silence and then a burst (owner, 2026-10-20).
-- **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
-  and the `moq-relay` program, each pinned to an exact version — the 0.3, 0.19, 0.21 and 0.17
+- **DECIDED** — `tatolab-moq` stands on the moq-dev line of MoQ — not the engine or
+  `tatolabd`, and the runtime unit ships no `moq-relay`: `moq-net`, `moq-tokio`, `hang`
+  and the `moq-relay` program a rig starts, each pinned to an exact version — the 0.3, 0.19, 0.21 and 0.17
   lines — and every payload a stock
   player reads is in that line's media layout, every catalog in its catalog layout. Known
   (2026-10-17): Cloudflare's hosted relays are a beta speaking IETF drafts 14 and 16, which
   `moq-net` negotiates; a Cloudflare token rides the URL path; Cloudflare assigns no root, so
-  its adapter names the machine's namespace; moq.pro's credential is a project signing key
+  its gateway names the machine's namespace; moq.pro's credential is a project signing key
   that mints read and write for every broadcast. The line's own compatibility claim is
-  otherwise unverified here. Owner, 2026-10-04 and 2026-10-16. [moq-relays — SHIPPED #2842,
-  #2853; amended by gateway-nodes: `tatolab-moq` stands on the line, not the engine or `tatolabd`, and the runtime unit ships no `moq-relay`]
+  otherwise unverified here. The engine and `streamlib-sdk` depend on no `hang`.
+  Owner, 2026-10-04 and 2026-10-16. [moq-relays — SHIPPED #2842,
+  #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — Previews come straight from the runtime. Tato Studio's viewers show any port
   of any node on the machine, the way TouchDesigner shows every wire: a view per family — a
   thumbnail for Image, shape and statistics or a point view for Array, a waveform for Channels,
   keyframes and bitrate with an on-demand decode for Packets, a table or a tree for Records — with
   no relay, encoder or exposure in between. A preview is on the machine only and changes no
-  stream's graph. Owner, 2026-11-03 and 2026-11-06. [gateway-nodes]
+  stream's graph. Owner, 2026-11-03 and 2026-11-06. [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: previews through the local relay — the preview page, `/watch` and an encode, two
   loopback hops and a decode for a picture on the same machine, and nothing for a family a MoQ
   player cannot draw (owner, 2026-11-06).
 - **DECIDED** — How a viewer reads a port, and who on the machine may open one. Tato Studio
-  opens a read of the port over the local API, and the runtime hands it the port's channel as it
-  hands a helper one; an Image frame is shared, not copied — Studio imports the surface as a helper
-  imports it — so a preview is zero-copy and never reaches a relay. Whoever may open the local
+  opens a read of the port over the local API (`open_viewer`, until `close_viewer` or the
+  connection's end), and the runtime hands it the port's channel as it hands a helper one. An
+  Image frame in memory Studio's display imports is shared, not copied — Studio imports the
+  surface as a helper imports it, through one Rust import client without pyo3
+  (`streamlib-gpu-frame-import-client`) that the wheel and Studio both link — so a preview never
+  reaches a relay. One that is not — on Linux NVIDIA an OPAQUE_FD texture or a LINEAR pixel
+  buffer — is copied once on the engine's GPU into a display-importable image (a DMA-BUF with an
+  explicit tiled modifier from the engine's render-target probe, the export staging's
+  `DisplayImportable` residency), only while a viewer reads it, and never reaches the CPU; a
+  frame already in such an image crosses with no copy. The viewer drives the copy, asking per
+  viewed frame over the surface-share socket (`SURFACE_SHARE_IMPORT_VIEWED_FRAME_OP`, read by
+  `display_import` or `cpu_read`): one staging per viewed pool slot, shared by every viewer of
+  it, refilled on the engine's device and retired on the host before the answer, and evicted
+  with the slot; the viewer only imports. A viewer whose display shows no DMA-BUF it imports —
+  Chromium on NVIDIA under X11 — reads a host-visible copy through the CPU; Studio picks the
+  reading before its first frame and runs with `--use-angle=vulkan` on Linux. Nothing a node
+  allocates, publishes or links changes, and neither does a CUDA consumer's import. Whoever may open the local
   API's socket may open a viewer: the owning user. Owner, 2026-11-07. Assumed unless overruled: a
   viewer reads the latest value and skips what it falls behind on, so it never slows the stream it
   reads.
-  [gateway-nodes; amended by display-importable-viewer-frames: a frame in memory Studio's display does not import is copied once on the engine's GPU into an image it does]
+  [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; display-importable-viewer-frames — SHIPPED #3524, #3530]
   Rejected: the runtime downscaling frames to thumbnails sent over the local API; thumbnail tiles
   beside a zero-copy full view (owner, 2026-11-07).
+  Rejected: a CPU readback for every viewer — a copy through host memory per frame, against the
+  zero-copy preview (owner, 2026-11-11).
+  Rejected: allocating node output textures as DMA-BUF so the viewer needs no copy — strands every
+  CUDA consumer of them, since NVIDIA exports one flavour per allocation (owner, 2026-11-11).
+  Rejected: the engine reading the port itself while a viewer is open and republishing each copied
+  frame on a channel of its own — a reader thread, a second channel and a copy for frames no
+  viewer reads (owner, 2026-11-11).
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
   ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
   stock MoQ tooling; a Red5 gateway; and a zero-copy
   local fast path between two streams on one machine. Known
-  (2026-10-16): through the local relay a raw frame between two streams on one machine pays an
+  (2026-10-16): through a relay on the machine a raw frame between two streams pays an
   encode, two loopback hops and a decode, about ten milliseconds and a lossy codec; data
   pays about a millisecond. [moq-relays]
 
@@ -3767,16 +4099,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722; amended by
   runtime-lives-with-tato-studio: Tato Studio as the runtime's parent]
 
-## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, first-party-package-index, offline-new-projects; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
+## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, first-party-package-index; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
   crate for Rust apps, all at one version (the entry below); it publishes no engine wheel,
-  and the runtime unit ships inside the installer (the entry below). Positioning is
+  and the runtime unit ships inside the installer (the entry below). Beside the core modules
+  the runtime unit carries, for the one platform it is built for, the third-party wheels they
+  require and one CPython build, pinned by SHA-256, so a new project syncs with no network
+  (§Product, the create entry). Positioning is
   "realtime engine, Python authoring" — the Rust engine is named as material; never marketed
   as "a Python library". Owner, 2026-10-08.
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
-  SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; amended by tatolab-names: the crate
+  SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; offline-new-projects — SHIPPED #3505, #3508, #3512, #3532; amended by tatolab-names: the crate
   is `tatolab-stream`; amended by first-party-package-index: the first-party modules publish to
   Tatolab's index, `tatolab-stream` alone to PyPI; `tatolab-stream` and the core modules ride
   the runtime unit as wheels, and every other module is released as a module project]
@@ -3821,8 +4156,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2488), so what MoltenVK refuses stays refused. "Baked in" means our Rust is compiled in,
   not that system deps are static. abi3 across a small range of GIL-enabled CPython builds
   only (free-threaded builds wait for the stable ABI to exist for them). "Our code" includes
-  vendored C/C++ we compile and link statically, not only our Rust: the wheel carries a C++
-  GLSL shader compiler so a kernel author needs no system shader toolchain. The wheel's
+  vendored C/C++ we compile and link statically, not only our Rust: the wheel's lend and
+  `tatolabd` carry `libslang-compiler` and `libslang-glslang` for each floor beside the engine
+  (never `libslang-glsl-module`), so a kernel author needs no system shader toolchain. They come
+  from Slang's release archives pinned by version and checksum and staged by a script the build
+  calls, which refuses a library whose glibc floor is above `manylinux_2_28` or whose macOS
+  minimum is above 26.0; Linux builds both from the pinned tag inside the pinned
+  `manylinux_2_28` image, as the bundled lavapipe does, and macOS takes the release archive.
+  `THIRD-PARTY-NOTICES.md` names Slang's licence (`Apache-2.0 WITH LLVM-exception`) and the
+  projects it carries. The wheel's
   adapter closure excludes skia. Processor interpreters import the lent `tatolab.runtime` —
   one native artifact, no separate helper cdylib. The portability proof parses ELF and
   Mach-O itself: every Mach-O the lend carries links only the system, carries
@@ -3857,18 +4199,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   against the lend, and into a directory whose venv holds only `tatolab-stream` runs `tatolab
   new`, whose load runs for twenty seconds, which must open the carried loader, raise nothing from the
   effect, and show the stream loaded with `TestPatternSource.video` writing at least sixty
-  frames in `graph` — `H264Encoder` either encoding or, on a runner with no encoder, refusing
-  by name while the stream stays loaded. On release a failed macOS proof of
+  frames in `graph`. On release a failed macOS proof of
   the runtime unit withholds the PyPI upload, as a failed build of any distribution does. A
-  pull request builds no distribution; on `main`, `ci.yml` also builds the debug runtime
+  pull request builds no distribution; nightly on `main`, `ci.yml` also builds the debug runtime
   unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
   Python suite and the integration suite's GPU-free half on it.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697;
-  moq-relays — SHIPPED #2845, #2866; amended by gateway-nodes: the scaffolded stream carries no `H264Encoder`, so the proof checks the effect's frames alone; amended by first-party-package-index: the starter holds the source alone, so the proof checks `TestPatternSource.video`'s frames]
+  moq-relays — SHIPPED #2845, #2866; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; amended by first-party-package-index: the starter holds the source alone, so the proof checks `TestPatternSource.video`'s frames]
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
   it. On every PR `Build (macOS)` compiles the whole workspace with the wheel in it
   (clippy on default targets, `check --all-targets`); on `main` it also runs the Rust
-  suites and the wheel crate's unit tests, and `Integration test (macOS)` gates
+  suites and the wheel crate's unit tests, and nightly `Integration test (macOS)` checks
   `_engine.pyi` with `stubtest` against the macOS binary — one stub for both floors — and
   runs the Python suite's GPU-free half. The test
   target's pipe is `std::io::pipe()`, and `check-no-inheritable-descriptor` accepts that
@@ -3934,7 +4275,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `tatolab/homebrew-tap`, whose `Casks/tatolab.rb` the app repository bumps per release. The
   app repository checks this repository out at the release tag, builds the runtime unit, wraps
   it, signs, notarises, and attaches the `.dmg`. The bundle carries the runtime as
-  `Tatolab Runtime.app`, a helper bundle inside it, holding `tatolabd`, `moq-relay` and the CLI
+  `Tatolab Runtime.app`, a helper bundle inside it, holding `tatolabd` and the CLI
   as `tatolab-cli` in `Contents/MacOS/` — a name that does not case-fold onto an executable
   beside it on a default APFS volume — and the lend laid out by Apple's code rules: every
   Mach-O under `Contents/Frameworks/tatolab-runtime/` at its path below `tatolab/runtime/`, the
@@ -3965,10 +4306,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2026-10-02, 2026-10-11, 2026-10-24, 2026-10-28, 2026-10-31 and 2026-11-05.
   [runtime-hosting — SHIPPED #2721; machine-lock-without-administrator — SHIPPED #2929;
   amended by runtime-lives-with-tato-studio: the app hosting the runtime as its child, no
-  install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
+  install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes, control-api-contract, live-graph-inputs, asset-media-facts-and-previews, playback-controls)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, control-api-contract, asset-media-facts-and-previews, playback-controls)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -3982,13 +4323,25 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the same verbs; REST/WS routes serve the same operations for programmatic clients.
   The served MCP tool set is exactly the observation verbs `graph`, `logs` and
   `describe_runtime` (the runtime's version, build id, monotonic uptime and its own log's
-  folder), the four graph-mutation verbs — `add_node`, `remove_node`, `connect` and
-  `disconnect` — the thirteen stream actions — `start_project`, `reload_project`, `create_project`,
-  `describe_stream_action`, `cancel_stream_action`, `list_project_streams`, `stop_project`,
-  `pause_project`, `resume_project`, `remove_project`, `rename_stream`, `list_streams` and `expose_port`
-  (§Product) — and the four relay verbs —
-  `add_relay`, `configure_relay`, `remove_relay` and `list_relays` (§Networking, the
-  adapters); `health` is a REST route, not a tool. The MCP handshake's server version is the
+  folder); the graph edits — `add_node`, `remove_node`, `connect`, `disconnect`,
+  `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`,
+  `set_exposed_config_fields`, `import_graph_generator`, `refresh_fragments`, `add_group`,
+  `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`,
+  `collapse_selection_into_subgraph` and `unlock_generator_fragment` — with `transact`, `undo`
+  and `redo` (§Processor model, the project); the stream actions — `start_project`,
+  `reload_project`, `create_project`, `import_project`, `describe_stream_action`,
+  `cancel_stream_action`, `stop_project`, `pause_project`, `resume_project`, `remove_project`,
+  `list_streams` and `set_stream_clock_scale` (§Product); the viewer's `open_viewer` and
+  `close_viewer` (§Networking, how a viewer reads a port); the project's asset, file and
+  dependency tools — `list_assets`, `import_asset`, `relocate_asset`, `delete_asset`,
+  `set_asset_settings`, `replace_asset`, `create_stream`, `delete_stream`,
+  `set_stream_display_name`, `list_project_files`, `read_project_file`, `write_project_file`,
+  `create_node_file`, `add_dependency`, `update_dependency`, `list_dependencies`,
+  `remove_dependency`, `use_dependency_stream`, `list_project_node_types`, `rename_project`,
+  `set_project_description`, `set_project_cover`, `duplicate_project` and `delete_project`;
+  and the views' `list_project_views`, `write_studio_view_output` and `write_graph_input`.
+  A gateway's settings are its node's config, so no tool configures a relay. `health` is a
+  REST route, not a tool. The MCP handshake's server version is the
   runtime's crate version. The runtime has no shutdown verb: it stays on as a service does, stopped by
   the service manager or a signal, and `stop_project` ends a client's work. Rejected: a control plane that never mutates the graph, code being the
   source of truth and the edit loop `dev` — a dynamic graph an agent cannot add to is not
@@ -4006,13 +4359,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `POST /mcp`, `rmcp`'s Streamable HTTP service with its header checks and statuses, for
   the CLI's one-shot calls; and `/mcp/stdio`, an HTTP/1.1 `Upgrade: mcp-stdio` after which
   the connection carries MCP's stdio framing both ways, for the `mcp` verb. Beside its
-  tools the node serves three resources, each rendered at the moment it is read:
+  tools the node serves its resources, each rendered at the moment it is read:
   `streamlib://node-catalog`, every node type it can add with its description, derived
   config schema and ports — `/api/registry`'s document; `streamlib://graph`, the `graph`
-  tool's; and `streamlib://relay-adapter-catalog`, each relay adapter's kind, the name and
-  icon people see it by — the icon is the provider's own logo on a square canvas, a `data:` URI the
-  adapter carries and never fetches — its doc and its settings schema, its secrets marked `writeOnly` —
-  `/api/relay-adapters`' document. It also serves
+  tool's; `streamlib://stream-actions` and `streamlib://stream-action/<action>`, the actions
+  under way and one action; and `streamlib://project/<project>/transactions`, a project's
+  change feed. It also serves
   three prompts, recipes rendered against the live graph and the catalog —
   `insert_node_between_linked_nodes`, `fan_output_to_another_consumer` and
   `show_channel_on_virtual_camera` — whose every step is a call to a served tool: a prompt is
@@ -4023,16 +4375,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
   runtime-description; create-project — SHIPPED #2995, #3012; queued-stream-actions — SHIPPED
-  #2998, #3006, #3009; stream-clocks — SHIPPED #3166; amended by gateway-nodes: `expose_port`, the four relay verbs and `streamlib://relay-adapter-catalog` go, a gateway's settings being its config, and a tool serves a viewer's read of a port]
+  #2998, #3006, #3009; stream-clocks — SHIPPED #3166; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; self-contained-project-imports — SHIPPED #3402, #3405; project-action-contract — SHIPPED #3430, #3436, #3438; studio-view-nodes — SHIPPED #3446, #3449, #3461; live-graph-inputs — SHIPPED #3540; graph-groups-and-nested-fragments — SHIPPED #3329, #3359]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
-  name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
-  `processor_id` beside it. The graph-mutation tools are `add_node(type, config, name)`,
-  answering the name the node received; `remove_node(name)`; `connect`, each end given as
-  `<end>_node` and `<end>_port`, answering a `link_id`; and `disconnect`, taking a `link_id`.
-  Every tool addresses a node by its name within its stream, never by an id; `graph` still
-  renders a node's `id` as a live key. `add_node`, `remove_node`, `connect` and `disconnect`
-  take a required `stream`; `logs` takes a project, narrowed to a stream or an action when
+  name". `graph` renders a node's UUID as `id` beside its `name`, and each link end as
+  `{node, port}`, with no `processor_id` beside it. The graph-mutation tools are
+  `add_node(type, config, name)`, answering the UUID the runtime gave the node;
+  `remove_node`; `connect`, each end given as `<end>_node` and `<end>_port`, answering a
+  `link_id`; and `disconnect`, taking a `link_id`. Every tool names a node, an asset and a
+  project by UUID, and a stream's graph edit names the stream by its stream asset's UUID;
+  each change is one transaction by its `author`, applied whole or refused whole and recorded
+  as one commit on the project's history, which `undo` and `redo` walk per author, and every
+  tool's arguments are parsed and applied through the action contract's one path (§Processor
+  model, the project). `logs` takes a project, narrowed to a stream or an action when
   asked; `graph {stream?}` returns one stream's one-shape graph,
   loadable, or `{machine, streams: […]}`. Both ends of a `connect` are ports in the one
   stream it names (§Networking, a link's ends); the catalog
@@ -4041,22 +4396,30 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `insert_node_between_linked_nodes` among them. The engine's Rust identifiers keep
   "processor" until the rename. Owner, 2026-10-02. [local-api; stream-graph — SHIPPED #2614;
   zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; runtime-hosting — SHIPPED #2704, #2711,
-  #2715; queued-stream-actions — SHIPPED #2997; amended by project-and-assets: every tool names a node, an asset and a project by UUID, and every change is a transaction with undo and redo; amended by project-action-contract: every tool's arguments are the action contract's types]
+  #2715; queued-stream-actions — SHIPPED #2997; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; project-action-contract — SHIPPED #3430, #3436, #3438]
 - **DECIDED** — `graph` carries the machine's name as a top-level key, `machine`, beside a
-  stream's `stream`, `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the
-  generated schema and the prompt fixture — and no mesh key. Every channel reserves one
-  subscriber slot beyond its fixed cap, the exposed-port publisher's, and no other.
+  stream's `stream`, `nodes` and `links`, with each reference edge a node's config names — in
+  the OpenAPI schema, the MCP tool, the generated schema and the prompt fixture — and no mesh
+  key. No channel reserves a subscriber slot beyond its fixed cap.
   [zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; package-split-and-lend — SHIPPED
-  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853; amended by gateway-nodes: `exposed` leaves `graph`, reference edges join it, and no channel reserves a publisher's slot]
+  #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+- **DECIDED** — `graph` says what a helper's restart did. A helper-placed node's
+  `components.state` reads `Restarting` between a death and its next `ready`, and its
+  `components.helper_process_restarts` carries `restart_count` (restarts since the stream loaded)
+  and `last_exit_reason` (the exit status or signal, its pid, and the tail of the helper's
+  standard error). A node past its crash-loop limit reads `Error`, carrying why in
+  `components.failed_because`; readiness waits through `Restarting`, so its error names the
+  crash loop and the last death's reason. The MCP instructions name `Restarting` and the
+  restart record. [helper-process-restart — SHIPPED #3111]
 - **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
   hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
   SHIPPED #2693]
 - **DECIDED** — The CLI is the native `tatolab`, shipped with the runtime and never in a
-  pip distribution, linking no engine: `new`; the stream verbs `run`, `dev`, `stop`,
-  `rm`, `rename`, `streams` and `expose`, each a call into the running runtime; the
-  observation verbs `graph` and `logs`; the relay verbs `relays` and `relay add`, `relay set`
-  and `relay remove`, a secret given only from a file or standard input; the `mcp` verb; and
+  pip distribution, linking no engine: `new`; the project verbs `start`, `reload`, `dev`,
+  `stop`, `pause`, `resume`, `rm`, `cancel`, `streams` and `clock`, each a call into the
+  running runtime, `stop` stopping the working directory's project and `start` running it;
+  the observation verbs `graph` and `logs`; the `mcp` verb; and
   one machine-setup verb, `enable-virtual-camera`, which installs the
   loopback permission the virtual camera's loopback door needs behind the desktop's
   password prompt and touches no node. `--version` prints the CLI's version and, when a
@@ -4066,7 +4429,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
   #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description;
-  stream-identity-and-persistence — SHIPPED #2962; amended by gateway-nodes: `expose` and the relay verbs go; amended by project-run-controls: `stop` stops the working directory's project and `start` runs it]
+  stream-identity-and-persistence — SHIPPED #2962; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
   local API socket and the iceoryx2 domain. On Linux it is
@@ -4077,37 +4440,37 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   refuses the start by name; every user takes the resolved directory. No StreamLib variable
   overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
   with nothing set, and `tatolab` resolves it through `streamlib-runtime-client-contract`, the
-  code the runtime resolves it with. What a runtime *keeps* sits elsewhere: a project's log
-  and caches under its `.tatolab/`, and the stream records and the runtime's own
+  code the runtime resolves it with. What a runtime *keeps* sits elsewhere: a project's log,
+  `.tatolab/logs/project.jsonl`, and its caches under its `.tatolab/`, and the stream records and the runtime's own
   log in the state directory (§Product). There is no registry to discover a runtime by: one
   runtime per machine serves one socket at a fixed path. Owner, 2026-09-14.
   [control-plane-one-surface; local-transport-hardening — SHIPPED #2261; local-api — SHIPPED
   #2660, #2663; package-split-and-lend — SHIPPED #2697; runtime-hosting — SHIPPED #2711;
-  amended by project-action-contract: a project's log moves into `.tatolab/logs/`]
+  project-action-contract — SHIPPED #3430, #3436, #3438]
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; graph and health
   inspection ride the same control plane. [control-plane-one-surface]
 - **DECIDED** — There is no observer effect: reading a port requires neither terminating it in
-  a window nor adding a node to the graph — an exposed port is read through a relay in the
-  topology that ships. [control-plane-surface-pixel-exchange; moq-relays — SHIPPED #2853,
-  #2860; amended by gateway-nodes: any port is read through a viewer, with no relay and no node added]
+  a window nor adding a node to the graph — any port is read through a viewer, with no relay
+  and no node added. [control-plane-surface-pixel-exchange; moq-relays — SHIPPED #2853,
+  #2860; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — Auth and remote-access posture: whoever can open the local API's socket may
   call it — the owning user, by file permission — and nothing off the machine can call it at
   all, so control carries no token and no account. What a runtime offers other machines is
-  exposure, decided in §Networking. Owner, 2026-10-01.
-  [control-plane-bind-posture; local-api — SHIPPED #2663; amended by gateway-nodes: what a runtime offers other machines is what its streams' gateway nodes send]
+  what its streams' gateway nodes send (§Networking). Owner, 2026-10-01.
+  [control-plane-bind-posture; local-api — SHIPPED #2663; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — The local API is reachable only on its own machine. Each machine's runtime
   serves one local API on a socket in its runtime directory that only the owning user can
   open — `local-api.sock`, chmod 0600 inside the 0700 directory, a live holder refused by a
   connect probe naming the path and a stale file replaced — carrying the router and control
   vocabulary unchanged; no network address serves control, and a client dials the one socket.
   The runtime's HTTP is a separate listener that changes nothing — on loopback only, serving
-  the listing, `/watch` by address and the lock holder's pid (§Networking) — because a
+  the lock holder's pid alone — because a
   browser cannot dial a socket. A runtime is never
   driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [one-runtime-per-machine; local-api — SHIPPED
-  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; moq-relays — SHIPPED #2860, #2864; amended by gateway-nodes: the listing and the lock holder's pid, with no `/watch`]
+  #2660, #2662, #2663; runtime-hosting — SHIPPED #2711; moq-relays — SHIPPED #2860, #2864; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
   stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb resolves the runtime,
   opens its socket, sends the one `/mcp/stdio` upgrade request, and then copies bytes,
@@ -4129,9 +4492,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   neither launch a command nor reach a machine's loopback, are not served by the local API.
   Owner, 2026-10-01; `rmcp`, owner, 2026-10-06; earlier revisions over `/mcp/stdio`, owner,
   2026-10-27. [local-api — SHIPPED #2665, #2667]
-- **DECIDED** — `graph` returns every stream the runtime holds, and every stream action the CLI
-  has — `run`, `stop`, `rm`, `rename`, `streams`, `expose` — is also a tool,
+- **DECIDED** — `graph` returns every stream the runtime holds, and every project action the
+  CLI has — `start`, `reload`, `stop`, `pause`, `resume`, `rm`, `cancel`, `streams`, `clock` — is
+  also a tool,
   beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can. One
   runtime per machine owned by one user (§Product) means one socket per machine. Owner,
   2026-10-01; confirmed 2026-10-02. [local-api; runtime-hosting — SHIPPED #2711;
-  stream-identity-and-persistence — SHIPPED #2962, #2965; amended by gateway-nodes: `expose` leaves the verbs and the tools]
+  stream-identity-and-persistence — SHIPPED #2962, #2965; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]

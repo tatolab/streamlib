@@ -66,4 +66,4 @@ and `/watch` go.
 - One stream reads another only through gateway nodes. Inside a stream, nodes still share memory.
 - Credentials leave `tatolabd`'s compiled adapters. Where they live, how a node refers to a track,
   how a subgraph declares its ports and how a viewer reads a port are settled in the change
-  `docs/plan/changes/gateway-nodes.md`.
+  `docs/plan/changes/archive/2026-11-08-gateway-nodes.md`.
