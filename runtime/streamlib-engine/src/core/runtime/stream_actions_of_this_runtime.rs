@@ -4833,7 +4833,10 @@ mod tests {
             );
             assert!(!running.has_ended());
             assert!(running.is_held_stopped());
-            assert_eq!(runner.ids_of_the_loaded_streams(), [camera.clone()]);
+            assert_eq!(
+                runner.ids_of_the_loaded_streams(),
+                std::slice::from_ref(&camera)
+            );
         }
 
         let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
