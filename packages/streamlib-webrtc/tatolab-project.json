@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "Publishes a stream over WHIP and plays one over WHEP.",
+  "name": "WebRTC",
+  "project": "6b71eac7-74e9-4765-8a66-3931b75e8469"
+}

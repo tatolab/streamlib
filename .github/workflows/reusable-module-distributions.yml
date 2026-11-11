@@ -257,7 +257,15 @@ jobs:
         with:
           ref: ${{ inputs.tag_name }}
           persist-credentials: false
-          sparse-checkout: scripts
+          sparse-checkout: |
+            scripts
+            packages
+            sdk/tatolab-stream
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
 
       - name: Collect every module wheel this run built
         uses: actions/download-artifact@v7
@@ -383,3 +391,79 @@ jobs:
               exit 1
             fi
           done
+
+      - name: The module project archives import and describe
+        run: python3 scripts/test_tatolab_module_projects.py -v
+
+      - name: Collect the tatolab-stream whose listing describes each module
+        uses: actions/download-artifact@v7
+        with:
+          name: module-check-tatolab-stream
+          path: /tmp/module-check-tatolab-stream
+
+      # Each module project's archive carries every wheel this run built for it, and the
+      # catalog lists the nodes the runtime's own listing reads from the Linux one. A module
+      # this run did not build keeps the entry the served catalog already gives it.
+      - name: Assemble each module project and write the catalog
+        env:
+          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG_NAME#v}"
+          if [ -z "$release_version" ]; then
+            release_version="$(python3 -c "import tomllib; print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])")"
+          fi
+          python3 scripts/tatolab_module_projects.py assemble . dist "$release_version" module-projects
+          curl -fsSL "$GET_TATOLAB_COM_URL/catalog/v1.json" -o /tmp/catalog-it-replaces.json || rm -f /tmp/catalog-it-replaces.json
+          python3 scripts/tatolab_module_projects.py write-catalog module-projects "$(command -v uv)" \
+            "$(ls /tmp/module-check-tatolab-stream/*.whl)" /tmp/catalog-it-replaces.json
+          find module-projects -type f | sort
+          cat module-projects/catalog/v1.json
+
+      # An archive's key is never written twice: one held with other bytes fails the job,
+      # as the index refuses a wheel it holds with other bytes.
+      - name: Upload the module project archives, then the catalog
+        if: ${{ !inputs.dry_run }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_GET_TATOLAB_COM_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          r2_endpoint="https://$CLOUDFLARE_ACCOUNT_ID.r2.cloudflarestorage.com"
+          put_object() {
+            aws s3api put-object --endpoint-url "$r2_endpoint" --bucket "$GET_TATOLAB_COM_BUCKET" \
+              --body "$1" --key "$2" --content-type "$3" --cache-control "$4" > /dev/null
+          }
+          for archive_path in module-projects/modules/*.zip; do
+            [ -e "$archive_path" ] || continue
+            archive_key="${archive_path#module-projects/}"
+            archive_sha256="$(cut -d ' ' -f 1 "$archive_path.sha256")"
+            held_sha256="$(curl -fsSL "$GET_TATOLAB_COM_URL/$archive_key.sha256" 2>/dev/null | cut -d ' ' -f 1 || true)"
+            if [ -n "$held_sha256" ]; then
+              if [ "$held_sha256" != "$archive_sha256" ]; then
+                echo "::error::$GET_TATOLAB_COM_URL already serves $archive_key with sha256 $held_sha256, not this run's $archive_sha256"
+                exit 1
+              fi
+              continue
+            fi
+            put_object "$archive_path" "$archive_key" application/zip "public, max-age=31536000, immutable"
+            put_object "$archive_path.sha256" "$archive_key.sha256" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
+          done
+          put_object module-projects/catalog/v1.json catalog/v1.json "application/json" "public, max-age=0, must-revalidate"
+
+      - name: get.tatolab.com serves every archive the catalog lists
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "$GET_TATOLAB_COM_URL/catalog/v1.json" | python3 -c "
+          import hashlib, json, sys, urllib.request
+          for entry in json.load(sys.stdin)['entries']:
+              served = hashlib.sha256(urllib.request.urlopen(entry['download_url']).read()).hexdigest()
+              if served != entry['download_sha256']:
+                  print('::error::' + entry['download_url'] + ' is served with sha256 ' + served + ', not the ' + entry['download_sha256'] + ' the catalog lists')
+                  sys.exit(1)
+          "

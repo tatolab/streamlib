@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "A Rive animation as a stream source, drawn on the GPU with no copy. Linux only.",
+  "name": "Rive",
+  "project": "815ed2b5-f51d-463d-b3fc-7f10467f89db"
+}

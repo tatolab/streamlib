@@ -27,6 +27,10 @@ classifiers = [
 # depends on it.
 dependencies = ["tatolab-stream>=0.68.32", "numpy>=2.1"]
 
+[project.entry-points."tatolab.nodes"]
+OpusEncoder = "tatolab.opus:OpusEncoder"
+OpusDecoder = "tatolab.opus:OpusDecoder"
+
 [project.urls]
 Homepage = "https://tatolab.com"
 Install = "https://tatolab.com/docs/install"

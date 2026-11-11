@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "Plays a stream's audio out of a speaker on the machine.",
+  "name": "Speaker",
+  "project": "5fa87a77-ded6-4d85-90a3-04be93429401"
+}
