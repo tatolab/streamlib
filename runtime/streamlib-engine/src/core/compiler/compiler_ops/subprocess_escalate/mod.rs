@@ -31,6 +31,7 @@ mod hex_encoded_wire_bytes;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
 mod port_stream_facts;
+pub(crate) mod process_raising_the_node_reports;
 mod ray_tracing;
 pub(crate) mod shared_native_service_lease;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -94,6 +95,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::SetOutputPortStreamFacts(p) => Some(&p.request_id),
         EscalateRequest::FailTheNode(p) => Some(&p.request_id),
+        EscalateRequest::SetProcessRaisingBecause(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
@@ -161,6 +163,13 @@ pub(crate) fn handle_escalate_op(
                 req,
             ))
         }
+        EscalateRequest::SetProcessRaisingBecause(req) => Some(
+            process_raising_the_node_reports::handle_set_process_raising_because(
+                what_the_node_reaches,
+                rid,
+                req,
+            ),
+        ),
         EscalateRequest::AcquireSharedNativeServiceLease(req) => Some(
             shared_native_service_lease::handle_acquire_shared_native_service_lease(
                 &what_the_node_reaches.shared_native_service_leases,

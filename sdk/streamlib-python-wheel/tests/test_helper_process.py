@@ -1020,6 +1020,67 @@ def test_a_manual_processor_whose_start_raised_fails_its_node(
     assert not lifecycle_thread.is_alive()
 
 
+def test_a_process_that_keeps_raising_is_reported_once_and_cleared_once_it_runs_cleanly(
+    stand_in_parent,
+):
+    """The first raise of a run sends the parent what `process()` raised, the
+    raises after it send nothing, and the first clean call sends `null`; the
+    processor keeps being driven throughout.
+
+    Fail-without-fix: the raise is only logged, no `set_process_raising_because`
+    arrives, and the graph shows the node `Running` with nothing amiss.
+    """
+    from helper_process_probes import RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES
+
+    RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0] = True
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
+
+    def the_next_escalate_request_other_than_a_log() -> dict:
+        while True:
+            frame = stand_in_parent.receive()
+            assert frame is not None, "the helper sent the parent nothing"
+            if frame.get("op") != "log":
+                return frame
+
+    raising = the_next_escalate_request_other_than_a_log()
+    assert raising["rpc"] == "escalate_request"
+    assert raising["op"] == "set_process_raising_because"
+    assert raising["raising_because"].startswith("process() raised RuntimeError: broke on purpose (")
+    assert "helper_process_probes.py, line " in raising["raising_because"]
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": raising["request_id"], "result": "ok"}
+    )
+
+    deadline = time.monotonic() + 0.3
+    while time.monotonic() < deadline:
+        frame = stand_in_parent.receive(timeout_seconds=max(0.0, deadline - time.monotonic()))
+        assert frame is None or frame.get("op") == "log", (
+            f"a raise after the first of the run sent {frame}"
+        )
+
+    RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0] = False
+    ran_cleanly = the_next_escalate_request_other_than_a_log()
+    assert ran_cleanly["op"] == "set_process_raising_because"
+    assert ran_cleanly["raising_because"] is None
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": ran_cleanly["request_id"], "result": "ok"}
+    )
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    answers = [the_next_escalate_request_other_than_a_log()["rpc"] for _ in range(2)]
+    assert answers == ["stopped", "done"]
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 @pytest.mark.skipif(sys.platform == "linux", reason="Linux adopts the fd rather than refusing")
 def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
     """The method exists on every floor, so the stub is one, and off Linux it

@@ -28,6 +28,9 @@ pub struct ObservableProcessorState {
     /// `setup()` refused.
     capture_device_access_never_asked_for: Mutex<Option<PrivacyGatedCaptureDevice>>,
     helper_process_restarts: Mutex<HelperProcessRestartRecord>,
+    /// What the processor's `process()` raised or returned as an error the
+    /// last time it ran, while it has not run cleanly since.
+    process_raising_because: Mutex<Option<String>>,
 }
 
 /// How often a helper-placed processor's helper process has been started again
@@ -49,6 +52,7 @@ impl ObservableProcessorState {
             failure_reason: Mutex::new(None),
             capture_device_access_never_asked_for: Mutex::new(None),
             helper_process_restarts: Mutex::new(HelperProcessRestartRecord::default()),
+            process_raising_because: Mutex::new(None),
         }
     }
 
@@ -121,6 +125,35 @@ impl ObservableProcessorState {
     /// How often the helper process was restarted, and why it last died.
     pub fn helper_process_restart_record(&self) -> HelperProcessRestartRecord {
         self.helper_process_restarts.lock().clone()
+    }
+
+    /// Note how the processor's `process()` last ended: `Some` with what it
+    /// raised, or `None` once it ran cleanly again. The processor keeps running
+    /// either way.
+    pub fn note_why_process_is_raising(&self, raising_because: Option<String>) {
+        *self.process_raising_because.lock() = raising_because;
+    }
+
+    /// Note that `process()` raised, keeping the words of the first raise of a
+    /// run of them; `describe_the_raise` is called only when no raise is held.
+    pub fn note_that_process_raised(&self, describe_the_raise: impl FnOnce() -> String) {
+        let mut process_raising_because = self.process_raising_because.lock();
+        if process_raising_because.is_none() {
+            *process_raising_because = Some(describe_the_raise());
+        }
+    }
+
+    /// Note that `process()` ran cleanly, ending a run of raises.
+    pub fn note_that_process_ran_cleanly(&self) {
+        let mut process_raising_because = self.process_raising_because.lock();
+        if process_raising_because.is_some() {
+            *process_raising_because = None;
+        }
+    }
+
+    /// What `process()` raised, while it has not run cleanly since.
+    pub fn why_process_is_raising(&self) -> Option<String> {
+        self.process_raising_because.lock().clone()
     }
 
     /// Move the processor to `state`, unless it has already failed.
@@ -251,6 +284,21 @@ impl JsonSerializableComponent for ProcessorFailureReasonComponent {
             return JsonValue::Null;
         }
         serde_json::json!(self.0.failure_reason())
+    }
+}
+
+/// What a processor's `process()` keeps raising, rendered beside its state as
+/// `process_raising_because`: the raise's own words while `process()` has not
+/// run cleanly since, or `null`.
+pub struct ProcessRaisingBecauseComponent(pub Arc<ObservableProcessorState>);
+
+impl JsonSerializableComponent for ProcessRaisingBecauseComponent {
+    fn json_key(&self) -> &'static str {
+        "process_raising_because"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        serde_json::json!(self.0.why_process_is_raising())
     }
 }
 
@@ -494,5 +542,34 @@ mod tests {
             rendered.to_json(),
             serde_json::json!("start() raised: no such file \"lower_third.riv\"")
         );
+    }
+
+    /// `graph` renders what a running processor's `process()` raised beside
+    /// its state, keeping the first raise of a run of them, and nothing once a
+    /// call runs cleanly again; the state never leaves `Running`.
+    #[test]
+    fn a_raise_renders_beside_a_running_state_until_process_runs_cleanly() {
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
+        let rendered = ProcessRaisingBecauseComponent(Arc::clone(&state));
+        assert_eq!(rendered.to_json(), JsonValue::Null);
+
+        state.note_that_process_raised(|| "process() failed: the first raise".to_string());
+        state.note_that_process_raised(|| unreachable!("a raise is already held"));
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!("process() failed: the first raise")
+        );
+        assert_eq!(state.current(), ProcessorState::Running);
+
+        state.note_that_process_ran_cleanly();
+        assert_eq!(rendered.to_json(), JsonValue::Null);
+
+        state.note_why_process_is_raising(Some("process() raised KeyError: 'frame'".to_string()));
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!("process() raised KeyError: 'frame'")
+        );
+        state.note_why_process_is_raising(None);
+        assert_eq!(rendered.to_json(), JsonValue::Null);
     }
 }

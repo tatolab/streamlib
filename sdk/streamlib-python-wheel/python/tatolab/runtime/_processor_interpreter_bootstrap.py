@@ -1292,8 +1292,9 @@ class HostedProcessor:
             hook for hook in self.LIFECYCLE_HOOKS if hasattr(processor_instance, hook)
         }
 
-    def call_hook(self, hook_name: str, context: Any) -> None:
-        """Call `hook_name` if the class defined one, logging what it raised.
+    def call_hook(self, hook_name: str, context: Any) -> "Optional[Exception]":
+        """Call `hook_name` if the class defined one, logging and answering what
+        it raised.
 
         A hook raising here is not fatal to the helper — the processor keeps
         being driven, exactly as it would in the parent. Nor is the
@@ -1302,7 +1303,7 @@ class HostedProcessor:
         it still run.
         """
         if hook_name not in self._declared_hooks:
-            return
+            return None
         try:
             getattr(self.instance, hook_name)(context)
         except KeyboardInterrupt:
@@ -1316,6 +1317,8 @@ class HostedProcessor:
                 error=str(hook_failure),
                 traceback=traceback.format_exc(),
             )
+            return hook_failure
+        return None
 
     def call_hook_letting_failure_propagate(self, hook_name: str, context: Any) -> None:
         """Call `hook_name`, leaving what it raised to the caller.
@@ -1357,6 +1360,24 @@ def construct_hosted_processor(
     )
 
 
+def the_words_a_process_raise_is_shown_in(raised: BaseException) -> str:
+    """`process() raised <type>: <message>`, then where in the node's own code it
+    was raised, as the graph shows a node whose `process()` keeps raising."""
+    words = "".join(traceback.format_exception_only(type(raised), raised)).strip()
+    raised_at = traceback.extract_tb(raised.__traceback__)[-1:] if raised.__traceback__ else []
+    if not raised_at:
+        return f"process() raised {words}"
+    frame = raised_at[0]
+    filename = frame.filename
+    try:
+        relative_filename = os.path.relpath(filename)
+        if not relative_filename.startswith(os.pardir):
+            filename = relative_filename
+    except ValueError:
+        pass
+    return f"process() raised {words} ({filename}, line {frame.lineno})"
+
+
 class HelperProcessLifecycle:
     """Drives one hosted processor from the commands its parent sends."""
 
@@ -1387,6 +1408,7 @@ class HelperProcessLifecycle:
         self._config_as_last_applied: "dict[str, Any]" = {}
         self._config_its_node_was_last_handed: "dict[str, Any]" = {}
         self._exposed_config_values_last_refused: "dict[str, Any]" = {}
+        self._process_is_raising = False
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
@@ -1675,7 +1697,36 @@ class HelperProcessLifecycle:
             return
         if hook_name == "process" and self._config_fields_its_node_exposes_as_inputs:
             self._take_each_new_value_a_link_gives_an_exposed_config_field()
-        self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
+        raised = self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
+        if hook_name == "process":
+            self._tell_the_parent_when_process_starts_or_stops_raising(raised)
+
+    def _tell_the_parent_when_process_starts_or_stops_raising(
+        self, raised: "Optional[Exception]"
+    ) -> None:
+        """Send the parent what `process()` raised when a run of raises begins,
+        and `None` when a clean call ends one, so the graph shows the node
+        raising while it keeps running; a call that ends as the last one did
+        sends nothing."""
+        process_is_raising = raised is not None
+        if process_is_raising == self._process_is_raising:
+            return
+        self._process_is_raising = process_is_raising
+        try:
+            self._bridge.request_from_parent(
+                {
+                    "op": "set_process_raising_because",
+                    "raising_because": (
+                        None if raised is None else the_words_a_process_raise_is_shown_in(raised)
+                    ),
+                }
+            )
+        except EscalateRequestError as refusal:
+            log.error(
+                "the parent did not take whether this node's process() raises; the graph "
+                "may not show it",
+                error=str(refusal),
+            )
 
     def _take_the_config_fields_its_node_exposes_as_inputs(self, exposed_config_fields: "list[str]") -> None:
         """Read each of `exposed_config_fields` from the input port of its name, in place of those read before."""

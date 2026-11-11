@@ -8,10 +8,11 @@ use petgraph::graph::DiGraph;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessorFailureReasonComponent,
-    ProcessorNode, ProcessorTraversalMut, ProcessorUniqueId, StateComponent, TraversalSourceMut,
-    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
-    config_node_reference_edges_of_one_node, the_input_ports_of_the_exposed_config_fields,
+    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessRaisingBecauseComponent,
+    ProcessorFailureReasonComponent, ProcessorNode, ProcessorTraversalMut, ProcessorUniqueId,
+    StateComponent, TraversalSourceMut, cast_exposed_name_to_url_safe,
+    config_keys_of_a_node_type_holding_a_node_reference, config_node_reference_edges_of_one_node,
+    the_input_ports_of_the_exposed_config_fields,
 };
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 
@@ -122,6 +123,7 @@ impl<'a> TraversalSourceMut<'a> {
                 ProcessorState::Pending
             });
             node_mut.insert(ProcessorFailureReasonComponent(state.clone_inner()));
+            node_mut.insert(ProcessRaisingBecauseComponent(state.clone_inner()));
             node_mut.insert(state);
         }
 
