@@ -1,0 +1,28 @@
+{
+  "name": "@tatolab/runtime-client",
+  "version": "0.68.71",
+  "description": "The TypeScript client of the Tatolab runtime's control API, generated from its contract file.",
+  "license": "BUSL-1.1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./contract.json": "./contract.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "runtime_client.js",
+    "runtime_client.d.ts",
+    "control_contract.js",
+    "control_contract.d.ts",
+    "contract.json",
+    "REFERENCE.md"
+  ]
+}

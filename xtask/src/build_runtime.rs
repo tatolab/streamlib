@@ -23,6 +23,7 @@
 use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
 use crate::stage_browser_host::stage_the_browser_host;
 use crate::stage_first_party_modules::stage_the_first_party_modules;
+use crate::stage_runtime_client_package::stage_the_runtime_client_package;
 use crate::stage_runtime_unit_carried_packages::stage_the_carried_packages;
 use crate::stage_runtime_unit_uv::stage_the_runtime_unit_uv;
 use crate::stage_sample_projects::stage_the_sample_projects;
@@ -41,7 +42,8 @@ pub(crate) use runtime_unit_layout::{
 pub(crate) use runtime_unit_layout::{
     browser_host_directory_beside_the_lend, carried_python_downloads_directory_beside_the_lend,
     carried_python_downloads_metadata_file_in, carried_wheels_directory_beside_the_lend,
-    first_party_modules_directory_beside_the_lend, sample_projects_directory_beside_the_lend,
+    first_party_modules_directory_beside_the_lend,
+    runtime_client_package_directory_beside_the_lend, sample_projects_directory_beside_the_lend,
 };
 use std::path::{Path, PathBuf};
 
@@ -245,6 +247,7 @@ pub fn run(
     stage_the_browser_host(workspace_root)?;
     stage_the_first_party_modules(workspace_root)?;
     stage_the_sample_projects(workspace_root)?;
+    stage_the_runtime_client_package(workspace_root)?;
     stage_the_carried_packages(workspace_root, macos_developer_id_application_identity)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);

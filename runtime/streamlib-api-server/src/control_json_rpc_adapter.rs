@@ -943,4 +943,95 @@ pub(crate) mod tests {
         assert_eq!(notification["params"]["change"], "applied");
         assert_eq!(notification["params"]["transaction"]["author_name"], "Dana");
     }
+
+    #[tokio::test]
+    async fn the_typescript_client_is_served_and_hears_a_change_another_client_made() {
+        let project_parent_directory = tempfile::tempdir().unwrap();
+        let project_directory = project_parent_directory.path().join("arm-control");
+        ProjectRepository::create(
+            &project_directory,
+            "arm-control",
+            &ProjectTransactionAuthor::the_runtime(),
+        )
+        .unwrap();
+        let served = ControlServedWithAnMcpClient::over_the_stub().await;
+        let listed = crate::mcp::tests::first_text_block_json(
+            &served
+                .mcp_tool_result(
+                    "list_assets",
+                    json!({ "project_directory": project_directory }),
+                )
+                .await,
+        );
+        let project = listed["project"].as_str().unwrap().to_owned();
+
+        let fixture_script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../sdk/tatolab-runtime-client/integration_fixtures/subscribe_and_print_one_change.mjs",
+        );
+        let mut typescript_client = tokio::process::Command::new("node")
+            .arg(&fixture_script)
+            .arg(&served.served.local_api_socket_path)
+            .arg(&project)
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("`node` runs the TypeScript client's integration fixture");
+        let mut steps_the_client_printed =
+            BufReader::new(typescript_client.stdout.take().unwrap()).lines();
+        let mut next_step = async || -> Value {
+            let line = tokio::time::timeout(
+                Duration::from_secs(20),
+                steps_the_client_printed.next_line(),
+            )
+            .await
+            .expect("the TypeScript client prints its next step")
+            .unwrap()
+            .expect("the TypeScript client prints a step before it exits");
+            serde_json::from_str(&line).unwrap()
+        };
+
+        let connected = next_step().await;
+        assert_eq!(
+            connected["discovered"]["contract_version"],
+            CONTROL_CONTRACT_VERSION
+        );
+        assert_eq!(
+            connected["listed_streams"],
+            crate::mcp::tests::first_text_block_json(
+                &served.mcp_tool_result("list_streams", json!({})).await
+            )
+        );
+        assert_eq!(
+            connected["listed_streams_over_a_post"],
+            connected["listed_streams"]
+        );
+        assert_eq!(
+            connected["empty_subscription_refusal"]["is_a_control_operation_error"], true,
+            "{connected}"
+        );
+        assert_eq!(
+            connected["empty_subscription_refusal"]["method"],
+            "subscribe_project_changes"
+        );
+        assert_eq!(connected["subscribed"]["projects"], json!([project]));
+
+        let source = project_parent_directory.path().join("intro.mp4");
+        std::fs::write(&source, b"video").unwrap();
+        let imported = served
+            .mcp_tool_result(
+                "import_asset",
+                json!({ "project_directory": project_directory, "source": source,
+                        "asset_path": "media/intro.mp4",
+                        "author": { "kind": "person", "name": "Dana" } }),
+            )
+            .await;
+        assert_eq!(imported["isError"], false, "{imported}");
+
+        let heard = next_step().await;
+        assert_eq!(heard["heard"]["project"], project.as_str());
+        assert_eq!(heard["heard"]["change"], "applied");
+        assert_eq!(heard["heard"]["transaction"]["author_name"], "Dana");
+        assert_eq!(next_step().await, json!({ "closed": true }));
+        assert!(typescript_client.wait().await.unwrap().success());
+    }
 }

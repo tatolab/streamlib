@@ -27,6 +27,8 @@ serde = { version = "1.0", features = ["derive"] }
 
 # The operation registry `generate-control-contract` renders.
 streamlib-control-contract = { path = "../runtime/streamlib-control-contract" }
+# The local API routes and headers `generate-runtime-client` writes into the TypeScript client.
+streamlib-runtime-client-contract = { path = "../runtime/streamlib-runtime-client-contract" }
 
 # Error handling
 anyhow = "1.0"
