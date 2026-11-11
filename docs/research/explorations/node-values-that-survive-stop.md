@@ -27,8 +27,9 @@ read from by its id, the node's UUID.
 
 - **The state board** (`docs/plan/changes/lightweight-node-kinds.md`, "The state board";
   `runtime/streamlib-engine/src/core/runtime/function_node_states_carried_across_loads.rs`). A
-  stateful function node (`Lfo`, `Lag`, `Random`'s seed) keeps its state there. It is keyed by node
-  name, carried across a helper restart, a promotion, a reload and a runtime restart, kept in the
+  stateful function node (`Lfo`, `Lag`, `Random`'s seed) keeps its state there. It is per stream
+  and keyed by node name, one entry per placed instance, so two `Lfo`s never share a phase; a
+  rename loses the state. It is carried across a helper restart, a promotion, a reload and a runtime restart, kept in the
   stream's record and shown by `graph`. Its values are numbers in a typed record.
 - **Stop forgets function-node state** (playback-controls, owner, 2026-11-11).
 - **A Graph Input holds a current value in memory**, renders it in `graph` as `current_value`,
@@ -45,7 +46,8 @@ second one next to it.
 2. **A new project value store** beside the state board. Rejected by the session for the same
    reason: two stores keyed by node, one for function state and one for inputs.
 3. **Extend the state board into the one node value store (recommended).**
-   - Key it by node UUID instead of name, so a value follows its node through a rename.
+   - Key it by node UUID instead of name: one entry per placed instance, as a person placing two
+     `Lfo`s expects, that follows its node through a rename (owner, 2026-11-11).
    - Each value declares a **lifetime**: `kept`, saved with the project and restored at Play, a
      runtime restart and a crash; or `reset`, forgotten at Stop as today.
    - A `GraphInput` is a stateful node whose state is its value. `write_graph_input` writes that
@@ -60,9 +62,8 @@ second one next to it.
    Git history, because a control moved at 60 Hz would flood history. "Save as default" stays a
    separate, deliberate `set_node_config` commit. The other path: commit each settled value to
    history, debounced, which makes values undoable but noisy.
-2. **The default lifetime.** Recommended: a Graph Input defaults to `kept` (show lights stay), and
-   a function node's `State` defaults to `reset` (today's behaviour). The other path: one default
-   for every node.
+2. **The default lifetime — settled.** A function node's `State` resets at Stop, as stateless
+   nodes and today's nodes expect; a Graph Input keeps (owner, 2026-11-11).
 3. **Values the board cannot hold.** The board holds numbers. A Records Graph Input holds
    strings and objects too. Either the store grows to hold any family value, or only numeric
    values can be kept in the first slice.
@@ -79,6 +80,6 @@ showing which controls are kept, and save-as-default in Studio.
 
 ## Exit
 
-Graduates through `/align` once the owner settles the three forks. It amends playback-controls'
+Graduates through `/align` once the owner settles forks 1 and 3. It amends playback-controls'
 "Stop forgets function-node state" and live-graph-inputs' "gone on the next load", so the delta
 is a change proposal against both.
