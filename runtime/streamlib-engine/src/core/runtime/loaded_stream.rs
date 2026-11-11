@@ -10,8 +10,13 @@ use std::time::Duration;
 
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::graph_change_listener::GraphChangeListener;
+use super::live_graph_reconciled_to_a_graph_document::{
+    LiveNodeAsTheGraphHoldsIt, RunningLinkBetweenTwoNodesByUuid, the_live_links_by_node_uuid_of,
+    the_live_nodes_of,
+};
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::EngineResourcesSharedByEveryStream;
 use super::stream_actions_of_this_runtime::LoadedStreamHolding;
@@ -113,6 +118,9 @@ pub struct LoadedStreamInThisRuntime {
     /// The fragment, variable and interface nodes, and what they resolved to, of the
     /// graph this stream runs, so `graph` renders them as drawn.
     pub(super) graph_only_nodes_as_drawn: Mutex<GraphOnlyNodesAsDrawn>,
+    /// Whether its playback is stopped and its graph held to read and edit, until its next
+    /// start.
+    is_held_stopped: AtomicBool,
     /// How long this stream's teardown has before its watchdog abandons it.
     teardown_watchdog_budget: Duration,
     /// Held for the whole of a start or a stop, so a stop that lands while
@@ -303,6 +311,7 @@ impl LoadedStreamInThisRuntime {
             ),
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
+            is_held_stopped: AtomicBool::new(false),
             engine_resources_shared_by_every_stream,
             compiler,
             runtime_context,
@@ -546,6 +555,7 @@ impl LoadedStreamInThisRuntime {
             crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_function_node_input_with_no_value_as_the_stream_starts,
         )?;
         *self.status.lock() = RuntimeStatus::Starting;
+        self.is_held_stopped.store(false, Ordering::Release);
         tracing::info!("[start] Starting the stream `{}`", self.stream_id());
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarting);
 
@@ -655,13 +665,26 @@ impl LoadedStreamInThisRuntime {
     /// [`Runner::unload_stream`]: crate::core::runtime::Runner::unload_stream
     #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop(&self) -> Result<()> {
-        let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
+        self.stop_holding_the_start_or_stop_lock().0
+    }
+
+    /// [`Self::stop`] with the start-or-stop lock already held, answering beside its outcome
+    /// the nodes and links the graph held as their removal was queued, in the one graph scope
+    /// that queued it, so no edit lands between the two.
+    fn stop_holding_the_start_or_stop_lock(
+        &self,
+    ) -> (
+        Result<()>,
+        Vec<LiveNodeAsTheGraphHoldsIt>,
+        Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)>,
+    ) {
+        let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         {
             let mut stream_status = self.status.lock();
             if *stream_status == RuntimeStatus::Stopped {
                 tracing::debug!("[stop] Already stopped");
-                return Ok(());
+                return (Ok(()), Vec::new(), Vec::new());
             }
             *stream_status = RuntimeStatus::Stopping;
         }
@@ -677,15 +700,18 @@ impl LoadedStreamInThisRuntime {
         }
 
         let this_streams_runtime_context_while_started = self.runtime_context.lock().clone();
-        let processor_count = self.compiler.scope(|graph, tx| {
-            let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
-            let count = processor_ids.len();
-            for proc_id in processor_ids {
-                tx.log(PendingOperation::RemoveProcessor(proc_id));
-            }
-            graph.set_state(GraphState::Idle);
-            count
-        });
+        let (processor_count, nodes_torn_down, links_torn_down) =
+            self.compiler.scope(|graph, tx| {
+                let nodes_torn_down = the_live_nodes_of(graph);
+                let links_torn_down = the_live_links_by_node_uuid_of(graph);
+                let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
+                let count = processor_ids.len();
+                for proc_id in processor_ids {
+                    tx.log(PendingOperation::RemoveProcessor(proc_id));
+                }
+                graph.set_state(GraphState::Idle);
+                (count, nodes_torn_down, links_torn_down)
+            });
         tracing::info!("[stop] Queued removal of {} processor(s)", processor_count);
 
         let mut processor_removal_outcome = Ok(());
@@ -727,7 +753,59 @@ impl LoadedStreamInThisRuntime {
         *self.status.lock() = RuntimeStatus::Stopped;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopped);
         tracing::info!("[stop] The stream `{}` stopped", self.stream_id());
-        processor_removal_outcome
+        (processor_removal_outcome, nodes_torn_down, links_torn_down)
+    }
+
+    /// Stop this stream's playback and keep its graph: every processor instance, device claim,
+    /// surface and the clock torn down as [`Self::stop`] does, then each node and link put back
+    /// unbuilt under its UUID, so the stream reads and edits held stopped and its next
+    /// [`Self::start`] runs the graph fresh. Reads no graph document and describes no type.
+    #[tracing::instrument(name = "stream.stop_playback", skip_all, fields(stream = %self.stream_id()))]
+    pub fn stop_playback_keeping_the_graph(&self) -> Result<()> {
+        let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
+        if self.runtime_context.lock().is_none() {
+            self.is_held_stopped.store(true, Ordering::Release);
+            return Ok(());
+        }
+        let graph_only_nodes_as_drawn = self.graph_only_nodes_as_drawn.lock().clone();
+        let (teardown_outcome, nodes_of_the_graph, links_of_the_graph) =
+            self.stop_holding_the_start_or_stop_lock();
+
+        let mut processor_of_each_node_uuid: HashMap<Uuid, ProcessorUniqueId> =
+            HashMap::with_capacity(nodes_of_the_graph.len());
+        for node in nodes_of_the_graph {
+            let spec = ProcessorSpec::new(node.processor_type, node.config)
+                .with_display_name(node.display_name)
+                .with_pins_and_studio_fields(node.pins, node.studio)
+                .with_exposed_config_fields(node.exposed_config_fields)
+                .with_node_uuid(node.node_uuid);
+            let put_back = self.add_processor_of_a_validated_graph_load(spec)?;
+            processor_of_each_node_uuid.insert(node.node_uuid, put_back.processor_id);
+        }
+        let processor_of = |node_uuid: &Uuid| -> Result<ProcessorUniqueId> {
+            processor_of_each_node_uuid
+                .get(node_uuid)
+                .cloned()
+                .ok_or_else(|| {
+                    Error::GraphError(format!("the held graph holds no node {node_uuid}"))
+                })
+        };
+        for (_, link) in links_of_the_graph {
+            self.connect(
+                OutputLinkPortRef::new(processor_of(&link.source_node)?, &link.source_port),
+                InputLinkPortRef::new(processor_of(&link.target_node)?, &link.target_port),
+            )?;
+        }
+        let node_names_the_graph_only_nodes_hold = graph_only_nodes_as_drawn.node_names_cast();
+        self.compiler.scope(|this_streams_graph, _tx| {
+            this_streams_graph
+                .set_node_names_the_graph_only_nodes_hold(node_names_the_graph_only_nodes_hold)
+        });
+        *self.graph_only_nodes_as_drawn.lock() = graph_only_nodes_as_drawn;
+        *self.status.lock() = RuntimeStatus::Initial;
+        self.is_held_stopped.store(true, Ordering::Release);
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        teardown_outcome
     }
 
     /// Ask for this stream's shutdown: its level moves to graceful and its own
@@ -968,6 +1046,12 @@ impl LoadedStreamInThisRuntime {
     /// The lifecycle status of this stream.
     pub fn status(&self) -> RuntimeStatus {
         *self.status.lock()
+    }
+
+    /// Whether this stream is held stopped: loaded as a graph model that reads and edits, with
+    /// no processor, runtime context or clock until its start.
+    pub fn is_held_stopped(&self) -> bool {
+        self.is_held_stopped.load(Ordering::Acquire)
     }
 
     /// The processors whose threads were abandoned past their shutdown budget

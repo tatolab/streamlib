@@ -394,7 +394,8 @@ pub enum StreamListingState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the
     /// runtime's next start.
     Running,
-    /// Stopped with its project, and left unloaded until `start_project`.
+    /// Stopped with its project: its graph held to read and edit when it is loaded, nothing
+    /// running, until `start_project`.
     Stopped,
     /// Loaded with its project paused: its processors hold their state and process nothing
     /// until `resume_project`.
@@ -849,9 +850,10 @@ impl Runner {
     }
 
     /// Queue a stop of the whole project in `project_directory` on its queue, and answer the
-    /// action: it unloads every loaded stream of the project and records each recorded one
-    /// stopped, so the runtime leaves the project stopped across its restarts until a
-    /// `start_project`. Each record running once the actions queued before run carries the stop
+    /// action: it ends the playback of every loaded stream of the project — every instance,
+    /// device claim, function-node state and the clock torn down — keeps each held with its
+    /// graph to read and edit, and records each recorded one stopped. The runtime leaves the
+    /// project stopped across its restarts until a `start_project`. Each record running once the actions queued before run carries the stop
     /// as a pending mark until the action records it stopped, so a crash finishes it at the
     /// next start. Refused — with nothing queued — for a directory not named by its absolute
     /// path, a project whose removal is queued, and a project none of whose streams runs once
@@ -1127,7 +1129,9 @@ impl Runner {
             .directories_of_the_paused_projects
             .lock();
         let loaded_streams_of_the_project = self.loaded_streams_of_the_project(&project_directory);
-        if loaded_streams_of_the_project.is_empty()
+        if loaded_streams_of_the_project
+            .iter()
+            .all(|loaded| loaded.is_held_stopped())
             && !self.is_a_run_the_last_action_queued_on_the_project(&project_directory)
         {
             return Err(Error::Runtime(format!(
@@ -1418,10 +1422,11 @@ impl Runner {
         progress
     }
 
-    /// Unload the stream whose id is `stream_id`, finishing the pending stop
-    /// `action_id` on its record; a recorded one is recorded stopped first, so a restart leaves it unloaded. A loaded recorded
-    /// stream is unloaded even when its record cannot be read or written, and
-    /// the outcome says why it was not recorded stopped. Refused — with nothing
+    /// Stop the stream whose id is `stream_id`, finishing the pending stop `action_id` on its
+    /// record: a loaded recorded one is recorded stopped and its playback ended, its graph held
+    /// to read and edit; a stream its host loaded is unloaded. A loaded recorded stream's
+    /// playback ends even when its record cannot be read or written, and the outcome says why
+    /// it was not recorded stopped. Refused — with nothing
     /// changed — naming the streams the runtime holds when it holds none of
     /// that id, and for a stream already stopped or failed.
     fn stop_the_stream_finishing_its_pending_stop(
@@ -1474,7 +1479,7 @@ impl Runner {
             (Some(loaded), Some(_)) => {
                 let recorded_stopped =
                     self.record_the_stream_stopped_finishing_its_pending_stop(stream_id, action_id);
-                unload_a_stream_an_action_took_back(&loaded, "its owner stopped it");
+                self.stop_the_playback_of_a_held_stream(&loaded)?;
                 Ok(match recorded_stopped {
                     Ok(()) => StreamStopOutcome {
                         stream_id: stream_id.to_string(),
@@ -1496,8 +1501,34 @@ impl Runner {
         }
     }
 
+    /// End the playback of `loaded`, which stays held: every instance torn down, its graph
+    /// kept to read and edit, and its function-node states forgotten so the next start begins
+    /// fresh. A stream whose graph cannot be put back is unloaded, and refused naming why.
+    fn stop_the_playback_of_a_held_stream(
+        &self,
+        loaded: &Arc<LoadedStreamInThisRuntime>,
+    ) -> Result<()> {
+        let playback_stopped = loaded
+            .log_route()
+            .run_entered(|| loaded.stop_playback_keeping_the_graph());
+        self.forget_the_function_node_states_of_the_stream(loaded.stream_id());
+        let Err(not_kept) = playback_stopped else {
+            return Ok(());
+        };
+        let why_it_is_unloaded = format!(
+            "the stream `{}` stopped and its graph was not kept to edit, so it is unloaded: \
+             {not_kept}",
+            loaded.stream_id()
+        );
+        loaded
+            .log_route()
+            .run_entered(|| tracing::error!("{why_it_is_unloaded}"));
+        unload_a_stream_an_action_took_back(loaded, "its graph was not kept at its stop");
+        Err(Error::Runtime(why_it_is_unloaded))
+    }
+
     /// Record the stream `stream_id` stopped, finishing the pending stop
-    /// `action_id` on its record.
+    /// `action_id` on its record, its function-node states forgotten.
     fn record_the_stream_stopped_finishing_its_pending_stop(
         &self,
         stream_id: &str,
@@ -1505,6 +1536,7 @@ impl Runner {
     ) -> Result<()> {
         self.change_the_record_of_the_stream(stream_id, |record| {
             record.stopped = true;
+            record.function_node_states_by_node_name.clear();
             if let Some(action_id) = action_id {
                 record.finish_the_pending_stream_action(action_id);
             }
@@ -1577,6 +1609,8 @@ impl Runner {
                 stream_location: Some(stream.stream_location().clone()),
                 state: if is_paused(stream.status()) {
                     StreamListingState::Paused
+                } else if stream.is_held_stopped() {
+                    StreamListingState::Stopped
                 } else {
                     StreamListingState::Running
                 },
@@ -2566,7 +2600,125 @@ impl Runner {
                 },
             ));
         }
+        if self.every_stream_of_the_project_is_held_stopped(&project_directory) {
+            return Ok(self.queue_the_playback_of_the_held_project(project_directory));
+        }
         Ok(self.queue_the_load_of_the_stream_assets_of_the_project(project_directory, None))
+    }
+
+    /// Whether the project in `project_directory` holds a stream and every one it records is
+    /// loaded and held stopped, so its playback starts with no load.
+    fn every_stream_of_the_project_is_held_stopped(&self, project_directory: &Path) -> bool {
+        let held_streams = self.loaded_streams_of_the_project(project_directory);
+        !held_streams.is_empty()
+            && held_streams.iter().all(|held| held.is_held_stopped())
+            && self
+                .ids_of_every_record_of_the_project(project_directory)
+                .iter()
+                .all(|recorded| held_streams.iter().any(|held| held.stream_id() == recorded))
+    }
+
+    /// Queue the start of the playback of every held stopped stream of the project in
+    /// `project_directory`, answering the action's id at once. The action reads no document
+    /// and makes no venv: each stream starts fresh from the graph it holds, paused while its
+    /// project is.
+    fn queue_the_playback_of_the_held_project(
+        &self,
+        project_directory: PathBuf,
+    ) -> StreamActionQueued {
+        let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
+        let action_id = queue_of_each_project.next_action_id(
+            self.engine_resources_shared_by_every_stream
+                .runtime_id
+                .as_str(),
+        );
+        let streams = self
+            .loaded_streams_of_the_project(&project_directory)
+            .iter()
+            .map(|held| StreamOfAStreamAction {
+                stream_id: held.stream_id().to_string(),
+                display_name: held.display_name(),
+                stream_location: Some(held.stream_location().clone()),
+                state: None,
+            })
+            .collect();
+        let action = StreamAction {
+            action_id: action_id.clone(),
+            project_directory: project_directory.clone(),
+            kind: StreamActionKind::Load,
+            state: StreamActionState::Queued,
+            step: None,
+            venv_sync: None,
+            streams,
+            failed_because: None,
+        };
+        queue_of_each_project.queue_the_stream_action(
+            action,
+            Box::new(move |runner: &Runner| {
+                runner.start_the_playback_of_the_held_project(&action_id, &project_directory);
+            }),
+            &self.tokio_handle(),
+        )
+    }
+
+    /// Run the playback start the stream action `action_id` queued of the project in
+    /// `project_directory`: record each held stopped stream running and start it, and finish
+    /// the action. A stream whose start is refused is unloaded and recorded failed with the
+    /// reason.
+    fn start_the_playback_of_the_held_project(&self, action_id: &str, project_directory: &Path) {
+        let progress = self.progress_of_the_stream_action(action_id);
+        progress.is_on(StreamActionStep::Starting);
+        let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
+        let mut states = Vec::new();
+        for held in self.loaded_streams_of_the_project(project_directory) {
+            if progress.is_cancelled() {
+                break;
+            }
+            if !held.is_held_stopped() {
+                continue;
+            }
+            let stream_id = held.stream_id().to_string();
+            if let Err(not_recorded) = self.change_the_record_of_the_stream(&stream_id, |record| {
+                record.mark_running_resetting_its_crash_count();
+            }) {
+                held.log_route().run_entered(|| {
+                    tracing::error!(
+                        "the stream `{stream_id}` was not started: its record was not written \
+                         running: {not_recorded}"
+                    )
+                });
+                states.push((stream_id, StreamListingState::Stopped));
+                continue;
+            }
+            let started = held
+                .log_route()
+                .run_entered(|| self.start_the_stream_paused_while_its_project_is(&held));
+            match started {
+                Ok(()) => states.push((
+                    stream_id,
+                    if is_paused(held.status()) {
+                        StreamListingState::Paused
+                    } else {
+                        StreamListingState::Running
+                    },
+                )),
+                Err(start_refusal) => {
+                    held.log_route().run_entered(|| {
+                        tracing::error!("the stream `{stream_id}` failed: {start_refusal}")
+                    });
+                    unload_a_stream_an_action_took_back(&held, "its start was refused");
+                    if let Err(not_recorded) =
+                        self.change_the_record_of_the_stream(&stream_id, |record| {
+                            record.failed_because = Some(start_refusal.to_string());
+                        })
+                    {
+                        tracing::error!("{not_recorded}");
+                    }
+                    states.push((stream_id, StreamListingState::Failed));
+                }
+            }
+        }
+        progress.finish(Ok(states));
     }
 
     /// Queue the reload of the project in `request`'s directory on its stream action queue,
@@ -2659,12 +2811,19 @@ impl Runner {
         match the_last_load_or_stop_queued {
             Some(kind) => kind == StreamActionKind::Load,
             None => {
-                !self
-                    .loaded_streams_of_the_project(project_directory)
-                    .is_empty()
+                let loaded_streams_of_the_project =
+                    self.loaded_streams_of_the_project(project_directory);
+                loaded_streams_of_the_project
+                    .iter()
+                    .any(|loaded| !loaded.is_held_stopped())
                     || self
                         .current_records_of_the_project(project_directory)
                         .iter()
+                        .filter(|record| {
+                            !loaded_streams_of_the_project
+                                .iter()
+                                .any(|loaded| loaded.stream_id() == record.stream_id)
+                        })
                         .any(|record| record.listing_state() == StreamListingState::Running)
             }
         }
@@ -3516,9 +3675,10 @@ mod tests {
         }
     }
     use crate::core::test_support::{
-        MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR, MockOutputOnlyProcessor,
-        MockSourceRefusingAnAccessNobodyAskedFor, a_temporary_directory_at_owner_only_mode,
-        ensure_test_mocks_registered, write_an_executable_script_from_a_child_process,
+        MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR, MockInputOnlyProcessor,
+        MockOutputOnlyProcessor, MockSourceRefusingAnAccessNobodyAskedFor,
+        a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+        write_an_executable_script_from_a_child_process,
     };
     use serial_test::serial;
     use std::collections::BTreeMap;
@@ -4648,7 +4808,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_stopped_recorded_stream_is_recorded_stopped_and_a_fresh_runtime_leaves_it_unloaded() {
+    fn a_stopped_recorded_stream_is_held_stopped_and_a_fresh_runtime_leaves_it_unloaded() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
         let camera = project.stream_id_of("camera");
@@ -4671,11 +4831,12 @@ mod tests {
                     stop_not_recorded_because: None,
                 }
             );
-            assert!(running.has_ended());
-            assert!(runner.ids_of_the_loaded_streams().is_empty());
-            let refusal =
-                refusal_of(runner.stop_the_stream_finishing_its_pending_stop(&camera, None));
-            assert!(refusal.contains("already stopped"), "{refusal}");
+            assert!(!running.has_ended());
+            assert!(running.is_held_stopped());
+            assert_eq!(
+                runner.ids_of_the_loaded_streams(),
+                std::slice::from_ref(&camera)
+            );
         }
 
         let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
@@ -4798,7 +4959,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn stopping_a_loaded_recorded_stream_whose_record_cannot_be_written_still_unloads_it() {
+    fn stopping_a_loaded_recorded_stream_whose_record_cannot_be_written_still_ends_its_playback() {
         let state_directory = tempfile::tempdir().unwrap();
         let streams_directory = state_directory.path().join("streams");
         let runner = a_runner_recording_its_streams_in(Some(&streams_directory));
@@ -4814,13 +4975,13 @@ mod tests {
             let _refusing_writes = StreamsDirectoryRefusingWrites::from_now_on(&streams_directory);
             runner.stop_the_stream_finishing_its_pending_stop(&camera, None)
         }
-        .expect("the stop succeeds, since the stream is unloaded");
+        .expect("the stop succeeds, since the stream's playback ends");
         assert!(
             stopped.stop_not_recorded_because.is_some(),
             "the outcome says the stop was not recorded: {stopped:?}"
         );
-        assert!(running.has_ended());
-        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        assert!(!running.has_ended());
+        assert!(running.is_held_stopped());
         assert!(!the_record_of(&streams_directory, &camera).stopped);
     }
 
@@ -6892,7 +7053,12 @@ mod tests {
         let record = the_record_of(state_directory.path(), &camera);
         assert!(record.stopped);
         assert!(record.pending_stream_actions.is_empty(), "{record:?}");
-        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        assert!(
+            runner
+                .loaded_stream_of_the_id(&camera)
+                .unwrap()
+                .is_held_stopped()
+        );
     }
 
     #[test]
@@ -7036,12 +7202,165 @@ mod tests {
         ];
         expected.sort_by(|first, second| first.0.cmp(&second.0));
         assert_eq!(stream_states, expected);
-        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        let mut held_ids = runner.ids_of_the_loaded_streams();
+        held_ids.sort();
+        let mut expected_held_ids = vec![camera.clone(), microphone.clone()];
+        expected_held_ids.sort();
+        assert_eq!(held_ids, expected_held_ids);
+        for held_id in &held_ids {
+            assert!(
+                runner
+                    .loaded_stream_of_the_id(held_id)
+                    .unwrap()
+                    .is_held_stopped()
+            );
+        }
         assert!(the_record_of(state_directory.path(), &camera).stopped);
         assert!(the_record_of(state_directory.path(), &microphone).stopped);
         let preview = the_record_of(state_directory.path(), &failed.stream_id);
         assert!(preview.is_failed() && !preview.stopped, "{preview:?}");
         assert!(preview.pending_stream_actions.is_empty(), "{preview:?}");
+    }
+
+    /// The graph of a stream named `stream_name`: an output-only mock's `out1` linked into
+    /// an input-only mock's `in1`.
+    fn the_graph_of_a_stream_of_a_source_linked_into_a_sink(
+        stream_name: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "stream": stream_name,
+            "nodes": [
+                {
+                    "name": "source",
+                    "type": MockOutputOnlyProcessor::Processor::processor_class_import_path().as_str(),
+                    "config": {},
+                },
+                {
+                    "name": "sink",
+                    "type": MockInputOnlyProcessor::Processor::processor_class_import_path().as_str(),
+                    "config": {},
+                },
+            ],
+            "links": [{
+                "source": { "node": "source", "port": "out1" },
+                "target": { "node": "sink", "port": "in1" },
+            }],
+        })
+    }
+
+    #[test]
+    #[serial]
+    fn a_stopped_project_holds_its_graph_to_edit_and_plays_it_fresh_with_no_load() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(
+            the_graph_of_a_stream_of_a_source_linked_into_a_sink("camera"),
+        );
+        let camera = project.stream_id_of("camera");
+        runner
+            .load_the_project_off_its_queue(project.run_request())
+            .unwrap();
+        let playing = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert_eq!(playing.status(), RuntimeStatus::Started);
+
+        let stop = runner.stop_project(project.path()).unwrap();
+        let stopped = the_stream_action_once_finished(&runner, &stop.action_id);
+
+        assert_eq!(stopped.state, StreamActionState::Done, "{stopped:?}");
+        let held = runner
+            .loaded_stream_of_the_id(&camera)
+            .expect("the stream stays held");
+        assert!(
+            Arc::ptr_eq(&held, &playing),
+            "the stop loads no other stream"
+        );
+        assert!(held.is_held_stopped());
+        assert!(held.runtime_context.lock().is_none());
+        assert_eq!(held.node_count(), 2);
+        assert_eq!(held.the_live_links_by_node_uuid().len(), 1);
+        let listing = runner
+            .list_streams()
+            .into_iter()
+            .find(|listed| listed.stream_id == camera)
+            .unwrap();
+        assert_eq!(listing.state, StreamListingState::Stopped);
+        assert_eq!(listing.node_count, Some(2));
+        assert!(the_record_of(state_directory.path(), &camera).stopped);
+        let pause_refusal = refusal_of(runner.pause_project(project.path()));
+        assert!(pause_refusal.contains("none to pause"), "{pause_refusal}");
+
+        held.add_processor(
+            crate::core::processors::ProcessorSpec::new(
+                MockOutputOnlyProcessor::Processor::processor_class_import_path(),
+                serde_json::json!({}),
+            )
+            .with_display_name("second-source".to_string()),
+        )
+        .expect("a stopped stream takes an edit");
+        project.remove_the_graph_document("camera");
+
+        let play = runner
+            .start_project(project_start_or_reload_request_of(project.path()))
+            .unwrap();
+        let played = the_stream_action_once_finished(&runner, &play.action_id);
+
+        assert_eq!(played.state, StreamActionState::Done, "{played:?}");
+        assert_eq!(played.streams[0].state, Some(StreamListingState::Running));
+        let playing_again = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(
+            Arc::ptr_eq(&playing_again, &playing),
+            "the play loads no other stream"
+        );
+        assert_eq!(playing_again.stream_tag(), playing.stream_tag());
+        assert!(!playing_again.is_held_stopped());
+        assert_eq!(playing_again.status(), RuntimeStatus::Started);
+        assert_eq!(playing_again.node_count(), 3);
+        assert!(!the_record_of(state_directory.path(), &camera).stopped);
+    }
+
+    #[test]
+    #[serial]
+    fn a_stop_after_a_play_tears_every_instance_down_again_and_keeps_the_graph() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(
+            the_graph_of_a_stream_of_a_source_linked_into_a_sink("camera"),
+        );
+        let camera = project.stream_id_of("camera");
+        runner
+            .load_the_project_off_its_queue(project.run_request())
+            .unwrap();
+        for _ in 0..2 {
+            let stop = runner.stop_project(project.path()).unwrap();
+            the_stream_action_once_finished(&runner, &stop.action_id);
+            let play = runner
+                .start_project(project_start_or_reload_request_of(project.path()))
+                .unwrap();
+            the_stream_action_once_finished(&runner, &play.action_id);
+        }
+        let stop = runner.stop_project(project.path()).unwrap();
+        the_stream_action_once_finished(&runner, &stop.action_id);
+
+        let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(held.is_held_stopped());
+        assert_eq!(held.node_count(), 2);
+        assert_eq!(held.the_live_links_by_node_uuid().len(), 1);
+        let instances_left = held.compiler.scope_reading(|graph| {
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter(|node| {
+                    crate::core::graph::GraphNodeWithComponents::has::<
+                        crate::core::graph::ProcessorInstanceComponent,
+                    >(*node)
+                })
+                .count()
+        });
+        assert_eq!(
+            instances_left, 0,
+            "a stopped graph holds no processor instance"
+        );
     }
 
     #[test]

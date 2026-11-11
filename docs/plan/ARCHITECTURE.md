@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract, offline-new-projects; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, gateway-nodes, project-and-assets, first-party-package-index, project-action-contract, offline-new-projects, playback-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -278,7 +278,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port, never reopen it. The service restarts a crashed `tatolabd` and its recorded streams
   return. Owner, 2026-10-02. [runtime-hosting — SHIPPED #2711, #2713;
   stream-identity-and-persistence — SHIPPED #2960, #2962, #2965; create-project — SHIPPED
-  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #3439]
+  #2995, #3012; queued-stream-actions — SHIPPED #2997, #2998, #2999, #3006, #3009; amended by gateway-nodes: `expose_port` goes, and no ruling on a port is recorded; project-level-run-controls — SHIPPED #3407; project-run-controls — SHIPPED #3439; amended by playback-controls: `stop_project` ends playback and keeps the project held, readable and editable]
 - **DECIDED** — A stream's location, id and display name. A stream is identified by its
   **location**: its project directory's absolute path, symlinks resolved, and its stream function
   as `module:function` (`stream.py:main` is `stream:main`). Its **stream id** is computed from
@@ -1028,7 +1028,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews; unbuilt: fragments; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls; unbuilt: fragments; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -3968,7 +3968,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes, control-api-contract, live-graph-inputs, asset-media-facts-and-previews)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes, control-api-contract, live-graph-inputs, asset-media-facts-and-previews, playback-controls)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
