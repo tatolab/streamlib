@@ -163,7 +163,7 @@ payload layout every codec node reads.
 - REMOVED: sdk/streamlib-processor-schema/src/catalog_entry.rs
 - REMOVED: sdk/tatolab-stream/tatolab/stream/catalog.py
 - REMOVED: runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/port_catalog_entry.rs
-- REMOVED: hang_legacy_container_media_frame
+- REMOVED: runtime/streamlib-engine/src/core/hang_legacy_container_media_frame.rs
 - REMOVED: UpstreamCatalogEntry
   Continuation: `catalog=` on `Output` goes with `catalog.py`; the engine's `hang` dependency goes
   with the container in ticket 2 (checked by hand in the ship PR, since the pattern also names

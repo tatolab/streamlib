@@ -201,13 +201,20 @@ view of a message. A cast type that claims its surface is
 also the tensor-protocol producer for that frame. _Avoid_: "typed bag", "frame object" (a
 cast type need not be a frame).
 
-**Catalog entry** _(crosses)_: what an output port's declaration says about what it writes,
-in the layout the stack's players read — the section (`video`, `audio`, `text`, `json`,
-`binary`) and that section's own fields — written by the node that owns the port, merged by
-a gateway node into its broadcast's catalog as text and rendered by `graph`; documentation a
-reader follows, never a contract `connect` compares. _Avoid_: "catalog fragment" (retired
-2026-10-17 — it named a `kind`/`encoding`/`cast` triple in the runtime's own words),
-"schema", "port type", "shape declaration".
+**Catalog entry** _(crosses)_: a MoQ track's description in hang's layout — the section
+(`video`, `audio`, `text`, `json`, `binary`) and that section's own fields — built by `MoqTrack`
+from its upstream port's family, codec and stream facts, and merged by a gateway node into its
+broadcast's catalog as text. hang's words exist only in `tatolab-moq`. _Avoid_: "catalog
+fragment" (retired 2026-10-17 — it named a `kind`/`encoding`/`cast` triple in the runtime's
+own words), "schema", "port type", "shape declaration", and "catalog entry" for what a port
+says about its stream — say **stream facts**.
+
+**Stream facts** _(crosses)_: a port's typed description of the stream it carries, in its
+family's own fields — `ImageStreamFacts` (frame rate, content light level, mastering display)
+and `PacketsStreamFacts` (codec string, coded extent, sample rate, channel count, the codec's
+configuration record) — stated by the node that owns the output and read by a reader with
+`upstream_stream_facts`; rendered by `graph` and shown as pins and in Properties, never compared
+at `connect`. _Avoid_: "caps", "metadata", "catalog" for it.
 
 **Local API** _(engine)_: the runtime's per-machine control surface over a local socket — for
 observing, inspecting and changing the live graphs of its streams — which the CLI, MCP hosts

@@ -586,7 +586,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `#[repr(C)]`, append-only function table, versioned major, minor and size, handed to an
   extension wheel's native half as a named capsule from a node's context. It carries opening,
   writing, reading and waiting on a port Python handed to native code, from any thread and
-  without the GIL; the port's catalog entry; log records into the helper's log ring; the
+  without the GIL; the port's stream facts; log records into the helper's log ring; the
   monotonic clock and the stream time of one of its instants; the node's stop flag; and host capabilities, among them the audio device
   interface and the virtual camera output stream. Only data-plane verbs and plain, generation-checked handles cross it, never an
   RHI object, and the engine never calls module code through it. A later Python write to a
@@ -1028,7 +1028,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls; unbuilt: fragments; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls; unbuilt: fragments; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -1048,14 +1048,36 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A port declares its name (the attribute's name), its family with that
   family's keys (below), a description, and on an input its delivery profile, its
   `borrow_quota=`, what it requires (`requires=`, `requires_codec=`, `formats=`) and, on a
-  Channels input, the window contract §Media I/O states. An output port carries its
-  producer-written catalog entry — a hang entry, the section and that section's own fields —
-  documentation `connect` never compares (§Networking, the catalog). In Python the port
+  Channels input, the window contract §Media I/O states. An output port carries its stream
+  facts (below). In Python the port
   attribute types the read and the write; in Rust `#[processor(... input("video", family =
   Image, ...))]` declares the family, the macro refuses a port without one, and the read
   target's `Deserialize` impl validates a by-name cast. [schema-free-ports — SHIPPED #1816,
   #1812; moq-relays — SHIPPED #2821, #2840; strict-port-families — SHIPPED
-  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273; typed-stream-facts — SHIPPED #3286, #3289, #3313]
+- **DECIDED** — A port's stream facts are typed fields its family defines, describing the
+  stream rather than one message. `connect` never compares them and the engine inserts nothing
+  on their account; a mismatch a node cannot handle is that node's refusal in its own words.
+  `ImageStreamFacts` holds `frame_rate` (a rational, `numerator`/`denominator`),
+  `content_light_level` (`max_content_light_level`, `max_frame_average_light_level`, cd/m²) and
+  `mastering_display_colour_volume` (SMPTE ST 2086 in the H.265 SEI's units: three primaries and
+  the white point, `max_display_mastering_luminance`, `min_display_mastering_luminance`).
+  `PacketsStreamFacts` holds `rfc6381_codec` (the codec with profile and level, `avc1.64001f`),
+  `coded_width` and `coded_height` (video), `sample_rate` and `channel_count` (audio), and
+  `codec_configuration_hex` (the codec's out-of-band configuration record — `avcC`, `hvcC`,
+  `OpusHead` — as lowercase hex, absent when the stream carries it in band). Every field is
+  optional. Channels, Array and Records have no stream facts beyond their declared keys: what
+  they carry is stated per message or by name. `Output(Image, rate=…)` declares the frame rate
+  as a literal rational or `from_config(key)`, resolved once the node's config is known, as
+  Channels' `rate=` is, and seeds `frame_rate`. The node that owns an output replaces its facts
+  while running — `ctx.outputs.set_stream_facts(port, facts)` in Python,
+  `OutputWriter::set_stream_facts` in Rust, `output_port_set_stream_facts` in the module C ABI —
+  and a reader asks `ctx.inputs.upstream_stream_facts(port)` for the facts of the output feeding
+  that input, `None` until any are stated; a facts type not the port's family's is refused. The
+  engine depends on no MoQ layout: hang's catalog words exist only in `tatolab-moq`
+  (§Networking). Owner, 2026-11-08. Rejected: a free JSON entry in another project's layout, or
+  caps compared or negotiated at `connect` — a port says what it carries in its own family's
+  typed words, visible as pins and in Properties (owner, 2026-11-08). [typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — A read can name the inbound link it drained. Beside `read_raw`, a reader
   offers a read that returns the message, its stamp and the *inbound link* it arrived on,
   named by the source channel name the link subscribed to — `<lowercased producer
@@ -1320,14 +1342,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `ctx.config` is that mapping. [agent-readable-processor-catalog — SHIPPED #2226]
 - **DECIDED** — Port rendering in the control plane is name, description, `family` (the
   family with the keys the port declared), delivery profile, direction, on an audio input that
-  declared one its window contract, and on an output that carries one its `catalog_entry`, in
-  `graph` and `/api/registry` alike. A port that declared no window contract
+  declared one its window contract, on an output its `stream_facts` in the family's own field
+  names, and on a Records port `values_checked: false` — the node catalog's "unchecked" mark —
+  in `graph` and `/api/registry` alike. A port that declared no window contract
   renders no `audio_window` key at all rather than a null. A `match_device` port renders
   the five values its device settled — machine-dependent because the device format is,
   which is truer than a static lie — and renders the sentinel itself while nothing has
   settled it. [schema-free-ports — SHIPPED #1816; audio-port-window-contract — SHIPPED
   #2032, #2034; moq-relays — SHIPPED #2840; strict-port-families — SHIPPED
-  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
+  #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — A port carries one of five families, each one engine-owned memory layout:
   **Image** — a GPU surface of a pixel format from the engine's texture formats
   (`rgba8_unorm`, `rgba16_float`, …), its size and colour; **Array** — named attributes (`P`, `Cd`, `logits`),
@@ -1431,7 +1454,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   samples; a Packets body carries the codec name; a Records body is zero, its payload the
   runtime's msgpack encoding; an Array body carries the attribute table's row count. Stream
   facts an Image frame does not carry — frame rate, content light level, mastering display —
-  belong on the port's catalog entry, updated through `set_catalog_entry`. Per-frame dynamic
+  are the port's `ImageStreamFacts`. Per-frame dynamic
   HDR (HDR10+, Dolby Vision) is a later descriptor kind, whose metadata rides the sample's
   payload bytes. Owner, 2026-11-06. [strict-port-families — SHIPPED
   #3203, #3204, #3206, #3207, #3208, #3210, #3211, #3218, #3220, #3238, #3241, #3273]
@@ -2531,7 +2554,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes, typed-stream-facts; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio, gateway-nodes; unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -2737,13 +2760,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
   `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
   counting through sleep; on Linux both read `CLOCK_MONOTONIC`.
-  Wall clock is permitted on exactly six surfaces and nowhere else: log record `host_ts`
+  Wall clock is permitted on exactly five surfaces and nowhere else: log record `host_ts`
   and `source_ts`, log file naming, a project change feed's `refused_at` — the UTC an action
   was refused, beside the `applied_at` a transaction reads off its commit (owner,
-  2026-11-10) — the local relay certificate's validity — its UTC `notBefore` / `notAfter`,
-  issued and aged by the one file that writes the certificate (owner, 2026-10-17) — and a
-  relay token's expiry — the UTC `iat` / `exp` of the moq.pro JWTs the moq.pro adapter and
-  the live proof's subscribe minter sign (owner, 2026-10-20) — their job is correlating with
+  2026-11-10) — and a relay token's expiry — the UTC `iat` / `exp` of the moq.pro JWTs the
+  moq.pro gateway and the live proof's subscribe minter sign (owner, 2026-10-20) — their job is correlating with
   the outside world, which monotonic time cannot do. A wall-clock value never enters the
   data plane and is never compared against a media timestamp; another surface is a plan
   change, not a judgement call. The gate enforces the list in the tree it scans — `runtime`,
@@ -2751,12 +2772,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   opt-out attribute: the surfaces read there are a closed set of kinds in the gate, so
   another is a source change that surfaces in review rather than a line quietly appended,
   and an entry whose file stops reading a wall clock is a licence the gate makes you hand
-  back. The relay certificate and token surfaces are read outside its scan, a relay token in
-  `packages/tatolab-moq`. The allowlist is per-file, which is why a data-plane file never joins it — a
+  back. The relay token surface is read outside its scan, in `packages/tatolab-moq`. The allowlist is per-file, which is why a data-plane file never joins it — a
   machine-global unique name comes from the engine's unique-name primitive, never from
   reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; macos-capability-parity —
-  SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158]
+  SHIPPED #2408; moq-relays — SHIPPED #2842, #2873; stream-clocks — SHIPPED #3158; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — Audio backend: one chain per platform, probed once per process and logged
   once, no configuration dial and no environment override. On Linux, PipeWire-native,
   reached by runtime dlopen — the MIT-licensed PipeWire/SPA headers are vendored, the
@@ -3112,7 +3132,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
   GOP knobs are ticket-level, like every other node's config. The four video blocks
   are one encode body and one decode body specialised by a codec identity, not four
-  processors — the pair differs in an enumerant, its catalog entry's codec string and a name —
+  processors — the pair differs in an enumerant, its stream facts' codec string and a name —
   and each node is its own port surface, registration and identity. The layering
   wall holds at this fourth device class too: colour conversion into the codec's NV12
   input rides the engine's existing RHI colour converter — the `rgb_to_nv12` stage on
@@ -3146,21 +3166,21 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the coded extent; on Apple, where CoreMedia reports only the cropped extent, a picture past
   the cap is refused. [macos-capability-parity — SHIPPED #2412, #2413; macos-platform-floor —
   SHIPPED #2374]
-- **DECIDED** — An encoded frame is the stack's media frame and nothing around it: a varint
-  timestamp in microseconds, then one Annex-B access unit with its parameter sets inline, which
-  the port's catalog entry signals by carrying no `description`. No pooled-buffer or
-  surface-id carriage for encoded bytes unless a measured need appears. The codec string —
-  parsed from the SPS the arm emits, so no arm's profile is misstated — and the coded extent,
-  before crop, ride the port's catalog entry, which the encoder writes after its first frame;
-  colour rides the bitstream's VUI; a sync point is the envelope's `starts_group`; the
-  timestamp rides the user header like every message's. A message the decoder cannot read is
+- **DECIDED** — An encoded frame is the codec's unit and nothing around it: one Annex-B access
+  unit with its parameter sets inline, which the port's `PacketsStreamFacts` signal by carrying
+  no `codec_configuration_hex`. No pooled-buffer or surface-id carriage for encoded bytes unless
+  a measured need appears. The codec string — parsed from the SPS the arm emits, so no arm's
+  profile is misstated — and the coded extent, before crop, are the port's `PacketsStreamFacts`,
+  which the encoder states after its first sync point; colour rides the bitstream's VUI into the
+  decoder's `ImageFrame`; a sync point is the envelope's `starts_group`; the stamp is the
+  envelope's `timestamp_ns` like every message's. A message the decoder cannot read is
   refused by name, never reshaped — the audio wire codec's doctrine — and a decoded frame is
   an ordinary Image frame; the encoded message is a Packets unit naming its codec. Loss on an ordered encoded link is the engine's per-link count the
   reader exposes as `lost_since_last_read`: a decoder enters a stream only at a
   `starts_group` and, on a message reporting a loss, discards to the next `starts_group` —
   resuming at that message when it itself starts a group. A write the channel ceiling refuses
   makes the encoder's next frame a keyframe, counted in `graph`'s refused-write count. Owner,
-  2026-10-16 and 2026-10-17. [codec-blocks — SHIPPED #2083, #2085; moq-relays — SHIPPED #2850]
+  2026-10-16 and 2026-10-17. [codec-blocks — SHIPPED #2083, #2085; moq-relays — SHIPPED #2850; typed-stream-facts — SHIPPED #3286, #3289, #3313]
   Rejected: a producer sequence inside the payload — a stock player stops on it (owner,
   2026-10-16).
   Rejected: codec-level gap detection — unreliable with hardware decoders (owner, 2026-10-16).
@@ -3183,8 +3203,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   crate's own hardware tests on both floors
   (`runtime/streamlib-owned-device-video-codec-nodes/tests/`). The rig
   is two streams on `tatolabd`, as a deployment builds it (owner, 2026-10-19): the sender
-  (`TestPatternSource` → the encoder) exposes the encoder's port, and the receiver reads that
-  track at the local relay through `RelayTrackSource` and decodes it. The rig reads the
+  (`TestPatternSource` → the encoder) sends the encoder's port through `MoqTrackSend` to a
+  `moq-relay` the rig starts, and the receiver reads that track through `MoqTrackReceive` and
+  decodes it. The rig reads the
   sender's encoded track with `tatolab-read-track`, as any user reads a port, decodes the dump
   with the rig's ffmpeg into PNGs, and measures them with `cargo xtask psnr`, a first-class
   calculation in the proof tooling; the receiver's decode is proven by its decoded-frame count
@@ -3192,7 +3213,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `/verify-live`, and (ii) CI-named GPU-free tests: bitstream parsing, VUI/color translation,
   config resolution, container bytes. Running the rig stays rig-only, and no test reaches into
   a consumer for its fixtures. [codec-blocks — SHIPPED #2084, #2085, #2086; moq-relays —
-  SHIPPED #2860, #2866; amended by gateway-nodes: the sender sends the encoder's port through `MoqTrackSend` to a `moq-relay` the rig starts, and the receiver reads it through `MoqTrackReceive`]
+  SHIPPED #2860, #2866; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
   frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
   chroma plane falls under 30 dB — one floor for every reference, no chroma warn band.
@@ -3256,17 +3277,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   engine-owned fixture stream beside `audio_loopback_stream.py` taking its codec from an
   environment variable, so there is no second rig and no Rust arm to agree with.
   [python-codec-block-api — SHIPPED #2107; moq-relays — SHIPPED #2860]
-- **DECIDED** — An encoded audio packet is the encoded-frame convention applied to audio: the
-  stack's media frame — the varint timestamp in microseconds, then one bare Opus packet as
-  RFC 6716 §3 frames it — every packet opening its own group, so a decoder enters at any. The
-  port's catalog entry is a hang audio entry: `codec` (`"opus"`), `sampleRate` (`48000`,
-  Opus's own clock), `numberOfChannels`, and the `OpusHead` bytes in `description`, whose
-  PreSkip is the encoder's lookahead in 48 kHz samples, which a decoder trims. The stamp rides
-  the user header and names the packet's first sample, carried from the window block the
-  encoder consumed with the timestamped write. `OpusDecoder` reads the channels and the
-  pre-skip from the upstream entry's `OpusHead`, falling back to the packet's TOC for the
-  channels. Owner, 2026-10-16 and 2026-10-17. [opus-mp4-recording-rung — SHIPPED #2125;
-  moq-relays — SHIPPED #2850]
+- **DECIDED** — An encoded audio packet is the encoded-frame convention applied to audio: one
+  bare Opus packet as RFC 6716 §3 frames it, every packet opening its own group, so a decoder
+  enters at any. The port's `PacketsStreamFacts` state `sample_rate` `48000` (Opus's own
+  clock), `channel_count`, and the `OpusHead` bytes as `codec_configuration_hex`, whose PreSkip
+  is the encoder's lookahead in 48 kHz samples, which a decoder trims. The envelope's stamp
+  names the packet's first sample, carried from the window block the encoder consumed with the
+  timestamped write. `OpusDecoder` reads the channels and the pre-skip from
+  `upstream_stream_facts`' `OpusHead`, falling back to the packet's TOC for the channels.
+  Owner, 2026-10-16 and 2026-10-17. [opus-mp4-recording-rung — SHIPPED #2125;
+  moq-relays — SHIPPED #2850; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — `OpusEncoder` is `execution = reactive`, `scheduling = high` like the
   video blocks, input `audio` declaring `delivery_profile = "ordered"` and
   `audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960)` — no
@@ -3276,8 +3296,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   encoder's first-frame pattern: one or two channels through libopus's `Encoder`, three
   to eight through `MSEncoder` with channel mapping family 1 (the standard surround order
   both MP4 and WebRTC accept), more than eight refused by name; a block whose count
-  changes re-mints, as an extent change re-mints video, and the port's catalog entry then
-  names the new count.
+  changes re-mints, as an extent change re-mints video, and the port's stream facts then
+  name the new count.
   Output `encoded_audio`; the `OpusHead`'s pre-skip is the minted encoder's reported lookahead. Config,
   both optional so `{}` is legal: `bitrate_bps` (absent → libopus's automatic rate) and
   `application` (`"audio"`, `"voip"`, `"lowdelay"`; absent → `"audio"`). FEC and DTX off.
@@ -3320,7 +3340,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [opus-mp4-recording-rung — SHIPPED #2123, #2124, #2125, #2126, #2127]
 - **DECIDED** — `requires_gpu` and said in the module docstring:
   `test_opus_blocks.py` — a Python known-signal source → `OpusEncoder` → probes →
-  `OpusDecoder` → probes: every message is a media frame opening its own group under the
+  `OpusDecoder` → probes: every message is an Opus packet opening its own group under the
   port's `OpusHead`, packets are 20 ms apart, decoded blocks are 48 kHz `f32` in the
   source's channels.
   [opus-mp4-recording-rung — SHIPPED #2126, #2128]
@@ -3358,7 +3378,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes, typed-stream-facts, display-importable-viewer-frames; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
+## Networking — transport, moq, webrtc — IN-FLIGHT (unbuilt: a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3369,7 +3389,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams at a runtime boundary. [extension-model; networking-extension-wheels — SHIPPED
   #2153]
 - **DECIDED** — The wheel sits on the encoded side of the codec blocks and touches no raw
-  frame, surface or GPU: `WhipPublisher` consumes the media frames `H264Encoder` and
+  frame, surface or GPU: `WhipPublisher` consumes the units `H264Encoder` and
   `OpusEncoder` write; `WhepPlayer` writes the same frames upstream of `H264Decoder` and
   `OpusDecoder`. Audio is in scope from the first
   rung. Both are ordinary processor extensions — `@node.process` classes in the wheel calling the
@@ -3384,15 +3404,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   session's media and there is nothing left to choose. Endpoint and credential configuration
   is ticket-level, as for every built-in's config.
   [extension-model; networking-extension-wheels — SHIPPED #2150, #2151]
-- **DECIDED** — The WebRTC processors carry the stack's media frame as bytes: the publisher
-  reads each track's codec off its upstream port's catalog entry and hands the access unit or
-  packet after its varint timestamp to the wheel's Rust; the player writes that frame and
-  fills what a decoder needs from the stream itself — the extent from the SPS, a sync point
-  from the access unit as the group flag, the audio parameters from the session description
-  — into its ports' catalog entries rather than from config. What crosses a network on a
+- **DECIDED** — The WebRTC processors carry the codec's unit as bytes: the publisher takes each
+  track's codec from its upstream Packets port's declared codec and its extent from
+  `PacketsStreamFacts`, and hands the access unit or packet to the wheel's Rust; the player
+  writes the unit and states what a decoder needs from the stream itself — the extent from the
+  SPS, a sync point from the access unit as the group flag, the audio parameters from the
+  session description — as its ports' stream facts rather than from config. What crosses a network on a
   media track is a bitstream and the description a decoder needs, never a serialised link
   payload. [extension-model; moq-data-tracks — SHIPPED #2172, #2173; moq-relays — SHIPPED
-  #2888]
+  #2888; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — A received stream reaches the graph through the manual-source shape: the wheel's Rust receives on
   its own runtime and a processor-owned thread writes, so no engine seam is added for it. Two
   budgets the wheel lives inside, ticket-level but named here: a helper stops on the shutdown
@@ -3402,7 +3422,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [extension-model; local-transport-hardening — SHIPPED #2264, #2266]
 - **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
-  parsing, and the media frames and catalog entries the player writes checked against the
+  parsing, and the units and stream facts the player writes checked against the
   wire contract. Live,
   rig-only: WHIP publish to Cloudflare Stream and WHEP play back from it, with credentials
   outside the tree, in the fixture-script shape the codec rig set (owner, 2026-09-04).
@@ -3419,14 +3439,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   sessions run in. [networking-extension-wheels — SHIPPED #2150; package-split-and-lend —
   SHIPPED #2673, #2691]
 - **DECIDED** — `WhipPublisher`: `@node.process`, one fan-in input `tracks` (`ordered`) —
-  each inbound link is one RTP track, video or audio by its upstream port's catalog entry,
+  each inbound link is one RTP track, video or audio by its upstream port's declared codec,
   the session's SDP built from the links `inbound_link_names` reports at
   `setup()`; config `url` and optional `bearer_token`. `WhepPlayer`:
   `@node.process(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
   `url` and optional `bearer_token`; `start()` hands `ctx.outputs` to a processor-owned
-  thread that connects, drains the session and writes media frames — a group starting at
+  thread that connects, drains the session and writes units — a group starting at
   each IDR, the stamp from the RTP clock mapped onto the monotonic clock, codec, extent and
-  Opus parameters stated in its ports' catalog entries — and `stop()` closes the session inside the 5 s budget. **No
+  Opus parameters stated as its ports' stream facts — and `stop()` closes the session inside the 5 s budget. **No
   session is minted in `setup()`, and a refused connect is retried rather than ending the
   stream** (2026-09-05, found by the live proof): a WHEP endpoint answers `409 Conflict`
   while the input it fronts has not started publishing, the ordinary state of a player
@@ -3435,7 +3455,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   cannot be dialled again. A write the engine refuses is the one failure not retried: it
   names its port and ends the thread, because reconnecting would spend an endpoint's session
   forever on a write refused every time. [networking-extension-wheels — SHIPPED #2150;
-  moq-relays — SHIPPED #2888]
+  moq-relays — SHIPPED #2888; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — `ci.yml`'s `integration-test-linux` and `integration-test-macos` jobs
   carry the extension lane for `packages/streamlib-webrtc`: on the runtime unit they built, build
   the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
@@ -3448,23 +3468,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2697]
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by the wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
-  cases), SDP offer construction and answer parsing, and the player's media frames and catalog
-  entries checked against the wire contract on the `wired_link` fixture pattern. Live, rig-only, under
+  cases), SDP offer construction and answer parsing, and the player's units and stream facts
+  checked against the wire contract on the `wired_link` fixture pattern. Live, rig-only, under
   `/verify-live` with a networking arm, two streams on one runtime as the codec rig is: a
   sender publishes `TestPatternSource` → `H264Encoder` and the known signal over WHIP to
   Cloudflare Stream, and a receiver plays the same stream back over WHEP through the decoders
   — credentials read from the environment, absent ones reported as cannot-run, never as pass.
-  The lock reads the receiver's `encoded_video` track at the local relay with
-  `tatolab-read-track`, a tool outside the runtime, decodes it with the rig's ffmpeg and
+  The lock reads the receiver's `encoded_video`, sent through `MoqTrackSend` to a `moq-relay`
+  the rig starts, with `tatolab-read-track`, a tool outside the runtime, decodes it with the rig's ffmpeg and
   scores it with `xtask psnr bar-colors` against its own baseline within ±0.05; the
   receiver's decode is proven by its decoded-frame count in `graph` — the network sits inside
   a path the codec rig already scored, so a mismatch is the wheel's.
-  [networking-extension-wheels — SHIPPED #2153; moq-relays — SHIPPED #2902; amended by gateway-nodes: the receiver's `encoded_video` reaches `tatolab-read-track` through `MoqTrackSend` to a `moq-relay` the rig starts]
+  [networking-extension-wheels — SHIPPED #2153; moq-relays — SHIPPED #2902; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — The address, as built. A port's address is `<machine>/<stream id>/<node>/<port>`,
   every part cast as one address chunk (`core/runtime/address_chunk.rs`, one shared fixture
-  of cases the engine and the pure-Python builder both cast from): the `/watch` path names
-  it, and an exposed port is the track `<node>/<port>` of the broadcast
-  `<machine>/<stream id>.hang`. It carries no processor id; whatever owns the port resolves the
+  of cases the engine and the pure-Python builder both cast from): `graph`, the logs and a
+  viewer name a port by it, and no broadcast or HTTP path is derived from it. It carries no
+  processor id; whatever owns the port resolves the
   node's name when asked. No engine type parses the string form (owner, 2026-10-19). The machine is named as the machine-name entry below
   states and read by `graph`'s top-level `machine`; a stream's id is computed from its location
   at load (§Product).
@@ -3472,36 +3492,36 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
   package-split-and-lend — SHIPPED #2693; runtime-hosting — SHIPPED #2715;
-  stream-identity-and-persistence — SHIPPED #2960; amended by gateway-nodes: `graph`, the logs and a viewer name a port by its address, and no broadcast or `/watch` path is derived from it]
+  stream-identity-and-persistence — SHIPPED #2960; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — A link's ends are both on this machine, in one stream. As built, a link end
   is `{node, port}`, a port of this stream's graph; the graph holds one link collection, which
   every traversal walks. A snapshot whose link end names a stream or a machine is refused by
-  name at load, the refusal naming the relay source node, through which a stream reads
-  another stream's port on this machine or another. In Python `connect(source, destination)`
+  name at load, the refusal naming `MoqTrackReceive`, through which a stream reads another
+  stream's track at a relay, on this machine or another. In Python `connect(source, destination)`
   takes a reference minted by this stream's builder as its source, and a value of any other
   kind is refused naming the spelling that would work. The engine reads no payload to carry a
-  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715; amended by gateway-nodes: the refusal names `MoqTrackReceive`, through which a stream reads another stream's track at a relay]
+  link. [zenoh-and-moq-wheel-removal — SHIPPED #2643; runtime-hosting — SHIPPED #2715; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — Reading across streams is always pulled, and the source is never asked. A
   stream that wants another stream's data reads a track at a relay through a track receive
   node, and that track exists only because the other stream's author added a track send node
   for it; nothing is sent for a track nobody subscribes to. No runtime pushes its output into
   another's input, and no runtime wires two others. Owner, 2026-10-04: a source never wires
   itself into a reader, the way a server never wires its URL into a client's browser; owner,
-  2026-11-06: nothing is shared that the graph does not show. [exposure-levels; gateway-nodes]
+  2026-11-06: nothing is shared that the graph does not show. [exposure-levels; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
   link carries a stamp from another machine, so a many-track sink compares first stamps across tracks with no another-machine refusal. A
-  message read from a relay reaches a graph through the relay source node, which stamps it
+  message read from a relay reaches a graph through `MoqTrackReceive`, which stamps it
   from the track's own timestamp re-based onto this machine's clock — a fixed offset taken
   from the first object, re-anchored on a discontinuity, never per-message arrival time, the
   stack's own player's model — with the timestamped write; a track carrying no timestamp is
   stamped at arrival. The relay's object carries the writer's stamp and the node's doc says
   both. Owner, 2026-10-17. [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643;
-  moq-relays — SHIPPED #2855; amended by gateway-nodes: the node that re-bases a relay track's stamps is `MoqTrackReceive`]
+  moq-relays — SHIPPED #2855; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
-  machines become comparable; until then the per-clock rule above stands, and the relay
-  source node's restated stamp is a local stamp like any relay node's. [runtime-mesh;
+  machines become comparable; until then the per-clock rule above stands, and
+  `MoqTrackReceive`'s restated stamp is a local stamp like any node's. [runtime-mesh;
   cross-runtime-links; moq-relays]
 - **OPEN** — An adaptive jitter buffer: intended, do not build until designed. Direction: a
   playing sink holds what it plays at a steady delay sized from the jitter it measures, the
@@ -3512,7 +3532,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   designer the way TouchDesigner's and Unreal Blueprints' are; the runtime holds no publisher,
   no exposure, no routing policy and no relay of its own, and a stream's graph shows everything
   it sends. Who reads at a relay is that relay's own access rules. Owner, 2026-11-06.
-  [gateway-nodes]
+  [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a publisher in the runtime that forwards a stream's ports to relays on its own —
   data the graph does not show (owner, 2026-11-06).
   Rejected: `expose`, exposure levels or a per-relay routing toggle deciding what leaves the
@@ -3520,7 +3540,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   into (owner, 2026-11-06).
 - **DECIDED** — Networking is a module of gateway nodes, in the Unreal Engine shape. A
   **gateway node** holds one connection to a relay and publishes one broadcast it names; a
-  **track node** declares one outgoing track on a gateway with its catalog entry, and the stream
+  **track node** declares one outgoing track on a gateway, and the stream
   holds it as a graph variable; a **track send node** writes content to a track it names by
   reference, anywhere in the graph, with no wire back to the gateway; a **track receive node**
   reads a remote track through a gateway. A node names another — a track its gateway, a send
@@ -3528,8 +3548,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (`MoqTrackSend(track=camera_track)`): the graph records it as a reference edge, the load
   refuses one naming a node that is missing or of the wrong type, and `graph` renders it beside
   the links. A reference edge carries no data and is never a link. The MoQ nodes are the
-  `tatolab-moq` module, built the way a third party builds one; the WebRTC wheel's nodes are
-  another such module. Owner, 2026-11-06. [gateway-nodes]
+  `tatolab-moq` module, built the way a third party builds one: a Rust-native extension wheel
+  depending on `tatolab-stream` and the module host table and on no engine crate, as
+  `streamlib-webrtc` is, whose nodes are another such module. `MoqGateway` is manual and
+  `paced_by_real_time`, holds one session from its own config and has no data ports; `MoqTrack`
+  (`gateway`, `track`, optional `catalog`) has no data ports, and a second send node on one track
+  is refused at load by name; `MoqTrackSend` has one input `content` of a family with a wire
+  form — Packets, Records, Channels or Array — and a link from an Image port is refused at
+  `connect` naming an encoder, because an Image slot means nothing off the machine.
+  Owner, 2026-11-06. [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a long data wire from every sender to its gateway, or a connection carried on a
   special port — the graph variable is what keeps one connection reusable across the graph
   (owner, 2026-11-06).
@@ -3538,14 +3565,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Tatolab solves no networking problem. Reach between machines, a peer's
   identity, encryption on the wire, NAT and names are a relay's, or the network the user
   already has — a tailnet, a LAN, the internet. The runtime reads, configures and requires
-  nothing of Tailscale: no status, no `tailscale serve`, no certificate, no name; reaching a
-  machine's local relay over a tailnet is a docs page, because the relay listens on the
-  machine and a tailnet reaches the machine. Nothing is built for discovery, certificate
+  nothing of Tailscale: no status, no `tailscale serve`, no certificate, no name. No relay runs
+  on the machine unless a person starts one, and a tailnet reaches whatever relay a connection
+  names. Nothing is built for discovery, certificate
   minting, name claiming or peer authentication, on any network. Owner, 2026-10-16.
-  [one-runtime-per-machine; moq-relays — SHIPPED #2842; amended by gateway-nodes: no relay runs on the machine unless a person starts one, so a tailnet reaches whatever relay a connection names]
+  [one-runtime-per-machine; moq-relays — SHIPPED #2842; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: reading Tailscale's status for the machine's name and the tailnet's machines, and
   having `tatolabd` configure `tailscale serve` — a rights prompt and a manual step on every
-  install, for reach the local relay already gives (owner, 2026-10-16).
+  install, for reach a relay already gives (owner, 2026-10-16).
 - **DECIDED** — The address is `<machine>/<stream id>/<node>/<port>`: the runtime is addressed by
   its machine, and the same string is the address in Python, the CLI, the URL path and the
   graph (owner, 2026-09-30). Collisions (owner,
@@ -3570,33 +3597,27 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2715; stream-identity-and-persistence — SHIPPED #2960]
 - **DECIDED** — A machine's name is its hostname, cast, and its name at a relay is the root
   that relay's credential assigns. The engine names the machine by its hostname cast and reads
-  nothing of Tailscale; a relay adapter's root prefixes the broadcast at that relay.
-  [runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2842, #2873; amended by gateway-nodes: the root is the connection's, and a gateway node prefixes its broadcast with it]
+  nothing of Tailscale; the root is the connection's, and a gateway node prefixes its broadcast
+  with it at that relay.
+  [runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2842, #2873; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — The runtime's HTTP is on loopback only and carries what is not real time:
-  the listing of the machine's streams and exposed ports, the preview page, and at
-  `/machine-runtime-lock-holder` the serving runtime's pid, which names the macOS machine
-  lock's holder (§Product). Its paths are
-  the address: `/watch/<machine>/<stream id>` opens the preview on a broadcast with its tracks
-  to pick from, `/watch/<machine>/<stream id>/<node>/<port>` straight onto one track. The listing
-  shows private and public ports; an internal port is listed and not served. The runtime's
-  HTTP serves no media and listens nowhere but loopback; what the local relay's own listener
-  serves over HTTP beside its tracks — its certificate fingerprint, its WebSocket path and the
-  relay program's `/fetch` — is the relay's, under the same grant as the tracks. The read-only
-  MCP, the bounded-sample form and the snapshot form are not built. Owner, 2026-10-16,
-  2026-10-17 and 2026-10-24. [moq-relays — SHIPPED #2860, #2864;
-  machine-lock-without-administrator — SHIPPED #2929; amended by gateway-nodes: the preview page and the `/watch` paths leave it; it carries the listing of the machine's streams and the lock holder's pid]
+  the listing of the machine's streams, and at `/machine-runtime-lock-holder` the serving
+  runtime's pid, which names the macOS machine lock's holder (§Product). It serves no media and
+  listens nowhere but loopback. The bounded-sample form and the snapshot form are not built.
+  Owner, 2026-10-16, 2026-10-17 and 2026-10-24. [moq-relays — SHIPPED #2860, #2864;
+  machine-lock-without-administrator — SHIPPED #2929; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: live forms over HTTP served by the runtime — MPEG-TS, HLS, raw H.264, fMP4 — and a
   `whep` form (owner, 2026-10-04).
   Rejected: a snapshot form — one PNG of a port's latest frame, the runtime reading the port's
-  payload to make it — a door beside the relay; a frame is seen through the preview page or
-  any MoQ client (owner, 2026-10-17).
+  payload to make it — a door beside the graph; a frame is seen in a viewer or through any MoQ
+  client (owner, 2026-10-17).
 - **DECIDED** — The runtime has no door for verification, and verification gets none. Every
   end-to-end proof — the codec rigs, the audio loopback check, the evidence an agent captures —
   is a deterministic tool outside the runtime that reads a port the way a user does: the stream
   under test sends it through gateway nodes to a relay the rig starts, and the tool reads it as
   a MoQ client, or a person looks at it in a viewer. Nothing of it lives in the engine. The
   engine's internals are proven by unit tests; the engine is never proven by building an app on
-  it. Owner, 2026-10-17 and 2026-11-06. [moq-relays — SHIPPED #2860, #2875; gateway-nodes]
+  it. Owner, 2026-10-17 and 2026-11-06. [moq-relays — SHIPPED #2860, #2875; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: `exchange` kept as an engine-internal verification door, an image-writing built-in
   for the rigs, an MCP image tool — side paths past the product's own nodes, which agents
   reach for over the product's own doors (owner, 2026-10-17).
@@ -3618,7 +3639,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a stream, nodes share data through shared memory, as today. The runtime is never a relay and
   starts none: a person who wants one on the machine runs `moq-relay` and stores a connection to
   it, and a rig starts its own as a fixture. Owner, 2026-10-16 and 2026-11-06. [moq-relays;
-  gateway-nodes]
+  gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: `tatolabd` supervising a bundled local relay — an always-running relay is the
   automatic sharing this removes (owner, 2026-11-06).
   Rejected: embedding `moq-relay` as a library inside `tatolabd` — the runtime would then be a
@@ -3631,7 +3652,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   convention for a catalog they read — and each track node is the track its config names, so four
   cameras and a microphone sent through one gateway are five tracks any client subscribes to by
   name. The relay's own listing is the directory. Two gateways on one connection are two
-  broadcasts. Owner, 2026-10-16 and 2026-11-06. [moq-relays; gateway-nodes]
+  broadcasts. Owner, 2026-10-16 and 2026-11-06. [moq-relays; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: one broadcast per track — it loses multi-track switching and audio beside video,
   the things a broadcast is for (owner, 2026-10-16).
 - **DECIDED** — A message's group boundary is the writer's, in the envelope. `write(port,
@@ -3639,32 +3660,26 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port is one group per message and its author never sees the flag; `starts_group=False`
   continues the group the last message opened. The built-in encoders set it themselves —
   `True` on a keyframe, `False` otherwise — and a node emitting encoded media sets it from its
-  own keyframe knowledge; `OpusEncoder` opens a group per packet. The publisher maps it to the
-  relay's group boundary and reads nothing else; Python and Rust readers see it alike, beside
-  the stamp, and the envelope's stamp is the object's. Owner, 2026-10-16 and 2026-10-17.
-  [moq-relays — SHIPPED #2821, #2850, #2853; amended by gateway-nodes: the track send node maps `starts_group` to the group boundary and drops the rest of a group under backpressure or on a message reporting a loss, as the publisher did]
-- **DECIDED** — The catalog is assembled from port descriptions, never from payloads. An output
-  port's declaration may carry, beside its name and description, its catalog entry in the
-  layout the stack's players read: the section it belongs in — `video`, `audio`, `text`,
-  `json`, `binary` — and that section's own fields, `codec`, `codedWidth` and `codedHeight`,
-  `sampleRate`, `numberOfChannels`, `description` for a decoder's out-of-band setup, and on a
-  data track `mode` (`snapshot` or `stream`) and `mime`. The node that owns the port writes its
-  entry from its config and from what it learns at its first frame — an encoder its codec
-  string and coded extent — and replaces it while running; a built-in's Records port declares
-  `binary`, `mode: snapshot`, `mime: application/msgpack`, and no reader in the runtime
-  consults a data track's `mode`. The
-  publisher merges the entries of a stream's exposed ports into the broadcast's catalog track
-  as text, one entry per track named `<node>/<port>` under its section, and `graph` renders
-  each port's entry. Any reader may read a port's entry — a local node off its inbound link,
-  a remote client off the catalog — and it is documentation a reader follows: `connect`
-  compares nothing, the engine checks nothing against it, and no port is required to carry
-  one. Owner, 2026-10-16 and 2026-10-17. [moq-relays — SHIPPED #2840, #2853; amended by gateway-nodes: the gateway merges its track nodes' entries into its broadcast's catalog, a track node's `catalog` replacing its upstream port's entry]
-  Rejected: a port declaration the engine acts on — a media opt-in the publisher reads payloads
-  under — media logic in the adapter path (owner, 2026-10-16).
-  Rejected: an entry in the runtime's own words — a `kind`, a free-text `encoding`, a `cast`
-  import path — for the publisher to translate into the players' layout; a port describes
-  itself in the layout the players read, so one malformed entry breaks its own track and
-  never the broadcast (owner, 2026-10-17).
+  own keyframe knowledge; `OpusEncoder` opens a group per packet. `MoqTrackSend` maps it to the
+  relay's group boundary, reads nothing else, and drops the rest of a group under backpressure
+  or on a message reporting a loss; Python and Rust readers see it alike, beside the stamp, and
+  the envelope's stamp is the object's. Owner, 2026-10-16 and 2026-10-17.
+  [moq-relays — SHIPPED #2821, #2850, #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
+- **DECIDED** — The catalog is assembled from stream facts at the network boundary, never from
+  payloads. `MoqTrack` builds its track's hang catalog entry from the upstream port's family, its
+  declared codec and its stream facts — Image's `frame_rate` and HDR facts, Packets' coded
+  extent, rate, channel count and `codec_configuration_hex` as hang's `description` — and its
+  optional `catalog` config overrides it. `MoqGateway` merges its track nodes' entries into its
+  broadcast's catalog track as text, one entry per track. `MoqTrackSend` wraps each unit in
+  hang's legacy container (a varint microsecond stamp, then the unit) on the way out, and
+  `MoqTrackReceive` unwraps it and states the facts it read from the remote catalog on its
+  output. hang's words exist only in `tatolab-moq` and `tatolab-read-track`. Owner, 2026-10-16,
+  2026-10-17 and 2026-11-08. [moq-relays — SHIPPED #2840, #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
+  Rejected: a port declaration the engine acts on — a media opt-in the runtime reads payloads
+  under — media logic in the transport path (owner, 2026-10-16).
+  Rejected: an entry in the runtime's own words — a `kind` or a free-text `encoding` — for a
+  track node to translate; a port states its family's typed stream facts, which the track node
+  maps to the players' layout (owner, 2026-10-17 and 2026-11-08).
 - **OPEN** — A decoded audio port playable by any MoQ player: intended, do not build until
   designed. Direction: a track fed by a decoded audio port carries an `audio` entry with the `pcm`
   codec and raw interleaved little-endian f32 objects in place of its Channels blocks.
@@ -3677,7 +3692,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   is written again whole for a relay that hands a late subscriber only newer objects —
   Cloudflare's, every second. Signing in
   to a provider and provisioning a relay live in the app or a separate service, never the
-  runtime. Owner, 2026-10-14, 2026-10-20 and 2026-11-06. [moq-relays; gateway-nodes]
+  runtime. Owner, 2026-10-14, 2026-10-20 and 2026-11-06. [moq-relays; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: relay adapters compiled into `tatolabd` — networking is a module, and the runtime
   carries no relay code (owner, 2026-11-06).
 - **DECIDED** — A gateway's URL and credential are config on the gateway node, as every node's
@@ -3685,7 +3700,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   relay instance and no relay secret, and has no relay verbs. No config key is a special secret
   type: a credential kept in a secret store reaches the gateway on the wire, from a node that
   reads the store and writes the gateway's settings as a Records message to its `settings` input,
-  whose values replace the config's. Owner, 2026-11-06. [gateway-nodes]
+  whose values replace the config's. Owner, 2026-11-06. [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a secret config type that `graph` and the logs redact — a special type for one case,
   where a node on the wire already does it (owner, 2026-11-06).
   Rejected: the runtime storing named connections in `relays.json` and the OS secret store for
@@ -3693,7 +3708,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Reading a track is a receive node. `MoqTrackReceive`, in `tatolab-moq`, takes a
   gateway by reference, a broadcast and a track, subscribes, and writes each object's payload
   bytes to its one output as received, stamped from the track's own timestamp re-based onto this
-  machine's clock (the stamps entry above); the track's catalog entry is readable off the node.
+  machine's clock (the stamps entry above); the facts it read from the track's catalog are its
+  output's stream facts.
   What follows it — a decoder, a numpy node, nothing — is the builder's. It is how a stream reads
   another stream's track on this machine or another, and the only way a graph reads a relay;
   nothing in the runtime is built for runtime-to-runtime. Its config is MoQ's own vocabulary:
@@ -3701,7 +3717,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   §Processor model gives a source, each name read exactly as written — `.hang` or not. The
   runtime casts every name it gives and never a name it reads. Owner, 2026-10-16, 2026-10-18 and
   2026-11-06. [moq-relays — SHIPPED #2855, #2858; relay-track-reading — SHIPPED #2898;
-  gateway-nodes]
+  gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
   Rejected: naming the track by a Tatolab address, `track_address`, beside `broadcast` and
   `track` — two ways to name one thing, one of them a term invented where MoQ has one (owner,
   2026-10-18).
@@ -3710,8 +3726,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Rejected: the engine subscribing to a relay inside the link machinery, so a link's source
   can name a port on another machine — a MoQ reader in the engine, a second link kind, and a
   stamp-marking question with no answer (owner, 2026-10-16).
-- **DECIDED** — A relay track is read through one relay-track reader, which the relay source
-  node and `tatolab-read-track` share. It receives a track's groups in arrival order and
+- **DECIDED** — A relay track is read through one relay-track reader in `tatolab-moq`, which
+  `MoqTrackReceive` and `tatolab-read-track` share. It receives a track's groups in arrival order and
   releases them in sequence order, holding at a missing sequence. A missing group is given up
   only when its stream is reset after its header arrived, when the track ends, or when newer
   content on the track has run the reader's `max_age` past where the missing group would end,
@@ -3719,52 +3735,75 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   arrived first. A group that arrives in sequence is released at once, so the hold adds no
   latency unless a group is missing. The reader joins at the live edge, replaying no cached
   history, and subscribes with its own `max_age`, so the relay sheds nothing the reader would
-  still take. `max_age` is the reader's: the relay source node's defaults to 100 ms, and
+  still take. `max_age` is the reader's: `MoqTrackReceive`'s defaults to 100 ms, and
   `tatolab-read-track` waits the track's declared retention. It is a transport budget, how late
-  a group may arrive and still be used, and never a playout delay. The relay source node
+  a group may arrive and still be used, and never a playout delay. `MoqTrackReceive`
   writes every group it gives up as a loss its readers count in `lost_since_last_read`, the
   way a link counts one, never as a silent step. Owner, 2026-10-20. [relay-track-reading —
-  SHIPPED #2898, #2900; amended by gateway-nodes: the reader lives in `tatolab-moq`, shared by `MoqTrackReceive` and `tatolab-read-track`]
+  SHIPPED #2898, #2900; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: moq-net's sequence cursor (`.ordered()`) — it steps over a group whose stream lands
   after its successor's, at any budget (session, 2026-10-20).
   Rejected: giving up a missing group when the budget elapses on a clock — waits and sleeps
   never fix realtime streaming (owner, 2026-10-20).
   Rejected: one budget for every reader, the track's 5 s retention — one lost group becomes
   5 s of silence and then a burst (owner, 2026-10-20).
-- **DECIDED** — The engine stands on the moq-dev line of MoQ: `moq-net`, `moq-tokio`, `hang`
-  and the `moq-relay` program, each pinned to an exact version — the 0.3, 0.19, 0.21 and 0.17
+- **DECIDED** — `tatolab-moq` stands on the moq-dev line of MoQ — not the engine or
+  `tatolabd`, and the runtime unit ships no `moq-relay`: `moq-net`, `moq-tokio`, `hang`
+  and the `moq-relay` program a rig starts, each pinned to an exact version — the 0.3, 0.19, 0.21 and 0.17
   lines — and every payload a stock
   player reads is in that line's media layout, every catalog in its catalog layout. Known
   (2026-10-17): Cloudflare's hosted relays are a beta speaking IETF drafts 14 and 16, which
   `moq-net` negotiates; a Cloudflare token rides the URL path; Cloudflare assigns no root, so
-  its adapter names the machine's namespace; moq.pro's credential is a project signing key
+  its gateway names the machine's namespace; moq.pro's credential is a project signing key
   that mints read and write for every broadcast. The line's own compatibility claim is
-  otherwise unverified here. Owner, 2026-10-04 and 2026-10-16. [moq-relays — SHIPPED #2842,
-  #2853; amended by gateway-nodes: `tatolab-moq` stands on the line, not the engine or `tatolabd`, and the runtime unit ships no `moq-relay`]
+  otherwise unverified here. The engine and `streamlib-sdk` depend on no `hang`.
+  Owner, 2026-10-04 and 2026-10-16. [moq-relays — SHIPPED #2842,
+  #2853; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; typed-stream-facts — SHIPPED #3286, #3289, #3313]
 - **DECIDED** — Previews come straight from the runtime. Tato Studio's viewers show any port
   of any node on the machine, the way TouchDesigner shows every wire: a view per family — a
   thumbnail for Image, shape and statistics or a point view for Array, a waveform for Channels,
   keyframes and bitrate with an on-demand decode for Packets, a table or a tree for Records — with
   no relay, encoder or exposure in between. A preview is on the machine only and changes no
-  stream's graph. Owner, 2026-11-03 and 2026-11-06. [gateway-nodes]
+  stream's graph. Owner, 2026-11-03 and 2026-11-06. [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: previews through the local relay — the preview page, `/watch` and an encode, two
   loopback hops and a decode for a picture on the same machine, and nothing for a family a MoQ
   player cannot draw (owner, 2026-11-06).
 - **DECIDED** — How a viewer reads a port, and who on the machine may open one. Tato Studio
-  opens a read of the port over the local API, and the runtime hands it the port's channel as it
-  hands a helper one; an Image frame is shared, not copied — Studio imports the surface as a helper
-  imports it — so a preview is zero-copy and never reaches a relay. Whoever may open the local
+  opens a read of the port over the local API (`open_viewer`, until `close_viewer` or the
+  connection's end), and the runtime hands it the port's channel as it hands a helper one. An
+  Image frame in memory Studio's display imports is shared, not copied — Studio imports the
+  surface as a helper imports it, through one Rust import client without pyo3
+  (`streamlib-gpu-frame-import-client`) that the wheel and Studio both link — so a preview never
+  reaches a relay. One that is not — on Linux NVIDIA an OPAQUE_FD texture or a LINEAR pixel
+  buffer — is copied once on the engine's GPU into a display-importable image (a DMA-BUF with an
+  explicit tiled modifier from the engine's render-target probe, the export staging's
+  `DisplayImportable` residency), only while a viewer reads it, and never reaches the CPU; a
+  frame already in such an image crosses with no copy. The viewer drives the copy, asking per
+  viewed frame over the surface-share socket (`SURFACE_SHARE_IMPORT_VIEWED_FRAME_OP`, read by
+  `display_import` or `cpu_read`): one staging per viewed pool slot, shared by every viewer of
+  it, refilled on the engine's device and retired on the host before the answer, and evicted
+  with the slot; the viewer only imports. A viewer whose display shows no DMA-BUF it imports —
+  Chromium on NVIDIA under X11 — reads a host-visible copy through the CPU; Studio picks the
+  reading before its first frame and runs with `--use-angle=vulkan` on Linux. Nothing a node
+  allocates, publishes or links changes, and neither does a CUDA consumer's import. Whoever may open the local
   API's socket may open a viewer: the owning user. Owner, 2026-11-07. Assumed unless overruled: a
   viewer reads the latest value and skips what it falls behind on, so it never slows the stream it
   reads.
-  [gateway-nodes; amended by display-importable-viewer-frames: a frame in memory Studio's display does not import is copied once on the engine's GPU into an image it does]
+  [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; display-importable-viewer-frames — SHIPPED #3524, #3530]
   Rejected: the runtime downscaling frames to thumbnails sent over the local API; thumbnail tiles
   beside a zero-copy full view (owner, 2026-11-07).
+  Rejected: a CPU readback for every viewer — a copy through host memory per frame, against the
+  zero-copy preview (owner, 2026-11-11).
+  Rejected: allocating node output textures as DMA-BUF so the viewer needs no copy — strands every
+  CUDA consumer of them, since NVIDIA exports one flavour per allocation (owner, 2026-11-11).
+  Rejected: the engine reading the port itself while a viewer is open and republishing each copied
+  frame on a channel of its own — a reader thread, a second channel and a copy for frames no
+  viewer reads (owner, 2026-11-11).
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
   ports; end-to-end encryption (the entry above); a CMAF-emitting node for HLS players and
   stock MoQ tooling; a Red5 gateway; and a zero-copy
   local fast path between two streams on one machine. Known
-  (2026-10-16): through the local relay a raw frame between two streams on one machine pays an
+  (2026-10-16): through a relay on the machine a raw frame between two streams pays an
   encode, two loopback hops and a decode, about ten milliseconds and a lossy codec; data
   pays about a millisecond. [moq-relays]
 
@@ -4010,7 +4049,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes, control-api-contract, live-graph-inputs, asset-media-facts-and-previews, playback-controls)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, gateway-nodes, project-and-assets, project-action-contract, studio-view-nodes, control-api-contract, live-graph-inputs, asset-media-facts-and-previews, playback-controls)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
