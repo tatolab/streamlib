@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.61](https://github.com/tatolab/streamlib/compare/v0.68.60...v0.68.61) (2026-11-11)
+
+
+### Features
+
+* **runtime:** graph shows what a node's process() keeps raising, while it keeps running ([a53022c](https://github.com/tatolab/streamlib/commit/a53022ce80fab2fc5eb36f7d91b16de1414396d4))
+
 ## [0.68.60](https://github.com/tatolab/streamlib/compare/v0.68.59...v0.68.60) (2026-11-11)
 
 
