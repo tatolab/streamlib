@@ -1,9 +1,10 @@
 name: Install Linux engine build dependencies
 description: >-
-  apt-installs packages under a wall-clock bound, from the .debs `main` last
-  downloaded for this package set and runner image when they still install,
-  otherwise from a mirror, escaping to a second one rather than waiting out a
-  slow one.
+  apt-installs the packages the runner image does not already carry, under a
+  wall-clock bound, from the .debs `main` last downloaded for that set when
+  they still install, otherwise from a mirror, escaping to a second one rather
+  than waiting out a slow one. When the image carries every package, nothing
+  reaches the network or the cache.
 
 # Composite-action steps cannot declare `timeout-minutes`, so the ceiling is the
 # script's own per-command bound (790s worst case) plus the restore's one-minute
@@ -25,21 +26,31 @@ runs:
     # ImageVersion ends the key so a runner-image roll saves a fresh set, and
     # the restore prefix stops before it so a run on the new image still starts
     # from the last set; the script refuses a .deb that no longer fits.
-    - name: Name the cache of this package set's .debs
+    - name: Name the packages the image lacks and the cache of their .debs
       id: deb-cache
       shell: bash
       env:
         REQUESTED_APT_PACKAGES: ${{ inputs.packages }}
       run: |
-        package_set_digest="$(printf '%s\n' $REQUESTED_APT_PACKAGES | sort -u | sha256sum | cut -c1-16)"
+        missing_apt_packages=()
+        for requested_apt_package in $(printf '%s\n' $REQUESTED_APT_PACKAGES | sort -u); do
+          if [ "$(dpkg-query -W -f='${Status}' "$requested_apt_package" 2>/dev/null)" = "install ok installed" ]; then
+            echo "$requested_apt_package: the runner image carries it"
+          else
+            missing_apt_packages+=("$requested_apt_package")
+          fi
+        done
+        package_set_digest="$(printf '%s\n' "${missing_apt_packages[@]}" | sha256sum | cut -c1-16)"
         restore_prefix="linux-engine-apt-debs-${RUNNER_OS}-${RUNNER_ARCH}-${ImageOS:-unknown-image}-${package_set_digest}-"
         {
+          echo "missing-packages=${missing_apt_packages[*]}"
           echo "directory=${RUNNER_TEMP}/linux-engine-apt-debs"
           echo "restore-prefix=${restore_prefix}"
           echo "key=${restore_prefix}${ImageVersion:-unknown-version}"
         } >> "$GITHUB_OUTPUT"
 
     - name: Restore the .debs main last downloaded for this package set
+      if: steps.deb-cache.outputs.missing-packages != ''
       id: restore-debs
       uses: actions/cache/restore@v5
       # actions/cache waits 10 minutes on a stalled download by default, which
@@ -52,15 +63,19 @@ runs:
         restore-keys: ${{ steps.deb-cache.outputs.restore-prefix }}
 
     - name: Install system dependencies with a bounded retry
+      if: steps.deb-cache.outputs.missing-packages != ''
       shell: bash
       env:
         STREAMLIB_APT_DEB_CACHE_DIRECTORY: ${{ steps.deb-cache.outputs.directory }}
       run: >-
         "${{ github.action_path }}/install-system-dependencies-with-bounded-retry.sh"
-        ${{ inputs.packages }}
+        ${{ steps.deb-cache.outputs.missing-packages }}
 
     - name: Save the .debs this run downloaded
-      if: steps.restore-debs.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      if: >-
+        steps.deb-cache.outputs.missing-packages != ''
+        && steps.restore-debs.outputs.cache-hit != 'true'
+        && github.ref == 'refs/heads/main'
       uses: actions/cache/save@v5
       with:
         path: ${{ steps.deb-cache.outputs.directory }}/*.deb

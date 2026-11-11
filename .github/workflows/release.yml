@@ -60,10 +60,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: ./.github/actions/cache-rust-dependencies
         with:
           shared-key: xtask
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build the version-pin sync tool while main still resolves
         run: cargo build --locked -q -p xtask
