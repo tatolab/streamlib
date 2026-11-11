@@ -23,6 +23,7 @@ from tatolab.compositor.alpha_over_compositor import (
     pack_layer_placements,
 )
 from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
     NODE_DECLARATION_EXECUTION_STAMP,
     NODE_DECLARATION_INPUT_PORTS_STAMP,
     NODE_DECLARATION_OUTPUT_PORTS_STAMP,
@@ -67,6 +68,17 @@ def test_placements_arrive_as_maps_and_are_cast_to_placements():
 def test_a_malformed_config_is_refused_naming_what_to_fix(config_keys, refusal_names):
     with pytest.raises(ValueError, match=refusal_names.replace("[", r"\[").replace("]", r"\]")):
         AlphaOverCompositorConfig(**config_keys)
+
+
+def test_the_published_config_schema_bounds_each_layers_opacity_and_the_canvas_size():
+    config_schema = getattr(AlphaOverCompositor, NODE_DECLARATION_CONFIG_SCHEMA_STAMP)
+    properties = config_schema["properties"]
+    opacity = properties["layers"]["items"]["properties"]["opacity"]
+
+    assert (opacity["minimum"], opacity["maximum"]) == (0.0, 1.0)
+    assert opacity["description"] == "0.0 hides the layer, 1.0 shows it as it arrives."
+    assert properties["width"]["minimum"] == 1
+    assert properties["height"]["minimum"] == 1
 
 
 def test_the_push_constant_block_packs_each_placement_at_its_std430_offset():

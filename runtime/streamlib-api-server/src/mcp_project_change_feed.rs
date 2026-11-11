@@ -226,8 +226,11 @@ pub(crate) async fn announce_project_transactions_until_the_listen_ends(
     let subscribed_resource_uris: Vec<String> = context
         .accepted()
         .resource_subscriptions
-        .clone()
-        .unwrap_or_default();
+        .iter()
+        .flatten()
+        .filter(|uri| the_project_a_transactions_resource_uri_names(uri).is_some())
+        .cloned()
+        .collect();
     let mut change_feed = project_repositories.subscribe_to_the_change_feed();
     loop {
         let updated_resource_uris: Vec<String> = tokio::select! {

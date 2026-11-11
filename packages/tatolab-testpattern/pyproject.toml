@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tatolab-testpattern"
-version = "0.68.57"
+version = "0.68.59"
 description = "A test-pattern video source for Tatolab streams: SMPTE bars and a bouncing potato, rendered on the GPU."
 readme = "README.md"
 requires-python = ">=3.12"

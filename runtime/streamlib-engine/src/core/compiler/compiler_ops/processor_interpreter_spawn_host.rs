@@ -1215,10 +1215,47 @@ pub(crate) fn run_a_child_process_to_its_exit_within(
     bound: Duration,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> std::io::Result<BoundedChildProcessRun> {
+    run_a_child_process_to_its_exit_within_handing_on_its_standard_error_lines(
+        command,
+        standard_error_log_label,
+        bound,
+        is_interrupted_by_the_host,
+        None,
+    )
+}
+
+/// What each line a child writes to its piped standard error is handed to, on the thread
+/// that reads it.
+pub(crate) type ChildStandardErrorLineTakenIn = Box<dyn FnMut(&str) + Send>;
+
+/// [`run_a_child_process_to_its_exit_within`], handing each line of the child's piped
+/// standard error to `each_standard_error_line_taken_in` as it is written.
+pub(crate) fn run_a_child_process_to_its_exit_within_handing_on_its_standard_error_lines(
+    command: &mut Command,
+    standard_error_log_label: &str,
+    bound: Duration,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+    each_standard_error_line_taken_in: Option<ChildStandardErrorLineTakenIn>,
+) -> std::io::Result<BoundedChildProcessRun> {
     let mut child = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(command)?;
-    let standard_error_recording = child.stderr.take().map(|standard_error| {
-        spawn_standard_error_reader_keeping_its_tail(standard_error, standard_error_log_label)
-    });
+    let standard_error_recording =
+        child
+            .stderr
+            .take()
+            .map(|standard_error| match each_standard_error_line_taken_in {
+                Some(line_taken_in) => spawn_standard_error_reader_keeping_its_tail(
+                    ChildStandardErrorLineHandingReader {
+                        child_standard_error: standard_error,
+                        partial_line: Vec::new(),
+                        line_taken_in,
+                    },
+                    standard_error_log_label,
+                ),
+                None => spawn_standard_error_reader_keeping_its_tail(
+                    standard_error,
+                    standard_error_log_label,
+                ),
+            });
     let exit_awaited =
         wait_for_a_stream_interpreter_to_exit(&child, bound, &|| false, is_interrupted_by_the_host);
     let exit_status =
@@ -1355,6 +1392,39 @@ impl<R: Read> Read for ChildStandardStreamRecordingReader<R> {
 impl<R> Drop for ChildStandardStreamRecordingReader<R> {
     fn drop(&mut self) {
         self.recording.mark_the_pipe_closed();
+    }
+}
+
+/// A reader that hands each whole line read through it, without its line ending, to
+/// `line_taken_in`, and the last unended line at end of file.
+struct ChildStandardErrorLineHandingReader<R> {
+    child_standard_error: R,
+    partial_line: Vec<u8>,
+    line_taken_in: ChildStandardErrorLineTakenIn,
+}
+
+impl<R> ChildStandardErrorLineHandingReader<R> {
+    fn hand_on_the_partial_line(&mut self) {
+        let line = String::from_utf8_lossy(&self.partial_line);
+        (self.line_taken_in)(line.trim_end_matches('\r'));
+        self.partial_line.clear();
+    }
+}
+
+impl<R: Read> Read for ChildStandardErrorLineHandingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read_byte_count = self.child_standard_error.read(buffer)?;
+        if read_byte_count == 0 && !self.partial_line.is_empty() {
+            self.hand_on_the_partial_line();
+        }
+        for byte in &buffer[..read_byte_count] {
+            if *byte == b'\n' {
+                self.hand_on_the_partial_line();
+            } else {
+                self.partial_line.push(*byte);
+            }
+        }
+        Ok(read_byte_count)
     }
 }
 

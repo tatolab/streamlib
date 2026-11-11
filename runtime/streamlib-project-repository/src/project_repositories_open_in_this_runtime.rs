@@ -257,7 +257,8 @@ mod tests {
                     source: crate::ProjectAssetImportSource::FileOnThisMachine(
                         parent.path().join("intro.mp4"),
                     ),
-                    asset_path: "media/intro.mp4".to_owned(),
+                    asset_path: Some("media/intro.mp4".to_owned()),
+                    file_name: None,
                     kind: None,
                     import_settings: serde_json::Map::new(),
                 }],

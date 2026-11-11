@@ -281,6 +281,69 @@ async fn a_change_with_no_author_is_by_the_agent_its_client_is_and_kind_narrows_
 }
 
 #[tokio::test]
+async fn an_import_with_no_path_lands_in_its_kinds_folder_numbered_past_a_taken_name() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let project_directory = served.project_directory();
+    let imports = [
+        ("intro.mp4", "media/intro.mp4"),
+        ("cover.png", "media/cover.png"),
+        ("robot.usd", "scenes/robot.usd"),
+        ("arm.fmu", "data/arm.fmu"),
+        ("grade.cube", "data/grade.cube"),
+    ];
+    for (source_file_name, standard_path) in imports {
+        let source =
+            served.a_file_outside_the_project(source_file_name, source_file_name.as_bytes());
+        let imported = served
+            .answered("import_asset", json!({ "source": source }))
+            .await;
+        assert_eq!(imported["asset"]["path"], standard_path, "{imported}");
+        assert!(exists_under(&project_directory, standard_path));
+    }
+
+    let another_intro = served.a_file_outside_the_project("intro.mp4", b"a second take");
+    let second = served
+        .answered("import_asset", json!({ "source": another_intro }))
+        .await;
+    assert_eq!(second["asset"]["path"], "media/intro-2.mp4", "{second}");
+    let third = served
+        .answered("import_asset", json!({ "source": another_intro }))
+        .await;
+    assert_eq!(third["asset"]["path"], "media/intro-3.mp4", "{third}");
+
+    let named = served
+        .answered(
+            "import_asset",
+            json!({ "source": another_intro, "file_name": "opening.mp4" }),
+        )
+        .await;
+    assert_eq!(named["asset"]["path"], "media/opening.mp4", "{named}");
+}
+
+#[tokio::test]
+async fn an_upload_imported_with_no_path_needs_a_file_name() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let content_sha256 = "0".repeat(64);
+    let refused = served
+        .tool_call("import_asset", json!({ "source": content_sha256 }))
+        .await;
+    assert!(
+        the_error_text_of(&refused).contains("needs a `file_name`"),
+        "{refused}"
+    );
+    let refused = served
+        .tool_call(
+            "import_asset",
+            json!({ "source": content_sha256, "file_name": "media/intro.mp4" }),
+        )
+        .await;
+    assert!(
+        the_error_text_of(&refused).contains("names a folder"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
 async fn an_import_of_an_upload_moves_it_to_the_assets_path_by_its_hash() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
     let source = served.a_file_outside_the_project("intro.mp4", b"video bytes");

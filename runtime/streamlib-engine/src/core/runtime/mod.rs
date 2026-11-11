@@ -26,6 +26,7 @@ mod project_first_party_packages_moved_to_the_runtime_version;
 mod project_folder_moved_to_the_trash;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
+mod project_venv_sync_progress;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 pub(crate) use project_venv_made_with_the_runtime_unit_uv::the_projects_venv_interpreter;
 #[allow(clippy::module_inception)]
@@ -93,6 +94,10 @@ pub use project_first_party_packages_moved_to_the_runtime_version::ProjectHistor
 pub use project_stream_action_queue::{
     FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, StreamAction, StreamActionKind, StreamActionQueued,
     StreamActionState, StreamActionStep, StreamActionWorkingOnAStream, StreamOfAStreamAction,
+};
+pub use project_venv_sync_progress::{
+    ProjectVenvSyncPackage, ProjectVenvSyncPackageKind, ProjectVenvSyncPackageState,
+    ProjectVenvSyncPhase, ProjectVenvSyncProgress,
 };
 pub(crate) use runtime::what_interrupted_a_load;
 pub use runtime::{

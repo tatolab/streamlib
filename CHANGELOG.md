@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.68.59](https://github.com/tatolab/streamlib/compare/v0.68.58...v0.68.59) (2026-11-10)
+
+
+### Features
+
+* **stream:** bound a Python config number with NumberRange ([6088ce4](https://github.com/tatolab/streamlib/commit/6088ce494909df51d334b1c280947fb5d4e08e5c))
+* **stream:** bound a Python config number with NumberRange ([7ff1d80](https://github.com/tatolab/streamlib/commit/7ff1d805ef8c1743b7048af60703aecba04ae39f)), closes [#3511](https://github.com/tatolab/streamlib/issues/3511)
+
+## [0.68.58](https://github.com/tatolab/streamlib/compare/v0.68.57...v0.68.58) (2026-11-10)
+
+
+### Features
+
+* **runtime:** the runtime unit carries tatolab-stream as a wheel, so a new project never waits on PyPI for it ([e91a0df](https://github.com/tatolab/streamlib/commit/e91a0dfe1040d5375cd404a7192c301ab7cf843e))
+
 ## [0.68.57](https://github.com/tatolab/streamlib/compare/v0.68.56...v0.68.57) (2026-11-10)
 
 

@@ -14,6 +14,7 @@ use std::sync::{Arc, OnceLock, Weak};
 
 use parking_lot::Mutex;
 
+use super::project_venv_sync_progress::ProjectVenvSyncProgress;
 use super::{Runner, StreamListingState, StreamLocation, is_the_machines_shutdown_requested};
 use crate::core::{Error, Result};
 
@@ -145,6 +146,9 @@ pub struct StreamAction {
     pub state: StreamActionState,
     /// The step it is on while it runs.
     pub step: Option<StreamActionStep>,
+    /// What its latest `uv sync` of the project's `.venv` has done, kept once the sync ends;
+    /// `None` until it syncs.
+    pub venv_sync: Option<ProjectVenvSyncProgress>,
     /// The streams it works on, once its project's graph documents named them.
     pub streams: Vec<StreamOfAStreamAction>,
     /// Why it failed; `None` unless it did.
@@ -208,6 +212,24 @@ pub(crate) enum StreamActionCancelOutcome {
     AskedOfTheRunningAction(StreamAction),
 }
 
+/// How many changed action ids a listener may fall behind by before it is told it lagged.
+const STREAM_ACTION_CHANGE_ANNOUNCEMENTS_HELD: usize = 1024;
+
+/// The id of each held action as it is queued or changes, sent to every listener.
+struct StreamActionChangeAnnouncements {
+    changed_action_ids: tokio::sync::broadcast::Sender<String>,
+}
+
+impl Default for StreamActionChangeAnnouncements {
+    fn default() -> Self {
+        Self {
+            changed_action_ids: tokio::sync::broadcast::Sender::new(
+                STREAM_ACTION_CHANGE_ANNOUNCEMENTS_HELD,
+            ),
+        }
+    }
+}
+
 /// Every project's stream action queue and the actions the engine holds.
 #[derive(Default)]
 pub(crate) struct StreamActionQueueOfEachProject {
@@ -215,9 +237,27 @@ pub(crate) struct StreamActionQueueOfEachProject {
     stream_actions_held: Mutex<StreamActionsHeld>,
     stream_actions_queued_by_this_runtime: AtomicU64,
     runner_the_workers_run_actions_on: OnceLock<Weak<Runner>>,
+    stream_action_change_announcements: StreamActionChangeAnnouncements,
 }
 
 impl StreamActionQueueOfEachProject {
+    /// Receive the id of each held action as it is queued or changes from now on.
+    pub(crate) fn listen_for_each_stream_action_change(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<String> {
+        self.stream_action_change_announcements
+            .changed_action_ids
+            .subscribe()
+    }
+
+    /// Tell every listener the held action `action_id` was queued or changed.
+    fn announce_the_change_of(&self, action_id: &str) {
+        let _no_listener_is_fine = self
+            .stream_action_change_announcements
+            .changed_action_ids
+            .send(action_id.to_string());
+    }
+
     /// Hand the queues the runner their workers run each action's body on.
     pub(crate) fn run_every_action_on(&self, runner: Weak<Runner>) {
         let _ = self.runner_the_workers_run_actions_on.set(runner);
@@ -249,6 +289,7 @@ impl StreamActionQueueOfEachProject {
             .lock()
             .by_action_id
             .insert(action.action_id.clone(), action);
+        self.announce_the_change_of(&queued.action_id);
         let a_worker_is_to_be_spawned = {
             let mut queues = self.stream_action_queue_of_each_project.lock();
             let no_worker_runs = !queues.contains_key(&queued.project_directory);
@@ -344,6 +385,18 @@ impl StreamActionQueueOfEachProject {
         action_id: &str,
         change: impl FnOnce(&mut StreamAction),
     ) {
+        if self.change_the_held_stream_action_unannounced(action_id, change) {
+            self.announce_the_change_of(action_id);
+        }
+    }
+
+    /// [`Self::change_the_held_stream_action`] without telling any listener; answers whether
+    /// the engine held the action.
+    fn change_the_held_stream_action_unannounced(
+        &self,
+        action_id: &str,
+        change: impl FnOnce(&mut StreamAction),
+    ) -> bool {
         let mut held = self.stream_actions_held.lock();
         let StreamActionsHeld {
             by_action_id,
@@ -351,12 +404,12 @@ impl StreamActionQueueOfEachProject {
             running_action_ids_whose_cancel_is_asked,
         } = &mut *held;
         let Some(action) = by_action_id.get_mut(action_id) else {
-            return;
+            return false;
         };
         let it_had_finished = action.state.is_finished();
         change(action);
         if it_had_finished || !action.state.is_finished() {
-            return;
+            return true;
         }
         running_action_ids_whose_cancel_is_asked.remove(action_id);
         let finished_action_ids = finished_action_ids_of_each_project
@@ -368,6 +421,7 @@ impl StreamActionQueueOfEachProject {
                 by_action_id.remove(&let_go);
             }
         }
+        true
     }
 
     /// Cancel the action `action_id`: one waiting in its queue is dropped and
@@ -416,6 +470,8 @@ impl StreamActionQueueOfEachProject {
         refuse_the_cancel_of_a_running_action(&action)?;
         held.running_action_ids_whose_cancel_is_asked
             .insert(action_id.to_string());
+        drop(held);
+        self.announce_the_change_of(action_id);
         Ok(StreamActionCancelOutcome::AskedOfTheRunningAction(action))
     }
 
@@ -570,11 +626,62 @@ impl<'runner> StreamActionProgress<'runner> {
             });
     }
 
+    /// A report of the action's next `uv sync`, which takes in each line of uv's standard
+    /// error on the thread that reads it.
+    pub(crate) fn report_of_the_next_venv_sync(&self) -> StreamActionVenvSyncReport {
+        StreamActionVenvSyncReport {
+            runner_holding_the_action: self
+                .queue_of_each_project
+                .runner_the_workers_run_actions_on
+                .get()
+                .cloned()
+                .unwrap_or_default(),
+            action_id: self.action_id.clone(),
+            venv_sync_so_far: ProjectVenvSyncProgress::default(),
+        }
+    }
+
     /// The project's graph documents named `streams`, which it takes in next.
     pub(crate) fn works_on(&self, streams: Vec<StreamOfAStreamAction>) {
         self.queue_of_each_project
             .change_the_held_stream_action(&self.action_id, |action| {
                 action.streams = streams;
+            });
+    }
+}
+
+/// One `uv sync` of a running action's project, held as the action's `venv_sync` from the
+/// first line uv writes.
+pub(crate) struct StreamActionVenvSyncReport {
+    runner_holding_the_action: Weak<Runner>,
+    action_id: String,
+    venv_sync_so_far: ProjectVenvSyncProgress,
+}
+
+impl StreamActionVenvSyncReport {
+    /// Take in one line of uv's standard error, holding the action's `venv_sync` anew when the
+    /// line changed it.
+    pub(crate) fn take_in_a_uv_standard_error_line(&mut self, uv_standard_error_line: &str) {
+        if !self
+            .venv_sync_so_far
+            .take_in_a_uv_standard_error_line(uv_standard_error_line)
+        {
+            return;
+        }
+        self.hold_the_venv_sync_so_far();
+    }
+
+    /// Hold the sync so far as the action's `venv_sync`.
+    pub(crate) fn hold_the_venv_sync_so_far(&self) {
+        let Some(runner) = self.runner_holding_the_action.upgrade() else {
+            return;
+        };
+        let venv_sync = self.venv_sync_so_far.clone();
+        runner
+            .stream_actions
+            .stream_action_queue_of_each_project
+            .change_the_held_stream_action(&self.action_id, |action| {
+                action.venv_sync = Some(venv_sync);
             });
     }
 }
@@ -607,6 +714,7 @@ mod tests {
             kind: StreamActionKind::Load,
             state: StreamActionState::Queued,
             step: None,
+            venv_sync: None,
             streams: Vec::new(),
             failed_because: None,
         }

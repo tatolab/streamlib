@@ -1299,7 +1299,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `default_factory` field optional with no default, and a default the wire cannot carry
   dropped rather than rewritten — with `additionalProperties: false`, since a dataclass
   refuses an unknown key and a TypedDict does not; `Annotated[T, Description("text")]` is a
-  description, and neither a bare string nor an attribute docstring is one; a class exposing `model_json_schema()` contributes that document minus
+  description, and neither a bare string nor an attribute docstring is one;
+  `Annotated[T, NumberRange(minimum=…, maximum=…)]` on an `int` or `float` key, `Optional` or
+  not, is its inclusive `minimum` / `maximum`, and one on a key holding no number is refused; a class exposing `model_json_schema()` contributes that document minus
   `$schema` and `title`, recognised by the method rather than by importing pydantic; an
   annotation the deriver does not know renders `{}`, a config class of a kind it cannot
   read is accepted with an open schema, and a self-referential class stops at an open
@@ -1924,7 +1926,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A project is a versioned repository of assets, and a stream's graph is one of
   them. A project holds a project file, assets — a stream's graph document, media, images, USD,
   FMUs and the rest, one file per asset — and node code; it has no `stream.py`, and a load reads
-  its stream assets. Every asset and every node instance gets a UUID the runtime generates when it
+  its stream assets. The project's folder layout is the runtime's, the same for every client:
+  `tatolab-project.json` at its root, `views/<name>/`, `imports/<folder>/` and the runtime's own
+  `.tatolab/`, with stream assets in `streams/` and node code in `nodes/` as the scaffold writes
+  them; an import that names no path lands in its kind's folder, `media/`, `scenes/` or `data/`,
+  under its own name, numbered `<name>-2.<extension>`, `-3`, … past a name already taken, and an
+  asset may still be moved anywhere in the project (owner, 2026-11-10, that the runtime owns the
+  layout; session, 2026-11-10, for the folders, the numbering and free relocation). Every asset and every node instance gets a UUID the runtime generates when it
   is created or placed; its config, state and links follow it, a name is only a label, and every
   reference names a UUID. The runtime is the project's one writer: every change, a graph edit or
   an asset import alike, is a transaction with an author and an inverse, applied whole or refused
@@ -3959,7 +3967,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes, control-api-contract)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension

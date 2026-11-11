@@ -136,6 +136,10 @@
           "jsonpath": "$.project.version"
         },
         {
+          "type": "generic",
+          "path": "packages/tatolab-compositor/pyproject.toml"
+        },
+        {
           "type": "toml",
           "path": "packages/tatolab-testpattern/pyproject.toml",
           "jsonpath": "$.project.version"

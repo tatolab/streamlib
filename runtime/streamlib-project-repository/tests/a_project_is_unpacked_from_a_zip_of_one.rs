@@ -48,7 +48,8 @@ impl ZippedProject {
                 None,
                 vec![ProjectAssetAction::ImportAsset {
                     source: ProjectAssetImportSource::FileOnThisMachine(lut_source),
-                    asset_path: "luts/grade.cube".to_owned(),
+                    asset_path: Some("luts/grade.cube".to_owned()),
+                    file_name: None,
                     kind: None,
                     import_settings: Map::new(),
                 }],

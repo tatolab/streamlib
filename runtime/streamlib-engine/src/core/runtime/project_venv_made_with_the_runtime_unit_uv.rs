@@ -16,6 +16,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::core::child_process_lifetime::{
@@ -25,8 +26,10 @@ use crate::core::child_process_lifetime::{
 use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
     HowABoundedChildProcessRunEnded, remove_every_python_variable_named_in,
     run_a_child_process_to_its_exit_within,
+    run_a_child_process_to_its_exit_within_handing_on_its_standard_error_lines,
 };
 use crate::core::error::Error;
+use crate::core::runtime::project_stream_action_queue::StreamActionVenvSyncReport;
 use crate::core::runtime::what_interrupted_a_load;
 use streamlib_consumer_rhi::runtime_unit_layout::{
     carried_python_downloads_directory_beside_the_lend, carried_wheels_directory_beside_the_lend,
@@ -141,12 +144,14 @@ impl From<ProjectVenvNotMade> for Error {
 /// `first_party_module_wheels` is declared in the project first, so the sync
 /// installs it.
 /// A sync is unbounded — uv's own network timeouts end a stalled download —
-/// and cut short whenever `is_interrupted_by_the_host` reports true.
+/// cut short whenever `is_interrupted_by_the_host` reports true, and reported
+/// line by line to `report_of_the_venv_sync` when one is given.
 pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
     project_directory: &Path,
     runtime_unit_uv: Option<&Path>,
     packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
+    report_of_the_venv_sync: Option<StreamActionVenvSyncReport>,
 ) -> Result<(), ProjectVenvNotMade> {
     let first_party_module_wheels = &packages_the_runtime_unit_carries.first_party_module_wheels;
     let project = project_directory.display();
@@ -209,6 +214,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
             packages_the_runtime_unit_carries,
             is_interrupted_by_the_host,
             WhatAFailedSyncLeaves::TheVenvAsItWas,
+            report_of_the_venv_sync,
         );
     };
     let Some(runtime_unit_uv) = runtime_unit_uv.filter(|uv| uv.is_file()) else {
@@ -242,6 +248,7 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         packages_the_runtime_unit_carries,
         is_interrupted_by_the_host,
         WhatAFailedSyncLeaves::NoVenv,
+        report_of_the_venv_sync,
     )
 }
 
@@ -683,6 +690,7 @@ fn sync_the_venv_with_the_runtime_unit_uv(
     packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
     what_a_failed_sync_leaves: WhatAFailedSyncLeaves,
+    report_of_the_venv_sync: Option<StreamActionVenvSyncReport>,
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
     let venv = project_directory.join(".venv");
@@ -708,6 +716,11 @@ fn sync_the_venv_with_the_runtime_unit_uv(
         leave_what_a_failed_sync_leaves()?;
         return Err(interrupted);
     }
+    let report_of_the_venv_sync_shared_by_each_run =
+        report_of_the_venv_sync.map(|report_of_the_venv_sync| {
+            report_of_the_venv_sync.hold_the_venv_sync_so_far();
+            Arc::new(Mutex::new(report_of_the_venv_sync))
+        });
     let runs = the_uv_runs_tried_in_turn(
         runtime_unit_uv,
         project_directory,
@@ -716,11 +729,22 @@ fn sync_the_venv_with_the_runtime_unit_uv(
     );
     let last_run = runs.len() - 1;
     for (run_index, (step, mut command)) in runs.into_iter().enumerate() {
-        let run = run_a_child_process_to_its_exit_within(
+        let each_uv_standard_error_line_taken_in = report_of_the_venv_sync_shared_by_each_run
+            .clone()
+            .map(|report_of_the_venv_sync| -> Box<dyn FnMut(&str) + Send> {
+                Box::new(move |uv_standard_error_line| {
+                    if let Ok(mut report_of_the_venv_sync) = report_of_the_venv_sync.lock() {
+                        report_of_the_venv_sync
+                            .take_in_a_uv_standard_error_line(uv_standard_error_line);
+                    }
+                })
+            });
+        let run = run_a_child_process_to_its_exit_within_handing_on_its_standard_error_lines(
             &mut command,
             PROJECT_VENV_SYNC_STANDARD_ERROR_LOG_LABEL,
             Duration::MAX,
             is_interrupted_by_the_host,
+            each_uv_standard_error_line_taken_in,
         )
         .map_err(|spawn_failure| {
             let failed = ProjectVenvNotMade::Failed {
@@ -1003,6 +1027,7 @@ mod tests {
                 Some(&self.stub_uv),
                 &PackagesTheRuntimeUnitCarries::default(),
                 &|| false,
+                None,
             )
         }
 
@@ -1018,6 +1043,7 @@ mod tests {
                     ..PackagesTheRuntimeUnitCarries::default()
                 },
                 &|| false,
+                None,
             )
         }
 
@@ -1212,6 +1238,7 @@ mod tests {
                 None,
                 &PackagesTheRuntimeUnitCarries::default(),
                 &|| false,
+                None,
             ));
 
         assert!(
@@ -1236,6 +1263,7 @@ mod tests {
                 Some(&project.stub_uv),
                 &PackagesTheRuntimeUnitCarries::default(),
                 &|| false,
+                None,
             ));
         }
         assert!(project.uv_runs().is_empty(), "{:?}", project.uv_runs());
@@ -1251,6 +1279,7 @@ mod tests {
             Some(&project.stub_uv),
             &PackagesTheRuntimeUnitCarries::default(),
             &|| std::time::Instant::now() >= interrupted_after,
+            None,
         ));
 
         assert!(refusal.contains("was not made: "), "{refusal}");
@@ -1268,6 +1297,7 @@ mod tests {
             None,
             &PackagesTheRuntimeUnitCarries::default(),
             &|| std::time::Instant::now() >= interrupted_after,
+            None,
         ));
 
         assert!(refusal.contains("was not made: "), "{refusal}");
@@ -1667,6 +1697,7 @@ mod tests {
             Some(&project.stub_uv),
             &carried,
             &|| false,
+            None,
         )
         .expect("the venv is made");
 
@@ -1715,6 +1746,7 @@ mod tests {
             Some(&project.stub_uv),
             &carried,
             &|| false,
+            None,
         )
         .expect("the venv is made");
 
@@ -1743,6 +1775,7 @@ mod tests {
             Some(&project.stub_uv),
             &carried,
             &|| false,
+            None,
         )
         .expect("the venv is made from the indexes");
 
@@ -1771,6 +1804,7 @@ mod tests {
                 Some(&project.stub_uv),
                 &carried,
                 &|| false,
+                None,
             ));
 
         assert!(
@@ -1821,6 +1855,7 @@ mod tests {
             Some(&project.stub_uv),
             &carried,
             &|| false,
+            None,
         )
         .expect("the venv is made");
 

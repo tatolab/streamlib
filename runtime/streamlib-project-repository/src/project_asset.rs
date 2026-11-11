@@ -55,6 +55,16 @@ impl ProjectAssetKind {
             _ => Self::Data,
         }
     }
+
+    /// The project folder an asset of this kind is imported into when the caller names no path.
+    pub fn standard_folder_in_a_project(self) -> &'static str {
+        match self {
+            Self::Stream => "streams",
+            Self::Media => "media",
+            Self::Scene => "scenes",
+            Self::Data => "data",
+        }
+    }
 }
 
 /// An asset's path inside its project: relative, `/`-separated, never into what the runtime keeps.

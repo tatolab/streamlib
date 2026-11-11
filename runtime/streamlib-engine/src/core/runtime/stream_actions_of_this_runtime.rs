@@ -26,7 +26,8 @@ use super::project_folder_moved_to_the_trash::move_the_project_folder_to_the_tra
 use super::project_stream_action_queue::{
     StreamAction, StreamActionCancelOutcome, StreamActionKind, StreamActionProgress,
     StreamActionQueueOfEachProject, StreamActionQueued, StreamActionState, StreamActionStep,
-    StreamActionWorkingOnAStream, StreamOfAStreamAction, a_stream_action_not_held,
+    StreamActionVenvSyncReport, StreamActionWorkingOnAStream, StreamOfAStreamAction,
+    a_stream_action_not_held,
 };
 use super::project_venv_made_with_the_runtime_unit_uv::{
     PackagesTheRuntimeUnitCarries, ProjectVenvNotMade,
@@ -764,7 +765,11 @@ impl Runner {
             project_directory: project.project_directory.clone(),
             interpreter: the_projects_venv_interpreter(&project_directory),
         };
-        match self.make_the_projects_venv(&project.project_directory, is_interrupted) {
+        match self.make_the_projects_venv(
+            &project.project_directory,
+            is_interrupted,
+            progress.map(StreamActionProgress::report_of_the_next_venv_sync),
+        ) {
             Ok(()) => {
                 if let Some(lend_directory) = self
                     .engine_resources_shared_by_every_stream
@@ -945,6 +950,7 @@ impl Runner {
             kind: StreamActionKind::Stop,
             state: StreamActionState::Queued,
             step: None,
+            venv_sync: None,
             streams,
             failed_because: None,
         };
@@ -1087,6 +1093,7 @@ impl Runner {
             kind,
             state: StreamActionState::Queued,
             step: None,
+            venv_sync: None,
             streams,
             failed_because: None,
         };
@@ -1722,6 +1729,7 @@ impl Runner {
                     kind: StreamActionKind::ReloadAtStart,
                     state: StreamActionState::Queued,
                     step: None,
+                    venv_sync: None,
                     streams,
                     failed_because: None,
                 };
@@ -2396,11 +2404,13 @@ impl Runner {
     }
 
     /// Make the `.venv` of the project in `project_directory` current with the
-    /// uv this runtime was handed and the first-party modules beside its lend.
+    /// uv this runtime was handed and the first-party modules beside its lend,
+    /// its sync reported to `report_of_the_venv_sync` when one is given.
     fn make_the_projects_venv(
         &self,
         project_directory: &Path,
         is_interrupted: &dyn Fn() -> bool,
+        report_of_the_venv_sync: Option<StreamActionVenvSyncReport>,
     ) -> std::result::Result<(), ProjectVenvNotMade> {
         let runtime_unit_uv = self
             .engine_resources_shared_by_every_stream
@@ -2425,6 +2435,7 @@ impl Runner {
             runtime_unit_uv,
             &self.packages_this_runtime_unit_carries(),
             is_interrupted,
+            report_of_the_venv_sync,
         )
     }
 
@@ -2440,7 +2451,7 @@ impl Runner {
         else {
             return Ok(());
         };
-        Ok(self.make_the_projects_venv(&project_directory, is_interrupted)?)
+        Ok(self.make_the_projects_venv(&project_directory, is_interrupted, None)?)
     }
 
     /// Load and start a recorded stream from `record` and the graph `graph` its document
@@ -2613,6 +2624,7 @@ impl Runner {
             kind: StreamActionKind::Load,
             state: StreamActionState::Queued,
             step: None,
+            venv_sync: None,
             streams: Vec::new(),
             failed_because: None,
         };
@@ -2738,6 +2750,7 @@ impl Runner {
             kind: StreamActionKind::Load,
             state: StreamActionState::Queued,
             step: None,
+            venv_sync: None,
             streams: vec![StreamOfAStreamAction {
                 stream_id: stream_id.clone(),
                 display_name: scaffold.project_name.clone(),
@@ -2816,6 +2829,21 @@ impl Runner {
             .stream_action_queue_of_each_project
             .held_stream_action(action_id)
             .ok_or_else(|| a_stream_action_not_held(action_id))
+    }
+
+    /// Every queued or running stream action, the earliest queued first.
+    pub fn stream_actions_under_way(&self) -> Vec<StreamAction> {
+        self.stream_actions
+            .stream_action_queue_of_each_project
+            .actions_under_way()
+    }
+
+    /// Receive the id of each stream action as it is queued or changes — its state, its step,
+    /// its streams or its venv sync — from now on.
+    pub fn listen_for_each_stream_action_change(&self) -> tokio::sync::broadcast::Receiver<String> {
+        self.stream_actions
+            .stream_action_queue_of_each_project
+            .listen_for_each_stream_action_change()
     }
 
     /// Cancel the stream action `action_id`. One still queued is dropped,
@@ -6550,6 +6578,7 @@ mod tests {
             kind: StreamActionKind::Load,
             state: StreamActionState::Queued,
             step: None,
+            venv_sync: None,
             streams: Vec::new(),
             failed_because: None,
         };
@@ -6927,6 +6956,7 @@ mod tests {
             kind,
             state: StreamActionState::InProgress,
             step: None,
+            venv_sync: None,
             streams: Vec::new(),
             failed_because: None,
         };

@@ -18,6 +18,7 @@ from typing import Annotated, Any
 
 from tatolab.stream import (
     ComputeKernel,
+    Description,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
     Image,
@@ -25,6 +26,7 @@ from tatolab.stream import (
     ImageFrameToWrite,
     Input,
     NodeOutputTextureRing,
+    NumberRange,
     Output,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -124,9 +126,13 @@ def _is_plain_number(value: Any) -> bool:
 class AlphaOverLayerPlacement:
     """Where one layer sits on the canvas and how much of it shows."""
 
-    x: Annotated[int, "Canvas column of the layer's left edge; negative clips it."] = 0
-    y: Annotated[int, "Canvas row of the layer's top edge; negative clips it."] = 0
-    opacity: Annotated[float, "0.0 hides the layer, 1.0 shows it as it arrives."] = 1.0
+    x: Annotated[int, Description("Canvas column of the layer's left edge; negative clips it.")] = 0
+    y: Annotated[int, Description("Canvas row of the layer's top edge; negative clips it.")] = 0
+    opacity: Annotated[
+        float,
+        Description("0.0 hides the layer, 1.0 shows it as it arrives."),
+        NumberRange(minimum=0.0, maximum=1.0),
+    ] = 1.0
 
     def __post_init__(self) -> None:
         if not _is_plain_int(self.x) or not _is_plain_int(self.y):
@@ -146,11 +152,19 @@ class AlphaOverLayerPlacement:
 class AlphaOverCompositorConfig:
     """What an `AlphaOverCompositor` is configured with."""
 
-    width: Annotated[int, "Canvas width in pixels; every composite is this wide."] = 1920
-    height: Annotated[int, "Canvas height in pixels; every composite is this tall."] = 1080
+    width: Annotated[
+        int,
+        Description("Canvas width in pixels; every composite is this wide."),
+        NumberRange(minimum=1),
+    ] = 1920
+    height: Annotated[
+        int,
+        Description("Canvas height in pixels; every composite is this tall."),
+        NumberRange(minimum=1),
+    ] = 1080
     layers: Annotated[
         "list[AlphaOverLayerPlacement]",
-        "Entry N places `layer_N`; a layer with no entry sits at 0,0 at full opacity.",
+        Description("Entry N places `layer_N`; a layer with no entry sits at 0,0 at full opacity."),
     ] = dataclasses.field(default_factory=list)
 
     def __post_init__(self) -> None:
