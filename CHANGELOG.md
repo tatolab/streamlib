@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.66](https://github.com/tatolab/streamlib/compare/v0.68.65...v0.68.66) (2026-11-11)
+
+
+### Features
+
+* **engine:** pause holds the stream clock and is recorded ([e7d91ff](https://github.com/tatolab/streamlib/commit/e7d91ff17c38bdc18ff88f8953c9a0834d8e39eb))
+* **engine:** pause holds the stream clock and is recorded ([a8c4f68](https://github.com/tatolab/streamlib/commit/a8c4f68c9989efdb19db6f19a20c031fb059fc7b))
+
 ## [0.68.65](https://github.com/tatolab/streamlib/compare/v0.68.64...v0.68.65) (2026-11-11)
 
 
