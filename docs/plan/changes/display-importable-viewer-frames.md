@@ -96,15 +96,12 @@ residencies, `DeviceLocal` and `HostVisible`, both `VkBuffer`s. This change adds
   sends the op in place of `import_pool_slot` for an Image frame; the held frame keeps the source's claim until it
   drops, so the slot is not reused under a refill.
 
-[NEEDS DECISION] Who drives the copy.
-- (a) The viewer asks per frame over the surface-share socket, as above. One request per
-  viewed frame (the viewer reads only the latest, so at most its display rate); no thread or
-  channel of the engine's own; the copy happens only for frames a viewer actually reads.
-- (b) The engine reads the port itself while a viewer is open, copies each latest frame and
-  republishes it on a channel of its own the viewer subscribes to instead. No per-frame
-  request, but a reader thread, a second channel and a copy for frames no viewer reads.
-Recommendation: (a). It extends the surface-share service and the export staging, adds no
-parallel channel, and copies nothing a viewer does not read.
+DECIDED (owner, 2026-11-11): the viewer drives the copy. It asks per frame over the
+surface-share socket, as above: one request per viewed frame (the viewer reads only the latest,
+so at most its display rate), no thread or channel of the engine's own, and a copy only for
+frames a viewer actually reads. Rejected: the engine reading the port itself while a viewer is
+open and republishing each copied frame on a channel of its own — a reader thread, a second
+channel and a copy for frames no viewer reads.
 
 DECIDED (owner, 2026-11-11): an NVIDIA X11 session reads by CPU. Studio picks the reading
 before its first frame, because there the import reports success and shows black, and runs
