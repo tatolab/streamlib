@@ -16,7 +16,7 @@ use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService};
 use serde_json::{Value, json};
 use streamlib_project_repository::{
     PROJECT_HISTORY_DIRECTORY, ProjectHistoryRepository, ProjectRepository,
-    ProjectTransactionAuthor,
+    ProjectTransactionAuthor, content_sha256_of,
 };
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
@@ -786,6 +786,81 @@ async fn a_project_file_written_over_the_socket_is_read_back_listed_and_undone()
             .path()
             .join("outside.py")
             .exists()
+    );
+}
+
+/// A `write_project_file` carrying the `content_sha256` its `read_project_file` answered is
+/// refused in the runtime's words once another write changed the file, leaving the file as the
+/// other write left it; the hash the read and each write answer chains the next save.
+#[tokio::test]
+async fn a_project_file_save_carrying_a_stale_hash_is_refused_over_the_socket() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let first_written = served
+        .answered(
+            "write_project_file",
+            json!({ "path": "nodes/camera.py", "content": "as read\n" }),
+        )
+        .await;
+    let read = served
+        .answered("read_project_file", json!({ "path": "nodes/camera.py" }))
+        .await;
+    assert_eq!(read["content_sha256"], first_written["content_sha256"]);
+    assert_eq!(
+        read["content_sha256"],
+        content_sha256_of(b"as read\n").as_str()
+    );
+    let saved = served
+        .answered(
+            "write_project_file",
+            json!({
+                "path": "nodes/camera.py",
+                "content": "saved\n",
+                "expected_sha256": read["content_sha256"],
+            }),
+        )
+        .await;
+    served
+        .answered(
+            "write_project_file",
+            json!({ "path": "nodes/camera.py", "content": "by the agent\n" }),
+        )
+        .await;
+
+    let refused = the_error_text_of(
+        &served
+            .tool_call(
+                "write_project_file",
+                json!({
+                    "path": "nodes/camera.py",
+                    "content": "the studio save\n",
+                    "expected_sha256": saved["content_sha256"],
+                }),
+            )
+            .await,
+    );
+    assert_eq!(
+        refused,
+        "write_project_file failed: `nodes/camera.py` changed since it was read, so this write \
+         would overwrite that change; nothing was written. Read the file again to see what it \
+         holds now"
+    );
+    assert_eq!(
+        std::fs::read(served.project_directory().join("nodes/camera.py")).unwrap(),
+        b"by the agent\n"
+    );
+
+    let already_held = the_error_text_of(
+        &served
+            .tool_call(
+                "write_project_file",
+                json!({ "path": "nodes/camera.py", "content": "by the agent\n" }),
+            )
+            .await,
+    );
+    assert_eq!(
+        already_held,
+        "write_project_file failed: `nodes/camera.py` already holds this content, so the write \
+         has nothing to change"
     );
 }
 
