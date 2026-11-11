@@ -345,7 +345,8 @@ tatolab enable-virtual-camera [--print]
   processor instance, device claim, function-node state and the clock are torn down, and each
   stream stays loaded with its graph to read and edit. The project stays stopped across the
   runtime's restarts until **`play`** plays it again, starting fresh. **`pause`** holds every
-  processor's state and the clock until **`resume`**. **`rm`** unloads every stream of the project
+  processor's state and a scaled or stepped clock until **`resume`**, across the runtime's
+  restarts too. **`rm`** unloads every stream of the project
   and forgets them. Each
   queues its action on the project's queue and prints its id at once: `tatolab streams` shows the
   streams `stopping` until it has run, and a runtime that crashes first finishes it at its next
