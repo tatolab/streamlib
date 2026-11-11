@@ -78,9 +78,12 @@ public contract, so it carries an ADR.
   operation that brings a project into the right state to build in: a queued stream action that
   runs, in order, the small project operations it is made of — sync its dependencies, make its
   venv (`uv sync`), read its documents, describe its types — and holds every stream asset
-  stopped. Each of those is a verb of its own an agent or Studio can call alone, and
-  `reload_project` / `tatolab reload` runs them again on a held project in any playback state,
-  keeping that state. Opening reports each step on its action, as a load does today, so Studio
+  stopped. Each of those is a verb of its own an agent or Studio can call alone. Opening is the
+  heaviest path, the hard reload. `reload_project` / `tatolab reload` is the soft reload: it is
+  refused on a project that is not open, and it runs only the operations whose inputs changed
+  since they last ran — a dependency sync when the dependency files changed, a re-read of the
+  documents that changed, a re-describe of the types whose source changed — in any playback
+  state, keeping that state. A full re-open is `close_project` then `open_project`. Opening reports each step on its action, as a load does today, so Studio
   opens the window at once and shows a loading state from the action's progress.
   `close_project` / `tatolab close` stops playback when it plays and lets the project go,
   recorded closed so a restart leaves it closed; it deletes nothing — the venv, synced
@@ -187,9 +190,10 @@ pressing Stop took the editor down with the flow (owner, 2026-11-11, #3542)."
    helper instance, GPU surface, device claim or run state (owner, 2026-11-11).
 2. **`open_project` / `close_project` are the lifecycle; the playback verbs are renamed and never
    load** (owner, 2026-11-11). Open is one queued action composed of separate small operations
-   (dependency sync, `uv sync`, read, describe), each callable alone and reused by reload, with
-   its progress shown as an action; close only reaches the closed state and erases nothing
-   (owner, 2026-11-11). A failed stream held editable from its document follows from "the
+   (dependency sync, `uv sync`, read, describe), each callable alone, with its progress shown
+   as an action; reload is a soft reload of an open project that runs only the operations whose
+   inputs changed, and close then open is the hard reload; close only reaches the closed state
+   and erases nothing (owner, 2026-11-11). A failed stream held editable from its document follows from "the
    project is always there to build in" (#3542).
 3. **Pause is recorded and comes back paused** (owner, 2026-11-11).
 4. **Pause holds the clock** (owner, 2026-11-11).
@@ -205,7 +209,8 @@ pressing Stop took the editor down with the flow (owner, 2026-11-11, #3542)."
    answer for a stopped project; Stop forgets function-node state.
 2. **The verbs split.** `open_project`, `close_project` and the four `*_playback` verbs on the
    wire, MCP and the CLI; `start_project`, `stop_project`, `pause_project` and `resume_project`
-   deleted; the restart restores recorded playback and closed projects stay closed.
+   deleted; `reload_project` refused unless open and running only the operations whose inputs
+   changed; the restart restores recorded playback and closed projects stay closed.
 3. **Pause pauses everything.** The clock hold, and pause recorded.
 4. **Stopped is told apart.** The structured viewer refusal, failed streams held from their
    document, the words (MCP descriptions, server prompt, skills, glossary).

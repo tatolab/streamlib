@@ -12,7 +12,7 @@ verb unload a stream, and before making a read or an edit depend on a project pl
 
 The project's lifecycle and its playback are separate verbs. `open_project` holds a project,
 readable and editable, until `close_project` or `remove_project` lets it go; `reload_project`
-re-reads it from disk. `start_playback`, `stop_playback`, `pause_playback` and `resume_playback`
+softly refreshes an open project, running only the operations whose inputs changed. `start_playback`, `stop_playback`, `pause_playback` and `resume_playback`
 change only its playback and never load, read or refresh anything: Play instantiates fresh
 processors from the held graph on a new clock, Stop removes every instance and all run state and
 keeps the graph, Pause holds everything, the clock included, and Resume carries it on. Playback
