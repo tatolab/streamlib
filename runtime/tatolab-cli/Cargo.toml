@@ -3,7 +3,7 @@
 
 [package]
 name = "tatolab-cli"
-description = "The `tatolab` CLI: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `streams` and `expose` load and manage the streams the machine's runtime holds, and `graph`, `logs` and `mcp` observe them, each through the runtime's local API socket at its fixed path — `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this machine's users the virtual camera's loopback device, once. No verb starts a runtime."
+description = "The `tatolab` CLI: `new` writes a stream project; `open`, `close`, `play`, `reload`, `dev`, `stop`, `pause`, `resume`, `rm`, `streams` and `clock` load and manage the streams the machine's runtime holds, and `graph`, `logs` and `mcp` observe them, each through the runtime's local API socket at its fixed path — `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this machine's users the virtual camera's loopback device, once. No verb starts a runtime."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

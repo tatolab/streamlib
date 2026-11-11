@@ -569,7 +569,7 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         let waiting_line = match &listed_stream.location {
             Some(location) => format!(
                 "{stream_id} is waiting for {capture_devices} access, which nobody has asked for \
-                 yet: `tatolab stop --dir {project_directory}` then `tatolab start --dir \
+                 yet: `tatolab stop --dir {project_directory}` then `tatolab play --dir \
                  {project_directory}` asks for it.\n",
                 project_directory = location.project_directory.display()
             ),
@@ -750,7 +750,7 @@ mod tests {
              desk-0a1b2c  desk  running  3      /srv/desk  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
              \n\
              desk-0a1b2c is waiting for camera and microphone access, which nobody has asked \
-             for yet: `tatolab stop --dir /srv/desk` then `tatolab start --dir /srv/desk` asks for it.\n"
+             for yet: `tatolab stop --dir /srv/desk` then `tatolab play --dir /srv/desk` asks for it.\n"
         );
     }
 

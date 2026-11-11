@@ -278,11 +278,11 @@ impl StreamRecordOfAnEarlierRuntime {
         let run_it_again = match &self.project_directory {
             Some(project_directory) => {
                 format!(
-                    "run it again with `tatolab start` in {}",
+                    "run it again with `tatolab open --play` in {}",
                     project_directory.display()
                 )
             }
-            None => "run it again with `tatolab start` in its project".to_string(),
+            None => "run it again with `tatolab open --play` in its project".to_string(),
         };
         format!(
             "an earlier runtime recorded it, under record schema {}, and this runtime does not \
@@ -1033,7 +1033,8 @@ mod tests {
             "{failed_because}"
         );
         assert!(
-            failed_because.contains("run it again with `tatolab start` in /home/someone/hello"),
+            failed_because
+                .contains("run it again with `tatolab open --play` in /home/someone/hello"),
             "{failed_because}"
         );
         assert!(records.remove("main").unwrap());

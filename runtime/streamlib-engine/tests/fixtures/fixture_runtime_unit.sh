@@ -615,7 +615,7 @@ start_the_fixture_project() {
     FIXTURE_PROJECT_STREAM_ID=""
     FIXTURE_PROJECT_DIRECTORIES+=("$project_directory")
     if stream_asset="$(stream_asset_of_the_fixture_project "$project_directory")" \
-        && "$TATOLAB_EXECUTABLE" start --dir "$project_directory" >"$run_log_file" 2>&1; then
+        && "$TATOLAB_EXECUTABLE" open --play --dir "$project_directory" >"$run_log_file" 2>&1; then
         for _ in $(seq 1 120); do
             FIXTURE_PROJECT_STREAM_ID="$(stream_id_the_runtime_gave_the_stream_asset "$stream_asset")" \
                 && break

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab`: `new` writes a stream project; `start`, `reload`, `dev`, `stop`, `pause`, `resume`, `rm`,
+//! `tatolab`: `new` writes a stream project; `open`, `close`, `play`, `reload`, `dev`, `stop`, `pause`, `resume`, `rm`,
 //! `streams` and `clock` load and manage the streams the machine's runtime holds; and `graph`, `logs` and
 //! `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's

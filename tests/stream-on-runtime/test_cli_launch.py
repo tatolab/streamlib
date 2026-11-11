@@ -996,7 +996,7 @@ def test_a_run_takes_in_every_graph_document_and_forgets_a_stream_whose_document
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """`start` loads every graph document of the project, each its own stream: two
+    """`open` loads every graph document of the project, each its own stream: two
     run, and one that does not load is failed saying why; a reload once a document
     is gone unloads and forgets its stream."""
     app_directory = make_tatolab_project({"stream.py": STREAM_PY_WITH_TWO_STREAMS})

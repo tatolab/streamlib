@@ -92,7 +92,7 @@ impl LoadedStreamInThisRuntime {
         if self.is_held_stopped() {
             return Err(Error::Runtime(format!(
                 "the project of the stream `{}` in {} is stopped, so no node of it runs to \
-                 publish on `{port_name}`; `start_project` starts it",
+                 publish on `{port_name}`; `start_playback` plays it",
                 self.stream_id(),
                 self.project_directory().display()
             )));
