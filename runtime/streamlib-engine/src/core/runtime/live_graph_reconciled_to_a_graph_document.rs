@@ -28,23 +28,23 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 /// One link of a running graph, each end its node's UUID and its port's cast name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct RunningLinkBetweenTwoNodesByUuid {
-    source_node: Uuid,
-    source_port: String,
-    target_node: Uuid,
-    target_port: String,
+pub(super) struct RunningLinkBetweenTwoNodesByUuid {
+    pub(super) source_node: Uuid,
+    pub(super) source_port: String,
+    pub(super) target_node: Uuid,
+    pub(super) target_port: String,
 }
 
 /// One node the live graph holds, as a reconcile compares it to the document's.
-struct LiveNodeAsTheGraphHoldsIt {
-    processor_id: ProcessorUniqueId,
-    node_uuid: Uuid,
-    display_name: String,
-    processor_type: ProcessorClassImportPath,
-    config: Value,
-    pins: Map<String, Value>,
-    studio: Map<String, Value>,
-    exposed_config_fields: Vec<String>,
+pub(super) struct LiveNodeAsTheGraphHoldsIt {
+    pub(super) processor_id: ProcessorUniqueId,
+    pub(super) node_uuid: Uuid,
+    pub(super) display_name: String,
+    pub(super) processor_type: ProcessorClassImportPath,
+    pub(super) config: Value,
+    pub(super) pins: Map<String, Value>,
+    pub(super) studio: Map<String, Value>,
+    pub(super) exposed_config_fields: Vec<String>,
 }
 
 /// A graph document a reconcile accepted: resolved and validated, each node's index in the graph
@@ -370,7 +370,7 @@ impl LoadedStreamInThisRuntime {
         });
     }
 
-    fn the_live_nodes(&self) -> Vec<LiveNodeAsTheGraphHoldsIt> {
+    pub(super) fn the_live_nodes(&self) -> Vec<LiveNodeAsTheGraphHoldsIt> {
         self.compiler.scope(|this_streams_graph, _tx| {
             this_streams_graph
                 .traversal()
@@ -391,7 +391,9 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
-    fn the_live_links_by_node_uuid(&self) -> Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)> {
+    pub(super) fn the_live_links_by_node_uuid(
+        &self,
+    ) -> Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)> {
         self.compiler.scope(|this_streams_graph, _tx| {
             let node_uuid_of_each_processor: HashMap<ProcessorUniqueId, Uuid> = this_streams_graph
                 .traversal()

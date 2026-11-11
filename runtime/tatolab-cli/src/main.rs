@@ -170,7 +170,7 @@ enum TatolabVerb {
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
-    /// Stop this project: queue the unload of every stream of it, kept stopped across restarts.
+    /// Stop this project's playback: queue the teardown of every running instance, keeping its graph to edit, stopped across restarts.
     #[command(
         long_about = "Queue a stop of the whole project on its stream action queue: once the \
                       project's earlier actions have run, every stream of it is unloaded and \

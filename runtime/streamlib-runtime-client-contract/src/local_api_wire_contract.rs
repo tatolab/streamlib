@@ -52,7 +52,7 @@ pub struct StreamLocationOnTheWire {
 pub struct StopProjectToolResult {
     /// The queued stop, as `describe_stream_action` takes it.
     pub action: String,
-    /// The project whose streams it unloads and records stopped, symlinks resolved.
+    /// The project whose playback it stops, recording each stream stopped, symlinks resolved.
     pub project_directory: PathBuf,
 }
 
@@ -185,7 +185,7 @@ pub enum ListedStreamState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
     /// start.
     Running,
-    /// Stopped with its project, and left unloaded until `start_project`.
+    /// Stopped with its project: its graph loaded to read and edit, nothing running, until `start_project`.
     Stopped,
     /// Loaded with its project paused: its processors process nothing until `resume_project`.
     Paused,
