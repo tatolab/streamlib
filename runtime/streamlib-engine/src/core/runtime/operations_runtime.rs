@@ -127,7 +127,15 @@ pub(super) async fn add_processor_impl(
     // A type this stream does not resolve yet is described in the stream's
     // own interpreter, off the async worker: a describe runs for as long as
     // the module's import does.
-    if processor_interpreter_launch_record.a_live_add_must_describe(&spec.name) {
+    let a_load_holds_its_type_as_a_placeholder = config_references_of_the_added_node
+        == ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd
+        && processor_interpreter_launch_record
+            .node_types_this_stream_resolves()
+            .placeholder_of_the_node_type_not_described(&spec.name)
+            .is_some();
+    if !a_load_holds_its_type_as_a_placeholder
+        && processor_interpreter_launch_record.a_live_add_must_describe(&spec.name)
+    {
         let node_type = spec.name.clone();
         let launch_record = Arc::clone(&processor_interpreter_launch_record);
         tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
@@ -172,6 +180,16 @@ pub(super) async fn add_processor_impl(
         if registry_miss {
             emit_will_add(&node_id);
             emit_did_add(&node_id);
+            if processor_interpreter_launch_record
+                .node_types_this_stream_resolves()
+                .placeholder_of_the_node_type_not_described(&ident_for_err)
+                .is_some()
+            {
+                return Ok(NodeInTheGraph {
+                    processor_id: node_id,
+                    name: assigned_display_name,
+                });
+            }
             return Err(Error::UnknownProcessorType {
                 ident: ident_for_err,
             });

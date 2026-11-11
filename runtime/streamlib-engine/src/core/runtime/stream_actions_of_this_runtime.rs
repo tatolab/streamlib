@@ -384,8 +384,9 @@ pub(crate) enum StreamStateAfterItsRun {
         /// How many nodes the loaded graph holds.
         node_count: usize,
     },
-    /// Recorded failed and not loaded: its code gave no graph, or its load or
-    /// start was refused.
+    /// Recorded failed: its code gave no graph, or its load or start was refused, and it is
+    /// not loaded; or its node code did not describe a type its graph names, and it is held
+    /// stopped from its document, that type's nodes held as placeholders.
     Failed {
         /// Why — a traceback, or the refusal.
         failed_because: String,
@@ -650,7 +651,8 @@ impl Runner {
     /// A load runs no project code and is never refused for what a document or the project's
     /// environment holds: a document that does not read, or whose load or start is refused,
     /// records its stream failed with the reason, and a `.venv` that cannot be made records
-    /// every stream of the project failed. A record of the project whose stream asset no
+    /// every stream of the project failed. A stream whose node code does not describe a type
+    /// its graph names is recorded failed and held stopped from its document. A record of the project whose stream asset no
     /// document holds any more is unloaded and forgotten.
     ///
     /// A load of a stream already recorded replaces it under the same id, keeping its display
@@ -1836,22 +1838,28 @@ impl Runner {
         let mut listings: Vec<StreamListing> = self
             .every_loaded_stream()
             .iter()
-            .map(|stream| StreamListing {
-                stream_id: stream.stream_id().to_string(),
-                display_name: stream.display_name(),
-                stream_location: Some(stream.stream_location().clone()),
-                state: if is_paused(stream.status()) {
-                    StreamListingState::Paused
-                } else if stream.is_held_stopped() {
-                    StreamListingState::Stopped
-                } else {
-                    StreamListingState::Running
-                },
-                node_count: Some(stream.node_count()),
-                failed_because: None,
-                capture_devices_whose_access_was_never_asked_for: stream
-                    .capture_devices_whose_access_was_never_asked_for(),
-                stream_action_under_way: None,
+            .map(|stream| {
+                let why_it_cannot_play =
+                    stream.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing();
+                StreamListing {
+                    stream_id: stream.stream_id().to_string(),
+                    display_name: stream.display_name(),
+                    stream_location: Some(stream.stream_location().clone()),
+                    state: if why_it_cannot_play.is_some() {
+                        StreamListingState::Failed
+                    } else if is_paused(stream.status()) {
+                        StreamListingState::Paused
+                    } else if stream.is_held_stopped() {
+                        StreamListingState::Stopped
+                    } else {
+                        StreamListingState::Running
+                    },
+                    node_count: Some(stream.node_count()),
+                    failed_because: why_it_cannot_play,
+                    capture_devices_whose_access_was_never_asked_for: stream
+                        .capture_devices_whose_access_was_never_asked_for(),
+                    stream_action_under_way: None,
+                }
             })
             .collect();
         if let Some(stream_records) = self.stream_records() {
@@ -2177,6 +2185,25 @@ impl Runner {
             });
             match reloaded {
                 Ok(stream) => {
+                    if let Some(why_it_cannot_play) =
+                        stream.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+                    {
+                        tracing::error!(
+                            "the stream `{stream_id}` re-loaded held stopped from its document, \
+                             and is failed: {why_it_cannot_play}"
+                        );
+                        if let Err(not_written) =
+                            stream_records.change_the_record(&stream_id, |recorded| {
+                                recorded.failed_because = Some(why_it_cannot_play);
+                            })
+                        {
+                            tracing::error!(
+                                "the stream `{stream_id}` was not recorded failed: {not_written}"
+                            );
+                        }
+                        reloads.push(StreamReloadAtTheStart::HeldStopped { stream_id });
+                        continue;
+                    }
                     tracing::info!(
                         "the stream `{stream_id}` re-loaded from {} with {} nodes",
                         record.location,
@@ -2549,6 +2576,16 @@ impl Runner {
             unload_a_stream_an_action_took_back(&stream, "its record was not written");
             return Err(not_written);
         }
+        if let Some(why_it_cannot_play) =
+            stream.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+        {
+            stream.hold_stopped_without_a_start();
+            return record_a_stream_held_from_its_document_failed(
+                stream_records,
+                stream_record,
+                why_it_cannot_play,
+            );
+        }
         if playback_after_the_load == ProjectPlaybackAfterItsLoad::HeldStopped {
             return Ok(self.hold_a_loaded_stream_stopped(&stream));
         }
@@ -2780,23 +2817,16 @@ impl Runner {
         let stream_to_load = OneStreamAStreamActionLoads::recorded_by(record, display_name, graph)
             .with_capture_device_access_prompting(capture_device_access_prompting)
             .abandoned_once(is_interrupted);
-        match playback_after_the_load {
-            ProjectPlaybackAfterItsLoad::Playing => self.load_and_start_a_stream(stream_to_load),
-            ProjectPlaybackAfterItsLoad::HeldStopped => {
-                let stream = self.load_a_recorded_stream(stream_to_load)?;
-                stream.hold_stopped_without_a_start();
-                Ok(stream)
-            }
-        }
-    }
-
-    /// [`Self::load_a_recorded_stream`], then start it; a
-    /// refused start unloads it.
-    fn load_and_start_a_stream(
-        &self,
-        stream_to_load: OneStreamAStreamActionLoads<'_>,
-    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         let stream = self.load_a_recorded_stream(stream_to_load)?;
+        let held_from_its_document = stream
+            .why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+            .is_some();
+        if held_from_its_document
+            || playback_after_the_load == ProjectPlaybackAfterItsLoad::HeldStopped
+        {
+            stream.hold_stopped_without_a_start();
+            return Ok(stream);
+        }
         if let Err(start_refusal) = self.start_the_stream_paused_while_its_project_is(&stream) {
             unload_a_stream_an_action_took_back(&stream, "its start was refused");
             return Err(start_refusal);
@@ -2985,6 +3015,18 @@ impl Runner {
                 break;
             }
             let stream_id = held.stream_id().to_string();
+            if let Some(why_it_cannot_play) =
+                held.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+            {
+                held.log_route().run_entered(|| {
+                    tracing::error!(
+                        "the stream `{stream_id}` was not started, and is held stopped from its \
+                         document: {why_it_cannot_play}"
+                    )
+                });
+                states.push((stream_id, StreamListingState::Failed));
+                continue;
+            }
             if let Err(not_recorded) = self.change_the_record_of_the_stream(&stream_id, |record| {
                 record.mark_running_resetting_its_crash_count();
             }) {
@@ -3884,7 +3926,20 @@ fn record_a_refused_load_failed(
     if is_the_machines_shutdown_requested() {
         return Err(refusal);
     }
-    let failed_because = refusal.to_string();
+    record_a_stream_held_from_its_document_failed(
+        stream_records,
+        stream_record,
+        refusal.to_string(),
+    )
+}
+
+/// Record the stream `stream_record` records failed with `failed_because`; a record not
+/// written is logged.
+fn record_a_stream_held_from_its_document_failed(
+    stream_records: &StreamRecordsInTheStateDirectory,
+    stream_record: &mut StreamRecord,
+    failed_because: String,
+) -> Result<StreamStateAfterItsRun> {
     stream_record.failed_because = Some(failed_because.clone());
     if let Err(not_written) = stream_records
         .write_the_record_a_load_made(stream_record.clone())
@@ -4151,6 +4206,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::core::runtime::STREAM_RECORD_SCHEMA_VERSION;
+    use streamlib_processor_schema::ProcessorClassImportPath;
     use streamlib_runtime_client_contract::directory_at_an_explicit_mode;
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
@@ -4187,16 +4243,15 @@ mod tests {
 
     /// The graph of a stream named `stream_name` whose one node is of a type no module
     /// provides, which its load refuses.
-    fn the_graph_of_a_stream_whose_load_is_refused(stream_name: &str) -> serde_json::Value {
-        serde_json::json!({
-            "stream": stream_name,
-            "nodes": [{
-                "name": "source",
-                "type": "tatolab.absent:AbsentNodeType",
-                "config": {},
-            }],
-            "links": [],
-        })
+    fn the_graph_of_a_stream_naming_a_type_not_described(stream_name: &str) -> serde_json::Value {
+        let mut graph = the_graph_of_a_stream_named(stream_name);
+        let source = graph["nodes"][0].clone();
+        graph["nodes"] = serde_json::json!([source, {
+            "name": "absent",
+            "type": "tatolab.absent:AbsentNodeType",
+            "config": {"strength": 3},
+        }]);
+        graph
     }
 
     /// How a stub `.venv/bin/python` answers the runtime's probe of whether the interpreter
@@ -4785,12 +4840,12 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_replace_whose_load_is_refused_unloads_the_running_stream_and_records_it_failed_never_restoring_it()
+    fn a_replace_whose_node_code_does_not_describe_a_type_holds_the_stream_failed_from_its_document()
      {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithGraphDocuments::holding(
-            the_graph_of_a_stream_whose_load_is_refused("camera"),
+            the_graph_of_a_stream_naming_a_type_not_described("camera"),
         );
         let camera = project.stream_id_of("camera");
         let previous_record = a_record_of(&project, "camera");
@@ -4802,7 +4857,7 @@ mod tests {
 
         let run = runner
             .load_the_project_off_its_queue(project.run_request())
-            .expect("a refused load is a failed stream, not a refused run");
+            .expect("a type not described is a failed stream, not a refused run");
 
         let (stream, failed_because) = the_one_failed_stream_of(&run);
         assert!(
@@ -4810,15 +4865,20 @@ mod tests {
             "{failed_because}"
         );
         assert_eq!(stream.stream_id, camera);
-        assert_eq!(stream.display_name, "camera");
         assert!(stream.replaced_a_recorded_stream);
         assert!(
             previous.has_ended(),
-            "the replace unloaded the running stream"
+            "the replace unloaded the previous stream"
         );
+        let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(held.is_held_stopped() && held.runtime_context.lock().is_none());
+        assert_eq!(held.node_count(), 2, "every node of its document is held");
         assert!(
-            runner.ids_of_the_loaded_streams().is_empty(),
-            "the previous version is not put back"
+            held.node_types_this_stream_resolves()
+                .placeholder_of_the_node_type_not_described(
+                    &ProcessorClassImportPath::new("tatolab.absent:AbsentNodeType").unwrap()
+                )
+                .is_some()
         );
         assert_eq!(
             the_record_of(state_directory.path(), &camera)
@@ -4826,6 +4886,75 @@ mod tests {
                 .as_deref(),
             Some(failed_because)
         );
+        let listed = runner
+            .list_streams()
+            .into_iter()
+            .find(|listed| listed.stream_id == camera)
+            .unwrap();
+        assert_eq!(listed.state, StreamListingState::Failed);
+        assert!(
+            listed
+                .failed_because
+                .as_deref()
+                .is_some_and(|why| why.contains("`absent`")),
+            "{listed:?}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_play_of_a_stream_held_from_its_document_is_refused_and_keeps_it_held() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(
+            the_graph_of_a_stream_naming_a_type_not_described("camera"),
+        );
+        let camera = project.stream_id_of("camera");
+        a_project_opened_on(&runner, &project);
+        let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(held.is_held_stopped());
+
+        let queued = runner.start_playback(project.path()).unwrap();
+        let played = the_stream_action_once_finished(&runner, &queued.action_id);
+
+        assert_eq!(
+            played
+                .streams
+                .iter()
+                .map(|stream| (stream.stream_id.as_str(), stream.state))
+                .collect::<Vec<_>>(),
+            [(camera.as_str(), Some(StreamListingState::Failed))],
+            "{played:?}"
+        );
+        let still_held = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(Arc::ptr_eq(&held, &still_held), "the stream stays held");
+        assert!(still_held.is_held_stopped() && still_held.runtime_context.lock().is_none());
+        assert!(the_record_of(state_directory.path(), &camera).is_failed());
+    }
+
+    #[test]
+    #[serial]
+    fn a_reload_once_its_document_names_only_described_types_loads_the_failed_stream_again() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(
+            the_graph_of_a_stream_naming_a_type_not_described("camera"),
+        );
+        let camera = project.stream_id_of("camera");
+        a_project_opened_on(&runner, &project);
+        let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+
+        project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
+        the_project_reloaded(&runner, &project);
+
+        let loaded_again = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(!Arc::ptr_eq(&held, &loaded_again));
+        assert_eq!(
+            loaded_again.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(),
+            None
+        );
+        assert!(loaded_again.is_held_stopped());
+        assert!(!the_record_of(state_directory.path(), &camera).is_failed());
     }
 
     #[test]
@@ -5928,9 +6057,8 @@ mod tests {
     fn a_run_leaves_a_stream_its_host_loaded_and_forgets_a_record_whose_document_is_gone() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let project = ProjectWithGraphDocuments::holding(
-            the_graph_of_a_stream_whose_load_is_refused("studio"),
-        );
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("studio"));
+        project.write_an_unloadable_graph_document("studio");
         let hosted = a_stream_its_host_loaded(&runner, &project, "camera");
         let record = a_record_of(&project, "recorded-camera");
         let recorded =
@@ -5940,11 +6068,7 @@ mod tests {
             .load_the_project_off_its_queue(project.run_request())
             .unwrap();
 
-        let (stream, failed_because) = the_one_failed_stream_of(&run);
-        assert!(
-            failed_because.contains("AbsentNodeType"),
-            "{failed_because}"
-        );
+        let (stream, _failed_because) = the_one_failed_stream_of(&run);
         assert_eq!(stream.stream_id, project.stream_id_of("studio"));
         assert!(!hosted.has_ended());
         assert!(recorded.has_ended());
@@ -7371,7 +7495,7 @@ mod tests {
         let camera = project.stream_id_of("camera");
         a_project_opened_on(&runner, &project);
 
-        project.write_the_graph_document(the_graph_of_a_stream_whose_load_is_refused("camera"));
+        project.write_an_unloadable_graph_document("camera");
         the_project_reloaded(&runner, &project);
 
         assert!(
