@@ -622,6 +622,61 @@ def test_a_key_holding_a_typed_node_reference_carries_the_type_it_names() -> Non
 
 
 # ---------------------------------------------------------------------------
+# A config key holding a project asset's UUID: `Annotated[str, ProjectAssetUuid(...)]`
+# ---------------------------------------------------------------------------
+
+
+def test_a_key_holding_a_project_asset_uuid_names_the_media_it_takes() -> None:
+    from tatolab.stream import ProjectAssetUuid
+
+    @dataclasses.dataclass
+    class PlayerConfig:
+        poster: Annotated[str, ProjectAssetUuid(media=("image", "video"))] = ""
+        anything: Annotated[Optional[str], ProjectAssetUuid(), Description("Any asset.")] = None
+
+    properties = schema_of(PlayerConfig)["properties"]
+    assert properties["poster"] == {
+        "type": "string",
+        "default": "",
+        "x-tatolab-project-asset": {"media": ["image", "video"]},
+    }
+    assert properties["anything"] == {
+        "anyOf": [{"type": "string"}, {"type": "null"}],
+        "description": "Any asset.",
+        "default": None,
+        "x-tatolab-project-asset": {},
+    }
+
+
+def test_a_project_asset_uuid_on_a_key_holding_no_string_is_refused() -> None:
+    from tatolab.stream import ProjectAssetUuid
+    from tatolab.stream._node_config_schema import derive_config_class_json_schema
+
+    class CountConfig(TypedDict):
+        count: Annotated[int, ProjectAssetUuid()]
+
+    with pytest.raises(TypeError, match="holds no string"):
+        derive_config_class_json_schema(CountConfig)
+
+
+@pytest.mark.parametrize(
+    ("media", "refusal"),
+    [
+        ((), ValueError),
+        (("picture",), ValueError),
+        ("image", TypeError),
+    ],
+)
+def test_project_asset_uuid_refuses_media_the_runtime_reads_no_facts_for(
+    media: Any, refusal: type
+) -> None:
+    from tatolab.stream import ProjectAssetUuid
+
+    with pytest.raises(refusal):
+        ProjectAssetUuid(media=media)
+
+
+# ---------------------------------------------------------------------------
 # Key descriptions: `Annotated[T, Description("...")]`
 # ---------------------------------------------------------------------------
 

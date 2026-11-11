@@ -40,6 +40,7 @@ from typing import Any
 
 from ._description import description_and_annotation_without_it
 from ._number_range import number_range_an_annotation_carries
+from ._project_asset_uuid import project_asset_uuid_an_annotation_carries
 
 __all__ = [
     "derive_config_class_json_schema",
@@ -327,6 +328,12 @@ def _json_schema_for_annotation(
         if number_range is not None:
             _refuse_a_number_range_on_a_schema_that_admits_no_number(described, number_range)
             described.update(number_range.json_schema_keywords())
+        project_asset_uuid = project_asset_uuid_an_annotation_carries(annotation, "a config key")
+        if project_asset_uuid is not None:
+            _refuse_a_project_asset_uuid_on_a_schema_that_admits_no_string(
+                described, project_asset_uuid
+            )
+            described.update(project_asset_uuid.json_schema_keywords())
         return described
 
     if annotation is None or annotation is type(None):
@@ -392,6 +399,18 @@ def _refuse_a_number_range_on_a_schema_that_admits_no_number(
     raise TypeError(
         f"{number_range!r} is written on a config key that holds no number; it bounds "
         f"an `int` or a `float`, `Optional` or not."
+    )
+
+
+def _refuse_a_project_asset_uuid_on_a_schema_that_admits_no_string(
+    key_schema: "dict[str, Any]", project_asset_uuid: Any
+) -> None:
+    members = key_schema.get("anyOf", [key_schema])
+    if any(member.get("type") == "string" for member in members):
+        return
+    raise TypeError(
+        f"{project_asset_uuid!r} is written on a config key that holds no string; an asset's "
+        f"UUID is a `str`, `Optional` or not."
     )
 
 

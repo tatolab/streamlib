@@ -52,6 +52,15 @@ def test_image_file_is_a_class_node_with_one_image_output_configured_by_asset():
     assert ImageFileConfig().asset == ""
 
 
+def test_image_file_config_schema_marks_its_asset_key_as_a_project_image_asset():
+    asset_key_schema = getattr(ImageFile, "__tatolab_node_config_schema__")["properties"]["asset"]
+    assert asset_key_schema == {
+        "type": "string",
+        "default": "",
+        "x-tatolab-project-asset": {"media": ["image"]},
+    }
+
+
 def test_a_jpeg_is_decoded_upright_by_its_exif_orientation(tmp_path: Path):
     path = tmp_path / "rotated.jpeg"
     exif = PillowImage.Exif()

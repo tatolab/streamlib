@@ -28,6 +28,8 @@ from ._exposed_name_cast import (
 )
 from ._description import Description as Description
 from ._number_range import NumberRange as NumberRange
+from ._project_asset_uuid import ProjectAssetMedia as ProjectAssetMedia
+from ._project_asset_uuid import ProjectAssetUuid as ProjectAssetUuid
 from ._built_in_nodes import ArrayToChannels as ArrayToChannels
 from ._built_in_nodes import ArrayToChannelsConfig as ArrayToChannelsConfig
 from ._built_in_nodes import ArrayToImage as ArrayToImage
@@ -209,6 +211,8 @@ __all__ = [
     "NodeReference",
     "NodeReferenceToNodeType",
     "NumberRange",
+    "ProjectAssetMedia",
+    "ProjectAssetUuid",
     "ExposedNameCastsToNothingError",
     "FunctionNode",
     "RustFunctionNode",
