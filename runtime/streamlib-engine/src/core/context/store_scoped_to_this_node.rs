@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Weak};
+use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
@@ -67,9 +67,10 @@ impl StoreScopedToThisNode {
 }
 
 /// Every project store open in this process, by resolved project directory: a store's file admits
-/// one open database at a time, so runtimes in one process that hold the same project share it.
+/// one open database at a time, so runtimes in one process that hold the same project share it,
+/// and a store closes under this lock so no runtime opens its file while it is still closing.
 static PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY: LazyLock<
-    Mutex<HashMap<PathBuf, Weak<ProjectStore>>>,
+    Mutex<HashMap<PathBuf, Arc<ProjectStore>>>,
 > = LazyLock::new(Default::default);
 
 /// Every project store this runtime holds, one per resolved project directory, shared with any
@@ -95,6 +96,25 @@ impl std::fmt::Debug for ProjectStoresOpenInThisRuntime {
     }
 }
 
+impl Drop for ProjectStoresOpenInThisRuntime {
+    fn drop(&mut self) {
+        let mut project_store_open_in_this_process_by_resolved_directory =
+            PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY.lock();
+        for (resolved_project_directory, held_by_this_runtime) in
+            self.project_store_by_resolved_directory.get_mut().drain()
+        {
+            drop(held_by_this_runtime);
+            let no_one_else_holds_it = project_store_open_in_this_process_by_resolved_directory
+                .get(&resolved_project_directory)
+                .is_some_and(|open| Arc::strong_count(open) == 1);
+            if no_one_else_holds_it {
+                project_store_open_in_this_process_by_resolved_directory
+                    .remove(&resolved_project_directory);
+            }
+        }
+    }
+}
+
 impl ProjectStoresOpenInThisRuntime {
     /// The store of the project at `project_directory`, opened on its first use.
     pub fn the_store_of_the_project_at(
@@ -112,18 +132,15 @@ impl ProjectStoresOpenInThisRuntime {
             PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY.lock();
         let open_in_this_process = match project_store_open_in_this_process_by_resolved_directory
             .get(&resolved_project_directory)
-            .and_then(Weak::upgrade)
         {
-            Some(open_in_another_runtime) => open_in_another_runtime,
+            Some(open_in_another_runtime) => Arc::clone(open_in_another_runtime),
             None => {
                 let opened = Arc::new(
                     ProjectStore::open_in_the_project_at(&resolved_project_directory)
                         .map_err(|refusal| Error::Runtime(refusal.to_string()))?,
                 );
                 project_store_open_in_this_process_by_resolved_directory
-                    .retain(|_, open| open.strong_count() > 0);
-                project_store_open_in_this_process_by_resolved_directory
-                    .insert(resolved_project_directory.clone(), Arc::downgrade(&opened));
+                    .insert(resolved_project_directory.clone(), Arc::clone(&opened));
                 opened
             }
         };
