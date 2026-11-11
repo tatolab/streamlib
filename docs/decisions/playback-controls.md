@@ -10,10 +10,13 @@ verb unload a stream, and before making a read or an edit depend on a project pl
 
 ## Decision
 
-The runtime holds a project, readable and editable, from the moment it is created, started or
-opened until it is removed. Start, Stop, Pause and Resume change only its playback: Start builds
-fresh processors from the held graph on a new clock, Stop tears every processor, device claim and
-the clock down and keeps the graph, Pause holds the flow and Resume carries it on.
+The project's lifecycle and its playback are separate verbs. `open_project` holds a project,
+readable and editable, until `close_project` or `remove_project` lets it go; `reload_project`
+re-reads it from disk. `start_playback`, `stop_playback`, `pause_playback` and `resume_playback`
+change only its playback and never load, read or refresh anything: Play instantiates fresh
+processors from the held graph on a new clock, Stop removes every instance and all run state and
+keeps the graph, Pause holds everything, the clock included, and Resume carries it on. Playback
+is recorded, so a restart restores it.
 
 ## Why
 
@@ -27,6 +30,11 @@ the clock down and keeps the graph, Pause holds the flow and Resume carries it o
 - **The engine already separates the two.** A loaded stream at `RuntimeStatus::Initial` has its
   graph model and no runtime context, and edits made in it compile at its start. Only the stop
   path discarded the graph.
+- **Play starts fresh, like a level.** Unreal's play-in-editor builds every actor from the level
+  each time; nothing of the last session leaks into the next except what the game saved on
+  purpose. A node's own persisted files and assets are that save; function-node state is not.
+- **A timeline needs a transport.** A later timeline view drives playback with these verbs, so
+  Pause is a state of its own, recorded and holding the clock.
 - **Stop still frees the machine.** Processors, helper node instances, GPU surfaces and device
   claims go at Stop, so a camera or a GPU is released exactly as before; only the graph model and
   its described types stay.
