@@ -98,7 +98,7 @@ fn hash_while_copying(
 }
 
 /// The SHA-256 of `bytes`, lowercase hex, as a sidecar records it.
-pub(crate) fn content_sha256_of(bytes: &[u8]) -> String {
+pub fn content_sha256_of(bytes: &[u8]) -> String {
     lowercase_hex(&Sha256::digest(bytes))
 }
 
