@@ -31,7 +31,7 @@ refuses a mismatch before a frame flows.
 
 ## 2. Graph foundations: variables and reference edges
 
-Change: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) §Graph
+Change: [`changes/archive/2026-11-10-lightweight-node-kinds.md`](changes/archive/2026-11-10-lightweight-node-kinds.md) §Graph
 variables and reference edges. Ticket: #3235.
 
 `SetVariable` and `GetVariable` as Blueprints have them, and the reference edge: a node's
@@ -43,7 +43,7 @@ change's phases 1 to 4.
 
 ## 3. Graph replacements for expose and preview
 
-Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), tickets 1 and 3.
+Change: [`changes/archive/2026-11-08-gateway-nodes.md`](changes/archive/2026-11-08-gateway-nodes.md), tickets 1 and 3.
 
 - #3213: the `tatolab-moq` module (gateway, track, send and receive nodes) and the
   `GraphInput` / `GraphOutput` interface nodes. Waits on step 2.
@@ -51,28 +51,28 @@ Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), tickets 1 and 3.
   with no relay in between, reading the port's channel and importing an Image surface
   zero-copy (decided 2026-11-07). It does not wait
   on #3213, so it may run beside it.
-- [`changes/typed-stream-facts.md`](changes/typed-stream-facts.md): #3284, a port's stream facts
+- [`changes/archive/2026-11-08-typed-stream-facts.md`](changes/archive/2026-11-08-typed-stream-facts.md): #3284, a port's stream facts
   as typed family fields and hang out of the engine, lands with #3215 so viewers and Properties
   show them; its second ticket, the Packets unit without hang's container, may run beside it.
 
-- Landed: #3213 (PRs #3244 and #3245). #3215's read path landed (PRs #3248 to #3252, #3255
-  and #3286) and Tato Studio's per-family views landed in tatolab-app #166; left are stream
-  facts in the app (tatolab-app #170) and the Image rig preview.
+- Landed: #3213 (PRs #3244 and #3245), #3215 (PRs #3248 to #3252, #3255 and #3286) and #3284
+  (PRs #3286, #3289 and #3313); Tato Studio's per-family views landed in tatolab-app #166. Both
+  changes are shipped and folded into `ARCHITECTURE.md`.
 
 ## 4. Remove the automatic path
 
-Change: [`changes/gateway-nodes.md`](changes/gateway-nodes.md), ticket 2.
+Change: [`changes/archive/2026-11-08-gateway-nodes.md`](changes/archive/2026-11-08-gateway-nodes.md), ticket 2.
 
 - #3214: the exposed-port publisher, exposure and `expose`, the bundled local relay, the relay
   verbs and the preview page leave the tree. It waits on #3213, because the rigs move onto
   gateway nodes, and on #3215, so previews have their replacement before the old page goes.
 - Done when the removal gate passes on every `REMOVED:` bullet of the change and
   `/ship-change` has folded it.
-- Landed: #3214 (PR #3262). The `/ship-change` waits on #3215.
+- Landed: #3214 (PR #3262). `gateway-nodes` is shipped and folded into `ARCHITECTURE.md`.
 
 ## 5. Projects and assets
 
-Change: [`changes/project-and-assets.md`](changes/project-and-assets.md).
+Change: [`changes/archive/2026-11-09-project-and-assets.md`](changes/archive/2026-11-09-project-and-assets.md).
 
 A project becomes a versioned repository of assets with its own history, a stream's graph is one
 asset, every asset and node gets a runtime-generated UUID, every change is a transaction, and
@@ -83,9 +83,11 @@ step 4, because `exposed` leaves the spec keys and the stream record there.
 Tickets: #3256 (the project), then #3257 (streams as graph assets), then #3258 (transactions),
 #3259 (generators as fragments), #3260 (linked dependencies) and #3152 (the project read).
 
-- Landed: #3256 (PRs #3261 and #3263) and #3257 (PRs #3275 and #3285). #3258 is in progress.
+- Landed: every ticket, #3256 (PRs #3261 and #3263), #3257 (PRs #3275 and #3285), #3258,
+  #3259, #3260 and #3152. `project-and-assets` and `graph-groups-and-nested-fragments` are
+  shipped and folded into `ARCHITECTURE.md`.
 
-[`changes/graph-groups-and-nested-fragments.md`](changes/graph-groups-and-nested-fragments.md)
+[`changes/archive/2026-11-09-graph-groups-and-nested-fragments.md`](changes/archive/2026-11-09-graph-groups-and-nested-fragments.md)
 rides this step: a generator placing a generator joins #3259, and labelled groups in the graph
 document, #3308, follow #3258.
 
@@ -100,8 +102,8 @@ later steps follow it in the change's own order (owner, 2026-11-10).
 
 ## 7. New capability: lightweight nodes, then shaders
 
-Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md) and
-[`changes/slang-shader-compiler.md`](changes/slang-shader-compiler.md).
+Changes: [`changes/archive/2026-11-10-lightweight-node-kinds.md`](changes/archive/2026-11-10-lightweight-node-kinds.md) and
+[`changes/archive/2026-11-08-slang-shader-compiler.md`](changes/archive/2026-11-08-slang-shader-compiler.md).
 
 1. Function nodes at the read seam, phase 1 of lightweight-node-kinds: #3224 (node kinds and
    compiled `@node.function`), #3225 (promotion when a function node crashes or stalls its
@@ -117,10 +119,8 @@ Changes: [`changes/lightweight-node-kinds.md`](changes/lightweight-node-kinds.md
 5. The pool, phase 4: #3237, one pool interpreter per stream for Python function nodes no
    Python class reads. It is required, not optional.
 
-- Landed: #3225, #3228, #3229 and #3232 of item 1, with most of #3224 (PRs #3276 to #3278);
-  item 2 in full, #3222 (PR #3272) and #3223 (PR #3288); #3230 of item 3 (PR #3292); #3234 of
-  item 4 (PR #3297); and the first of item 5's pool, islands a built-in reads (PRs #3305 and
-  #3310).
+- Landed: every ticket of items 1 to 5. `lightweight-node-kinds` and `slang-shader-compiler`
+  are shipped and folded into `ARCHITECTURE.md`.
 
 Step 7 may run beside step 5. #3226 (islands on live edits) and #3227 (pins) wait on step 5's
 transaction ticket, #3258, so live edits and pin values are built once, as transactions. Nothing in steps

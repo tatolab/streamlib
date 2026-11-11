@@ -20,10 +20,10 @@ types; _(engine)_ is what the runtime's code, the plan and the decision records 
 never a user surface; _(crosses)_ means one meaning on both sides. An unmarked entry
 predates the markers.
 
-**Stream** _(user)_: the unit a person writes and runs — today's app: a function decorated
-`@stream` that builds a graph, in a directory with `pyproject.toml` and one venv that may hold
-several; its Input and Output nodes are its interface. The function builds it through the `StreamBuilder` it is handed.
-Once loaded it persists until stopped or removed. _Avoid_: "app", "pipeline", "dataflow",
+**Stream** _(user)_: the unit a person builds and runs: a stream asset of a project, its graph
+document `streams/<name>.graph.json`, in a project with `pyproject.toml` and one venv that may
+hold several; its Input and Output nodes are its interface. A `@graph_generator` builds part of
+one as a fragment. Once loaded it persists until stopped or removed. _Avoid_: "app", "pipeline", "dataflow",
 "workflow", "graph" for the unit; "attached stream", "kept stream", "detach" (every loaded
 stream persists).
 
@@ -37,8 +37,8 @@ _Avoid_: "stream project" (a project holds many streams), "app".
 start, a create, a stop, a remove, or the runtime's re-load at start — answered at once with its
 **action id** and carried out in the background, one at a time per project. It ends done or
 failed or cancelled; `describe_stream_action` reads it and `cancel_stream_action` ends it
-early. A project's actions form one serial queue. `rename_stream` sets an
-attribute of the record and is not an action. _Avoid_: "job", "task", "load" for a stop or a
+early. A project's actions form one serial queue. `set_stream_display_name` is a transaction on the
+stream's graph document and is not an action. _Avoid_: "job", "task", "load" for a stop or a
 remove.
 
 **Project log** _(user)_: a project's one log under `<project>/.tatolab/logs/`, keyed by the
