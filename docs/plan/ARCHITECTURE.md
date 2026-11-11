@@ -2104,7 +2104,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2704, #2713; stream-identity-and-persistence — SHIPPED #2960,
   #2965]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ slang-shader-compiler)
+## Graphics (RHI / GPU) — SHIPPED (OPEN: a texture registration's layout cell, the remaining graphics capabilities)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
@@ -2132,7 +2132,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   device without it, the module's session construction refuses naming the missing direction. A kernel whose SPIR-V declares a
   subgroup operation the driver does not serve, or uses one in a stage it does not serve,
   refuses at `create_*_kernel` naming the driver, the operation and the stage (MoltenVK serves
-  none in vertex, measured) — the one class of GLSL construct found that MoltenVK cannot serve.
+  none in vertex, measured) — the one class of shader construct found that MoltenVK cannot serve.
   [macos-platform-floor — SHIPPED #2356, #2357, #2374; macos-capability-parity — SHIPPED #2403]
 - **DECIDED** — The engine's kernel primitives are exposable to Python as configured
   blocks: shader/compute source and binding config passed from Python, compiled and
@@ -2282,14 +2282,36 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   capabilities of `GpuContext`, reached the same way by every caller. No kernel capability
   can be absent at runtime, and no application glue supplies one.
   [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777]
-- **DECIDED** — GLSL is the shader source contract: Python passes GLSL text and the
-  engine compiles it at kernel construction, and re-creating an identical kernel is free —
-  compilation is cached under a key covering everything that changes the output (source,
-  stage, entry point, target environment, compiler version), never source alone.
-  Pre-compiled SPIR-V stays accepted as an escape hatch. Authoring a kernel requires no
-  toolchain beyond the installed wheel, for every kernel kind. The wheel carries a C++
-  GLSL compiler (shaderc / glslang). [python-kernel-api; python-kernel-surface —
-  SHIPPED #1775]
+- **DECIDED** — Slang is the shader source contract and the one shader compiler. Python
+  passes Slang text, and the engine compiles it at kernel construction; re-creating an
+  identical kernel is free — compilation is cached under a key covering everything that
+  changes the output (source, stage, entry point, target environment, and the compiler as
+  `slang <version>`, read from the global session at run time), never source alone. The kernel
+  constructors take Slang and nothing else, with no language parameter: GLSL text is refused
+  naming its `#version` line, and a compiler diagnostic names the line of the caller's source
+  in Slang's own words. The entry point is `main` by default and any name is accepted; a vertex
+  shader reads its index as `SV_VulkanVertexID`, since `SV_VertexID` makes Slang declare a
+  capability the engine's device does not enable. Pre-compiled SPIR-V stays accepted as an
+  escape hatch. Authoring a kernel requires no toolchain beyond the installed wheel, for every
+  kernel kind. One module in `core/rhi/` (`slang_shader_source_compiler.rs`) owns every Slang
+  call: it opens `libslang-compiler` by path from beside the engine with `libloading` and calls
+  Slang's COM interfaces through tables declared there, each layout held to Slang's headers by a
+  size test; one global session per process, created on first use; a fresh session per
+  compile, so an edited source never returns an old module; compiles serialised by the module's
+  lock, since a Slang global session is not thread-safe. Settings: SPIR-V 1.4 for Vulkan 1.2,
+  optimisation on, debug info off — Slang keeps binding names without it, and the engine's
+  reflection refuses Slang's debug instructions. The target is a parameter — a stage and a
+  backend — serving every stage the engine has (compute, vertex, fragment, ray tracing) to
+  SPIR-V; another backend, or a material graph's fragment stage, is a later change on the same
+  compiler. The engine's own shaders, `streamlib-vulkan-video`'s and `packages/test-fixtures`'
+  are Slang, compiled by the build scripts through the same library; no GLSL file remains in
+  the engine tree. Reflection, binding by the shader's own names, the push-constant check and
+  the capability refusals read Slang's SPIR-V unchanged. A compile runs at kernel construction
+  or a graph edit (about 40 ms, against shaderc's 4 to 5), never per frame. Owner, 2026-11-06.
+  Rejected: keeping GLSL through Slang's GLSL front end with a `source_language` parameter — one
+  language is one compile path with no front-end gaps (owner, 2026-11-06).
+  [python-kernel-api; python-kernel-surface — SHIPPED #1775; slang-shader-compiler — SHIPPED
+  #3272, #3288]
 - **DECIDED** — Dispatch is synchronous: it returns when the GPU work has retired and
   the writes are visible, and no fence or timeline vocabulary reaches Python. Several
   dispatches batch into one submission with barriers between them and a single fence at
@@ -2431,25 +2453,6 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   flavour to zero live allocations. An allocation an exported raw handle still names stays
   counted against the budget until that handle's holder drops it.
   [shared-pools-bounded-by-memory-budget — SHIPPED #2743]
-- **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, pure wheel
-  Python over `create_compute_kernel`, the processor output texture ring,
-  `copy_surface_to_surface` and dispatch, with no engine, wire or stub change. The user writes
-  one GLSL function, `vec4 effect(vec4 source, ivec2 at)`;
-  `GlslPixelEffect.compile(gpu_full_access, effect_glsl=, dials=)` in `setup()` builds an
-  ordinary compute kernel around it, and `apply_to_frame(gpu_limited_access, frame, dials=)`
-  in `process()` lands the frame with the engine copy, dispatches, and returns the output message
-  (`surface_id`, `width`, `height`, `timestamp_ns`, `color_info`). One single-plane RGBA
-  source, output at its extent in `rgba8_unorm`. Dials are push constants typed `float`,
-  `int`, `vec2` or `vec4`, read as `dials.<name>` and laid out std430 after the template's
-  elapsed-seconds member — `vec3` refused by name, and a block past 128 bytes refused naming
-  the dial that crosses it — declared at compile and supplied at every apply, checked before
-  any GPU work. Pre-declared: `streamlib_extent`, `streamlib_elapsed_seconds` (monotonic, zero
-  at the first apply), `streamlib_source_at` (clamped at the edge) and `streamlib_source_uv`
-  (bilinear). `#line 1` above the body makes a compiler diagnostic name the user's own line.
-  Refusals name the line the user can fix: a missing `effect` signature, a malformed or
-  reserved dial name, a `vec3`, an oversize block, an undeclared, missing or mistyped dial,
-  and a frame the copy refuses. No Rust peer until a Rust consumer names one.
-  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2428]
 - **DECIDED** — Model input is prepared on the GPU by `ModelInputTensorKernel`, pure wheel
   Python over a compute kernel, the tensor side of the processor output pool and binding by
   surface id — no engine or wire change. `ModelInputTensorKernel.compile(gpu_full_access,
@@ -2675,10 +2678,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   "sample stream" bottom-right — rendered by one compute dispatch per frame
   into a texture from the node's output pool, the potato and the captions baked into the
   `tatolab-testpattern` module as RGBA overlays, so it needs no device, no permission and no
-  font library, and runs on the software device. It is pure Python and GLSL, built through
+  font library, and runs on the software device. It is pure Python and Slang, built through
   `create_compute_kernel`; its type is `tatolab.testpattern:TestPatternSource`, with its
   config keys and ports unchanged. The branding is content. Owner, 2026-10-16.
-  [moq-relays — SHIPPED #2866; {SHIP[1:-1]}]
+  [moq-relays — SHIPPED #2866; slang-shader-compiler — SHIPPED #3272]
 - **DECIDED** — `H264Encoder` has a CPU arm (unbuilt): until it lands a
   machine without a GPU encoder shares no H.264, and the sample stream is proven on a device
   with one. Where the device's platform arm refuses H.264 encode — the software device among
@@ -2822,8 +2825,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990]
 - **DECIDED** — The headers are vendored, not taken from the build machine.
   `manylinux_2_28` carries no PipeWire development package, so a system-header build is
-  not reproducible where the wheel is actually built — the same reasoning that pins the
-  GLSL compiler to build-from-source rather than linking whatever sits on the builder.
+  not reproducible where the wheel is actually built — the same reasoning that builds the
+  Slang libraries from their pinned tag on Linux rather than linking whatever sits on the builder.
   MIT-licensed PipeWire and SPA headers land under `vendor/`, untouched and
   unreformatted, and the licence obligations are met by the machinery that already
   reproduces every vendored C/C++ project's own licence text out of the tree. `LICENSE`,
@@ -3295,8 +3298,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   never for a codec the wheel can carry. It arrives through the `opus` crate over
   `opusic-sys`, whose bundled libopus builds static by default; libopus's notice is a
   `VENDORED_CPP_PROJECTS` entry carried by the `tatolab-opus` wheel, read from the crate's
-  own `COPYING` in the registry checkout — the `shaderc-sys` shape generalised to a second
-  build-script crate rather than a parallel mechanism — and the wheel's portability test is
+  own `COPYING` in the registry checkout — one mechanism for every build-script crate rather
+  than a parallel one — and the wheel's portability test is
   the pass/fail: the extension loads no host library outside the platform's own.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2125]
 - **DECIDED** — `OpusEncoder` and `OpusDecoder` ship as the `tatolab-opus` extension
@@ -3853,8 +3856,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2488), so what MoltenVK refuses stays refused. "Baked in" means our Rust is compiled in,
   not that system deps are static. abi3 across a small range of GIL-enabled CPython builds
   only (free-threaded builds wait for the stable ABI to exist for them). "Our code" includes
-  vendored C/C++ we compile and link statically, not only our Rust: the wheel carries a C++
-  GLSL shader compiler so a kernel author needs no system shader toolchain. The wheel's
+  vendored C/C++ we compile and link statically, not only our Rust: the wheel's lend and
+  `tatolabd` carry `libslang-compiler` and `libslang-glslang` for each floor beside the engine
+  (never `libslang-glsl-module`), so a kernel author needs no system shader toolchain. They come
+  from Slang's release archives pinned by version and checksum and staged by a script the build
+  calls, which refuses a library whose glibc floor is above `manylinux_2_28` or whose macOS
+  minimum is above 26.0; Linux builds both from the pinned tag inside the pinned
+  `manylinux_2_28` image, as the bundled lavapipe does, and macOS takes the release archive.
+  `THIRD-PARTY-NOTICES.md` names Slang's licence (`Apache-2.0 WITH LLVM-exception`) and the
+  projects it carries. The wheel's
   adapter closure excludes skia. Processor interpreters import the lent `tatolab.runtime` —
   one native artifact, no separate helper cdylib. The portability proof parses ELF and
   Mach-O itself: every Mach-O the lend carries links only the system, carries
