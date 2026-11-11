@@ -44,7 +44,9 @@
   once and readers take every change, at whatever rate a control moves. One writer per held
   project flushes the latest value of each changed kept key to
   `.tatolab/node-values.json` (whole-file write to a temporary file, then rename) at most once per
-  debounce window, so the file never runs at a control's rate and never sees concurrent writes.
+  debounce window, every value changed in that window batched into the one write, so the file
+  never runs at a control's rate and never sees concurrent writes. The writer runs off every
+  processing and request path: a control write never waits on disk (owner, 2026-11-11).
   Stop, `close_project` and a clean runtime shutdown flush at once. A crash loses at most one
   window. Nothing reaches the graph document or Git history (owner, 2026-11-11).
 - **Restore.** `open_project` and the runtime's start read the file; Play hands each kept value
