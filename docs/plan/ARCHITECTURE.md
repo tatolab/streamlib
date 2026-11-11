@@ -3322,7 +3322,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
   credited as the runtime's parent]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes, typed-stream-facts; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ gateway-nodes, typed-stream-facts, display-importable-viewer-frames; unbuilt: `tatolab-moq` and its gateway nodes, runtime viewers, a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
   never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
@@ -3721,7 +3721,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   API's socket may open a viewer: the owning user. Owner, 2026-11-07. Assumed unless overruled: a
   viewer reads the latest value and skips what it falls behind on, so it never slows the stream it
   reads.
-  [gateway-nodes]
+  [gateway-nodes; amended by display-importable-viewer-frames: a frame in memory Studio's display does not import is copied once on the engine's GPU into an image it does]
   Rejected: the runtime downscaling frames to thumbnails sent over the local API; thumbnail tiles
   beside a zero-copy full view (owner, 2026-11-07).
 - **OPEN** — Left for later changes, built against by nothing: a bounded-sample form for data
