@@ -76,7 +76,11 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::Disconnect { link })
             }
             StreamGraphOperation::SetNodeConfig { node, from, to } => {
-                self.update_processor_config(&self.the_processor_of_the_node(node)?, &to)?;
+                self.update_processor_config_compiled_right_away(
+                    &self.the_processor_of_the_node(node)?,
+                    &to,
+                )
+                .await?;
                 Ok(StreamGraphOperation::SetNodeConfig { node, from, to })
             }
             StreamGraphOperation::SetPinValue {
