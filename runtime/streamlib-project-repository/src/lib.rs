@@ -25,6 +25,7 @@ mod project_store;
 mod project_stream_document;
 mod project_transaction;
 mod project_views;
+mod sample_project;
 mod stream_fragment_references;
 mod stream_graph_action;
 mod stream_graph_document;
@@ -93,6 +94,10 @@ pub use project_transaction::{
 pub use project_views::{
     PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,
     TATOLAB_VIEW_MANIFEST_FILE_NAME, every_view_a_project_and_its_imports_bring, the_view_type_of,
+};
+pub use sample_project::{
+    SAMPLE_PROJECT_MAIN_STREAM_DOCUMENT_PATH, SampleProjectListed,
+    SampleProjectTheRuntimeUnitCarries, every_sample_project_in, the_sample_project_named,
 };
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,

@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "camera-compute-kernel",
+  "description": "Your webcam in black and white, graded on the GPU by a Slang compute kernel that lives in the project.",
+  "name": "Camera compute kernel",
   "project": "420d59b8-5f8d-4f43-b1b5-62ffbb599e2f"
 }

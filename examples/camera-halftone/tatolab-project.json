@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "camera-halftone",
+  "description": "Your webcam printed as newsprint by a Slang compute kernel, one ink dot per cell; the pixels never leave the GPU.",
+  "name": "Camera halftone",
   "project": "2b44fc09-c60f-4d1a-ad4f-cff6fef44090"
 }

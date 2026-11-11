@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "camera-virtual-camera",
+  "description": "One capture device in and two virtual cameras out, one untouched and one inverted by a Python node, for any app on the machine to open.",
+  "name": "Camera to two virtual cameras",
   "project": "3e98a424-b4e6-4052-86ab-a040cff9d5c2"
 }
