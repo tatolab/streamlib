@@ -1,0 +1,104 @@
+name: Cache Rust dependencies
+description: >-
+  Restores the Rust build cache `main` saved for this job, and lets `main` save
+  a new one only when the job's external crates or toolchain changed, or once a
+  week, never for a version-pin sync or a workspace edit alone.
+
+# Swatinem/rust-cache keys on every Cargo.toml and Cargo.lock it finds, workspace
+# crates' own version pins included, so left to itself it saves a full cache per
+# job whenever a release syncs those pins. Here `main` saves only when no save
+# this ISO week names the job's external crate set and toolchain; the week in
+# the key refills a cache GitHub evicted within days, with no crate change.
+
+inputs:
+  shared-key:
+    description: The job's Rust cache name.
+    required: true
+  workspaces:
+    description: Cargo workspaces and their target directories, as Swatinem/rust-cache takes them.
+    required: false
+    default: ". -> target"
+
+outputs:
+  external-crate-set-digest:
+    description: Digest of the external crates every workspace's Cargo.lock pins, and the toolchain.
+    value: ${{ steps.external-crate-set.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    # Only `[[package]]` entries with a `source` are external crates; a
+    # workspace crate has none, and its version is all a release changes.
+    - name: Name the external crate set
+      id: external-crate-set
+      shell: bash
+      env:
+        RUST_CACHE_WORKSPACES: ${{ inputs.workspaces }}
+      run: |
+        digest="$(
+          {
+            while read -r workspace_directory _; do
+              [ -n "$workspace_directory" ] || continue
+              lockfile="$workspace_directory/Cargo.lock"
+              [ -f "$lockfile" ] || continue
+              echo "== $lockfile"
+              awk '
+                /^\[\[package\]\]/ { if (entry ~ /\nsource = /) print entry; entry = $0; next }
+                { entry = entry "\n" $0 }
+                END { if (entry ~ /\nsource = /) print entry }
+              ' "$lockfile"
+            done <<< "$RUST_CACHE_WORKSPACES"
+            cat rust-toolchain.toml .cargo/config.toml 2>/dev/null || true
+          } | sha256sum | cut -c1-16
+        )"
+        iso_week="$(date -u +%G-W%V)"
+        {
+          echo "digest=$digest"
+          echo "marker-directory=$RUNNER_TEMP/rust-dependency-cache-marker-${{ inputs.shared-key }}"
+          echo "marker-key=rust-dependency-cache-saved-${{ inputs.shared-key }}-${RUNNER_OS}-${RUNNER_ARCH}-${digest}-${iso_week}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Ask whether main already saved a cache for this crate set
+      if: github.ref == 'refs/heads/main'
+      id: saved-for-this-crate-set
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.external-crate-set.outputs.marker-directory }}
+        key: ${{ steps.external-crate-set.outputs.marker-key }}
+        lookup-only: true
+
+    - name: Decide whether this run saves
+      id: save-decision
+      shell: bash
+      env:
+        ON_MAIN: ${{ github.ref == 'refs/heads/main' }}
+        SAVED_FOR_THIS_CRATE_SET: ${{ steps.saved-for-this-crate-set.outputs.cache-hit == 'true' }}
+      run: |
+        if [ "$ON_MAIN" = true ] && [ "$SAVED_FOR_THIS_CRATE_SET" != true ]; then
+          echo "save=true" >> "$GITHUB_OUTPUT"
+          echo "main saves this job's Rust cache: no save this week names this external crate set and toolchain"
+        else
+          echo "save=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Restore the Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.shared-key }}
+        workspaces: ${{ inputs.workspaces }}
+        save-if: ${{ steps.save-decision.outputs.save == 'true' }}
+        cache-on-failure: true
+
+    - name: Record that main saved a cache for this crate set
+      if: steps.save-decision.outputs.save == 'true' && steps.saved-for-this-crate-set.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p "${{ steps.external-crate-set.outputs.marker-directory }}"
+        echo "${{ steps.external-crate-set.outputs.digest }}" > "${{ steps.external-crate-set.outputs.marker-directory }}/external-crate-set-digest"
+
+    - name: Save the record
+      if: steps.save-decision.outputs.save == 'true' && steps.saved-for-this-crate-set.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.external-crate-set.outputs.marker-directory }}
+        key: ${{ steps.external-crate-set.outputs.marker-key }}
