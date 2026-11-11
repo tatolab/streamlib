@@ -90,6 +90,14 @@ def test_a_setting_the_source_does_not_take_is_refused():
         TestPatternSourceConfig(fps=60)  # type: ignore[call-arg]
 
 
+def test_a_running_source_takes_a_new_frame_size():
+    source = TestPatternSource(TestPatternSourceConfig())
+
+    source.configure(TestPatternSourceConfig(width=640, height=360))
+
+    assert (source._config.width, source._config.height) == (640, 360)
+
+
 def test_the_baked_overlays_are_the_extents_their_names_say():
     for overlay in (POTATO_SPRITE, SAMPLE_STREAM_CAPTION_PANEL):
         assert len(overlay.rgba_rows()) == overlay.width * overlay.height * 4

@@ -1201,6 +1201,18 @@ impl LoadedStreamInThisRuntime {
         processor_id: &ProcessorUniqueId,
         config: C,
     ) -> Result<()> {
+        self.log_a_processor_config_update_for_the_next_commit(processor_id, config)?;
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
+    }
+
+    /// Check `config` against everything that holds a processor's configuration and log it
+    /// for the next commit, publishing nothing.
+    pub(super) fn log_a_processor_config_update_for_the_next_commit<C: Serialize>(
+        &self,
+        processor_id: &ProcessorUniqueId,
+        config: C,
+    ) -> Result<()> {
         let config_json =
             serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
@@ -1248,10 +1260,7 @@ impl LoadedStreamInThisRuntime {
                 config_to_apply: config_json,
             });
             Ok(())
-        })?;
-
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        Ok(())
+        })
     }
 
     /// How many nodes this stream's live graph holds.

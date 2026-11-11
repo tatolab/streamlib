@@ -210,7 +210,11 @@ impl LoadedStreamInThisRuntime {
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
             if live_node.config != document_node.config {
-                self.update_processor_config(&live_node.processor_id, &document_node.config)?;
+                self.update_processor_config_compiled_right_away(
+                    &live_node.processor_id,
+                    &document_node.config,
+                )
+                .await?;
             }
             if live_node.exposed_config_fields != document_node.exposed_config_fields {
                 self.set_exposed_config_fields(
