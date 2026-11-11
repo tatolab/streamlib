@@ -1707,11 +1707,11 @@ class HelperProcessLifecycle:
         """Send the parent what `process()` raised when a run of raises begins,
         and `None` when a clean call ends one, so the graph shows the node
         raising while it keeps running; a call that ends as the last one did
-        sends nothing."""
+        sends nothing. A report the parent refused is sent again on the next
+        call, since the parent records each one in place of the last."""
         process_is_raising = raised is not None
         if process_is_raising == self._process_is_raising:
             return
-        self._process_is_raising = process_is_raising
         try:
             self._bridge.request_from_parent(
                 {
@@ -1723,10 +1723,12 @@ class HelperProcessLifecycle:
             )
         except EscalateRequestError as refusal:
             log.error(
-                "the parent did not take whether this node's process() raises; the graph "
-                "may not show it",
+                "the parent did not take whether this node's process() raises; the next "
+                "call tells it again",
                 error=str(refusal),
             )
+            return
+        self._process_is_raising = process_is_raising
 
     def _take_the_config_fields_its_node_exposes_as_inputs(self, exposed_config_fields: "list[str]") -> None:
         """Read each of `exposed_config_fields` from the input port of its name, in place of those read before."""
