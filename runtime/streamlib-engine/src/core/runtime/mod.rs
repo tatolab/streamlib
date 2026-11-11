@@ -16,6 +16,7 @@ mod machine_name;
 mod machine_state_directory;
 mod new_project_name_drawing;
 mod new_project_scaffold;
+mod node_of_a_stream_not_running;
 mod open_descriptor_soft_limit;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;

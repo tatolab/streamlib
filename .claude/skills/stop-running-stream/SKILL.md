@@ -1,6 +1,6 @@
 ---
 name: stop-running-stream
-description: Stop a project's streams on the machine's StreamLib runtime with `tatolab stop`, or forget its whole project with `tatolab rm`, then confirm with `tatolab streams` that it is no longer loaded so its camera / GPU claim is released — and end a runtime the session started for itself. Use when done driving a stream — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear a recorded stream before loading a fresh one. Wraps `tatolab stop`, `tatolab rm` and `tatolab streams`.
+description: Stop a project's streams on the machine's StreamLib runtime with `tatolab stop`, or forget its whole project with `tatolab rm`, then confirm with `tatolab streams` that it shows `stopped` (still held, its camera / GPU claim released) or, after `rm`, is gone — and end a runtime the session started for itself. Use when done driving a stream — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear a recorded stream before loading a fresh one. Wraps `tatolab stop`, `tatolab rm` and `tatolab streams`.
 ---
 
 # stop-running-stream
