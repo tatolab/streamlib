@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.68.62](https://github.com/tatolab/streamlib/compare/v0.68.61...v0.68.62) (2026-11-11)
+
+
+### Features
+
+* **assets:** serve each asset's media facts and preview picture ([116f42b](https://github.com/tatolab/streamlib/commit/116f42bac453e129198d63b8899f0cf4a5fa4434))
+
+
+### Bug Fixes
+
+* **engine:** copy a viewed frame into memory the viewer reads, by display import or CPU ([35dac20](https://github.com/tatolab/streamlib/commit/35dac207ca98d3a0994d933406cfe8c6f888889b))
+* **engine:** drop the graph argument the stream build no longer reads ([d24f7b7](https://github.com/tatolab/streamlib/commit/d24f7b76983b52fef2e7232f5c76a5f8925fa040))
+* **engine:** let a viewer read a viewed frame by CPU where its display cannot import one ([69d2cc7](https://github.com/tatolab/streamlib/commit/69d2cc75381aedfdccbec27e40e25e9a0e3d4950))
+* **engine:** load a graph holding no node as an empty stream ([d377ac7](https://github.com/tatolab/streamlib/commit/d377ac7a9774c30b3fc013bd6fc956b390e8e987))
+* **engine:** load a graph holding no node as an empty stream ([f906a1e](https://github.com/tatolab/streamlib/commit/f906a1e0f805ffebe0308e89c9eb9352ed510340)), closes [#3535](https://github.com/tatolab/streamlib/issues/3535)
+* keep a reader panic, an oversized box and a renamed file from breaking media-facts reads ([579d16f](https://github.com/tatolab/streamlib/commit/579d16fbe5940a670ab114f3e2b623cbb67ccfbb))
+* keep a reader panic's unreadable result and answer a dead reading thread ([48fc4b3](https://github.com/tatolab/streamlib/commit/48fc4b333e7c3615a15569452ec81d3607a3269f))
+* pin streamlib-asset-media-facts at 0.68.61 ([018649e](https://github.com/tatolab/streamlib/commit/018649eba8920f81293da7598261d8a4d78b27a0))
+
 ## [0.68.61](https://github.com/tatolab/streamlib/compare/v0.68.60...v0.68.61) (2026-11-11)
 
 

@@ -1,6 +1,6 @@
 [package]
 name = "tatolab-speaker"
-version = "0.68.61"
+version = "0.68.62"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
