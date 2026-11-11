@@ -886,8 +886,7 @@ impl Runner {
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let stream = self.build_the_stream_a_graph_load_names(
-            graph,
+        let stream = self.build_the_stream_a_load_names(
             load_options,
             LoadedStreamHolding::LivesWithTheHostProcess,
         )?;
@@ -927,7 +926,7 @@ impl Runner {
 
         use crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL;
 
-        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options, holding) {
+        let stream = match self.build_the_stream_a_load_names(load_options, holding) {
             Ok(stream) => stream,
             // Read after the build, so an interrupt landing during it abandons
             // the load rather than refusing it.
@@ -1297,9 +1296,8 @@ impl Runner {
     // Loading
     // =========================================================================
 
-    fn build_the_stream_a_graph_load_names(
+    fn build_the_stream_a_load_names(
         &self,
-        graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
         holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
