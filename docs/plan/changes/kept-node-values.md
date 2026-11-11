@@ -102,8 +102,9 @@ as stated until the owner says otherwise (session, 2026-11-11).
 
 1. **Kept Graph Input values** — the project store and its debounced writer, `ctx.store()` in
    Rust, a kept `GraphInput` restoring its value at setup and committing at teardown, `lifetime`
-   on `GraphInputConfig`. A stopped project's `graph` reading the store, and writes to a stopped
-   kept Input (Assumed 2), follow in ticket 1b. Engine tests over a real engine:
+   on `GraphInputConfig`. Ticket 1b follows with: a stopped project's `graph` reading the store,
+   writes to a stopped kept Input (Assumed 2), the store closed with `close_project` once that verb
+   lands, and dropping the keys of a node the graph no longer holds. Engine tests over a real engine:
    a kept Input written then Stop, Play reaches its readers with the written value; a reset Input
    returns to its `default`; 1,000 writes in one second commit at most four write transactions and
    the database holds the last; a restart restores the kept value.

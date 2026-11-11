@@ -127,8 +127,8 @@ pub use stream_graph_studio_contract::{
     StreamGraphNoteFields, StudioCanvasPair,
 };
 
-/// The directory inside a project that holds what the runtime keeps for it: history, content and
-/// staged imports.
+/// The directory inside a project that holds what the runtime keeps for it: history, content,
+/// staged imports and the project's store.
 pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";
 pub use tatolab_view_manifest::{
     TatolabViewAcceptedFiles, TatolabViewCapability, TatolabViewDeclaredPort, TatolabViewManifest,

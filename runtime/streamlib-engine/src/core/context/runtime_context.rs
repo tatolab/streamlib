@@ -391,7 +391,7 @@ impl RuntimeContext {
     }
 
     /// Create a processor-specific context carrying the placed node's UUID.
-    pub fn with_node_uuid(&self, node_uuid: uuid::Uuid) -> Self {
+    pub(crate) fn with_node_uuid(&self, node_uuid: uuid::Uuid) -> Self {
         Self {
             node_uuid: Some(node_uuid),
             ..self.clone()

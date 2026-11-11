@@ -1276,6 +1276,9 @@ impl Runner {
             "the shared native services",
         );
         engine.shared_native_services.stop_every_service();
+        engine
+            .project_stores_open_in_this_runtime
+            .commit_every_waiting_write_of_every_store_now();
         // The Mach service thread answers helpers' reports against the
         // timeline pairs, so it is joined before the pairs go, and both go
         // while the device that made their semaphores still exists.

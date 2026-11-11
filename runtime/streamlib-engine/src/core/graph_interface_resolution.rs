@@ -81,7 +81,7 @@ impl GraphInputValueLifetime {
             .find(|lifetime| declared.as_str() == Some(lifetime.wire_name()))
             .ok_or_else(|| {
                 format!(
-                    "its `{GRAPH_INPUT_LIFETIME_CONFIG_KEY}` is {declared}, and a lifetime is                      \"kept\" or \"reset\""
+                    "its `{GRAPH_INPUT_LIFETIME_CONFIG_KEY}` is {declared}, and a lifetime is \"kept\" or \"reset\""
                 )
             })
     }

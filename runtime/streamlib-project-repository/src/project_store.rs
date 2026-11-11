@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -79,10 +80,14 @@ pub enum ProjectStoreRefusal {
 
 type TableAndKey = (ProjectStoreTableName, String);
 
-/// The writes made since the writer last committed, the latest of each key, `None` a removal.
+type LatestValueOfEachKey = BTreeMap<TableAndKey, Option<Vec<u8>>>;
+
+/// The writes made since the writer last committed, the latest of each key, `None` a removal,
+/// and the batch a commit is writing now, which reads still see until it lands.
 #[derive(Default)]
 struct WritesWaitingForTheNextCommit {
-    latest_of_each_key: BTreeMap<TableAndKey, Option<Vec<u8>>>,
+    latest_of_each_key: LatestValueOfEachKey,
+    batch_being_committed: LatestValueOfEachKey,
     first_waiting_since: Option<Instant>,
     the_store_is_closing: bool,
 }
@@ -93,6 +98,7 @@ struct ProjectStoreSharedWithItsWriter {
     debounce_window: Duration,
     writes_waiting: Mutex<WritesWaitingForTheNextCommit>,
     a_write_is_waiting_or_the_store_closes: Condvar,
+    #[cfg(test)]
     write_transactions_committed: AtomicU64,
     commit_in_progress: Mutex<()>,
 }
@@ -138,6 +144,7 @@ impl ProjectStore {
             debounce_window,
             writes_waiting: Mutex::default(),
             a_write_is_waiting_or_the_store_closes: Condvar::new(),
+            #[cfg(test)]
             write_transactions_committed: AtomicU64::new(0),
             commit_in_progress: Mutex::new(()),
         });
@@ -184,13 +191,15 @@ impl ProjectStore {
         table: ProjectStoreTableName,
         key: &str,
     ) -> Result<Option<JsonValue>, ProjectStoreRefusal> {
-        let waiting = self
-            .shared_with_its_writer
-            .writes_waiting
-            .lock()
-            .latest_of_each_key
-            .get(&(table, key.to_string()))
-            .cloned();
+        let table_and_key = (table, key.to_string());
+        let waiting = {
+            let writes_waiting = self.shared_with_its_writer.writes_waiting.lock();
+            writes_waiting
+                .latest_of_each_key
+                .get(&table_and_key)
+                .or_else(|| writes_waiting.batch_being_committed.get(&table_and_key))
+                .cloned()
+        };
         let encoded = match waiting {
             Some(waiting) => waiting,
             None => self.shared_with_its_writer.read_committed(table, key)?,
@@ -200,14 +209,15 @@ impl ProjectStore {
             .transpose()
     }
 
-    /// Commit every write waiting now, without waiting for the debounce window.
+    /// Commit every write waiting now, without waiting for the debounce window; a commit that
+    /// fails leaves its writes waiting for the writer to try again.
     pub fn commit_every_waiting_write_now(&self) -> Result<(), ProjectStoreRefusal> {
         self.shared_with_its_writer
             .take_and_commit_every_waiting_write()
     }
 
-    /// How many write transactions the store has committed since it opened.
-    pub fn write_transactions_committed(&self) -> u64 {
+    #[cfg(test)]
+    fn write_transactions_committed(&self) -> u64 {
         self.shared_with_its_writer
             .write_transactions_committed
             .load(Ordering::Acquire)
@@ -246,10 +256,33 @@ impl ProjectStoreSharedWithItsWriter {
         }
     }
 
-    fn take_every_waiting_write(&self) -> BTreeMap<TableAndKey, Option<Vec<u8>>> {
+    fn take_every_waiting_write_into_the_batch_being_committed(&self) -> LatestValueOfEachKey {
         let mut writes_waiting = self.writes_waiting.lock();
         writes_waiting.first_waiting_since = None;
-        std::mem::take(&mut writes_waiting.latest_of_each_key)
+        writes_waiting.batch_being_committed =
+            std::mem::take(&mut writes_waiting.latest_of_each_key);
+        writes_waiting.batch_being_committed.clone()
+    }
+
+    /// The batch landed: reads find it on disk now.
+    fn forget_the_batch_committed(&self) {
+        self.writes_waiting.lock().batch_being_committed.clear();
+    }
+
+    /// The batch did not land: put each of its writes back unless a newer one waits, so the
+    /// writer tries them again within the window.
+    fn put_the_batch_back_to_wait(&self) {
+        let mut writes_waiting = self.writes_waiting.lock();
+        let batch = std::mem::take(&mut writes_waiting.batch_being_committed);
+        for (table_and_key, encoded) in batch {
+            writes_waiting
+                .latest_of_each_key
+                .entry(table_and_key)
+                .or_insert(encoded);
+        }
+        if writes_waiting.first_waiting_since.is_none() {
+            writes_waiting.first_waiting_since = Some(Instant::now());
+        }
     }
 
     fn commit_waiting_writes_until_the_store_closes(&self) {
@@ -283,10 +316,23 @@ impl ProjectStoreSharedWithItsWriter {
     /// lands over a newer one.
     fn take_and_commit_every_waiting_write(&self) -> Result<(), ProjectStoreRefusal> {
         let _one_commit_at_a_time = self.commit_in_progress.lock();
-        let waiting = self.take_every_waiting_write();
-        if waiting.is_empty() {
+        let batch = self.take_every_waiting_write_into_the_batch_being_committed();
+        if batch.is_empty() {
             return Ok(());
         }
+        match self.write_the_batch(&batch) {
+            Ok(()) => {
+                self.forget_the_batch_committed();
+                Ok(())
+            }
+            Err(refusal) => {
+                self.put_the_batch_back_to_wait();
+                Err(refusal)
+            }
+        }
+    }
+
+    fn write_the_batch(&self, batch: &LatestValueOfEachKey) -> Result<(), ProjectStoreRefusal> {
         let failed = |doing: &'static str| {
             let store_file = self.store_file.clone();
             move |why: &dyn std::fmt::Display| ProjectStoreRefusal::Failed {
@@ -302,7 +348,7 @@ impl ProjectStoreSharedWithItsWriter {
         {
             let mut tables_open: BTreeMap<ProjectStoreTableName, redb::Table<&str, &[u8]>> =
                 BTreeMap::new();
-            for ((table, key), encoded) in &waiting {
+            for ((table, key), encoded) in batch {
                 if !tables_open.contains_key(table) {
                     let opened = write_transaction
                         .open_table(table.definition())
@@ -329,6 +375,7 @@ impl ProjectStoreSharedWithItsWriter {
         write_transaction
             .commit()
             .map_err(|why| failed("commit")(&why))?;
+        #[cfg(test)]
         self.write_transactions_committed
             .fetch_add(1, Ordering::AcqRel);
         Ok(())

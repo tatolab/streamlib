@@ -120,7 +120,8 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Hand `value` to the stream's top-level `GraphInput` declaring the Input `input_name`,
     /// which publishes it on its `value` output to every reader, answering the Input's family.
-    /// Live data: nothing is recorded, the last write wins, and the value is gone on reload.
+    /// Live data: nothing is recorded in the graph or history and the last write wins; a `kept`
+    /// Input keeps it in the project's store, and a `reset` one returns to its default at Stop.
     fn write_a_value_to_a_top_level_graph_input(
         &self,
         input_name: String,

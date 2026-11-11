@@ -632,6 +632,17 @@ fn a_kept_value_its_family_no_longer_takes_leaves_the_graph_input_at_its_default
         stream.the_graph_inputs_current_value(&fader_id),
         Some(json!(0.5))
     );
+    assert_eq!(
+        project_stores
+            .the_store_of_the_project_at(stream._project_directory.path())
+            .unwrap()
+            .read(
+                streamlib_project_repository::ProjectStoreTableName::named("node_store"),
+                &format!("{fader_uuid}/value"),
+            )
+            .unwrap(),
+        None
+    );
 }
 
 #[test]
@@ -645,4 +656,117 @@ fn a_graph_input_declaring_a_lifetime_that_is_neither_kept_nor_reset_is_refused(
         refusal.contains("\"forever\"") && refusal.contains("\"kept\""),
         "{refusal}"
     );
+}
+
+/// A project `acme-show` on disk, its stream `a` loaded in a runner of its own.
+fn a_runner_holding_the_stream_of_the_project_at(
+    project_directory: &Path,
+) -> (Arc<Runner>, Arc<LoadedStreamInThisRuntime>) {
+    ensure_test_mocks_registered();
+    let runner = Runner::new().expect("the engine builds");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory,
+            "a",
+        ))
+        .expect("the stream loads");
+    (runner, stream)
+}
+
+fn add_the_lights_input(stream: &LoadedStreamInThisRuntime, node_uuid: uuid::Uuid) {
+    stream
+        .add_processor(
+            ProcessorSpec::new(
+                ProcessorClassImportPath::new(
+                    crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+                )
+                .unwrap(),
+                json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
+            )
+            .with_display_name("lights".to_string())
+            .with_node_uuid(node_uuid),
+        )
+        .expect("a GraphInput is added");
+}
+
+fn play(stream: &Arc<LoadedStreamInThisRuntime>) {
+    stream.start().expect("the stream plays");
+    stream
+        .wait_until_every_processor_is_running(Duration::from_secs(30))
+        .expect("the GraphInput runs");
+}
+
+fn the_value_a_new_reader_of_the_input_is_handed(
+    stream: &LoadedStreamInThisRuntime,
+    async_runtime: &tokio::runtime::Runtime,
+    node_uuid: uuid::Uuid,
+) -> Value {
+    let viewer = async_runtime
+        .block_on(stream.open_a_viewer_of_an_output_port(
+            node_uuid.to_string(),
+            "value".to_string(),
+            None,
+        ))
+        .expect("a running GraphInput's value opens a viewer");
+    let hand_off = viewer.hand_off().clone();
+    let mut reader = OutputPortViewerReader::subscribe(
+        &hand_off.iceoryx2_domain_root,
+        &hand_off.channel_service_name,
+        "a-reader",
+    )
+    .expect("the reader subscribes to the port's channel");
+    let read_back = rmp_serde::from_slice(&the_next_message_read(&mut reader).payload).unwrap();
+    drop(viewer);
+    read_back
+}
+
+#[test]
+#[serial]
+fn a_kept_graph_input_reaches_a_new_reader_with_its_value_after_a_real_stop_play_and_restart() {
+    let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+    std::fs::write(
+        project_directory.path().join(PROJECT_FILE_NAME),
+        TatolabProjectFile::of_a_new_project("acme-show")
+            .canonical_bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    let async_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let lights_uuid = uuid::Uuid::new_v4();
+    let written = json!({ "level": 0.8, "scene": "warm" });
+    {
+        let (_runner, stream) =
+            a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+        add_the_lights_input(&stream, lights_uuid);
+        play(&stream);
+        async_runtime
+            .block_on(
+                stream.write_a_value_to_a_top_level_graph_input(
+                    "lights".to_string(),
+                    written.clone(),
+                ),
+            )
+            .expect("the Input is written");
+        stream
+            .stop_playback_keeping_the_graph()
+            .expect("the stream stops");
+        play(&stream);
+        assert_eq!(
+            the_value_a_new_reader_of_the_input_is_handed(&stream, &async_runtime, lights_uuid),
+            written
+        );
+        stream.stop().expect("the stream ends");
+    }
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    add_the_lights_input(&stream, lights_uuid);
+    play(&stream);
+    assert_eq!(
+        the_value_a_new_reader_of_the_input_is_handed(&stream, &async_runtime, lights_uuid),
+        written
+    );
+    stream.stop().expect("the stream ends");
 }

@@ -93,3 +93,30 @@ fn a_removed_key_reads_as_absent_before_and_after_its_commit() {
     store.commit_every_waiting_write_now().expect("commits");
     assert_eq!(store.read(TABLE_UNDER_TEST, "slider").expect("reads"), None);
 }
+
+#[test]
+fn writes_spread_over_a_second_commit_about_once_per_window_holding_the_last() {
+    let project_directory = tempfile::tempdir().expect("a temporary project");
+    let store = ProjectStore::open_in_the_project_at(project_directory.path()).expect("opens");
+    let started = std::time::Instant::now();
+    for step in 0..1000_u32 {
+        let write_at = started + Duration::from_millis(u64::from(step));
+        while std::time::Instant::now() < write_at {
+            std::thread::yield_now();
+        }
+        store
+            .write(TABLE_UNDER_TEST, "slider", &json!(f64::from(step) / 1000.0))
+            .expect("writes");
+    }
+    store.commit_every_waiting_write_now().expect("commits");
+    assert!(
+        store.write_transactions_committed() <= 6,
+        "{} write transactions for a second of writes at a {:?} window",
+        store.write_transactions_committed(),
+        super::PROJECT_STORE_WRITE_DEBOUNCE_WINDOW
+    );
+    assert_eq!(
+        store.read(TABLE_UNDER_TEST, "slider").expect("reads"),
+        Some(json!(0.999))
+    );
+}

@@ -236,9 +236,10 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         Ok(())
     }
 
-    /// Open the store a kept `GraphInput` keeps its value in, and take the value it kept.
+    /// Open the store a `GraphInput` keeps its value in: a kept one takes the value it kept, and a
+    /// reset one forgets any it kept before.
     fn take_the_kept_value_of_a_graph_input(&mut self, ctx: &RuntimeContextFullAccess<'_>) {
-        if self.graph_input_value_lifetime != Some(GraphInputValueLifetime::Kept) {
+        if self.graph_input_value_lifetime.is_none() {
             return;
         }
         match ctx.store() {
@@ -254,11 +255,16 @@ impl NodeWhoseOutputsAClientWritesProcessor {
     /// Take the value a kept `GraphInput` kept in `store`, and keep each value written to it
     /// there.
     pub(crate) fn keep_the_graph_input_value_in(&mut self, store: StoreScopedToThisNode) {
-        if self.graph_input_value_lifetime != Some(GraphInputValueLifetime::Kept) {
-            return;
+        match self.graph_input_value_lifetime {
+            Some(GraphInputValueLifetime::Kept) => {}
+            Some(GraphInputValueLifetime::Reset) => {
+                store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY);
+                return;
+            }
+            None => return,
         }
         match store.read(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
-            Ok(Some(kept)) => self.take_a_kept_value_its_family_carries(kept),
+            Ok(Some(kept)) => self.take_a_kept_value_its_family_carries(kept, &store),
             Ok(None) => {}
             Err(not_read) => tracing::warn!(
                 "`GraphInput` node `{}` could not read the value it kept, so it starts from its \
@@ -276,13 +282,17 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         {
             tracing::warn!(
                 "`GraphInput` node `{}` stopped and its kept value did not reach the disk yet; \
-                 the store's writer commits it: {not_committed}",
+                 the store's writer tries it again: {not_committed}",
                 self.node_name
             );
         }
     }
 
-    fn take_a_kept_value_its_family_carries(&mut self, kept: JsonValue) {
+    fn take_a_kept_value_its_family_carries(
+        &mut self,
+        kept: JsonValue,
+        store: &StoreScopedToThisNode,
+    ) {
         let Some(&family) = self
             .family_of_each_output
             .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
@@ -294,12 +304,15 @@ impl NodeWhoseOutputsAClientWritesProcessor {
                 self.current_value_of_each_output
                     .insert(GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(), kept);
             }
-            Err(why) => tracing::warn!(
-                "`GraphInput` node `{}` kept {kept}, which the {} it carries now does not take, \
-                 so it starts from its default: {why}",
-                self.node_name,
-                family.declaration_name()
-            ),
+            Err(why) => {
+                tracing::warn!(
+                    "`GraphInput` node `{}` kept {kept}, which the {} it carries now does not \
+                     take, so it forgets it and starts from its default: {why}",
+                    self.node_name,
+                    family.declaration_name()
+                );
+                store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY);
+            }
         }
     }
 

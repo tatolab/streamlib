@@ -55,7 +55,7 @@ impl StoreScopedToThisNode {
     }
 
     /// Commit every write the project's store holds waiting, without waiting for its window.
-    pub fn commit_every_waiting_write_now(&self) -> Result<()> {
+    pub(crate) fn commit_every_waiting_write_now(&self) -> Result<()> {
         self.project_store
             .commit_every_waiting_write_now()
             .map_err(|refusal| Error::Runtime(refusal.to_string()))
@@ -108,5 +108,24 @@ impl ProjectStoresOpenInThisRuntime {
         );
         project_store_by_resolved_directory.insert(resolved_project_directory, Arc::clone(&opened));
         Ok(opened)
+    }
+
+    /// Commit every write each open store holds waiting, as the runtime shuts down.
+    pub(crate) fn commit_every_waiting_write_of_every_store_now(&self) {
+        let open_stores: Vec<(PathBuf, Arc<ProjectStore>)> = self
+            .project_store_by_resolved_directory
+            .lock()
+            .iter()
+            .map(|(directory, store)| (directory.clone(), Arc::clone(store)))
+            .collect();
+        for (project_directory, store) in open_stores {
+            if let Err(not_committed) = store.commit_every_waiting_write_now() {
+                tracing::error!(
+                    project_directory = %project_directory.display(),
+                    "the runtime shut down and the project's store did not commit what waited: \
+                     {not_committed}"
+                );
+            }
+        }
     }
 }
