@@ -375,6 +375,40 @@ impl StreamGraphOperation {
         }
     }
 
+    /// The operation as made at its own level, with the path of fragment nodes from the stream's
+    /// own level to that level: an `EditInsideFragment`'s edit, or this operation at an empty
+    /// path.
+    pub fn the_edit_at_its_own_level(&self) -> (Vec<Uuid>, &StreamGraphOperation) {
+        let mut level = Vec::new();
+        let mut edit = self;
+        while let Self::EditInsideFragment {
+            fragment,
+            edit: inner,
+            ..
+        } = edit
+        {
+            level.push(*fragment);
+            edit = inner;
+        }
+        (level, edit)
+    }
+
+    /// [`Self::the_edit_at_its_own_level`], the edit to change in place.
+    pub fn the_edit_at_its_own_level_mut(&mut self) -> (Vec<Uuid>, &mut StreamGraphOperation) {
+        let mut level = Vec::new();
+        let mut edit = self;
+        while let Self::EditInsideFragment {
+            fragment,
+            edit: inner,
+            ..
+        } = edit
+        {
+            level.push(*fragment);
+            edit = inner;
+        }
+        (level, edit)
+    }
+
     /// The node the operation acts on; none for an operation on a labelled group.
     pub fn node(&self) -> Option<Uuid> {
         match self {
