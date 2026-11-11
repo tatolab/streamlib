@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.68.68](https://github.com/tatolab/streamlib/compare/v0.68.67...v0.68.68) (2026-11-11)
+
+
+### Features
+
+* **engine:** a stream whose venv is not made or whose start is refused stays held ([ea7102d](https://github.com/tatolab/streamlib/commit/ea7102d2886b5ef23281d4b8881bd7845c93d8e8))
+* **engine:** a stream whose venv is not made or whose start is refused stays held ([c8bac30](https://github.com/tatolab/streamlib/commit/c8bac3026e026bb4796d1c8ea384abeb498510c4))
+
+
+### Bug Fixes
+
+* **engine:** placeholder ports are inferred without holding their lock ([b613029](https://github.com/tatolab/streamlib/commit/b613029c0de2fcb249fa31b604bd2afcb49562aa))
+
 ## [0.68.67](https://github.com/tatolab/streamlib/compare/v0.68.66...v0.68.67) (2026-11-11)
 
 
