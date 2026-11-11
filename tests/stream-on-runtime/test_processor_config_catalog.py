@@ -85,11 +85,8 @@ def schema_for(served_catalog: "dict[str, Any]", probe: str) -> "dict[str, Any]"
     return document
 
 
-def test_a_processor_with_no_description_is_served_its_docstring(served_catalog):
-    """The text the author already wrote reaches the agent reading the catalog."""
-    assert entry_for(served_catalog, "ModelConfiguredProbe")["description"] == (
-        "Configured by a model, and described by this docstring alone."
-    )
+def test_a_processor_with_no_description_is_served_none_from_its_docstring(served_catalog):
+    assert entry_for(served_catalog, "ModelConfiguredProbe")["description"] == ""
 
 
 def test_an_explicit_description_is_served_over_the_docstring(served_catalog):
