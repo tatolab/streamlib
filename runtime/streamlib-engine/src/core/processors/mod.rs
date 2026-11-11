@@ -47,5 +47,7 @@ pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };
 pub use processor_spec::ProcessorSpec;
-pub(crate) use project_view_node::ProjectViewNodeProcessor;
 pub use project_view_node::VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME;
+pub(crate) use project_view_node::{
+    NodeWhoseOutputsAClientWritesProcessor, the_message_a_value_written_onto_an_output_is,
+};

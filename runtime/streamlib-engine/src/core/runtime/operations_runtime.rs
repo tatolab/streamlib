@@ -701,6 +701,16 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn write_a_value_to_a_top_level_graph_input(
+        &self,
+        input_name: String,
+        value: serde_json::Value,
+    ) -> BoxFuture<'_, Result<crate::core::descriptors::PortFamily>> {
+        self.in_this_streams_log_route(
+            self.hand_a_value_written_to_a_top_level_graph_input(input_name, value),
+        )
+    }
+
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         self.add_processor_reporting_its_name(spec)
             .map(|added| added.processor_id)

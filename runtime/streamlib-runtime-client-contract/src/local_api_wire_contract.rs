@@ -500,6 +500,18 @@ pub struct WriteStudioViewOutputToolResult {
     pub port: String,
 }
 
+/// The `write_graph_input` tool's result: the Input of the stream's top-level `GraphInput` the
+/// value was handed to, which published it to every reader.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteGraphInputToolResult {
+    /// The stream id.
+    pub stream: String,
+    /// The Input's name, as the `GraphInput`'s config declares it under `port`.
+    pub input: String,
+    /// The Input's family, as its wire name: `array`, `channels` or `records`.
+    pub family: String,
+}
+
 /// The `set_stream_clock_scale` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetStreamClockScaleToolResult {

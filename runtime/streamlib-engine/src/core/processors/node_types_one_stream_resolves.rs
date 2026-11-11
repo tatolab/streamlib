@@ -19,7 +19,8 @@ use crate::core::graph::{
 };
 use crate::core::processors::processor_instance_factory::refuse_port_names_not_cast_or_declared_twice;
 use crate::core::processors::project_view_node::{
-    ProjectViewNodeProcessor, the_node_type_of_a_project_view,
+    NodeWhoseOutputsAClientWritesProcessor, the_node_type_of_a_project_view,
+    the_node_type_of_a_top_level_graph_input,
 };
 use crate::core::processors::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance,
@@ -33,6 +34,31 @@ struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
     input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
     how_its_nodes_run: HowANodeOfADescribedTypeRuns,
 }
+
+/// The node type every stream's top-level `GraphInput` runs as.
+static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
+    Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>,
+> = std::sync::LazyLock::new(|| {
+    let descriptor = the_node_type_of_a_top_level_graph_input()
+        .expect("the GraphInput node type's names are valid");
+    Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
+        input_and_output_port_info: (
+            Vec::new(),
+            descriptor.outputs.iter().map(PortInfo::from).collect(),
+        ),
+        descriptor,
+        how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+            Box::new(|node| {
+                Ok(Box::new(
+                    NodeWhoseOutputsAClientWritesProcessor::for_a_top_level_graph_input(node)?,
+                )
+                    as Box<
+                        dyn crate::core::processors::DynGeneratedProcessor + Send,
+                    >)
+            }),
+        ),
+    })
+});
 
 /// How a node of a type a stream's processor interpreter described runs.
 pub(crate) enum HowANodeOfADescribedTypeRuns {
@@ -82,8 +108,9 @@ pub(crate) struct DescribedNodeTypesAsTheyStoodBeforeARefusedChange {
 }
 
 /// The node types one loaded stream resolves: every natively compiled type in
-/// [`PROCESSOR_REGISTRY`], then each view its project and their imports bring, then the types
-/// described in the stream's own processor interpreter.
+/// [`PROCESSOR_REGISTRY`], then the type a top-level `GraphInput` runs as, then each view its
+/// project and their imports bring, then the types described in the stream's own processor
+/// interpreter.
 #[derive(Default)]
 pub struct NodeTypesOneStreamResolves {
     view_types_this_streams_project_brings: RwLock<
@@ -175,13 +202,16 @@ impl NodeTypesOneStreamResolves {
                     how_its_nodes_run:
                         HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(
                             move |node| {
-                                Ok(Box::new(ProjectViewNodeProcessor::for_the_node(
-                                    node,
-                                    descriptor_for_constructor.clone(),
-                                ))
-                                    as Box<
-                                        dyn crate::core::processors::DynGeneratedProcessor + Send,
-                                    >)
+                                Ok(
+                                    Box::new(NodeWhoseOutputsAClientWritesProcessor::for_the_node(
+                                        node,
+                                        descriptor_for_constructor.clone(),
+                                    ))
+                                        as Box<
+                                            dyn crate::core::processors::DynGeneratedProcessor
+                                                + Send,
+                                        >,
+                                )
                             },
                         )),
                 }),
@@ -354,6 +384,9 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &ProcessorClassImportPath,
     ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
+        if node_type.as_str() == crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE {
+            return Some(Arc::clone(&THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS));
+        }
         self.view_types_this_streams_project_brings
             .read()
             .get(node_type)

@@ -362,3 +362,151 @@ fn a_panel_reads_a_view_nodes_input_through_a_viewer_of_the_port_linked_into_it(
     let message = the_next_message_read(&mut reader);
     assert_eq!(message.payload, record);
 }
+
+impl AStreamOfAProjectBringingViews {
+    fn add_a_top_level_graph_input(&self, name: &str, config: Value) -> ProcessorUniqueId {
+        self.stream
+            .add_processor(
+                ProcessorSpec::new(
+                    ProcessorClassImportPath::new(
+                        crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+                    )
+                    .unwrap(),
+                    config,
+                )
+                .with_display_name(name.to_string()),
+            )
+            .expect("a GraphInput is added")
+    }
+
+    fn write_the_input(&self, input: &str, value: Value) -> Result<PortFamily> {
+        self.async_runtime.block_on(
+            self.stream
+                .write_a_value_to_a_top_level_graph_input(input.to_string(), value),
+        )
+    }
+
+    fn with_the_graph_inputs_processor<T>(
+        &self,
+        node_id: &ProcessorUniqueId,
+        call: impl FnOnce(&mut crate::core::processors::NodeWhoseOutputsAClientWritesProcessor) -> T,
+    ) -> T {
+        self.stream.compiler.scope(|graph, _tx| {
+            let node = graph.traversal().v(node_id).first().unwrap();
+            let mut processor = node
+                .get::<crate::core::graph::ProcessorInstanceComponent>()
+                .unwrap()
+                .0
+                .lock();
+            call(
+                processor
+                    .as_any_mut()
+                    .downcast_mut::<crate::core::processors::NodeWhoseOutputsAClientWritesProcessor>()
+                    .expect("a GraphInput runs as a node whose outputs a client writes"),
+            )
+        })
+    }
+}
+
+#[test]
+#[serial]
+fn a_value_written_to_a_graph_input_twice_reaches_both_readers_and_the_graph_keeps_none_of_it() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let cue_id =
+        stream.add_a_top_level_graph_input("cue", json!({ "port": "cue", "family": "records" }));
+    let cue_uuid = stream.run(&cue_id);
+    let graph_before = stream.what_the_graph_holds_of(&cue_id);
+    let (_left_viewer, mut left_reader) = stream.a_reader_of(&cue_uuid, "value");
+    let (_right_viewer, mut right_reader) = stream.a_reader_of(&cue_uuid, "value");
+
+    for record in [json!({ "track": "intro" }), json!({ "track": "drop" })] {
+        assert_eq!(
+            stream.write_the_input("cue", record.clone()).unwrap(),
+            PortFamily::Records
+        );
+        for reader in [&mut left_reader, &mut right_reader] {
+            let message = the_next_message_read(reader);
+            let read_back: Value = rmp_serde::from_slice(&message.payload).unwrap();
+            assert_eq!(read_back, record);
+        }
+    }
+
+    assert_eq!(
+        stream.with_the_graph_inputs_processor(&cue_id, |processor| processor
+            .current_value_of_the_output("value")
+            .cloned()),
+        Some(json!({ "track": "drop" }))
+    );
+    assert_eq!(stream.what_the_graph_holds_of(&cue_id), graph_before);
+}
+
+#[test]
+#[serial]
+fn an_array_written_to_a_graph_input_reaches_its_reader_as_its_values_attribute() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let fader_id = stream.add_a_top_level_graph_input(
+        "fader",
+        json!({ "port": "Fader", "family": "array", "range": [0, 1] }),
+    );
+    let fader_uuid = stream.run(&fader_id);
+    let (_viewer, mut reader) = stream.a_reader_of(&fader_uuid, "value");
+
+    assert_eq!(
+        stream.write_the_input("fader", json!(0.25)).unwrap(),
+        PortFamily::Array
+    );
+
+    let message = the_next_message_read(&mut reader);
+    assert_eq!(
+        message.payload_descriptor.known_kind().ok(),
+        Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+    );
+}
+
+#[test]
+#[serial]
+fn a_graph_inputs_default_reaches_a_reader_its_last_send_missed() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let cue_id = stream.add_a_top_level_graph_input(
+        "cue",
+        json!({ "port": "cue", "family": "records", "default": { "track": "intro" } }),
+    );
+    let cue_uuid = stream.run(&cue_id);
+    let (_viewer, mut reader) = stream.a_reader_of(&cue_uuid, "value");
+
+    stream
+        .with_the_graph_inputs_processor(&cue_id, |processor| {
+            processor.hand_each_current_value_to_a_reader_it_has_not_reached()
+        })
+        .expect("the default is published");
+
+    let message = the_next_message_read(&mut reader);
+    let read_back: Value = rmp_serde::from_slice(&message.payload).unwrap();
+    assert_eq!(read_back, json!({ "track": "intro" }));
+}
+
+#[test]
+#[serial]
+fn a_write_to_an_input_no_graph_input_declares_or_of_the_wrong_shape_is_refused_naming_why() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let cue_id =
+        stream.add_a_top_level_graph_input("cue", json!({ "port": "cue", "family": "records" }));
+    stream.run(&cue_id);
+
+    let refusal = stream
+        .write_the_input("fader", json!(1))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains("`fader`") && refusal.contains("`cue`"),
+        "{refusal}"
+    );
+    let refusal = stream
+        .write_the_input("cue", json!("drop"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refusal.contains("carries Records") && refusal.contains("JSON object"),
+        "{refusal}"
+    );
+}

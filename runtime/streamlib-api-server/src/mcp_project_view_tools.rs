@@ -14,7 +14,7 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListProjectViewsToolResult, ProjectViewDeclaredPort, ProjectViewListed,
-    WriteStudioViewOutputToolResult,
+    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
@@ -40,6 +40,22 @@ struct WriteStudioViewOutputToolArguments {
     port: String,
     #[schemars(
         description = "The value, as the port's family carries it: a Records port takes a JSON object; an Array port a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels port a number, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
+    )]
+    value: serde_json::Value,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct WriteGraphInputToolArguments {
+    #[schemars(description = "The stream id of the running stream.")]
+    stream: String,
+    #[schemars(
+        description = "The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as every exposed name is."
+    )]
+    input: String,
+    #[schemars(
+        description = "The value, as the Input's family carries it: a Records Input takes a JSON object; an Array Input a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels Input a number or a bool, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
     )]
     value: serde_json::Value,
 }
@@ -151,6 +167,32 @@ impl LocalApiMcpServerHandler {
         serialized_tool_result(
             "write_studio_view_output",
             &WriteStudioViewOutputToolResult { stream, node, port },
+        )
+    }
+
+    #[tool(
+        description = "Hand a value to the Input `input` of the running stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process. A write is live data: many clients may write one Input and the last write wins, nothing is recorded in the graph document or the project's history, and the value is gone on the next load. Until a write, the Input carries its config's `default`, if it declares one. `graph` renders the value an Input carries now under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for a stream that is not running, an Input no top-level `GraphInput` declares, and a value its family does not take."
+    )]
+    async fn write_graph_input(
+        &self,
+        Parameters(WriteGraphInputToolArguments {
+            stream,
+            input,
+            value,
+        }): Parameters<WriteGraphInputToolArguments>,
+    ) -> ToolCallAnswer {
+        let stream_operations = self.the_stream_a_tool_call_names("write_graph_input", &stream)?;
+        let family = stream_operations
+            .write_a_value_to_a_top_level_graph_input(input.clone(), value)
+            .await
+            .map_err(|refusal| format!("write_graph_input failed: {refusal}"))?;
+        serialized_tool_result(
+            "write_graph_input",
+            &WriteGraphInputToolResult {
+                stream,
+                input,
+                family: family.wire_name().to_owned(),
+            },
         )
     }
 }

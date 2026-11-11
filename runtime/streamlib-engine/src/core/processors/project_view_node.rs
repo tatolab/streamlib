@@ -1,8 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A node of a project view's type: the plug a Tato Studio view takes in a stream, whose inputs
-//! a panel reads through a viewer and whose outputs carry what a panel writes onto them.
+//! A node whose outputs a client writes: a node of a project view's type, the plug a Tato Studio
+//! view takes in a stream, whose inputs a panel reads through a viewer and whose outputs carry
+//! what a panel writes onto them; and a stream's top-level `GraphInput`, whose one `value` output
+//! carries what a client writes to the Input.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -24,6 +26,10 @@ use crate::core::descriptors::{
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorNode;
+use crate::core::graph_interface_resolution::{
+    GRAPH_INPUT_DEFAULT_CONFIG_KEY, GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME,
+};
 use crate::core::processors::DynGeneratedProcessor;
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
@@ -95,20 +101,81 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
     }
 }
 
-/// The processor a node of a view's type runs as, in this process: it publishes each value a
-/// panel writes onto one of its outputs, and takes in what its inputs are sent, which a panel
-/// reads through a viewer of the port linked in.
-pub(crate) struct ProjectViewNodeProcessor {
+/// How often a top-level `GraphInput` looks for a reader its current value has not reached.
+const GRAPH_INPUT_INTERVAL_BETWEEN_LOOKS_FOR_A_NEW_READER_MS: u32 = 100;
+
+/// The descriptor of the node type every top-level `GraphInput` runs as: one `value` output,
+/// of the family its config names.
+pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<ProcessorDescriptor> {
+    let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
+    value_family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
+    let mut descriptor = ProcessorDescriptor::new(
+        ProcessorClassShortName::new("GraphInput".to_string())
+            .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
+        ProcessorClassImportPath::new(GRAPH_INPUT_NODE_TYPE.to_string())
+            .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
+        "One Input of a stream: every port `value` is linked to reads what a client writes."
+            .to_string(),
+    );
+    descriptor.outputs = vec![PortDescriptor {
+        name: GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
+        description: "What a client writes to the Input, of the declared family.".to_string(),
+        required: false,
+        delivery_profile: None,
+        borrow_quota: None,
+        audio_window: None,
+        family: value_family,
+        pin_default: None,
+    }];
+    Ok(descriptor)
+}
+
+/// The processor a node whose outputs a client writes runs as, in this process: it publishes
+/// each value written onto one of its outputs, holds it as that output's current value, and takes
+/// in what its inputs are sent, which a panel reads through a viewer of the port linked in.
+pub(crate) struct NodeWhoseOutputsAClientWritesProcessor {
     node_name: String,
     descriptor: ProcessorDescriptor,
     config_json: JsonValue,
+    execution: ProcessExecution,
     family_of_each_output: HashMap<String, PortFamily>,
+    current_value_of_each_output: HashMap<String, JsonValue>,
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
 }
 
-impl ProjectViewNodeProcessor {
+impl NodeWhoseOutputsAClientWritesProcessor {
+    /// The processor of a top-level `GraphInput` `node`, its `value` output of the family its
+    /// config names and holding the config's `default` until a client writes.
+    pub(crate) fn for_a_top_level_graph_input(node: &ProcessorNode) -> Result<Self> {
+        let config = node.config.clone().unwrap_or_default();
+        let mut descriptor = the_node_type_of_a_top_level_graph_input()?;
+        let family = streamlib_processor_schema::output_port_family_resolved_against_config(
+            &descriptor.outputs[0].family,
+            Some(&config),
+        )
+        .map_err(|why| {
+            Error::Configuration(format!("`GraphInput` node `{}`: {why}", node.display_name))
+        })?;
+        descriptor.outputs[0].family = PortFamilyDeclaration::of_family(family);
+        let mut processor = Self::for_the_node(node, descriptor);
+        processor.execution = ProcessExecution::Continuous {
+            interval_ms: GRAPH_INPUT_INTERVAL_BETWEEN_LOOKS_FOR_A_NEW_READER_MS,
+        };
+        if let Some(default) = config.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY) {
+            processor
+                .current_value_of_each_output
+                .insert(GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(), default.clone());
+        }
+        Ok(processor)
+    }
+
+    /// The value output `port` carries now: the last written, else its default.
+    pub(crate) fn current_value_of_the_output(&self, port: &str) -> Option<&JsonValue> {
+        self.current_value_of_each_output.get(port)
+    }
+
     /// The processor of `node`, of the view type `descriptor` describes.
     pub(crate) fn for_the_node(node: &ProcessorNode, descriptor: ProcessorDescriptor) -> Self {
         let family_of_each_output = descriptor
@@ -126,7 +193,9 @@ impl ProjectViewNodeProcessor {
                 .config
                 .clone()
                 .unwrap_or_else(|| JsonValue::Object(Default::default())),
+            execution: ProcessExecution::Reactive,
             family_of_each_output,
+            current_value_of_each_output: HashMap::new(),
             next_start_sample_of_each_channels_output: HashMap::new(),
             output_writer: None,
             input_mailboxes: None,
@@ -141,7 +210,7 @@ impl ProjectViewNodeProcessor {
     ) -> Result<()> {
         let Some(&family) = self.family_of_each_output.get(port) else {
             return Err(Error::PortError(format!(
-                "view node `{}` has no output `{port}`; its outputs are {}",
+                "node `{}` has no output `{port}`; its outputs are {}",
                 self.node_name,
                 the_names_listed(self.family_of_each_output.keys())
             )));
@@ -155,14 +224,14 @@ impl ProjectViewNodeProcessor {
             the_message_a_value_written_onto_an_output_is(family, value, next_start_sample)
                 .map_err(|why| {
                     Error::PortError(format!(
-                        "output `{port}` of view node `{}` carries {}, and {why}",
+                        "output `{port}` of node `{}` carries {}, and {why}",
                         self.node_name,
                         family.declaration_name()
                     ))
                 })?;
         let output_writer = self.output_writer.as_ref().ok_or_else(|| {
             Error::Runtime(format!(
-                "view node `{}` holds no output writer yet",
+                "node `{}` holds no output writer yet",
                 self.node_name
             ))
         })?;
@@ -179,6 +248,29 @@ impl ProjectViewNodeProcessor {
                 port.to_string(),
                 next_start_sample + u64::from(body.samples_per_channel),
             );
+        }
+        self.current_value_of_each_output
+            .insert(port.to_string(), value.clone());
+        Ok(())
+    }
+
+    /// Publish the current value of each output again where a reader now connected missed it.
+    pub(crate) fn hand_each_current_value_to_a_reader_it_has_not_reached(&mut self) -> Result<()> {
+        let Some(output_writer_inner) = self
+            .output_writer
+            .as_ref()
+            .and_then(OutputWriter::inner_arc)
+        else {
+            return Ok(());
+        };
+        let outputs_a_reader_missed: Vec<(String, JsonValue)> = self
+            .current_value_of_each_output
+            .iter()
+            .filter(|(port, _)| output_writer_inner.has_a_reader_the_last_write_missed(port))
+            .map(|(port, value)| (port.clone(), value.clone()))
+            .collect();
+        for (port, value) in outputs_a_reader_missed {
+            self.publish_a_value_written_onto_an_output(&port, &value)?;
         }
         Ok(())
     }
@@ -208,8 +300,8 @@ fn the_names_listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
 
 /// The message `value`, written onto an output of `family`, is sent as: a Records output takes
 /// a JSON object; an Array output a number or a list of numbers, nested to any depth, as its
-/// `values` attribute, or an object of such attributes by name; a Channels output a number, as
-/// one control value, or `{"samples": [[...], ...], "sample_rate"}` channel by channel, starting
+/// `values` attribute, or an object of such attributes by name; a Channels output a number or a
+/// bool, as one control value, or `{"samples": [[...], ...], "sample_rate"}` channel by channel, starting
 /// at `next_start_sample`. Image and Packets are not written from a panel.
 pub(crate) fn the_message_a_value_written_onto_an_output_is(
     family: PortFamily,
@@ -228,7 +320,7 @@ pub(crate) fn the_message_a_value_written_onto_an_output_is(
         PortFamily::Array => the_array_frame_of_a_value(value),
         PortFamily::Channels => the_channels_block_of_a_value(value, next_start_sample),
         PortFamily::Image | PortFamily::Packets => Err(format!(
-            "a panel writes Array, Channels and Records values, never {}",
+            "a client writes Array, Channels and Records values, never {}",
             family.declaration_name()
         )),
     }
@@ -332,6 +424,7 @@ fn the_channels_block_of_a_value(
             vec![vec![number.as_f64().ok_or("the number is out of range")?]],
             0,
         ),
+        JsonValue::Bool(control_value) => (vec![vec![f64::from(u8::from(*control_value))]], 0),
         JsonValue::Object(block) => {
             let channels = block
                 .get("samples")
@@ -364,7 +457,7 @@ fn the_channels_block_of_a_value(
         }
         _ => {
             return Err(
-                "a Channels value is a number or `{\"samples\": [[...], ...], \"sample_rate\"}`"
+                "a Channels value is a number, a bool or `{\"samples\": [[...], ...], \"sample_rate\"}`"
                     .to_string(),
             );
         }
@@ -397,7 +490,7 @@ fn the_channels_block_of_a_value(
     ))
 }
 
-impl DynGeneratedProcessor for ProjectViewNodeProcessor {
+impl DynGeneratedProcessor for NodeWhoseOutputsAClientWritesProcessor {
     fn __generated_setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -415,19 +508,22 @@ impl DynGeneratedProcessor for ProjectViewNodeProcessor {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.take_every_waiting_input_message()
+        self.take_every_waiting_input_message()?;
+        self.hand_each_current_value_to_a_reader_it_has_not_reached()
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Err(Error::Runtime(
-            "a view node is reactive, so it is never started by hand".into(),
-        ))
+        Err(Error::Runtime(format!(
+            "node `{}` runs on its own schedule, so it is never started by hand",
+            self.node_name
+        )))
     }
 
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Err(Error::Runtime(
-            "a view node is reactive, so it is never stopped by hand".into(),
-        ))
+        Err(Error::Runtime(format!(
+            "node `{}` runs on its own schedule, so it is never stopped by hand",
+            self.node_name
+        )))
     }
 
     fn name(&self) -> &str {
@@ -439,7 +535,7 @@ impl DynGeneratedProcessor for ProjectViewNodeProcessor {
     }
 
     fn execution_config(&self) -> ExecutionConfig {
-        ExecutionConfig::new(ProcessExecution::Reactive)
+        ExecutionConfig::new(self.execution)
     }
 
     fn has_iceoryx2_outputs(&self) -> bool {
