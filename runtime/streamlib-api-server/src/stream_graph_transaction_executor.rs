@@ -149,6 +149,7 @@ impl GraphTransactionRefusal {
             refused_node: what_the_refused_operation_names.node,
             refused_link: what_the_refused_operation_names.link,
             refused_field: what_the_refused_operation_names.field,
+            not_running_because: None,
             runtime_words: self.runtime_words,
         }
     }

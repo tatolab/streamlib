@@ -40,6 +40,8 @@ impl<'a> TraversalSourceMut<'a> {
         let resolved_ports = node_types.port_info(&spec.name);
 
         let registry_miss = resolved_ports.is_none();
+        let placeholder_of_its_type =
+            node_types.placeholder_of_the_node_type_not_described(&spec.name);
 
         let name = the_name_a_new_node_takes(
             self.graph,
@@ -72,7 +74,7 @@ impl<'a> TraversalSourceMut<'a> {
         // A missed node carries the requested path verbatim, so
         // `GET /api/graph` names exactly what the caller asked for.
         let (mut inputs, outputs) = resolved_ports.unwrap_or_default();
-        if !registry_miss {
+        if !registry_miss && placeholder_of_its_type.is_none() {
             let declared_ports: Vec<_> = inputs.iter().chain(&outputs).cloned().collect();
             inputs.extend(the_input_ports_of_the_exposed_config_fields(
                 &name,
@@ -122,6 +124,13 @@ impl<'a> TraversalSourceMut<'a> {
             } else {
                 ProcessorState::Pending
             });
+            if let Some(placeholder) = &placeholder_of_its_type {
+                state.fail_with(format!(
+                    "its type `{}` was not described, so the node is held as written and runs \
+                     nothing: {}",
+                    node_mut.processor_type, placeholder.why_its_node_code_did_not_describe_it
+                ));
+            }
             node_mut.insert(ProcessorFailureReasonComponent(state.clone_inner()));
             node_mut.insert(ProcessRaisingBecauseComponent(state.clone_inner()));
             node_mut.insert(state);

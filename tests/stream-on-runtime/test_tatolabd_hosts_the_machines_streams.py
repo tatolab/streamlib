@@ -599,6 +599,7 @@ def write_the_record_run_leaves(
         "interpreter": str(project_directory / ".venv" / "bin" / "python"),
         "stopped": stopped,
         "closed": False,
+        "paused": False,
         "failed_because": None,
         "runtime_crashes_in_a_row_implicating_it": 0,
         "pending_stream_actions": [],

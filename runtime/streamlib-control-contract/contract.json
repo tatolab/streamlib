@@ -278,6 +278,17 @@
             ],
             "description": "The node's input or config field the refused operation names."
           },
+          "not_running_because": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeNotRunningBecauseOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the node the action reached for does not run, when that is why it was refused."
+          },
           "runtime_words": {
             "type": "string",
             "description": "Why, in the runtime's own words, never rewritten."
@@ -324,6 +335,31 @@
           "port"
         ],
         "description": "One end of a link a graph tool names: a node by its UUID and one of its ports."
+      },
+      "NodeNotRunningBecauseOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "playback_stopped",
+            "description": "Its project's playback is stopped."
+          },
+          {
+            "type": "string",
+            "const": "playback_paused",
+            "description": "Its project's playback is paused, and the node was added since."
+          },
+          {
+            "type": "string",
+            "const": "preparing",
+            "description": "Its stream is starting, or has not compiled the node yet."
+          },
+          {
+            "type": "string",
+            "const": "node_failed",
+            "description": "The node failed."
+          }
+        ],
+        "description": "Why a node a refused action reached for does not run."
       },
       "DescribeRuntimeRequest": {
         "type": "object",

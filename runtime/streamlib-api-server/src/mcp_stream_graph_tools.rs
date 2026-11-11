@@ -15,6 +15,7 @@ use rmcp::service::RequestContext;
 use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use streamlib::sdk::error::{Error, WhyANodeOfAStreamIsNotRunning};
 use streamlib_control_contract::{
     AUTHOR_ARGUMENT_DESCRIPTION, AddNode, AddNodeRequest, Connect, ControlOperation,
     ControlOperationCall, GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION, GraphEditMode,
@@ -33,7 +34,7 @@ use streamlib_project_repository::{
     ProjectTransactionReversal, StreamGraphAction, StudioCanvasPair,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    GraphTransactionToolResult, ProjectActionRefusalOnTheWire,
+    GraphTransactionToolResult, NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire,
 };
 use uuid::Uuid;
 
@@ -1133,4 +1134,42 @@ pub(crate) fn a_tool_result_of_the_refusal(
     let mut tool_result = CallToolResult::error(vec![ContentBlock::text(text)]);
     tool_result.structured_content = Some(json!({ "refusal": refusal }));
     tool_result
+}
+
+/// The answer of the tool `tool_name` refused for `refusal`: a structured refusal naming
+/// `not_running_because` when the node it reached for does not run, and its words otherwise.
+pub(crate) fn the_answer_to_a_refused_reach_for_a_node(
+    tool_name: &str,
+    refusal: Error,
+) -> ToolCallAnswer {
+    match refusal {
+        Error::NodeOfAStreamIsNotRunning {
+            not_running_because,
+            runtime_words,
+        } => Ok(a_tool_result_of_the_refusal(
+            ProjectActionRefusalOnTheWire {
+                action: tool_name.to_owned(),
+                refused_operation_index: None,
+                refused_node: None,
+                refused_link: None,
+                refused_field: None,
+                not_running_because: Some(match not_running_because {
+                    WhyANodeOfAStreamIsNotRunning::PlaybackStopped => {
+                        NodeNotRunningBecauseOnTheWire::PlaybackStopped
+                    }
+                    WhyANodeOfAStreamIsNotRunning::PlaybackPaused => {
+                        NodeNotRunningBecauseOnTheWire::PlaybackPaused
+                    }
+                    WhyANodeOfAStreamIsNotRunning::Preparing => {
+                        NodeNotRunningBecauseOnTheWire::Preparing
+                    }
+                    WhyANodeOfAStreamIsNotRunning::NodeFailed => {
+                        NodeNotRunningBecauseOnTheWire::NodeFailed
+                    }
+                }),
+                runtime_words,
+            },
+        )),
+        refusal => Err(format!("{tool_name} failed: {refusal}")),
+    }
 }

@@ -34,6 +34,31 @@ pub struct OutputPortNotExposedToTheReader {
     pub levels_the_reader_may_read: String,
 }
 
+/// Why a node of a stream does not run, as a refusal names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhyANodeOfAStreamIsNotRunning {
+    /// Its project's playback is stopped.
+    PlaybackStopped,
+    /// Its project's playback is paused, and the node was added since.
+    PlaybackPaused,
+    /// Its stream is starting, or a compile has not reached the node yet.
+    Preparing,
+    /// The node failed.
+    NodeFailed,
+}
+
+impl WhyANodeOfAStreamIsNotRunning {
+    /// The name the local API's wire spells it with.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::PlaybackStopped => "playback_stopped",
+            Self::PlaybackPaused => "playback_paused",
+            Self::Preparing => "preparing",
+            Self::NodeFailed => "node_failed",
+        }
+    }
+}
+
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -186,6 +211,15 @@ pub enum Error {
         port: String,
         /// The node's output ports, comma-joined, or `none`.
         output_ports_the_node_has: String,
+    },
+
+    /// A node of a stream that a caller reached for does not run.
+    #[error("{runtime_words}")]
+    NodeOfAStreamIsNotRunning {
+        /// Why the node does not run.
+        not_running_because: WhyANodeOfAStreamIsNotRunning,
+        /// The runtime's words for it, never rewritten.
+        runtime_words: String,
     },
 
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]

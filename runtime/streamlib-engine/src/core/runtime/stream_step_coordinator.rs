@@ -30,8 +30,8 @@ const STEP_COORDINATOR_LEDGER_RECHECK: Duration = Duration::from_millis(5);
 /// looks for a stop or a failed node again.
 const STEP_COORDINATOR_START_RECHECK: Duration = Duration::from_millis(100);
 
-/// Longest the coordinator waits, while its clock runs free of the barrier or
-/// a paced step is not due, before it looks at the clock and for a stop again.
+/// Longest the coordinator waits, while its clock runs free of the barrier, a
+/// pause holds it, or a paced step is not due, before it looks at the clock and for a stop again.
 const STEP_COORDINATOR_CLOCK_RECHECK: Duration = Duration::from_millis(50);
 
 /// One node's entry on a stream's step ledger.
@@ -354,6 +354,16 @@ fn run_the_step_barrier(
         let Some(stream_now) = stream.upgrade() else {
             return;
         };
+        if stream_clock.is_held_by_pause() {
+            drop(stream_now);
+            if !matches!(
+                stop_request_arrival.recv_timeout(STEP_COORDINATOR_CLOCK_RECHECK),
+                Err(crossbeam_channel::RecvTimeoutError::Timeout)
+            ) {
+                return;
+            }
+            continue;
+        }
         let Some(step_index) = stream_clock.step_open_behind_the_barrier() else {
             if !stream_clock
                 .wait_until_it_runs_behind_the_step_barrier(STEP_COORDINATOR_CLOCK_RECHECK)
@@ -411,6 +421,15 @@ fn run_the_step_barrier(
         loop {
             if stream_clock.step_open_behind_the_barrier() != Some(step_index) {
                 break;
+            }
+            if stream_clock.is_held_by_pause() {
+                if !matches!(
+                    stop_request_arrival.recv_timeout(STEP_COORDINATOR_CLOCK_RECHECK),
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout)
+                ) {
+                    return;
+                }
+                continue;
             }
             let Some(opens_at_ns) =
                 stream_clock.machine_time_ns_the_step_opens(step_index.saturating_add(1))
