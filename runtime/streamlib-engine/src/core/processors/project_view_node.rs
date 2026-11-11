@@ -158,7 +158,7 @@ pub(crate) struct NodeWhoseOutputsAClientWritesProcessor {
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
     graph_input_value_lifetime: Option<GraphInputValueLifetime>,
-    store_the_graph_input_keeps_its_value_in: Option<StoreScopedToThisNode>,
+    store_scoped_to_this_graph_input: Option<StoreScopedToThisNode>,
 }
 
 impl NodeWhoseOutputsAClientWritesProcessor {
@@ -221,7 +221,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
             output_writer: None,
             input_mailboxes: None,
             graph_input_value_lifetime: None,
-            store_the_graph_input_keeps_its_value_in: None,
+            store_scoped_to_this_graph_input: None,
         }
     }
 
@@ -233,7 +233,8 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         value: &JsonValue,
     ) -> Result<()> {
         self.publish_a_value_written_onto_an_output(port, value)?;
-        if let Some(store) = &self.store_the_graph_input_keeps_its_value_in
+        if self.graph_input_value_lifetime == Some(GraphInputValueLifetime::Kept)
+            && let Some(store) = &self.store_scoped_to_this_graph_input
             && let Err(not_kept) = store.write(GRAPH_INPUT_KEPT_VALUE_STORE_KEY, value)
         {
             tracing::warn!(
@@ -262,31 +263,67 @@ impl NodeWhoseOutputsAClientWritesProcessor {
     }
 
     /// Take the value a kept `GraphInput` kept in `store`, and keep each value written to it
-    /// there.
+    /// there; a reset one forgets what it kept.
     pub(crate) fn keep_the_graph_input_value_in(&mut self, store: StoreScopedToThisNode) {
         match self.graph_input_value_lifetime {
-            Some(GraphInputValueLifetime::Kept) => {}
-            Some(GraphInputValueLifetime::Reset) => {
-                store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY);
-                return;
+            Some(GraphInputValueLifetime::Kept) => {
+                match store.read(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
+                    Ok(Some(kept)) => self.take_a_kept_value_its_family_carries(kept, &store),
+                    Ok(None) => {}
+                    Err(not_read) => tracing::warn!(
+                        "`GraphInput` node `{}` could not read the value it kept, so it starts \
+                         from its default: {not_read}",
+                        self.node_name
+                    ),
+                }
             }
+            Some(GraphInputValueLifetime::Reset) => store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY),
             None => return,
         }
-        match store.read(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
-            Ok(Some(kept)) => self.take_a_kept_value_its_family_carries(kept, &store),
-            Ok(None) => {}
-            Err(not_read) => tracing::warn!(
-                "`GraphInput` node `{}` could not read the value it kept, so it starts from its \
-                 default: {not_read}",
-                self.node_name
-            ),
+        self.store_scoped_to_this_graph_input = Some(store);
+    }
+
+    /// Take the lifetime a running `GraphInput`'s new config names: one now kept keeps its
+    /// current value, and one now reset forgets what it kept.
+    fn take_the_graph_input_value_lifetime_of_a_new_config(
+        &mut self,
+        config_json: &JsonValue,
+    ) -> Result<()> {
+        if self.graph_input_value_lifetime.is_none() {
+            return Ok(());
         }
-        self.store_the_graph_input_keeps_its_value_in = Some(store);
+        let lifetime = GraphInputValueLifetime::declared_in(Some(config_json)).map_err(|why| {
+            Error::Configuration(format!("`GraphInput` node `{}`: {why}", self.node_name))
+        })?;
+        if self.graph_input_value_lifetime == Some(lifetime) {
+            return Ok(());
+        }
+        self.graph_input_value_lifetime = Some(lifetime);
+        let Some(store) = &self.store_scoped_to_this_graph_input else {
+            return Ok(());
+        };
+        match lifetime {
+            GraphInputValueLifetime::Kept => {
+                if let Some(current) = self
+                    .current_value_of_each_output
+                    .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
+                    && let Err(not_kept) = store.write(GRAPH_INPUT_KEPT_VALUE_STORE_KEY, current)
+                {
+                    tracing::warn!(
+                        "`GraphInput` node `{}` keeps its value now and could not keep its \
+                         current one: {not_kept}",
+                        self.node_name
+                    );
+                }
+            }
+            GraphInputValueLifetime::Reset => store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY),
+        }
+        Ok(())
     }
 
     /// Commit the value this `GraphInput` keeps, as its node stops.
     pub(crate) fn commit_the_kept_value_as_the_node_stops(&mut self) {
-        if let Some(store) = self.store_the_graph_input_keeps_its_value_in.take()
+        if let Some(store) = self.store_scoped_to_this_graph_input.take()
             && let Err(not_committed) = store.commit_every_waiting_write_now()
         {
             tracing::warn!(
@@ -698,6 +735,7 @@ impl DynGeneratedProcessor for NodeWhoseOutputsAClientWritesProcessor {
     }
 
     fn apply_config_json(&mut self, config_json: &JsonValue) -> Result<()> {
+        self.take_the_graph_input_value_lifetime_of_a_new_config(config_json)?;
         self.config_json = config_json.clone();
         Ok(())
     }

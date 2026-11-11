@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Weak};
 
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
@@ -66,8 +66,14 @@ impl StoreScopedToThisNode {
     }
 }
 
-/// Every project store this runtime has opened, one per resolved project directory, since a
-/// store's file admits one open database per process.
+/// Every project store open in this process, by resolved project directory: a store's file admits
+/// one open database at a time, so runtimes in one process that hold the same project share it.
+static PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY: LazyLock<
+    Mutex<HashMap<PathBuf, Weak<ProjectStore>>>,
+> = LazyLock::new(Default::default);
+
+/// Every project store this runtime holds, one per resolved project directory, shared with any
+/// other runtime in the process that holds the same project.
 #[derive(Default)]
 pub struct ProjectStoresOpenInThisRuntime {
     project_store_by_resolved_directory: Mutex<HashMap<PathBuf, Arc<ProjectStore>>>,
@@ -102,12 +108,30 @@ impl ProjectStoresOpenInThisRuntime {
         if let Some(open) = project_store_by_resolved_directory.get(&resolved_project_directory) {
             return Ok(Arc::clone(open));
         }
-        let opened = Arc::new(
-            ProjectStore::open_in_the_project_at(&resolved_project_directory)
-                .map_err(|refusal| Error::Runtime(refusal.to_string()))?,
+        let mut project_store_open_in_this_process_by_resolved_directory =
+            PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY.lock();
+        let open_in_this_process = match project_store_open_in_this_process_by_resolved_directory
+            .get(&resolved_project_directory)
+            .and_then(Weak::upgrade)
+        {
+            Some(open_in_another_runtime) => open_in_another_runtime,
+            None => {
+                let opened = Arc::new(
+                    ProjectStore::open_in_the_project_at(&resolved_project_directory)
+                        .map_err(|refusal| Error::Runtime(refusal.to_string()))?,
+                );
+                project_store_open_in_this_process_by_resolved_directory
+                    .retain(|_, open| open.strong_count() > 0);
+                project_store_open_in_this_process_by_resolved_directory
+                    .insert(resolved_project_directory.clone(), Arc::downgrade(&opened));
+                opened
+            }
+        };
+        project_store_by_resolved_directory.insert(
+            resolved_project_directory,
+            Arc::clone(&open_in_this_process),
         );
-        project_store_by_resolved_directory.insert(resolved_project_directory, Arc::clone(&opened));
-        Ok(opened)
+        Ok(open_in_this_process)
     }
 
     /// Commit every write each open store holds waiting, as the runtime shuts down.
@@ -129,3 +153,7 @@ impl ProjectStoresOpenInThisRuntime {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "store_scoped_to_this_node_tests.rs"]
+mod store_scoped_to_this_node_tests;

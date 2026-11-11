@@ -713,6 +713,54 @@ fn a_kept_value_its_family_no_longer_takes_leaves_the_graph_input_at_its_default
 
 #[test]
 #[serial]
+fn a_running_graph_input_takes_a_new_lifetime_from_a_live_config_change() {
+    use crate::core::processors::DynGeneratedProcessor;
+
+    let stream = AStreamOfAProjectBringingViews::load();
+    let fader_id = stream.add_a_top_level_graph_input(
+        "fader",
+        json!({ "port": "fader", "family": "array", "default": 0.0, "lifetime": "reset" }),
+    );
+    let project_stores = crate::core::context::ProjectStoresOpenInThisRuntime::default();
+    let fader_uuid = stream.play_the_graph_input(&fader_id, &project_stores);
+    let the_value_the_store_keeps = || {
+        project_stores
+            .the_store_of_the_project_at(stream._project_directory.path())
+            .unwrap()
+            .read(
+                streamlib_project_repository::ProjectStoreTableName::named("node_store"),
+                &format!("{fader_uuid}/value"),
+            )
+            .unwrap()
+    };
+    stream.write_the_input("fader", json!(0.3)).unwrap();
+    assert_eq!(the_value_the_store_keeps(), None);
+
+    stream
+        .with_the_graph_inputs_processor(&fader_id, |processor| {
+            processor.apply_config_json(
+                &json!({ "port": "fader", "family": "array", "default": 0.0, "lifetime": "kept" }),
+            )
+        })
+        .expect("the lifetime changes to kept");
+    assert_eq!(the_value_the_store_keeps(), Some(json!(0.3)));
+    stream.write_the_input("fader", json!(0.6)).unwrap();
+    assert_eq!(the_value_the_store_keeps(), Some(json!(0.6)));
+
+    stream
+        .with_the_graph_inputs_processor(&fader_id, |processor| {
+            processor.apply_config_json(
+                &json!({ "port": "fader", "family": "array", "default": 0.0, "lifetime": "reset" }),
+            )
+        })
+        .expect("the lifetime changes to reset");
+    assert_eq!(the_value_the_store_keeps(), None);
+    stream.write_the_input("fader", json!(0.9)).unwrap();
+    assert_eq!(the_value_the_store_keeps(), None);
+}
+
+#[test]
+#[serial]
 fn a_graph_input_declaring_a_lifetime_that_is_neither_kept_nor_reset_is_refused() {
     let refusal = crate::core::graph_interface_resolution::GraphInputValueLifetime::declared_in(
         Some(&json!({ "lifetime": "forever" })),
