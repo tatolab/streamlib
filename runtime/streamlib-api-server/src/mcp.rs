@@ -194,6 +194,7 @@ impl LocalApiMcpServerHandler {
         let asset_media_facts_reads_in_this_runtime = Arc::new(
             crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime::announcing_on(
                 Arc::clone(&project_repositories_open_in_this_runtime),
+                crate::asset_media_facts_reads::asset_media_facts_readers_beside_this_executable(),
             ),
         );
         Self {
