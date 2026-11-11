@@ -878,16 +878,15 @@ impl Runner {
     ///
     /// The stream's id — `load_options`' key, else the graph's name, cast
     /// URL-safe — is refused when it casts to nothing, when there is none, and
-    /// when a stream of that id is loaded; a graph holding no node is refused. A
-    /// load refused anywhere after that is torn down through the stream's own
-    /// stop and inserts nothing.
+    /// when a stream of that id is loaded; a graph holding no node loads as an
+    /// empty stream. A load refused anywhere after that is torn down through the
+    /// stream's own stop and inserts nothing.
     pub fn load_stream_from_graph_snapshot(
         &self,
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let stream = self.build_the_stream_a_graph_load_names(
-            graph,
+        let stream = self.build_the_stream_a_load_names(
             load_options,
             LoadedStreamHolding::LivesWithTheHostProcess,
         )?;
@@ -927,7 +926,7 @@ impl Runner {
 
         use crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL;
 
-        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options, holding) {
+        let stream = match self.build_the_stream_a_load_names(load_options, holding) {
             Ok(stream) => stream,
             // Read after the build, so an interrupt landing during it abandons
             // the load rather than refusing it.
@@ -1297,21 +1296,13 @@ impl Runner {
     // Loading
     // =========================================================================
 
-    fn build_the_stream_a_graph_load_names(
+    fn build_the_stream_a_load_names(
         &self,
-        graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
         holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         self.refuse_a_load_while_the_machine_shuts_down(&load_options.stream_id)?;
         let stream_id = the_cast_stream_id_a_load_names(&load_options.stream_id)?;
-        if graph.nodes.is_empty() {
-            return Err(Error::GraphError(format!(
-                "the stream `{stream_id}` holds no node — a stream whose function adds \
-                 nothing compiles to an empty graph, and there is nothing to run. Add a node \
-                 with `stream_builder.add(...)`"
-            )));
-        }
         self.build_a_stream(
             stream_id,
             load_options,
