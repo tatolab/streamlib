@@ -1,0 +1,81 @@
+# Written by `cargo xtask pin-runtime-unit-carried-packages`: the third-party wheels the
+# core modules require and the CPython build the runtime unit carries, per platform.
+
+[python]
+version = "3.12.15"
+
+[[python.archives]]
+target_triple = "aarch64-apple-darwin"
+path_in_the_unit = "20261013/cpython-3.12.15+20261013-aarch64-apple-darwin-install_only_stripped.tar.gz"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.12.15%2B20261013-aarch64-apple-darwin-install_only_stripped.tar.gz"
+sha256 = "9866e11cf2ae9caa1e671383786f248859a52dd8bfb702fb4c0dc2c65f1d36de"
+
+[[python.archives]]
+target_triple = "x86_64-unknown-linux-gnu"
+path_in_the_unit = "20261013/cpython-3.12.15+20261013-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.12.15%2B20261013-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+sha256 = "178d3d83b6e8e99285a65d3fce9c16b87952cc5efdb4d1a0e3ff3be18ff0fc9c"
+
+[[wheels]]
+name = "llvmlite"
+version = "0.50.0"
+target_triple = "aarch64-apple-darwin"
+path_in_the_unit = "llvmlite-0.50.0-cp312-cp312-macosx_12_0_arm64.whl"
+url = "https://files.pythonhosted.org/packages/d9/1f/2576416b3e9b73f77b8331b7f2e41ce5ae7bbff0489eb16d98099a71693c/llvmlite-0.50.0-cp312-cp312-macosx_12_0_arm64.whl"
+sha256 = "55f50a6b7c0b8de88b05d6bc407d70a60486ce024013997dc97e202bd187c75b"
+
+[[wheels]]
+name = "numba"
+version = "0.68.1"
+target_triple = "aarch64-apple-darwin"
+path_in_the_unit = "numba-0.68.1-cp312-cp312-macosx_12_0_arm64.whl"
+url = "https://files.pythonhosted.org/packages/d4/a7/2e54558d08bb64c8718ad398314605b6c73d154a593cf2bbf1360047fa4e/numba-0.68.1-cp312-cp312-macosx_12_0_arm64.whl"
+sha256 = "7de5e5d00e6c8967fc861be2a015eb8ad701ab3cf65d7f4a2c4d950990cf65d3"
+
+[[wheels]]
+name = "numpy"
+version = "2.5.4"
+target_triple = "aarch64-apple-darwin"
+path_in_the_unit = "numpy-2.5.4-cp312-cp312-macosx_14_0_arm64.whl"
+url = "https://files.pythonhosted.org/packages/31/2f/5ea3570fcb8ccd0882bea99436a513b2c85dad8f774a2057849130a8fb99/numpy-2.5.4-cp312-cp312-macosx_14_0_arm64.whl"
+sha256 = "9cb18a327b49c5c337f972b03682f6a49855525faaf3c0d3e9c96cd0fd8880a8"
+
+[[wheels]]
+name = "pillow"
+version = "13.0.0"
+target_triple = "aarch64-apple-darwin"
+path_in_the_unit = "pillow-13.0.0-cp312-cp312-macosx_11_0_arm64.whl"
+url = "https://files.pythonhosted.org/packages/39/4b/f2ed53d83aa44ac19599ac0a54897f867fafb95f406980d1e24083f8cbe3/pillow-13.0.0-cp312-cp312-macosx_11_0_arm64.whl"
+sha256 = "fc481f742ccda20e9ed760b8f978dff50f2a4e9bc253ac167fb0a05b0783ef52"
+
+[[wheels]]
+name = "llvmlite"
+version = "0.50.0"
+target_triple = "x86_64-unknown-linux-gnu"
+path_in_the_unit = "llvmlite-0.50.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/4c/72/22b6449e15bec4cc86c62b659e6c625ab777d01e87aaec717ecef440f87a/llvmlite-0.50.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+sha256 = "d501e5103076b9a14be885d2574dc2f6793171aa54a853d1244e011d476f1399"
+
+[[wheels]]
+name = "numba"
+version = "0.68.1"
+target_triple = "x86_64-unknown-linux-gnu"
+path_in_the_unit = "numba-0.68.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/43/23/0813ab091f60403c33cb741392ae77db13324587748df6f52167bf3a2404/numba-0.68.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+sha256 = "8b33fee239194b9b6cb9b176f3c2563b94e5882fd846748ad0cf960daeee5406"
+
+[[wheels]]
+name = "numpy"
+version = "2.5.4"
+target_triple = "x86_64-unknown-linux-gnu"
+path_in_the_unit = "numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/43/a3/c799c62e19c337e6d3770b08e475887fb30ce8477d3c09efca6b2f0228a6/numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+sha256 = "fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a"
+
+[[wheels]]
+name = "pillow"
+version = "13.0.0"
+target_triple = "x86_64-unknown-linux-gnu"
+path_in_the_unit = "pillow-13.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+url = "https://files.pythonhosted.org/packages/e6/99/fdf65cc539e266ab93546c261bdf98411fe165c6e4e13f9dbf597097192b/pillow-13.0.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+sha256 = "42d63be3af4f9b951b199b0a9d23365d37ab14687e6d77b74940432c8515c4ca"
