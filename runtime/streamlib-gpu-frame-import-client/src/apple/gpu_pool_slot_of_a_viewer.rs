@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A pixel-buffer pool slot as a viewer holds it: its IOSurface, handed on to
+//! A pool slot as a viewer holds it, a pixel buffer or a texture: its IOSurface, handed on to
 //! whatever displays the frame.
 
 use std::sync::Arc;
@@ -15,9 +15,9 @@ use streamlib_surface_client::{
 
 use super::SurfaceShareTransferredHandle;
 
-/// One pixel-buffer pool slot's IOSurface, as the surface-sharing service
+/// One pool slot's IOSurface, as the surface-sharing service
 /// handed it to a viewer: shared by every frame over the slot.
-pub struct PixelBufferPoolSlotOfAViewer {
+pub struct GpuPoolSlotOfAViewer {
     iosurface: CFRetained<IOSurfaceRef>,
     width: u32,
     height: u32,
@@ -26,11 +26,11 @@ pub struct PixelBufferPoolSlotOfAViewer {
 
 // SAFETY: an IOSurface is safe to use from any thread, and CFRetain and
 // CFRelease are atomic; the slot hands out only shared references.
-unsafe impl Send for PixelBufferPoolSlotOfAViewer {}
+unsafe impl Send for GpuPoolSlotOfAViewer {}
 // SAFETY: as above.
-unsafe impl Sync for PixelBufferPoolSlotOfAViewer {}
+unsafe impl Sync for GpuPoolSlotOfAViewer {}
 
-impl PixelBufferPoolSlotOfAViewer {
+impl GpuPoolSlotOfAViewer {
     /// Read the service's answer to an `import_pool_slot` of `pool_slot_key`
     /// and the ports it carried — the IOSurface's, then the timeline edges the
     /// reply names — releasing each once the surface is looked up.
@@ -140,11 +140,11 @@ impl PixelBufferPoolSlotOfAViewer {
 /// drop: the claim `IOSurfaceIsInUse` answers across processes, which the
 /// pool checks before it hands the slot out again.
 pub(crate) struct IOSurfaceUseCountClaimOfAViewer {
-    pool_slot: Arc<PixelBufferPoolSlotOfAViewer>,
+    pool_slot: Arc<GpuPoolSlotOfAViewer>,
 }
 
 impl IOSurfaceUseCountClaimOfAViewer {
-    pub(crate) fn claiming(pool_slot: Arc<PixelBufferPoolSlotOfAViewer>) -> Self {
+    pub(crate) fn claiming(pool_slot: Arc<GpuPoolSlotOfAViewer>) -> Self {
         pool_slot.iosurface.increment_use_count();
         Self { pool_slot }
     }
@@ -199,11 +199,7 @@ mod tests {
     }
 
     fn refusal_of_an_import(reply: &serde_json::Value, port_count: usize) -> String {
-        match PixelBufferPoolSlotOfAViewer::from_the_import_reply(
-            "slot",
-            reply,
-            null_ports(port_count),
-        ) {
+        match GpuPoolSlotOfAViewer::from_the_import_reply("slot", reply, null_ports(port_count)) {
             Ok(_) => panic!("an import whose ports name no IOSurface was admitted"),
             Err(refusal) => refusal,
         }

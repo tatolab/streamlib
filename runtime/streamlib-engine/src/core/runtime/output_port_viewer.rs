@@ -795,7 +795,7 @@ mod tests {
         let pool_slot = held.pool_slot();
         assert_eq!((pool_slot.width(), pool_slot.height()), (WIDTH, HEIGHT));
         assert!(
-            pool_slot.dma_buf_plane_fds().is_none(),
+            pool_slot.dma_buf_planes().is_none(),
             "an OPAQUE_FD export crosses as OPAQUE_FD memory"
         );
         let viewer_device = Arc::new(
