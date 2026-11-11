@@ -174,6 +174,23 @@ class ContinuousPacingProbe:
         WHEN_THE_PACING_PROBE_PROCESSED_NS.append(time.monotonic_ns())
 
 
+# Whether `RaisesUntilToldNotToProbe.process()` raises on its next call; a
+# test flips it to end a run of raises.
+RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES = [True]
+
+
+@node.process(execution="continuous", interval_ms=20)
+class RaisesUntilToldNotToProbe:
+    """Raises on every `process()` until a test clears
+    `RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES`, then runs cleanly."""
+
+    frames_to_downstream = Output(Packets)
+
+    def process(self, ctx) -> None:
+        if RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0]:
+            raise RuntimeError("broke on purpose")
+
+
 class ReconfigurableProbeConfig(TypedDict, total=False):
     gain: int
 

@@ -1347,6 +1347,13 @@ pub trait DynGeneratedProcessor: Send + 'static {
         None
     }
 
+    /// What this processor's `process()` raised as its helper process last
+    /// reported, while it has not run cleanly since; `None` by default, and for
+    /// a processor whose `process()` the engine calls itself.
+    fn why_process_is_raising_as_its_helper_reports(&self) -> Option<String> {
+        None
+    }
+
     /// Why this processor's helper process died on its own, once the engine
     /// has noticed and taken its group down; `None` for a processor with no
     /// helper, one whose helper is alive, or one the engine stopped itself.
