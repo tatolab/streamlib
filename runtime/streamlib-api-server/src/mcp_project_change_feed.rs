@@ -424,6 +424,7 @@ mod tests {
             refused_node: None,
             refused_link: None,
             refused_field: None,
+            not_running_because: None,
             runtime_words: runtime_words.to_owned(),
         }
     }

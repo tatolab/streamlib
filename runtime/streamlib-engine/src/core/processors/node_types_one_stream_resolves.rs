@@ -125,6 +125,18 @@ pub struct NodeTypesOneStreamResolves {
         RwLock<HashMap<ProcessorClassImportPath, InstalledModuleOfANodeType>>,
     execution_each_described_class_declares:
         RwLock<HashMap<ProcessorClassImportPath, ProcessExecution>>,
+    placeholder_of_each_node_type_not_described:
+        RwLock<HashMap<ProcessorClassImportPath, PlaceholderOfANodeTypeNotDescribed>>,
+}
+
+/// A node type a stream's graph document names and its node code did not describe, held as a
+/// placeholder so the stream's graph stays readable and editable: ports drawn from the
+/// document, no config schema, and nothing a node of it runs.
+#[derive(Debug, Clone)]
+pub struct PlaceholderOfANodeTypeNotDescribed {
+    /// Why its node code did not describe it, in the runtime's words.
+    pub why_its_node_code_did_not_describe_it: String,
+    input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
 }
 
 impl NodeTypesOneStreamResolves {
@@ -333,11 +345,132 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &ProcessorClassImportPath,
     ) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
-        PROCESSOR_REGISTRY.port_info(node_type).or_else(|| {
-            self.project_the_type_this_streams_interpreter_described(node_type, |described| {
-                described.input_and_output_port_info.clone()
+        PROCESSOR_REGISTRY
+            .port_info(node_type)
+            .or_else(|| {
+                self.project_the_type_this_streams_interpreter_described(node_type, |described| {
+                    described.input_and_output_port_info.clone()
+                })
             })
-        })
+            .or_else(|| {
+                self.placeholder_of_the_node_type_not_described(node_type)
+                    .map(|placeholder| placeholder.input_and_output_port_info)
+            })
+    }
+
+    /// The placeholder this stream holds for `node_type`, which its node code did not describe.
+    pub fn placeholder_of_the_node_type_not_described(
+        &self,
+        node_type: &ProcessorClassImportPath,
+    ) -> Option<PlaceholderOfANodeTypeNotDescribed> {
+        self.placeholder_of_each_node_type_not_described
+            .read()
+            .get(node_type)
+            .cloned()
+    }
+
+    /// Hold a placeholder of each node type `graph` names that this stream resolves no other
+    /// way, `why_its_node_code_did_not_describe_them` kept for each: each input is a port a
+    /// link of the graph reads into, a pin or an exposed config field of a node of that type,
+    /// and each output a port a link reads from, each taking the family of the port at its
+    /// link's other end, else Records.
+    pub(crate) fn hold_a_placeholder_of_each_node_type_not_described(
+        &self,
+        graph: &crate::core::graph_snapshot::GraphSnapshot,
+        why_its_node_code_did_not_describe_them: &str,
+    ) {
+        use crate::core::descriptors::{PortFamily, PortFamilyDeclaration};
+        use crate::core::graph::PortKind;
+        let node_type_of_each_node: HashMap<&str, &ProcessorClassImportPath> = graph
+            .nodes
+            .iter()
+            .map(|node| (node.name.as_str(), &node.processor_type))
+            .collect();
+        let not_described: Vec<&ProcessorClassImportPath> = graph
+            .nodes
+            .iter()
+            .map(|node| &node.processor_type)
+            .filter(|node_type| self.port_info(node_type).is_none())
+            .collect();
+        if not_described.is_empty() {
+            return;
+        }
+        let family_of_a_described_port = |node_name: &str, port_name: &str, is_input: bool| {
+            node_type_of_each_node
+                .get(node_name)
+                .and_then(|node_type| self.port_info(node_type))
+                .and_then(|(inputs, outputs)| {
+                    (if is_input { inputs } else { outputs })
+                        .into_iter()
+                        .find(|port| port.name == port_name)
+                        .map(|port| port.family)
+                })
+                .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Records))
+        };
+        let a_port = |name: &str, family: PortFamilyDeclaration, is_input: bool| PortInfo {
+            name: name.to_string(),
+            description: String::new(),
+            port_kind: PortKind::default(),
+            delivery_profile: is_input.then(|| "newest".to_string()),
+            borrow_quota: None,
+            audio_window: None,
+            family,
+            pin_default: None,
+        };
+        let mut placeholders = self.placeholder_of_each_node_type_not_described.write();
+        for node_type in not_described {
+            let placeholder = placeholders.entry(node_type.clone()).or_insert_with(|| {
+                PlaceholderOfANodeTypeNotDescribed {
+                    why_its_node_code_did_not_describe_it: why_its_node_code_did_not_describe_them
+                        .to_string(),
+                    input_and_output_port_info: (Vec::new(), Vec::new()),
+                }
+            });
+            let (inputs, outputs) = &mut placeholder.input_and_output_port_info;
+            let add_once = |ports: &mut Vec<PortInfo>, port: PortInfo| {
+                if !ports.iter().any(|held| held.name == port.name) {
+                    ports.push(port);
+                }
+            };
+            for link in &graph.links {
+                if node_type_of_each_node.get(link.target.node.as_str()) == Some(&node_type) {
+                    let family =
+                        family_of_a_described_port(&link.source.node, &link.source.port, false);
+                    add_once(inputs, a_port(&link.target.port, family, true));
+                }
+                if node_type_of_each_node.get(link.source.node.as_str()) == Some(&node_type) {
+                    let family =
+                        family_of_a_described_port(&link.target.node, &link.target.port, true);
+                    add_once(outputs, a_port(&link.source.port, family, false));
+                }
+            }
+            for node in graph
+                .nodes
+                .iter()
+                .filter(|node| &node.processor_type == node_type)
+            {
+                for pinned in node.pins.keys() {
+                    add_once(
+                        inputs,
+                        a_port(
+                            pinned,
+                            PortFamilyDeclaration::of_family(PortFamily::Records),
+                            true,
+                        ),
+                    );
+                }
+                for exposed in &node.exposed_config_fields {
+                    add_once(
+                        inputs,
+                        a_port(
+                            exposed,
+                            PortFamilyDeclaration::of_family(PortFamily::Channels),
+                            true,
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     /// How `node_type` runs, native first.
@@ -414,6 +547,17 @@ impl NodeTypesOneStreamResolves {
 
     /// Build the processor `node` is, native first.
     pub fn create(&self, node: &ProcessorNode) -> Result<ProcessorInstance> {
+        if let Some(placeholder) =
+            self.placeholder_of_the_node_type_not_described(&node.processor_type)
+        {
+            return Err(Error::Configuration(format!(
+                "node `{}` is of the type `{}`, which its node code did not describe, so it has \
+                 nothing to run: {}",
+                node.display_name,
+                node.processor_type,
+                placeholder.why_its_node_code_did_not_describe_it
+            )));
+        }
         if PROCESSOR_REGISTRY.can_create(&node.processor_type) {
             return PROCESSOR_REGISTRY.create(node);
         }

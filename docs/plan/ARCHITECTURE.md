@@ -445,8 +445,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
     each stream `paused`. A graph edit made meanwhile compiles on `tatolab resume` /
     `resume_project`, which resumes them all. The project stays paused until its resume, stop
     or removal, and a stream a run starts meanwhile starts paused, so a `tatolab dev` re-load
-    of a paused project stays paused (owner, 2026-11-10). Pause is live state and never
-    recorded, so a runtime restart re-loads the project running (session, 2026-11-09).
+    of a paused project stays paused (owner, 2026-11-10). Pause is recorded on each
+    stream's record, so a runtime restart re-loads the project paused (owner, 2026-11-11).
     Projects, not streams, are paused (owner, 2026-11-09).
   - **`rm` removes the whole project.** `tatolab rm [--dir]` and `remove_project
     {project_directory}` unload every loaded stream of the project and forget every record of
@@ -1625,7 +1625,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   "step_ns"}` or `{"mode": "stepped", "step_ns", "pace", "stop_after_steps"}`, absent meaning
   real — so `graph` renders it and a loaded graph keeps it; a stream's mode is fixed for its
   load. The engine builds one `StreamClock` per stream at its start,
-  `RuntimeContext.stream_clock`. Stream time is in the machine's monotonic epoch, derived from
+  `RuntimeContext.stream_clock`. A pause holds a scaled or stepped clock where it stands — a
+  free clock re-anchors at the stream time it had, and no step opens behind the barrier — and a
+  resume carries it on from there, a paced clock's next step paced from the resume; a real-time
+  clock is the machine's own and runs on (session, 2026-11-11). Stream time is in the machine's monotonic epoch, derived from
   `MediaClock` readings and step counts alone, never a wall clock or a sleep:
   - **real:** `MediaClock::now()` itself;
   - **scaled at or under 1×:** `base + scale × (MediaClock::now() − anchor)`; a scale change

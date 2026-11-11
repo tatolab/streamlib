@@ -554,6 +554,14 @@ impl LoadedStreamInThisRuntime {
                 self.stream_id()
             )));
         }
+        if let Some(why_it_cannot_play) =
+            self.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+        {
+            return Err(Error::Runtime(format!(
+                "the stream `{}` was not started: {why_it_cannot_play}",
+                self.stream_id()
+            )));
+        }
         self.compiler.scope_reading(
             crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_function_node_input_with_no_value_as_the_stream_starts,
         )?;
@@ -572,6 +580,9 @@ impl LoadedStreamInThisRuntime {
             })?;
 
         let stream_clock = Arc::new(self.this_streams_clock_starting_now(engine)?);
+        if graph_state_at_the_start == GraphState::Paused {
+            stream_clock.hold_where_it_stands_for_a_pause();
+        }
         let audio_clock = platform_audio_clock_for_one_stream();
 
         // The context holds this stream as its runtime operations; the cycle
@@ -1648,6 +1659,11 @@ impl LoadedStreamInThisRuntime {
 
         let processor_ids =
             self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Paused);
+        if let Some(this_streams_runtime_context) = self.runtime_context.lock().clone() {
+            this_streams_runtime_context
+                .stream_clock
+                .hold_where_it_stands_for_a_pause();
+        }
 
         let mut failures = Vec::new();
         for processor_id in &processor_ids {
@@ -1695,6 +1711,11 @@ impl LoadedStreamInThisRuntime {
         *self.status.lock() = RuntimeStatus::Starting;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResuming);
 
+        if let Some(this_streams_runtime_context) = self.runtime_context.lock().clone() {
+            this_streams_runtime_context
+                .stream_clock
+                .carry_on_from_where_the_pause_held_it();
+        }
         let processor_ids =
             self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Running);
 
@@ -1723,6 +1744,28 @@ impl LoadedStreamInThisRuntime {
         committed
     }
 
+    /// Why this stream cannot play: a node of its graph is of a type its node code did not
+    /// describe, held as a placeholder; `None` when every node's type is described.
+    pub fn why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(
+        &self,
+    ) -> Option<String> {
+        self.compiler.scope(|graph, _tx| {
+            graph.traversal().v(()).iter().find_map(|node| {
+                self.node_types_this_stream_resolves
+                    .placeholder_of_the_node_type_not_described(&node.processor_type)
+                    .map(|placeholder| {
+                        format!(
+                            "its node `{}` is of the type `{}`, which its node code did not \
+                             describe: {}",
+                            node.display_name,
+                            node.processor_type,
+                            placeholder.why_its_node_code_did_not_describe_it
+                        )
+                    })
+            })
+        })
+    }
+
     // =========================================================================
     // Graph load
     // =========================================================================
@@ -1743,17 +1786,34 @@ impl LoadedStreamInThisRuntime {
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
         let graph_whose_every_node_holds_a_uuid =
             graph.with_a_uuid_minted_for_each_node_holding_none();
-        self.processor_interpreter_launch_record
+        let described = self
+            .processor_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
                 &graph_whose_every_node_holds_a_uuid
                     .node_types_its_running_nodes_name_at_every_level(),
                 lend_directory,
-            )?;
+            );
+        let why_its_node_code_did_not_describe = match described {
+            Ok(()) => None,
+            Err(not_described @ Error::NodeTypesNotDescribed { .. })
+                if self.holding == LoadedStreamHolding::RecordedByTheRuntime =>
+            {
+                Some(not_described.to_string())
+            }
+            Err(refusal) => return Err(refusal),
+        };
         self.processor_interpreter_launch_record
             .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         let resolution = graph_whose_every_node_holds_a_uuid
             .with_graph_only_nodes_resolved(&self.node_types_this_stream_resolves)?;
         let graph = &resolution.graph_the_runtime_runs;
+        if let Some(why_its_node_code_did_not_describe) = &why_its_node_code_did_not_describe {
+            self.node_types_this_stream_resolves
+                .hold_a_placeholder_of_each_node_type_not_described(
+                    graph,
+                    why_its_node_code_did_not_describe,
+                );
+        }
         resolution.validate(&self.node_types_this_stream_resolves)?;
         let node_names_the_graph_only_nodes_hold =
             resolution.graph_only_nodes_as_drawn.node_names_cast();

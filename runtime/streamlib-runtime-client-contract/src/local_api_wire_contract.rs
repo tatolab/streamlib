@@ -815,8 +815,25 @@ pub struct ProjectActionRefusalOnTheWire {
     /// The node's input or config field the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_field: Option<String>,
+    /// Why the node the action reached for does not run, when that is why it was refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_running_because: Option<NodeNotRunningBecauseOnTheWire>,
     /// Why, in the runtime's own words, never rewritten.
     pub runtime_words: String,
+}
+
+/// Why a node a refused action reached for does not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeNotRunningBecauseOnTheWire {
+    /// Its project's playback is stopped.
+    PlaybackStopped,
+    /// Its project's playback is paused, and the node was added since.
+    PlaybackPaused,
+    /// Its stream is starting, or has not compiled the node yet.
+    Preparing,
+    /// The node failed.
+    NodeFailed,
 }
 
 /// The link a refused operation names, each end as the caller named it.
