@@ -105,7 +105,7 @@ streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler",
 sha2.workspace = true  # SHA-256 hashing (escalate content hashing)
 # A project's files — its project file and its stream assets' graph documents — read and written
 # without its history, so the engine links no libgit2.
-streamlib-project-repository = { path = "../streamlib-project-repository", default-features = false }
+streamlib-project-repository = { path = "../streamlib-project-repository", default-features = false, features = ["store"] }
 dotenvy = "0.15"  # Load .env files for development environment
 
 # Serialization

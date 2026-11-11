@@ -43,6 +43,8 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     /// across its helpers and its loads.
     pub(crate) function_node_states:
         Arc<crate::core::runtime::FunctionNodeStatesCarriedForOneStream>,
+    /// The project store of every project this runtime opened, the stream's own among them.
+    pub(crate) project_stores: Arc<super::ProjectStoresOpenInThisRuntime>,
 }
 
 #[derive(Clone)]
@@ -68,6 +70,9 @@ pub struct RuntimeContext {
     /// names itself the way every other surface does. `None` for the
     /// shared/global context.
     processor_display_name: Option<String>,
+    /// The placed node's UUID, the key its store is scoped to (None for the shared/global
+    /// context).
+    node_uuid: Option<uuid::Uuid>,
     /// Pause gate for this processor (None for shared/global context).
     pause_gate: Option<Arc<AtomicBool>>,
     /// Runtime operations interface for graph mutations.
@@ -124,6 +129,7 @@ impl RuntimeContext {
             processor_id: None,
             one_off_acquisitions_of_the_node: None,
             processor_display_name: None,
+            node_uuid: None,
             pause_gate: None,
             runtime_ops,
             tokio_handle,
@@ -330,6 +336,7 @@ impl RuntimeContext {
             processor_id: Some(processor_id),
             one_off_acquisitions_of_the_node: Some(OneOffAcquisitionsCountedForOneNativeNode::new()),
             processor_display_name: self.processor_display_name.clone(),
+            node_uuid: self.node_uuid,
             pause_gate: self.pause_gate.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
@@ -356,6 +363,7 @@ impl RuntimeContext {
             processor_id: self.processor_id.clone(),
             one_off_acquisitions_of_the_node: self.one_off_acquisitions_of_the_node.clone(),
             processor_display_name: self.processor_display_name.clone(),
+            node_uuid: self.node_uuid,
             pause_gate: Some(pause_gate),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
@@ -380,6 +388,31 @@ impl RuntimeContext {
             processor_display_name: Some(processor_display_name),
             ..self.clone()
         }
+    }
+
+    /// Create a processor-specific context carrying the placed node's UUID.
+    pub fn with_node_uuid(&self, node_uuid: uuid::Uuid) -> Self {
+        Self {
+            node_uuid: Some(node_uuid),
+            ..self.clone()
+        }
+    }
+
+    /// The keys this node keeps in its project's store, opening the store on first use.
+    pub fn store(&self) -> crate::core::error::Result<super::StoreScopedToThisNode> {
+        let node_uuid = self.node_uuid.ok_or_else(|| {
+            crate::core::error::Error::Runtime(
+                "a context of no node has no store; only a node's own context does".to_string(),
+            )
+        })?;
+        let project_store = self
+            .loaded_stream
+            .project_stores
+            .the_store_of_the_project_at(&self.loaded_stream.project_directory)?;
+        Ok(super::StoreScopedToThisNode::of_the_node(
+            project_store,
+            node_uuid,
+        ))
     }
 
     /// Check if this processor is paused.
@@ -616,6 +649,11 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().stream_project_directory()
     }
 
+    /// See [`RuntimeContext::store`].
+    pub fn store(&self) -> crate::core::Result<super::StoreScopedToThisNode> {
+        self.host_base().store()
+    }
+
     /// See [`RuntimeContext::asset_content_path`].
     pub fn asset_content_path(
         &self,
@@ -695,6 +733,11 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     /// The project directory of the stream this processor runs in.
     pub fn stream_project_directory(&self) -> &std::path::Path {
         self.host_base().stream_project_directory()
+    }
+
+    /// See [`RuntimeContext::store`].
+    pub fn store(&self) -> crate::core::Result<super::StoreScopedToThisNode> {
+        self.host_base().store()
     }
 
     /// See [`RuntimeContext::asset_content_path`].

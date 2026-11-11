@@ -43,9 +43,15 @@
 - **The project database.** Each project has one embedded database, `.tatolab/project.redb`
   (redb: one file, ACID and crash-safe, pure Rust), owned by one engine module and written only by
   the runtime. It is the project's backing store for runtime-kept data: each concern is a named
-  table in it, never a file or a store of its own. Its first table is `node_values`, keyed by
-  stream then node UUID, its value the node value as JSON. It holds no media, which stays as files
-  in the project (owner, 2026-11-11: "start with redb and evaluate how it goes").
+  table in it, never a file or a store of its own (`ProjectStore`, `ProjectStoreTableName`). It
+  holds no media, which stays as files in the project (owner, 2026-11-11: "start with redb and
+  evaluate how it goes"; "design it in a centralized way that if anyone else runs into needing
+  state as well they can use this store").
+- **`ctx.store()`, a node's own keys.** A node's runtime context hands it `store()`, a
+  `StoreScopedToThisNode`: `read`, `write` and `remove` of keys under the node's UUID in the
+  store's `node_store` table, so no node reaches another's, as a Durable Object reaches only its
+  own storage (owner, 2026-11-11, the name `store()`). A kept `GraphInput` keeps its value there
+  under `value`. Python nodes are handed it with ticket 2, with its Protocol in `tatolab.stream`.
 - **Memory at full rate, a debounced writer to disk.** A write changes the value in memory at
   once and readers take every change, at whatever rate a control moves. One writer per held
   project commits the latest value of each changed kept key at most once per debounce window,
@@ -54,7 +60,7 @@
   request path: a control write never waits on disk. Stop, `close_project` and a clean runtime
   shutdown flush at once. A crash loses at most one window. Nothing reaches the graph document or
   Git history (owner, 2026-11-11).
-- **Restore.** `open_project` and the runtime's start read `node_values`; Play hands each kept value
+- **Restore.** A kept node reads its keys through `ctx.store()` at setup; Play hands each kept value
   to its node before the first frame, so a `GraphInput` publishes the kept value instead of its
   `default`. A key whose node no longer exists, or whose value its family no longer takes, is
   dropped with a log record naming it.
@@ -94,8 +100,10 @@ as stated until the owner says otherwise (session, 2026-11-11).
 
 ## Tickets
 
-1. **Kept Graph Input values** — the store, the debounced writer, restore at open, start and Play,
-   `lifetime` on `GraphInputConfig`, `graph` reading the store. Engine tests over a real engine:
+1. **Kept Graph Input values** — the project store and its debounced writer, `ctx.store()` in
+   Rust, a kept `GraphInput` restoring its value at setup and committing at teardown, `lifetime`
+   on `GraphInputConfig`. A stopped project's `graph` reading the store, and writes to a stopped
+   kept Input (Assumed 2), follow in ticket 1b. Engine tests over a real engine:
    a kept Input written then Stop, Play reaches its readers with the written value; a reset Input
    returns to its `default`; 1,000 writes in one second commit at most four write transactions and
    the database holds the last; a restart restores the kept value.

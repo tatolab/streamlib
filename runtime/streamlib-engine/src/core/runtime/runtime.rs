@@ -129,6 +129,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     /// Each stream's function-node states, kept across its loads.
     pub(crate) function_node_states_carried_for_every_stream:
         super::FunctionNodeStatesCarriedForEveryStream,
+    /// The store of each project a stream of this runtime opened, one per project.
+    pub(crate) project_stores_open_in_this_runtime:
+        Arc<crate::core::context::ProjectStoresOpenInThisRuntime>,
     /// Whether [`Runner::shut_down`] has run.
     shut_down: AtomicBool,
     /// Whether this engine holds the machine's shutdown signals now, and so
@@ -649,6 +652,7 @@ impl Runner {
                         runtime_directory.shared_native_services_directory(),
                     ),
                 function_node_states_carried_for_every_stream: Default::default(),
+                project_stores_open_in_this_runtime: Default::default(),
                 shut_down: AtomicBool::new(false),
                 owns_the_machine_shutdown_signals: AtomicBool::new(false),
                 #[cfg(target_os = "linux")]

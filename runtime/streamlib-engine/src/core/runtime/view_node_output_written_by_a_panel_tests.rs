@@ -510,3 +510,139 @@ fn a_write_to_an_input_no_graph_input_declares_or_of_the_wrong_shape_is_refused_
         "{refusal}"
     );
 }
+
+impl AStreamOfAProjectBringingViews {
+    /// Run the `GraphInput` `node_id` as a Play does: a fresh processor, handed its store.
+    fn play_the_graph_input(
+        &self,
+        node_id: &ProcessorUniqueId,
+        project_stores: &crate::core::context::ProjectStoresOpenInThisRuntime,
+    ) -> String {
+        let node_uuid = self.run(node_id);
+        let project_store = project_stores
+            .the_store_of_the_project_at(self._project_directory.path())
+            .expect("the project's store opens");
+        let store = crate::core::context::StoreScopedToThisNode::of_the_node(
+            project_store,
+            node_uuid.parse().expect("a node UUID"),
+        );
+        self.with_the_graph_inputs_processor(node_id, |processor| {
+            processor.keep_the_graph_input_value_in(store)
+        });
+        node_uuid
+    }
+
+    /// Stop the `GraphInput` `node_id` as a Stop does: its processor torn down and dropped.
+    fn stop_the_graph_input(&self, node_id: &ProcessorUniqueId) {
+        self.with_the_graph_inputs_processor(node_id, |processor| {
+            processor.commit_the_kept_value_as_the_node_stops()
+        });
+    }
+
+    fn the_graph_inputs_current_value(&self, node_id: &ProcessorUniqueId) -> Option<Value> {
+        self.with_the_graph_inputs_processor(node_id, |processor| {
+            processor.current_value_of_the_output("value").cloned()
+        })
+    }
+}
+
+#[test]
+#[serial]
+fn a_kept_graph_inputs_value_survives_a_stop_and_a_play_and_a_reopened_store() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let lights_id = stream.add_a_top_level_graph_input(
+        "lights",
+        json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
+    );
+    {
+        let project_stores = crate::core::context::ProjectStoresOpenInThisRuntime::default();
+        stream.play_the_graph_input(&lights_id, &project_stores);
+        stream
+            .write_the_input("lights", json!({ "level": 0.8, "scene": "warm" }))
+            .unwrap();
+        stream.stop_the_graph_input(&lights_id);
+
+        stream.play_the_graph_input(&lights_id, &project_stores);
+        assert_eq!(
+            stream.the_graph_inputs_current_value(&lights_id),
+            Some(json!({ "level": 0.8, "scene": "warm" }))
+        );
+        stream.stop_the_graph_input(&lights_id);
+    }
+
+    let project_stores_after_a_restart =
+        crate::core::context::ProjectStoresOpenInThisRuntime::default();
+    let lights_uuid = stream.play_the_graph_input(&lights_id, &project_stores_after_a_restart);
+    let (_viewer, mut reader) = stream.a_reader_of(&lights_uuid, "value");
+    stream
+        .with_the_graph_inputs_processor(&lights_id, |processor| {
+            processor.hand_each_current_value_to_a_reader_it_has_not_reached()
+        })
+        .expect("the kept value is published");
+    let read_back: Value =
+        rmp_serde::from_slice(&the_next_message_read(&mut reader).payload).unwrap();
+    assert_eq!(read_back, json!({ "level": 0.8, "scene": "warm" }));
+}
+
+#[test]
+#[serial]
+fn a_reset_graph_input_starts_from_its_default_after_a_stop() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let trigger_id = stream.add_a_top_level_graph_input(
+        "trigger",
+        json!({
+            "port": "trigger", "family": "array", "default": 0, "lifetime": "reset"
+        }),
+    );
+    let project_stores = crate::core::context::ProjectStoresOpenInThisRuntime::default();
+    stream.play_the_graph_input(&trigger_id, &project_stores);
+    stream.write_the_input("trigger", json!(1)).unwrap();
+    stream.stop_the_graph_input(&trigger_id);
+
+    stream.play_the_graph_input(&trigger_id, &project_stores);
+    assert_eq!(
+        stream.the_graph_inputs_current_value(&trigger_id),
+        Some(json!(0))
+    );
+}
+
+#[test]
+#[serial]
+fn a_kept_value_its_family_no_longer_takes_leaves_the_graph_input_at_its_default() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let fader_id = stream.add_a_top_level_graph_input(
+        "fader",
+        json!({ "port": "fader", "family": "array", "default": 0.5 }),
+    );
+    let project_stores = crate::core::context::ProjectStoresOpenInThisRuntime::default();
+    let fader_uuid = stream.play_the_graph_input(&fader_id, &project_stores);
+    project_stores
+        .the_store_of_the_project_at(stream._project_directory.path())
+        .unwrap()
+        .write(
+            streamlib_project_repository::ProjectStoreTableName::named("node_store"),
+            &format!("{fader_uuid}/value"),
+            &json!("not a number"),
+        )
+        .unwrap();
+    stream.stop_the_graph_input(&fader_id);
+
+    stream.play_the_graph_input(&fader_id, &project_stores);
+    assert_eq!(
+        stream.the_graph_inputs_current_value(&fader_id),
+        Some(json!(0.5))
+    );
+}
+
+#[test]
+#[serial]
+fn a_graph_input_declaring_a_lifetime_that_is_neither_kept_nor_reset_is_refused() {
+    let refusal = crate::core::graph_interface_resolution::GraphInputValueLifetime::declared_in(
+        Some(&json!({ "lifetime": "forever" })),
+    )
+    .unwrap_err();
+    assert!(
+        refusal.contains("\"forever\"") && refusal.contains("\"kept\""),
+        "{refusal}"
+    );
+}

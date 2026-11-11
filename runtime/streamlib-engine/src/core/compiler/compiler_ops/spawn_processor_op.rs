@@ -319,6 +319,7 @@ fn spawn_dedicated_thread(
                 exec_config,
                 execution_the_node_runs_in,
                 processor_display_name,
+                node_uuid,
             ) = {
                 let mut graph = graph_arc_clone.write();
                 let node = match graph.traversal_mut().v(&proc_id_clone).first_mut() {
@@ -329,6 +330,7 @@ fn spawn_dedicated_thread(
                     }
                 };
                 let processor_display_name = node.display_name.clone();
+                let node_uuid = node.node_uuid;
 
                 let state = match node.get::<StateComponent>() {
                     Some(s) => s.clone_inner(),
@@ -394,6 +396,7 @@ fn spawn_dedicated_thread(
                     exec_config,
                     execution_the_node_runs_in,
                     processor_display_name,
+                    node_uuid,
                 )
             }; // Lock released here
 
@@ -428,6 +431,7 @@ fn spawn_dedicated_thread(
             let processor_context = runtime_ctx_clone
                 .with_processor_id(proc_id_clone.clone())
                 .with_processor_display_name(processor_display_name)
+                .with_node_uuid(node_uuid)
                 .with_pause_gate(pause_gate_inner.clone());
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
