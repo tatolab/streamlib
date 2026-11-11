@@ -13,8 +13,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::{
-    ASSET_PREVIEW_PICTURE_MEDIA_TYPE, read_the_media_facts_of_an_asset_file,
-    the_lowercase_extension_of,
+    ASSET_PREVIEW_PICTURE_MEDIA_TYPE, AssetMediaFactsReadFromTheFile, AssetMediaFactsUnreadable,
+    read_the_media_facts_of_an_asset_file, the_lowercase_extension_of,
 };
 
 /// The folder of a project, relative to its directory, the facts read from each asset's bytes
@@ -138,32 +138,54 @@ impl AssetMediaFactsCacheOfAProject {
         content_sha256: &str,
         asset_file_path: &Path,
     ) -> AssetMediaFactsCachedInTheProject {
-        let (cached, preview_png_bytes) =
-            match read_the_media_facts_of_an_asset_file(asset_file_path) {
-                Ok(read) => {
-                    let preview =
-                        read.preview_picture
-                            .as_ref()
-                            .map(|picture| AssetPreviewOnTheWire {
-                                pixel_width: picture.pixel_width,
-                                pixel_height: picture.pixel_height,
-                                media_type: ASSET_PREVIEW_PICTURE_MEDIA_TYPE.to_owned(),
-                            });
-                    (
-                        AssetMediaFactsCachedInTheProject::Read {
-                            media_facts: Box::new(read.media_facts),
-                            preview,
-                        },
-                        read.preview_picture.map(|picture| picture.png_bytes),
-                    )
-                }
-                Err(unreadable) => (
-                    AssetMediaFactsCachedInTheProject::Unreadable {
-                        media_facts_unreadable_because: unreadable.0,
+        self.read_by_and_keep(
+            content_sha256,
+            asset_file_path,
+            read_the_media_facts_of_an_asset_file,
+        )
+    }
+
+    /// Read the asset file at `asset_file_path` by `reader` and keep what was read; a reader that
+    /// panics on the file leaves it kept as unreadable, so it is never read again.
+    fn read_by_and_keep(
+        &self,
+        content_sha256: &str,
+        asset_file_path: &Path,
+        reader: impl FnOnce(&Path) -> Result<AssetMediaFactsReadFromTheFile, AssetMediaFactsUnreadable>,
+    ) -> AssetMediaFactsCachedInTheProject {
+        let read_or_unreadable =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reader(asset_file_path)))
+                .unwrap_or_else(|_| {
+                    tracing::warn!(path = %asset_file_path.display(), "a media facts reader panicked on an asset file");
+                    Err(AssetMediaFactsUnreadable::because(
+                        "the runtime's reader failed on this file",
+                    ))
+                });
+        let (cached, preview_png_bytes) = match read_or_unreadable {
+            Ok(read) => {
+                let preview = read
+                    .preview_picture
+                    .as_ref()
+                    .map(|picture| AssetPreviewOnTheWire {
+                        pixel_width: picture.pixel_width,
+                        pixel_height: picture.pixel_height,
+                        media_type: ASSET_PREVIEW_PICTURE_MEDIA_TYPE.to_owned(),
+                    });
+                (
+                    AssetMediaFactsCachedInTheProject::Read {
+                        media_facts: Box::new(read.media_facts),
+                        preview,
                     },
-                    None,
-                ),
-            };
+                    read.preview_picture.map(|picture| picture.png_bytes),
+                )
+            }
+            Err(unreadable) => (
+                AssetMediaFactsCachedInTheProject::Unreadable {
+                    media_facts_unreadable_because: unreadable.0,
+                },
+                None,
+            ),
+        };
         if let Err(why) = self.keep(
             content_sha256,
             asset_file_path,
@@ -331,5 +353,21 @@ mod tests {
             cache.cached(SHA256_OF_SOMETHING, &logo_as_data),
             Some(read_as_data)
         );
+    }
+
+    #[test]
+    fn a_reader_that_panics_leaves_the_file_kept_as_unreadable() {
+        let project = tempfile::tempdir().unwrap();
+        let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(project.path());
+        let clip = project.path().join("clip.mp4");
+        std::fs::write(&clip, b"not a movie").unwrap();
+        let unreadable = AssetMediaFactsCachedInTheProject::Unreadable {
+            media_facts_unreadable_because: "the runtime's reader failed on this file".to_owned(),
+        };
+        assert_eq!(
+            cache.read_by_and_keep(SHA256_OF_SOMETHING, &clip, |_| panic!("a reader defect")),
+            unreadable
+        );
+        assert_eq!(cache.cached(SHA256_OF_SOMETHING, &clip), Some(unreadable));
     }
 }

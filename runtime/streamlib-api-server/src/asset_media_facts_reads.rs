@@ -6,7 +6,6 @@
 //! the project's change feed when it finishes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, OnceLock};
@@ -57,6 +56,9 @@ pub(crate) struct AssetMediaFactsReadsInThisRuntime {
     read_queue_to_the_reading_thread: OnceLock<Sender<AssetMediaFactsReadQueued>>,
 }
 
+/// The thread that reads assets' media facts did not start, so a read cannot be queued.
+struct ReadingThreadNotRunning;
+
 /// What the runtime has of one asset's media facts now.
 pub(crate) enum AssetMediaFactsNow {
     /// A stream asset, whose graph `graph` serves; no facts are read for it.
@@ -103,14 +105,22 @@ impl AssetMediaFactsReadsInThisRuntime {
         {
             return AssetMediaFactsNow::Kept(kept);
         }
-        self.queue_a_read(AssetMediaFactsReadQueued {
+        match self.queue_a_read(AssetMediaFactsReadQueued {
             project,
             project_directory: project_directory.to_path_buf(),
             asset: asset.asset,
             content_sha256: asset.content_sha256.clone(),
             asset_file_path,
-        });
-        AssetMediaFactsNow::Reading
+        }) {
+            Ok(()) => AssetMediaFactsNow::Reading,
+            Err(ReadingThreadNotRunning) => {
+                AssetMediaFactsNow::Kept(AssetMediaFactsCachedInTheProject::Unreadable {
+                    media_facts_unreadable_because:
+                        "the runtime's thread that reads assets' media facts is not running"
+                            .to_owned(),
+                })
+            }
+        }
     }
 
     /// `asset` as `list_assets` and `describe_asset` answer it, with its media facts now.
@@ -156,14 +166,17 @@ impl AssetMediaFactsReadsInThisRuntime {
         }
     }
 
-    fn queue_a_read(self: &Arc<Self>, read: AssetMediaFactsReadQueued) {
+    fn queue_a_read(
+        self: &Arc<Self>,
+        read: AssetMediaFactsReadQueued,
+    ) -> Result<(), ReadingThreadNotRunning> {
         let read_key = (read.asset_file_path.clone(), read.content_sha256.clone());
         if !self
             .reads_queued_or_under_way
             .lock()
             .insert(read_key.clone())
         {
-            return;
+            return Ok(());
         }
         let read_queue = self.read_queue_to_the_reading_thread.get_or_init(|| {
             let (read_queue, reads_queued) = channel::<AssetMediaFactsReadQueued>();
@@ -183,9 +196,10 @@ impl AssetMediaFactsReadsInThisRuntime {
             }
             read_queue
         });
-        if read_queue.send(read).is_err() {
+        read_queue.send(read).map_err(|_| {
             self.reads_queued_or_under_way.lock().remove(&read_key);
-        }
+            ReadingThreadNotRunning
+        })
     }
 
     fn read_and_announce(&self, queued: AssetMediaFactsReadQueued) {
@@ -193,16 +207,7 @@ impl AssetMediaFactsReadsInThisRuntime {
         let kept = cache
             .cached(&queued.content_sha256, &queued.asset_file_path)
             .unwrap_or_else(|| {
-                std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    cache.read_and_keep(&queued.content_sha256, &queued.asset_file_path)
-                }))
-                .unwrap_or_else(|_| {
-                    tracing::warn!(path = %queued.asset_file_path.display(), "a media facts reader panicked on an asset file");
-                    AssetMediaFactsCachedInTheProject::Unreadable {
-                        media_facts_unreadable_because: "the runtime's reader failed on this file"
-                            .to_owned(),
-                    }
-                })
+                cache.read_and_keep(&queued.content_sha256, &queued.asset_file_path)
             });
         let media_facts_state = match kept {
             AssetMediaFactsCachedInTheProject::Read { .. } => MEDIA_FACTS_STATE_READ,
@@ -261,5 +266,49 @@ impl AssetMediaFactsReadsInThisRuntime {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use streamlib_project_repository::ProjectRelativeAssetPath;
+
+    use super::*;
+
+    #[test]
+    fn an_asset_is_unreadable_in_words_when_the_reading_thread_is_not_running() {
+        let project_directory = tempfile::tempdir().unwrap();
+        std::fs::write(project_directory.path().join("cover.png"), b"png bytes").unwrap();
+        let asset = ProjectAsset {
+            asset: Uuid::new_v4(),
+            kind: ProjectAssetKind::Media,
+            path: ProjectRelativeAssetPath::parse("cover.png").unwrap(),
+            content_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+                .to_owned(),
+            content_byte_len: 9,
+            import_settings: Default::default(),
+        };
+        let reads = Arc::new(AssetMediaFactsReadsInThisRuntime::announcing_on(Arc::new(
+            ProjectRepositoriesOpenInThisRuntime::default(),
+        )));
+        let (read_queue_to_no_thread, no_thread) = channel();
+        drop(no_thread);
+        assert!(
+            reads
+                .read_queue_to_the_reading_thread
+                .set(read_queue_to_no_thread)
+                .is_ok()
+        );
+        let AssetMediaFactsNow::Kept(AssetMediaFactsCachedInTheProject::Unreadable {
+            media_facts_unreadable_because,
+        }) = reads.the_media_facts_of(Uuid::new_v4(), project_directory.path(), &asset)
+        else {
+            panic!("the asset is not unreadable");
+        };
+        assert_eq!(
+            media_facts_unreadable_because,
+            "the runtime's thread that reads assets' media facts is not running"
+        );
+        assert!(reads.reads_queued_or_under_way.lock().is_empty());
     }
 }
