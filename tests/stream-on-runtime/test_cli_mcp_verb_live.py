@@ -79,6 +79,7 @@ CONTROL_TOOL_NAMES = {
     "close_viewer",
     "list_assets",
     "describe_asset",
+    "read_asset_preview",
     "import_asset",
     "relocate_asset",
     "delete_asset",
