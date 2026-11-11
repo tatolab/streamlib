@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.67](https://github.com/tatolab/streamlib/compare/v0.68.66...v0.68.67) (2026-11-11)
+
+
+### Features
+
+* **engine:** a stream whose node code does not describe a type is held from its document ([a410365](https://github.com/tatolab/streamlib/commit/a4103653d7fd3419933210ac2ec9b5a7dc18bfc7))
+* **engine:** a stream whose node code does not describe a type is held from its document ([570befd](https://github.com/tatolab/streamlib/commit/570befd548e8c20c0ff0e220a37bcd62ba13c5d1))
+
 ## [0.68.66](https://github.com/tatolab/streamlib/compare/v0.68.65...v0.68.66) (2026-11-11)
 
 
