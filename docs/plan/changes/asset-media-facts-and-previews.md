@@ -95,10 +95,10 @@ because of a file the runtime cannot read. A cache miss on `describe_asset` or
 read. A project's change feed announces the asset again once its facts are read, so a consumer
 subscribed to `transactions_resource_uri` can refresh a card.
 
-[NEEDS DECISION] The change-feed announcement is not a transaction. Options: (a) a new feed
-entry with `status: "media_facts_read"` naming the asset; (b) no announcement, a consumer polls
-`describe_asset` while `media_facts_state` is `reading`. Recommended: (a), because the Library
-shows many cards and polling each is wasteful.
+The announcement is a feed entry with `status: "media_facts_read"` naming the asset, not a
+transaction (owner, 2026-11-11).
+Rejected: a consumer polling `describe_asset` while `media_facts_state` is `reading` — the Library
+shows many cards and polling each is wasteful (owner, 2026-11-11).
 
 ### The readers
 
@@ -119,21 +119,17 @@ optional picture.
 - **Scenes**: no reader. `scene` is `null` and the asset has no preview until a scene reader
   exists, which this change does not add.
 
-[NEEDS DECISION] **The video poster frame.** Options: (a) the engine's own
-`OwnedDeviceVideoDecoder` decodes the first sync sample on the device and the frame is read
-back and scaled on the CPU (one decoder for the whole engine, H.264 and H.265 only, a GPU job
-per poster); (b) a CPU software decoder added for posters alone (a second decoder in the tree,
-and a new codec licence to carry); (c) no video poster in the first slice, and Studio shows the
-kind colour for video until (a) lands. Recommended: (c) then (a). The first slice ships facts for
-every family and pictures for images; the poster follows as its own slice through the engine's
-decoder, which keeps one decoder system.
+**The video poster frame** comes from the engine's own `OwnedDeviceVideoDecoder`: it decodes the
+first sync sample on the device, and the frame is read back and scaled on the CPU. The first slice
+ships facts for every family and pictures for images; the poster follows as its own slice, and
+Studio shows the kind colour for video until then (owner, 2026-11-11).
+Rejected: a CPU software decoder added for posters alone — a second decoder in the tree and a new
+codec licence to carry (owner, 2026-11-11).
 
-[NEEDS DECISION] **Compressed audio's facts.** Options: (a) `symphonia`'s probe, which reads
-duration, sample rate and channels for MP3, AAC, Ogg, Opus and more, under MPL-2.0; (b) hand
-parsers for each format's header, with an MP3 without a Xing header reporting no duration;
-(c) facts for WAV, AIFF and FLAC only, the rest `unreadable`. Recommended: (a), linked only into
+**Compressed audio's facts** come from `symphonia`'s probe, which reads duration, sample rate and
+channels for MP3, AAC, Ogg, Opus and more, under MPL-2.0, linked only into
 `streamlib-asset-media-facts`. MPL-2.0 is file-level, so it adds no obligation to StreamLib's own
-files, but it is a new licence in the shipped runtime and that is the owner's call.
+files (owner, 2026-11-11).
 
 ## Delta
 
@@ -143,7 +139,7 @@ Add after "Data on links and runtime state are never saved.":
 
 > An asset's media facts and preview picture are read from its bytes by the runtime and kept in
 > `.tatolab/` by the bytes' SHA-256, never in history, rebuilt whenever they are missing; a
-> fact the runtime cannot read is absent, never an error (session, 2026-11-11).
+> fact the runtime cannot read is absent, never an error (owner, 2026-11-11).
 
 ### MODIFIED: §Control plane, the asset tools
 
@@ -158,8 +154,8 @@ Add after "Data on links and runtime state are never saved.":
 
 ### ADDED: crates
 
-- `runtime/streamlib-asset-media-facts`, the readers. Dependencies: `image` (MIT or Apache-2.0),
-  and `symphonia` (MPL-2.0) if the audio decision picks it.
+- `runtime/streamlib-asset-media-facts`, the readers. Dependencies: `image` (MIT or Apache-2.0)
+  and `symphonia` (MPL-2.0).
 
 ### REMOVED
 
