@@ -246,6 +246,56 @@ pub fn pyproject_with_each_first_party_module_as_a_uv_path_source(
     Ok(pyproject.to_string())
 }
 
+/// Each first-party module link the `pyproject.toml` in `pyproject_text` names as a uv path source,
+/// `{ path = ".tatolab/first-party-imports/<wheel file name>" }`: the source's distribution and the
+/// wheel file name its link has. A source that names a path below the links folder rather than one
+/// file in it is left out, as is every source when the manifest names none.
+pub fn first_party_module_links_a_pyproject_names(
+    pyproject_text: &str,
+    project_directory: &Path,
+) -> Result<Vec<FirstPartyModuleDeclaredByAProject>, ProjectRepositoryRefusal> {
+    let pyproject: DocumentMut =
+        pyproject_text
+            .parse()
+            .map_err(|not_toml: toml_edit::TomlError| {
+                ProjectRepositoryRefusal::PyprojectUnreadable {
+                    path: project_directory.join(PYPROJECT_FILE_NAME),
+                    why: not_toml.to_string(),
+                }
+            })?;
+    let Some(uv_sources) = pyproject
+        .get("tool")
+        .and_then(|tool| tool.get("uv"))
+        .and_then(|uv| uv.get("sources"))
+        .and_then(Item::as_table_like)
+    else {
+        return Ok(Vec::new());
+    };
+    let links_folder_prefix = format!("{PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY}/");
+    Ok(uv_sources
+        .iter()
+        .filter_map(|(distribution_name, source)| {
+            let link_file_name = source
+                .get("path")
+                .and_then(Item::as_str)?
+                .strip_prefix(&links_folder_prefix)?;
+            let is_one_file_in_the_links_folder = !link_file_name.is_empty()
+                && !link_file_name.contains(['/', '\\'])
+                && link_file_name != ".."
+                && link_file_name != ".";
+            is_one_file_in_the_links_folder.then(|| FirstPartyModuleDeclaredByAProject {
+                distribution_name: distribution_name.to_owned(),
+                link_file_name: link_file_name.to_owned(),
+            })
+        })
+        .collect())
+}
+
+/// Whether `first` and `second` name one distribution, as PEP 503 compares distribution names.
+pub fn distribution_names_are_one(first: &str, second: &str) -> bool {
+    normalized_distribution_name(first) == normalized_distribution_name(second)
+}
+
 /// Where a project links the third-party wheels the runtime carries, relative to the project.
 pub const PROJECT_CARRIED_WHEELS_LINK: &str = ".tatolab/carried-wheels";
 
@@ -848,5 +898,37 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["robot-arm"]
         );
+    }
+
+    #[test]
+    fn the_first_party_module_links_a_pyproject_names_are_each_one_file_in_the_links_folder() {
+        let named = first_party_module_links_a_pyproject_names(
+            "[project]\nname = \"lib\"\n\n[tool.uv.sources]\n\
+             tatolab-stream = { path = \".tatolab/first-party-imports/tatolab_stream-0.68.59-py3-none-any.whl\" }\n\
+             tatolab-ops = { path = \".tatolab/first-party-imports/tatolab-ops/inner\" }\n\
+             robot-arm = { path = \"imports/robot-arm\", package = false }\n",
+            Path::new("/lib"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            named,
+            [FirstPartyModuleDeclaredByAProject {
+                distribution_name: "tatolab-stream".to_owned(),
+                link_file_name: "tatolab_stream-0.68.59-py3-none-any.whl".to_owned(),
+            }]
+        );
+        assert!(
+            first_party_module_links_a_pyproject_names(
+                "[project]\nname = \"lib\"\n",
+                Path::new("/lib")
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(distribution_names_are_one(
+            "tatolab_stream",
+            "Tatolab-Stream"
+        ));
     }
 }

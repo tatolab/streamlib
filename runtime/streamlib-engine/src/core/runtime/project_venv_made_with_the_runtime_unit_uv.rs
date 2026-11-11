@@ -336,6 +336,112 @@ fn declare_each_first_party_module_in_the_project(
             not_declared_because(format!("it was not written: {not_written}"))
         })?;
     }
+    for import_folder in each_import_folder_below(project_directory) {
+        link_each_first_party_module_the_import_names(&import_folder, first_party_module_wheels)?;
+    }
+    Ok(())
+}
+
+/// Every folder of the project's `imports/`, and of each import's own `imports/` below it, in
+/// name order: uv follows each one's path sources from the project's own.
+fn each_import_folder_below(project_directory: &Path) -> Vec<PathBuf> {
+    let mut import_folders = Vec::new();
+    let mut imports_directories_to_read =
+        vec![project_directory.join(streamlib_project_repository::PROJECT_IMPORTS_DIRECTORY)];
+    while let Some(imports_directory) = imports_directories_to_read.pop() {
+        let Ok(entries) = std::fs::read_dir(&imports_directory) else {
+            continue;
+        };
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                imports_directories_to_read.push(
+                    entry
+                        .path()
+                        .join(streamlib_project_repository::PROJECT_IMPORTS_DIRECTORY),
+                );
+                import_folders.push(entry.path());
+            }
+        }
+    }
+    import_folders.sort();
+    import_folders
+}
+
+/// Link each first-party module the import's `pyproject.toml` names through its own
+/// [`PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY`] to the wheel of that distribution the runtime
+/// carries, under the file name the import names, and take out every other link there. A copy
+/// never carries a project's `.tatolab/`, and uv reads an import's path sources from its own
+/// folder, so without these links uv finds none of the wheels the import names. The import's
+/// own files are never written. A module the runtime does not carry is left for uv to refuse.
+fn link_each_first_party_module_the_import_names(
+    import_folder: &Path,
+    first_party_module_wheels: &[PathBuf],
+) -> Result<(), ProjectVenvNotMade> {
+    let Ok(import_pyproject) = std::fs::read_to_string(import_folder.join("pyproject.toml")) else {
+        return Ok(());
+    };
+    let Ok(links_the_import_names) =
+        streamlib_project_repository::first_party_module_links_a_pyproject_names(
+            &import_pyproject,
+            import_folder,
+        )
+    else {
+        return Ok(());
+    };
+    let not_linked_because = |why: String| ProjectVenvNotMade::Failed {
+        failed_because: format!(
+            "the first-party modules the import in {} names could not be linked: {why}",
+            import_folder.display()
+        ),
+    };
+    let links_directory = import_folder.join(PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY);
+    let mut link_file_names_kept = Vec::new();
+    for named_link in &links_the_import_names {
+        let Some(carried_wheel) = first_party_module_wheels.iter().find(|module_wheel| {
+            the_distribution_name_of_the_module_wheel(module_wheel).is_some_and(|carried| {
+                streamlib_project_repository::distribution_names_are_one(
+                    &carried,
+                    &named_link.distribution_name,
+                )
+            })
+        }) else {
+            continue;
+        };
+        link_file_names_kept.push(named_link.link_file_name.as_str());
+        let link = links_directory.join(&named_link.link_file_name);
+        if std::fs::read_link(&link).is_ok_and(|target| target == *carried_wheel) {
+            continue;
+        }
+        std::fs::create_dir_all(&links_directory).map_err(|not_made| {
+            not_linked_because(format!(
+                "{} was not made: {not_made}",
+                links_directory.display()
+            ))
+        })?;
+        remove_what_stands_at(&link)?;
+        std::os::unix::fs::symlink(carried_wheel, &link).map_err(|not_linked| {
+            not_linked_because(format!(
+                "{} was not linked to {}: {not_linked}",
+                link.display(),
+                carried_wheel.display()
+            ))
+        })?;
+    }
+    let Ok(entries) = std::fs::read_dir(&links_directory) else {
+        return Ok(());
+    };
+    let links_no_longer_named: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            !link_file_names_kept
+                .iter()
+                .any(|kept| entry.file_name() == *kept)
+        })
+        .map(|entry| entry.path())
+        .collect();
+    for link in links_no_longer_named {
+        remove_what_stands_at(&link)?;
+    }
     Ok(())
 }
 
@@ -1548,6 +1654,113 @@ mod tests {
             ["tatolab-ops"]
         );
         assert_eq!(project.uv_runs().len(), 2, "{:?}", project.uv_runs());
+    }
+
+    /// Give the project an import at `imports_path` whose `pyproject.toml` names each wheel file
+    /// of `named_wheels` as a source through its own first-party module links.
+    fn an_import_naming_first_party_modules(
+        project: &ProjectAndAStubUv,
+        imports_path: &str,
+        named_wheels: &[(&str, &str)],
+    ) -> (PathBuf, String) {
+        let import_folder = project.project_directory.join(imports_path);
+        std::fs::create_dir_all(&import_folder).unwrap();
+        let mut import_pyproject = String::from("[project]\nname = \"lib\"\n\n[tool.uv.sources]\n");
+        for (distribution_name, wheel_file_name) in named_wheels {
+            import_pyproject.push_str(&format!(
+                "{distribution_name} = {{ path = \".tatolab/first-party-imports/{wheel_file_name}\" }}\n"
+            ));
+        }
+        std::fs::write(import_folder.join("pyproject.toml"), &import_pyproject).unwrap();
+        (import_folder, import_pyproject)
+    }
+
+    #[test]
+    fn each_first_party_module_an_import_names_is_linked_in_the_import_and_its_files_are_untouched()
+    {
+        let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
+        let stream = a_first_party_module_beside(&project, "tatolab-stream");
+        let (import_folder, import_pyproject) = an_import_naming_first_party_modules(
+            &project,
+            "imports/lib",
+            &[
+                ("tatolab-stream", "tatolab_stream-0.68.50-py3-none-any.whl"),
+                (
+                    "tatolab-not-carried",
+                    "tatolab_not_carried-0.68.50-py3-none-any.whl",
+                ),
+            ],
+        );
+        let (nested_import_folder, _) = an_import_naming_first_party_modules(
+            &project,
+            "imports/lib/imports/base",
+            &[("tatolab_stream", "tatolab_stream-0.68.51-py3-none-any.whl")],
+        );
+        let stale_link = import_folder.join(".tatolab/first-party-imports/tatolab_gone.whl");
+        std::fs::create_dir_all(stale_link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink("/an/older/runtime/tatolab_gone.whl", &stale_link).unwrap();
+
+        project
+            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&stream))
+            .expect("the venv is made");
+
+        assert_eq!(
+            std::fs::read_link(
+                import_folder
+                    .join(".tatolab/first-party-imports/tatolab_stream-0.68.50-py3-none-any.whl")
+            )
+            .unwrap(),
+            stream,
+            "uv finds the wheel at the path the import names, relative to the import"
+        );
+        assert_eq!(
+            std::fs::read_link(
+                nested_import_folder
+                    .join(".tatolab/first-party-imports/tatolab_stream-0.68.51-py3-none-any.whl")
+            )
+            .unwrap(),
+            stream
+        );
+        assert!(
+            std::fs::symlink_metadata(
+                import_folder.join(
+                    ".tatolab/first-party-imports/tatolab_not_carried-0.68.50-py3-none-any.whl"
+                )
+            )
+            .is_err()
+        );
+        assert!(std::fs::symlink_metadata(&stale_link).is_err());
+        assert_eq!(
+            std::fs::read_to_string(import_folder.join("pyproject.toml")).unwrap(),
+            import_pyproject
+        );
+    }
+
+    #[test]
+    fn a_lock_links_each_first_party_module_an_import_names_before_uv_locks() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        let stream = a_first_party_module_beside(&project, "tatolab-stream");
+        let (import_folder, _) = an_import_naming_first_party_modules(
+            &project,
+            "imports/lib",
+            &[("tatolab-stream", "tatolab_stream-0.68.51-py3-none-any.whl")],
+        );
+
+        lock_the_projects_python_requirements_with_the_runtime_unit_uv(
+            &project.project_directory,
+            &project.stub_uv,
+            &first_party_modules_only(std::slice::from_ref(&stream)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_link(
+                import_folder
+                    .join(".tatolab/first-party-imports/tatolab_stream-0.68.51-py3-none-any.whl")
+            )
+            .unwrap(),
+            stream
+        );
     }
 
     #[test]
