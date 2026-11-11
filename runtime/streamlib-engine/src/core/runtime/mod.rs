@@ -24,6 +24,7 @@ mod output_port_viewer;
 mod processor_interpreter_launch_record;
 mod project_first_party_packages_moved_to_the_runtime_version;
 mod project_folder_moved_to_the_trash;
+mod project_node_code_a_load_describes;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 mod project_venv_sync_progress;

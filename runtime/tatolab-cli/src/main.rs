@@ -176,9 +176,11 @@ enum TatolabVerb {
     /// Reload this open project: queue a soft re-read of its streams from disk, keeping its playback.
     #[command(
         long_about = "Queue a reload of the open project on its stream action queue and return \
-                      at once: the runtime reads every graph document again and replaces each \
-                      stream under the same id, and retries a failed one. The project keeps its \
-                      playback: playing, paused or stopped. A hard reload is `tatolab close` \
+                      at once: the runtime reads every graph document again; while the project's \
+                      node code and dependency files are as they were at a stream's load, it \
+                      brings that stream's graph to its document in place, and otherwise loads \
+                      the stream again under the same id, retrying a failed one. The project \
+                      keeps its playback: playing, paused or stopped. A hard reload is `tatolab close` \
                       then `tatolab open`. Refused when the project is not open (`tatolab open` \
                       opens it). Prints `<action> queued: load of <project>` and how to follow \
                       it with `tatolab logs -f`."

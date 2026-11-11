@@ -314,8 +314,11 @@ tatolab enable-virtual-camera [--print]
   again at each of its own starts until `close` or `rm`.
 - **`close`** queues the end of the project's playback and the unload of every stream of it,
   recording each closed and deleting nothing; `open` opens it again.
-- **`reload`** queues a soft reload of an open project from disk: each stream is replaced under
-  the same id, failed ones retried, and the project keeps its playback. A project that is not
+- **`reload`** queues a soft reload of an open project from disk, keeping its playback. While the
+  project's node code — its `.py` files, `pyproject.toml`, `uv.lock` and views' manifests — is as
+  it was at a stream's load, the stream stays loaded and its graph is brought to its document in
+  place: only the nodes and links that changed change. Otherwise the stream is loaded again under
+  the same id, a failed one retried. A project that is not
   open is refused, naming `open`.
 - **`play`** queues the playback of an open project: every stream starts fresh from the graph it
   holds, reading no document.
