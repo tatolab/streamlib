@@ -1,13 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab dev`: a start of the project queued on the machine's runtime over a `/mcp/stdio`
-//! connection of this process's own — a reload when the runtime refuses the start because the
-//! project already runs or is paused — the project's log followed by cursor from where it ended
-//! when `dev` started — each record under the project's folder name, across every load and
-//! restart, since the log is the project's — and a reload queued for every settled save, which
-//! replaces each stream and keeps a paused project paused, or records it failed with its traceback
-//! in the log; the runtime refuses the reload of a stopped project. A save of a
+//! `tatolab dev`: an open of the project queued on the machine's runtime over a `/mcp/stdio`
+//! connection of this process's own — a reload when the runtime refuses the open because the
+//! project is already open — then its playback, which the runtime refuses for a project that
+//! already plays or is paused, the project's log followed by cursor from where it ended when
+//! `dev` started — each record under the project's folder name, across every load and restart,
+//! since the log is the project's — and a reload queued for every settled save, which replaces
+//! each stream and keeps the project's playback, or records it failed with its traceback in the
+//! log; the runtime refuses the reload of a closed project. A save of a
 //! `.py` file first refreshes every fragment whose graph generator that module defines. Ctrl-C ends
 //! the following and leaves the streams loaded. When the runtime goes away, `dev` waits for it
 //! and follows the log again while the restarted runtime re-loads the project from its records;
@@ -18,7 +19,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use streamlib_runtime_client_contract::local_api_wire_contract::StartOrReloadProjectToolResult;
+use streamlib_runtime_client_contract::local_api_wire_contract::ProjectStreamActionQueuedToolResult;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::TatolabCommandFailure;
@@ -126,6 +127,7 @@ pub(crate) fn follow_the_project_log_and_load_the_project_on_every_save(
             dev_session_events_open: true,
             loads_owed: 1,
             the_runtime_answered_a_load_of_this_session: false,
+            the_runtime_answered_the_playback_of_this_session: false,
             python_files_changed_before_the_owed_load: BTreeSet::new(),
             project_source_watch_hold,
             runtime_log_directory: RuntimeLogDirectoryAsDescribed::NotDescribed,
@@ -148,6 +150,8 @@ struct DevSession {
     loads_owed: usize,
     /// Whether the runtime answered one of the session's loads, after which each is a reload.
     the_runtime_answered_a_load_of_this_session: bool,
+    /// Whether the runtime answered the session's one `start_playback`, played or refused.
+    the_runtime_answered_the_playback_of_this_session: bool,
     /// The `.py` files saved since the last fragment refresh, refreshed before the next load.
     python_files_changed_before_the_owed_load: BTreeSet<PathBuf>,
     /// Quiets the watch while a refresh writes the project's graph documents.
@@ -396,8 +400,8 @@ impl DevSession {
         {
             return after_the_refresh;
         }
-        let start_or_reload_outcome = match self.queue_a_start_or_reload(connected_client).await {
-            FinishedUnlessStopped::Finished(start_or_reload_outcome) => start_or_reload_outcome,
+        let open_or_reload_outcome = match self.queue_an_open_or_reload(connected_client).await {
+            FinishedUnlessStopped::Finished(open_or_reload_outcome) => open_or_reload_outcome,
             FinishedUnlessStopped::StopSignalDelivered => {
                 self.note(
                     "stopped before the runtime answered the load; `tatolab streams` lists what \
@@ -406,46 +410,100 @@ impl DevSession {
                 return DevSessionStep::Exit(Ok(0));
             }
         };
-        let (start_or_reload_tool, start_or_reload_outcome) = start_or_reload_outcome;
-        if let Err(start_or_reload_failure) = &start_or_reload_outcome
+        let (open_or_reload_tool, open_or_reload_outcome) = open_or_reload_outcome;
+        if let Err(open_or_reload_failure) = &open_or_reload_outcome
             && let Some(after_the_runtime_went_away) =
-                self.after_the_runtime_went_away(start_or_reload_failure)
+                self.after_the_runtime_went_away(open_or_reload_failure)
         {
             return after_the_runtime_went_away;
         }
         self.loads_owed = self.loads_owed.saturating_sub(1);
         self.the_runtime_answered_a_load_of_this_session = true;
-        match start_or_reload_outcome.and_then(|start_or_reload_result_text| {
-            tool_result_from::<StartOrReloadProjectToolResult>(
-                start_or_reload_tool.tool_name(),
-                &start_or_reload_result_text,
+        match open_or_reload_outcome.and_then(|open_or_reload_result_text| {
+            tool_result_from::<ProjectStreamActionQueuedToolResult>(
+                open_or_reload_tool.tool_name(),
+                &open_or_reload_result_text,
             )
             .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
         }) {
-            Ok(start_or_reload_result) => self.note(
-                rendered_queued_stream_action_line(
-                    &start_or_reload_result.action,
-                    "load",
-                    &start_or_reload_result
-                        .project_directory
-                        .display()
-                        .to_string(),
-                )
-                .trim_end(),
-            ),
-            Err(start_or_reload_failure) => {
+            Ok(open_or_reload_result) => {
+                self.note(
+                    rendered_queued_stream_action_line(
+                        &open_or_reload_result.action,
+                        the_stream_action_kind_the_tool_queues(open_or_reload_tool),
+                        &open_or_reload_result
+                            .project_directory
+                            .display()
+                            .to_string(),
+                    )
+                    .trim_end(),
+                );
+                if let Some(after_the_playback) = self
+                    .queue_the_playback_once_per_session(connected_client)
+                    .await
+                {
+                    return after_the_playback;
+                }
+            }
+            Err(open_or_reload_failure) => {
                 self.note(&format!(
-                    "{start_or_reload_failure}; save again to queue another load"
+                    "{open_or_reload_failure}; save again to queue another load"
                 ));
             }
         }
         DevSessionStep::FollowTheProjectLog
     }
 
+    /// The session's one `start_playback`, queued after its first load the runtime answered: a
+    /// refusal — a project that already plays or is paused — is left unsaid, since the project
+    /// plays or holds its pause either way. `None` unless the session ends or the runtime went
+    /// away before it answered.
+    async fn queue_the_playback_once_per_session(
+        &mut self,
+        connected_client: &LocalApiMcpToolClient,
+    ) -> Option<DevSessionStep> {
+        if self.the_runtime_answered_the_playback_of_this_session {
+            return None;
+        }
+        let playback_outcome = match self
+            .finish_unless_stopped(connected_client.call_tool(
+                StreamActionTool::StartPlayback.tool_name(),
+                self.project_load_request.project_tool_arguments(),
+            ))
+            .await
+        {
+            FinishedUnlessStopped::Finished(playback_outcome) => playback_outcome,
+            FinishedUnlessStopped::StopSignalDelivered => return Some(DevSessionStep::Exit(Ok(0))),
+        };
+        if let Err(playback_failure) = &playback_outcome
+            && let Some(after_the_runtime_went_away) =
+                self.after_the_runtime_went_away(playback_failure)
+        {
+            return Some(after_the_runtime_went_away);
+        }
+        self.the_runtime_answered_the_playback_of_this_session = true;
+        if let Ok(playback_result_text) = playback_outcome
+            && let Ok(playback_result) = tool_result_from::<ProjectStreamActionQueuedToolResult>(
+                StreamActionTool::StartPlayback.tool_name(),
+                &playback_result_text,
+            )
+        {
+            self.note(
+                rendered_queued_stream_action_line(
+                    &playback_result.action,
+                    "start_playback",
+                    &playback_result.project_directory.display().to_string(),
+                )
+                .trim_end(),
+            );
+        }
+        None
+    }
+
     /// The session's load and the tool that answered it: `reload_project` once the runtime
-    /// answered one of the session's loads; before that `start_project`, then `reload_project`
-    /// when the runtime refuses the start, as it does a project that already runs or is paused.
-    async fn queue_a_start_or_reload(
+    /// answered one of the session's loads; before that `open_project`, then `reload_project`
+    /// when the runtime refuses the open, as it does a project that is already open.
+    async fn queue_an_open_or_reload(
         &mut self,
         connected_client: &LocalApiMcpToolClient,
     ) -> FinishedUnlessStopped<(
@@ -454,21 +512,18 @@ impl DevSession {
     )> {
         if !self.the_runtime_answered_a_load_of_this_session {
             match self
-                .finish_unless_stopped(
-                    connected_client.call_tool(
-                        StreamActionTool::StartProject.tool_name(),
-                        self.project_load_request
-                            .start_or_reload_project_tool_arguments(),
-                    ),
-                )
+                .finish_unless_stopped(connected_client.call_tool(
+                    StreamActionTool::OpenProject.tool_name(),
+                    self.project_load_request.project_tool_arguments(),
+                ))
                 .await
             {
-                FinishedUnlessStopped::Finished(Err(start_failure))
-                    if !the_runtime_is_gone(&start_failure) => {}
-                FinishedUnlessStopped::Finished(start_outcome) => {
+                FinishedUnlessStopped::Finished(Err(open_failure))
+                    if !the_runtime_is_gone(&open_failure) => {}
+                FinishedUnlessStopped::Finished(open_outcome) => {
                     return FinishedUnlessStopped::Finished((
-                        StreamActionTool::StartProject,
-                        start_outcome,
+                        StreamActionTool::OpenProject,
+                        open_outcome,
                     ));
                 }
                 FinishedUnlessStopped::StopSignalDelivered => {
@@ -477,13 +532,10 @@ impl DevSession {
             }
         }
         match self
-            .finish_unless_stopped(
-                connected_client.call_tool(
-                    StreamActionTool::ReloadProject.tool_name(),
-                    self.project_load_request
-                        .start_or_reload_project_tool_arguments(),
-                ),
-            )
+            .finish_unless_stopped(connected_client.call_tool(
+                StreamActionTool::ReloadProject.tool_name(),
+                self.project_load_request.project_tool_arguments(),
+            ))
             .await
         {
             FinishedUnlessStopped::Finished(reload_outcome) => {
@@ -671,5 +723,14 @@ impl DevSession {
                 FinishedUnlessStopped::StopSignalDelivered => return None,
             }
         }
+    }
+}
+
+/// The kind of stream action `open_or_reload_tool` queues, as `dev`'s note prints it.
+fn the_stream_action_kind_the_tool_queues(open_or_reload_tool: StreamActionTool) -> &'static str {
+    if open_or_reload_tool == StreamActionTool::OpenProject {
+        "open"
+    } else {
+        "load"
     }
 }

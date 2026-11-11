@@ -48,7 +48,7 @@
     {
       "name": "list_streams",
       "summary": "List every stream the runtime holds, by stream id, with its location and state.",
-      "description": "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (loaded, or recorded and re-loaded at the runtime's next start), `stopped`, `paused` (loaded with its project paused by `pause_project`, until `resume_project`), `preparing` (an action that loads it — a `start_project` or `reload_project` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_project` or a `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until a `start_project` or `reload_project` of its project retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `stop_project` then `start_project` of its project asks.",
+      "description": "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (playing, or recorded playing and re-loaded playing at the runtime's next start), `stopped` (open with its playback stopped, its graph loaded to read and edit while its node count is set, until `start_playback`), `paused` (open with its playback paused by `pause_playback`, until `resume_playback`), `closed` (its project closed by `close_project`, not loaded, until `open_project`), `preparing` (an action that loads it — an `open_project`, `reload_project` or `start_playback` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_playback`, `close_project` or `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start, and skipped at the start until an `open_project` or `reload_project` of its project retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `close_project` then `open_project` of its project asks.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -430,7 +430,7 @@
             "items": {
               "$ref": "#/components/schemas/CaptureDeviceOnTheWire"
             },
-            "description": "Each capture device a node of the loaded stream refused because nobody has asked the user\nfor its access — the runtime re-loaded it on its own at its start — once each; a\n`stop_project` then `start_project` of its project asks. Empty when it is not loaded."
+            "description": "Each capture device a node of the loaded stream refused because nobody has asked the user\nfor its access — the runtime re-loaded it on its own at its start — once each; a\n`close_project` then `open_project` of its project asks. Empty when it is not loaded."
           },
           "action": {
             "type": [
@@ -489,17 +489,22 @@
           {
             "type": "string",
             "const": "running",
-            "description": "Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next\nstart."
+            "description": "Playing; or recorded playing, and re-loaded playing at the runtime's next start."
           },
           {
             "type": "string",
             "const": "stopped",
-            "description": "Stopped with its project, nothing running, until `start_project`; its graph is loaded to\nread and edit while `node_count` is set, and not loaded when it is null."
+            "description": "Open with its playback stopped, nothing running, until `start_playback`; its graph is\nloaded to read and edit while `node_count` is set."
           },
           {
             "type": "string",
             "const": "paused",
-            "description": "Loaded with its project paused: its processors process nothing until `resume_project`."
+            "description": "Open with its playback paused: its processors process nothing until `resume_playback`."
+          },
+          {
+            "type": "string",
+            "const": "closed",
+            "description": "Closed with its project, not loaded, until `open_project`."
           },
           {
             "type": "string",

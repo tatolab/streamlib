@@ -337,6 +337,7 @@ pub(crate) fn listed_stream_state_on_the_wire(state: StreamListingState) -> List
         StreamListingState::Failed => ListedStreamState::Failed,
         StreamListingState::Preparing => ListedStreamState::Preparing,
         StreamListingState::Stopping => ListedStreamState::Stopping,
+        StreamListingState::Closed => ListedStreamState::Closed,
     }
 }
 

@@ -22,7 +22,7 @@ use common::running_tatolab::{RunningTatolab, wait_until};
 use common::runtime_log_line_fixtures::a_log_record;
 use common::stub_local_api_server::{
     StubLocalApiScript, StubLocalApiServer, StubMcpStdioUpgradeAnswer, StubStreamLogRecords,
-    StubToolAnswer, StubToolCallTransport, start_or_reload_project_tool_result_text,
+    StubToolAnswer, StubToolCallTransport, open_or_reload_project_tool_result_text,
 };
 
 /// The stream `logs -f` follows here.
@@ -69,9 +69,9 @@ impl ScratchProject {
     }
 }
 
-/// `start_project`'s or `reload_project`'s answer: the load `action` of the project in `project_directory` queued.
+/// `open_project`'s or `reload_project`'s answer: the `action` of the project in `project_directory` queued.
 fn queued_answer(action: &str, project_directory: &Path) -> StubToolAnswer {
-    StubToolAnswer::tool_result(&start_or_reload_project_tool_result_text(
+    StubToolAnswer::tool_result(&open_or_reload_project_tool_result_text(
         action,
         project_directory,
     ))
@@ -81,6 +81,14 @@ fn queued_answer(action: &str, project_directory: &Path) -> StubToolAnswer {
 fn queued_note(action: &str, project_directory: &Path) -> String {
     format!(
         "tatolab dev: {action} queued: load of {}",
+        project_directory.display()
+    )
+}
+
+/// `dev`'s note once the open `action` of `project_directory` is queued.
+fn queued_open_note(action: &str, project_directory: &Path) -> String {
+    format!(
+        "tatolab dev: {action} queued: open of {}",
         project_directory.display()
     )
 }
@@ -98,14 +106,14 @@ fn a_runtime_logging_in(runtime_log_directory: &str) -> StubToolAnswer {
     )
 }
 
-/// The answers of a runtime whose `start_project` answers `load_answers`' first, and whose
+/// The answers of a runtime whose `open_project` answers `load_answers`' first, and whose
 /// `reload_project` answers each after it in order.
 fn start_then_reload_answers(
     mut load_answers: Vec<StubToolAnswer>,
 ) -> [(String, Vec<StubToolAnswer>); 2] {
     let reload_answers = load_answers.split_off(1.min(load_answers.len()));
     [
-        ("start_project".to_owned(), load_answers),
+        ("open_project".to_owned(), load_answers),
         ("reload_project".to_owned(), reload_answers),
     ]
 }
@@ -145,7 +153,7 @@ fn calls_to(stub_local_api_server: &StubLocalApiServer, tool_name: &str) -> usiz
 
 /// How many of `dev`'s loads reached the runtime: its starts and its reloads.
 fn loads_queued(stub_local_api_server: &StubLocalApiServer) -> usize {
-    calls_to(stub_local_api_server, "start_project")
+    calls_to(stub_local_api_server, "open_project")
         + calls_to(stub_local_api_server, "reload_project")
 }
 
@@ -220,7 +228,7 @@ fn dev_queues_a_load_of_the_project_and_prints_each_record_under_its_folder_name
 
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
 
-    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+    running_tatolab.wait_for_standard_error_line_containing(&queued_open_note(
         "Rabc-1",
         &scratch_project.canonical_path(),
     ));
@@ -236,7 +244,7 @@ fn dev_queues_a_load_of_the_project_and_prints_each_record_under_its_folder_name
         calls_to(&stub_local_api_server, "logs") >= 4
     });
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("start_project"),
+        stub_local_api_server.recorded_arguments_of("open_project"),
         [json!({"project_directory": scratch_project.canonical_path()})]
     );
     assert_eq!(
@@ -246,7 +254,7 @@ fn dev_queues_a_load_of_the_project_and_prints_each_record_under_its_folder_name
         1,
         "dev rides one /mcp/stdio connection of its own"
     );
-    assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "start_project");
+    assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "open_project");
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "logs");
     let logs_afters: Vec<serde_json::Value> = stub_local_api_server
         .recorded_arguments_of("logs")
@@ -269,7 +277,7 @@ fn dev_queues_a_load_of_the_project_and_prints_each_record_under_its_folder_name
     drop(running_tatolab);
 }
 
-/// Ctrl-C ends `dev`'s following and leaves the project's streams loaded: no `stop_project`, no
+/// Ctrl-C ends `dev`'s following and leaves the project's streams loaded: no `stop_playback`, no
 /// `remove_project`, exit 0.
 #[test]
 fn ctrl_c_on_dev_ends_the_following_and_never_stops_a_stream() {
@@ -290,7 +298,7 @@ fn ctrl_c_on_dev_ends_the_following_and_never_stops_a_stream() {
         assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
         assert_eq!(
             tool_calls_besides_logs(&stub_local_api_server),
-            ["start_project"]
+            ["open_project", "start_playback"]
         );
         assert_eq!(standard_error_lines.last().unwrap(), STOPPED_FOLLOWING_NOTE);
     }
@@ -334,7 +342,7 @@ fn dev_follows_on_after_a_refused_load_and_queues_another_load_for_each_save() {
     let stub_local_api_server = a_runtime_holding(
         &isolated_machine_directories,
         vec![
-            StubToolAnswer::tool_failure("the project already runs"),
+            StubToolAnswer::tool_failure("the project is already open"),
             StubToolAnswer::tool_failure(refusal),
             queued_answer("Rabc-2", &scratch_project.canonical_path()),
             queued_answer("Rabc-3", &scratch_project.canonical_path()),
@@ -385,10 +393,11 @@ fn dev_follows_on_after_a_refused_load_and_queues_another_load_for_each_save() {
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
         [
-            "start_project",
+            "open_project",
             "reload_project",
             "refresh_fragments",
             "reload_project",
+            "start_playback",
             "refresh_fragments",
             "reload_project"
         ],
@@ -405,16 +414,16 @@ fn dev_follows_on_after_a_refused_load_and_queues_another_load_for_each_save() {
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "reload_project");
 }
 
-/// A project that already runs, or is paused, refuses `dev`'s start, so `dev` reloads it and
-/// keeps reloading on each save.
+/// A project that is already open refuses `dev`'s open, so `dev` reloads it, asks for its
+/// playback once, and keeps reloading on each save.
 #[test]
-fn dev_reloads_a_project_that_already_runs_and_reloads_it_on_each_save() {
+fn dev_reloads_a_project_already_open_and_reloads_it_on_each_save() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
     let stub_local_api_server = a_runtime_holding(
         &isolated_machine_directories,
         vec![
-            StubToolAnswer::tool_failure("the project is paused, so there is none to start"),
+            StubToolAnswer::tool_failure("the project is already open"),
             queued_answer("Rabc-1", &scratch_project.canonical_path()),
             queued_answer("Rabc-2", &scratch_project.canonical_path()),
         ],
@@ -436,7 +445,12 @@ fn dev_reloads_a_project_that_already_runs_and_reloads_it_on_each_save() {
 
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        ["start_project", "reload_project", "reload_project"]
+        [
+            "open_project",
+            "reload_project",
+            "start_playback",
+            "reload_project"
+        ]
     );
     drop(running_tatolab);
 }
@@ -451,7 +465,7 @@ fn a_saved_python_file_refreshes_the_fragments_it_defines_before_the_load() {
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
             tool_answers_by_name: HashMap::from([
                 (
-                    "start_project".to_owned(),
+                    "open_project".to_owned(),
                     vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
                 ),
                 (
@@ -482,7 +496,7 @@ fn a_saved_python_file_refreshes_the_fragments_it_defines_before_the_load() {
             ..StubLocalApiScript::default()
         });
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+    running_tatolab.wait_for_standard_error_line_containing(&queued_open_note(
         "Rabc-1",
         &scratch_project.canonical_path(),
     ));
@@ -514,7 +528,8 @@ fn a_saved_python_file_refreshes_the_fragments_it_defines_before_the_load() {
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
         [
-            "start_project",
+            "open_project",
+            "start_playback",
             "refresh_fragments",
             "reload_project",
             "reload_project"
@@ -533,7 +548,7 @@ fn a_graph_document_saved_during_a_fragment_refresh_is_read_by_the_load_that_fol
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
             tool_answers_by_name: HashMap::from([
                 (
-                    "start_project".to_owned(),
+                    "open_project".to_owned(),
                     vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
                 ),
                 (
@@ -550,7 +565,7 @@ fn a_graph_document_saved_during_a_fragment_refresh_is_read_by_the_load_that_fol
             ..StubLocalApiScript::default()
         });
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+    running_tatolab.wait_for_standard_error_line_containing(&queued_open_note(
         "Rabc-1",
         &scratch_project.canonical_path(),
     ));
@@ -579,7 +594,12 @@ fn a_graph_document_saved_during_a_fragment_refresh_is_read_by_the_load_that_fol
 
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        ["start_project", "refresh_fragments", "reload_project"],
+        [
+            "open_project",
+            "start_playback",
+            "refresh_fragments",
+            "reload_project"
+        ],
         "the load the refresh owed is queued after the save, so it reads it"
     );
     drop(running_tatolab);
@@ -595,7 +615,7 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
             tool_answers_by_name: HashMap::from([
                 (
-                    "start_project".to_owned(),
+                    "open_project".to_owned(),
                     vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
                 ),
                 (
@@ -614,7 +634,7 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
     assert!(running_tatolab.is_still_running());
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        ["start_project"]
+        ["open_project", "start_playback"]
     );
     assert_eq!(
         calls_to(&stub_local_api_server, "logs"),
@@ -630,7 +650,7 @@ fn dev_waits_for_a_save_when_the_runtime_answers_logs_with_a_page_it_cannot_read
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-    assert_eq!(calls_to(&stub_local_api_server, "stop_project"), 0);
+    assert_eq!(calls_to(&stub_local_api_server, "stop_playback"), 0);
 }
 
 /// The runtime closing `dev`'s connection is a crash: `dev` names it and the log folder the
@@ -644,7 +664,7 @@ fn dev_survives_a_dropped_runtime_and_follows_the_log_on_without_queuing_a_load(
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
             tool_answers_by_name: HashMap::from([
                 (
-                    "start_project".to_owned(),
+                    "open_project".to_owned(),
                     vec![queued_answer("Rabc-1", &scratch_project.canonical_path())],
                 ),
                 (
@@ -705,7 +725,7 @@ fn a_load_the_runtime_went_away_before_answering_is_queued_again_once_it_answers
     let scratch_project = ScratchProject::new();
     let stub_local_api_server =
         isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
-            tools_that_never_answer: ["start_project".to_owned()].into_iter().collect(),
+            tools_that_never_answer: ["open_project".to_owned()].into_iter().collect(),
             stream_log_records: Some(StubStreamLogRecords {
                 records: Vec::new(),
                 page_size: 1,
@@ -715,12 +735,12 @@ fn a_load_the_runtime_went_away_before_answering_is_queued_again_once_it_answers
         });
     let running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
     wait_until("dev's first load reaches the runtime", || {
-        calls_to(&stub_local_api_server, "start_project") == 1
+        calls_to(&stub_local_api_server, "open_project") == 1
     });
 
     stub_local_api_server.close_every_mcp_stdio_connection();
     wait_until("dev queues the load again once the runtime answers", || {
-        calls_to(&stub_local_api_server, "start_project") == 2
+        calls_to(&stub_local_api_server, "open_project") == 2
     });
     let (exit_status, standard_error_lines) =
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
@@ -793,7 +813,7 @@ fn ctrl_c_while_dev_reconnects_to_a_runtime_that_never_opens_the_connection_exit
         Vec::new(),
     );
     let mut running_tatolab = spawn_dev(&isolated_machine_directories, &scratch_project);
-    running_tatolab.wait_for_standard_error_line_containing(&queued_note(
+    running_tatolab.wait_for_standard_error_line_containing(&queued_open_note(
         "Rabc-1",
         &scratch_project.canonical_path(),
     ));
@@ -878,7 +898,7 @@ fn ctrl_c_on_logs_follow_exits_zero_and_never_stops_the_stream() {
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
 
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
-    assert_eq!(calls_to(&stub_local_api_server, "stop_project"), 0);
+    assert_eq!(calls_to(&stub_local_api_server, "stop_playback"), 0);
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
         ["list_streams"]

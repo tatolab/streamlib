@@ -12,6 +12,7 @@ use super::operations::RuntimeOperations;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId, cast_exposed_name_to_url_safe};
 use crate::core::processors::ProcessorSpec;
+use crate::core::pubsub::RuntimeEvent;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
@@ -42,20 +43,23 @@ impl LoadedStreamInThisRuntime {
                 if !node.name.is_empty() {
                     spec = spec.with_display_name(node.name.clone());
                 }
-                let added = self.add_processor_async(spec).await?;
+                let a_node_held_the_uuid_before_the_add =
+                    self.the_processor_of_the_node(node.id).is_ok();
+                let added = match self.add_processor_async(spec).await {
+                    Ok(added) => added,
+                    Err(refusal) => {
+                        if !a_node_held_the_uuid_before_the_add {
+                            self.take_out_the_node_a_refused_add_left(node.id, &refusal)
+                                .await;
+                        }
+                        return Err(refusal);
+                    }
+                };
                 node.name = added.name;
                 for link in &links {
                     if let Err(refusal) = self.connect_the_link(link).await {
-                        if let Err(not_removed) = self
-                            .remove_processor_async(added.processor_id.clone())
-                            .await
-                        {
-                            tracing::error!(
-                                node = %node.id,
-                                %not_removed,
-                                "could not take out a node whose links were refused"
-                            );
-                        }
+                        self.take_out_the_node_a_refused_add_left(node.id, &refusal)
+                            .await;
                         return Err(refusal);
                     }
                 }
@@ -207,6 +211,33 @@ impl LoadedStreamInThisRuntime {
             return Err(refusal);
         }
         Ok(graph_operation)
+    }
+
+    /// Take out of the live graph the node of UUID `node` a refused add left in it, if it left
+    /// one, so a refused operation leaves the live graph as it was. An add of a type nothing
+    /// resolves places its node with nothing to compile, so that node is dropped as it stands;
+    /// one the compile could not build is removed as any node is.
+    async fn take_out_the_node_a_refused_add_left(&self, node: Uuid, refusal: &Error) {
+        let Ok(processor_id) = self.the_processor_of_the_node(node) else {
+            return;
+        };
+        if matches!(refusal, Error::UnknownProcessorType { .. }) {
+            self.compiler.scope(|graph, _tx| {
+                graph.traversal_mut().v(&processor_id).drop();
+            });
+            self.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveProcessor {
+                processor_id,
+            });
+            self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+            return;
+        }
+        if let Err(not_removed) = self.remove_processor_async(processor_id).await {
+            tracing::error!(
+                %node,
+                %not_removed,
+                "could not take out a node whose add was refused"
+            );
+        }
     }
 
     /// The processor the node whose UUID is `node` runs as, refused naming the nodes the

@@ -33,7 +33,7 @@ const FREE_HELPER_PROCESS_GROUP_SLOT: u64 = 0;
 /// Whether `process_group_id` could be a helper's own group.
 ///
 /// Never zero, one or a negative, and never the app's own group: a kill of
-/// that would take the shell job the app runs in with it — `tatolab start | tee
+/// that would take the shell job the app runs in with it — `tatolab open --play | tee
 /// log` included.
 fn is_a_registrable_helper_process_group_id(process_group_id: i32) -> bool {
     // SAFETY: `getpgrp` takes no arguments and cannot fail.

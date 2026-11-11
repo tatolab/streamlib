@@ -127,7 +127,7 @@ ENCODED_TRACK_DIR="$OUTPUT_DIR/encoded_track"
 MEASURED_DIR="$OUTPUT_DIR/measured"
 RELAY_LOG_FILE="$OUTPUT_DIR/relay.log"
 # The runtime's output — the engine's log mirror, every stream's records among
-# it — with each `tatolab start`'s beside it.
+# it — with each `tatolab open --play`'s beside it.
 LOG_FILE="$OUTPUT_DIR/runtime.log"
 SENDER_RUN_LOG_FILE="$OUTPUT_DIR/sender_run.log"
 RECEIVER_RUN_LOG_FILE="$OUTPUT_DIR/receiver_run.log"

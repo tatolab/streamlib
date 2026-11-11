@@ -968,8 +968,8 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
 
     The counter starts at one in its reader's first helper, which takes itself
     down at twenty; the reader's next helper resumes the count where the dead
-    one left it, `graph` shows the count the node holds, and a stop and run
-    of its project resumes it again.
+    one left it, `graph` shows the count the node holds, and a reload of its
+    project resumes it again.
 
     Fail-without-fix: with the state kept only in the helper, each new helper
     counts from one again, and its reader dies at twenty every time.
@@ -985,10 +985,8 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
     count_the_graph_showed = counter["components"]["function_node_state"]["calls"]
     [listed] = [listed for listed in local_api.list_streams() if listed["stream"] == stream_id]
     project_directory = listed["location"]["project_directory"]
-    queued_stop = local_api.call_tool("stop_project", {"project_directory": project_directory})
-    assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
-    queued_start = local_api.call_tool("start_project", {"project_directory": project_directory})
-    assert local_api.stream_action_once_ended(queued_start["action"])["state"] == "done"
+    queued_reload = local_api.call_tool("reload_project", {"project_directory": project_directory})
+    assert local_api.stream_action_once_ended(queued_reload["action"])["state"] == "done"
     first_read_after_the_restart = tatolabd.await_marker("FIRST_COUNT_READ", occurrence=3)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -1004,7 +1002,7 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
         f"`graph` shows the count the node holds: {counter['components']}"
     )
     assert first_read_after_the_restart["count"] > count_the_graph_showed, (
-        f"a stop and start resumes the count from {count_the_graph_showed}, and the reader "
+        f"a reload resumes the count from {count_the_graph_showed}, and the reader "
         f"first read {first_read_after_the_restart}"
     )
     assert len(tatolabd.marker_payloads("FRESH_COUNT_SINK_ABOUT_TO_DIE")) == 1, (
