@@ -27,7 +27,7 @@ use crate::core::graph::{
 };
 use crate::core::graph_fragment_flattening::GraphFragmentsAsDrawn;
 use crate::core::graph_interface_resolution::{
-    GraphInterfaceAsDrawn, is_a_graph_interface_node_type,
+    GraphInterfaceAsDrawn, GraphInterfaceLevel, is_a_graph_interface_node_type,
 };
 use crate::core::graph_variable_resolution::{
     GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
@@ -426,7 +426,7 @@ impl GraphSnapshot {
             .with_graph_variables_resolved(&fragments.fragments_as_drawn)?;
         let interface = variables
             .graph_the_runtime_runs
-            .with_graph_interface_resolved()?;
+            .with_graph_interface_resolved(GraphInterfaceLevel::TheStreamsTopLevel)?;
         Ok(GraphSnapshotWithGraphOnlyNodesResolved {
             graph_the_runtime_runs: interface.graph_the_runtime_runs,
             graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn {
@@ -616,7 +616,7 @@ impl GraphOnlyNodesAsDrawn {
         Ok(())
     }
 
-    /// The cast name of every fragment, variable and interface node drawn.
+    /// The cast name of every fragment, variable and interface node drawn that runs nothing.
     pub fn node_names_cast(&self) -> HashSet<String> {
         let fragment_names_cast = self.fragments_as_drawn.fragment_names_flattened_and_cast();
         self.variables_as_drawn
@@ -626,6 +626,7 @@ impl GraphOnlyNodesAsDrawn {
                 self.interface_as_drawn
                     .interface_nodes
                     .iter()
+                    .filter(|interface_node| !interface_node.declared_port.runs_as_a_source_node)
                     .map(|interface_node| &interface_node.node),
             )
             .filter_map(|node| {

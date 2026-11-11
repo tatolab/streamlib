@@ -1277,7 +1277,7 @@ impl LoadedStreamInThisRuntime {
             .machine_name
             .name()
             .to_string();
-        let (mut graph_response, stateful_function_nodes_by_node_uuid) =
+        let (mut graph_response, stateful_function_nodes_by_node_uuid, current_value_of_each_graph_input) =
             self.compiler.scope(|graph, _tx| {
                 let stateful_function_nodes_by_node_uuid: HashMap<String, (String, Vec<String>)> =
                     graph
@@ -1307,6 +1307,7 @@ impl LoadedStreamInThisRuntime {
                 (
                     graph.to_graph_response(machine_name),
                     stateful_function_nodes_by_node_uuid,
+                    the_current_value_of_each_running_graph_input(graph),
                 )
             });
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
@@ -1317,6 +1318,10 @@ impl LoadedStreamInThisRuntime {
         self.graph_only_nodes_as_drawn
             .lock()
             .render_into(&mut graph_response);
+        render_the_current_value_of_each_graph_input_into(
+            &mut graph_response.nodes,
+            current_value_of_each_graph_input,
+        );
         serde_json::to_value(graph_response)
             .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
     }
@@ -1728,3 +1733,58 @@ pub(crate) fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &
         .or_else(|| panic_payload.downcast_ref::<String>().map(String::as_str))
         .unwrap_or("a panic that carried no message")
 }
+
+/// The value each running top-level `GraphInput` carries now, by its node's UUID.
+fn the_current_value_of_each_running_graph_input(
+    graph: &crate::core::graph::Graph,
+) -> HashMap<String, serde_json::Value> {
+    use crate::core::graph::GraphNodeWithComponents;
+    graph
+        .traversal()
+        .v(())
+        .iter()
+        .filter(|node| {
+            node.processor_type.as_str()
+                == crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
+        })
+        .filter_map(|node| {
+            let processor_instance =
+                node.get::<crate::core::graph::ProcessorInstanceComponent>()?;
+            let mut processor_instance = processor_instance.0.lock();
+            let current_value = processor_instance
+                .as_any_mut()
+                .downcast_mut::<crate::core::processors::NodeWhoseOutputsAClientWritesProcessor>()?
+                .current_value_of_the_output(
+                    crate::core::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME,
+                )?
+                .clone();
+            Some((node.node_uuid.to_string(), current_value))
+        })
+        .collect()
+}
+
+/// Render each `GraphInput`'s current value under its `graph_interface` component, as
+/// `current_value`.
+fn render_the_current_value_of_each_graph_input_into(
+    nodes: &mut [crate::core::json_schema::ProcessorNodeOutput],
+    mut current_value_of_each_graph_input: HashMap<String, serde_json::Value>,
+) {
+    for node in nodes {
+        let Some(current_value) = current_value_of_each_graph_input.remove(&node.id) else {
+            continue;
+        };
+        if let Some(serde_json::Value::Object(graph_interface)) = node
+            .components
+            .get_mut(crate::core::graph_interface_resolution::GRAPH_INTERFACE_COMPONENT_KEY)
+        {
+            graph_interface.insert(
+                GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD.to_string(),
+                current_value,
+            );
+        }
+    }
+}
+
+/// The field of a `GraphInput`'s `graph_interface` component holding the value it carries now:
+/// the last a client wrote, else its `default`.
+pub const GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD: &str = "current_value";

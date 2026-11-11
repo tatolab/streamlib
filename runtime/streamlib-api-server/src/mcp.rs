@@ -1366,6 +1366,7 @@ pub(crate) mod tests {
         "delete_project",
         "list_project_views",
         "write_studio_view_output",
+        "write_graph_input",
     ];
 
     /// The tools that act on one stream, each naming it with a required
@@ -1393,6 +1394,7 @@ pub(crate) mod tests {
         "open_viewer",
         "set_stream_clock_scale",
         "write_studio_view_output",
+        "write_graph_input",
     ];
 
     /// Exact, not a superset: the catalog IS the control vocabulary, so a

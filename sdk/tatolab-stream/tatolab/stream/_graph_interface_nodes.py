@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Required, TypedDict
+from typing import Any, ClassVar, NotRequired, Required, TypedDict
 
 from ._built_in_node import BuiltInNode
 from ._port_family_declaration import PortFamily
@@ -47,11 +47,19 @@ class GraphInputConfig(TypedDict):
     """The Input's name, cast as every exposed name is."""
     family: Required["PortFamily[Any] | str"]
     """The Input's family: `Image`, `Array`, `Channels`, `Packets` or `Records`."""
+    default: NotRequired[Any]
+    """What the Input's readers see until a client writes it, of its family: a stream's
+    top-level Array, Channels or Records Input only."""
+    range: NotRequired[tuple[float, float]]
+    """`(lowest, highest)`, the span a control moves the Input's number in: a stream's
+    top-level Array or Channels Input only."""
 
 
 class GraphInput(BuiltInNode[GraphInputConfig]):
-    """Declares one Input of the graph: every port `value` is linked to reads what the graph
-    that adds this one wires into it. It runs nothing.
+    """Declares one Input of the graph: every port `value` is linked to reads what enters it.
+    A stream's top-level Array, Channels or Records Input runs, and carries what a client
+    writes with `write_graph_input`, else its `default`; a fragment's Input carries what the
+    graph that adds the fragment wires into it.
 
     Outputs:
         `value`: What enters the graph, of the declared family.

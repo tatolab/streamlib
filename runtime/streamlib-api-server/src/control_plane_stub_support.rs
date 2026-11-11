@@ -36,6 +36,20 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
                 )))
             })
         }
+        fn write_a_value_to_a_top_level_graph_input(
+            &self,
+            input_name: String,
+            _value: ::serde_json::Value,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::descriptors::PortFamily>,
+        > {
+            Box::pin(async move {
+                Err(::streamlib::sdk::error::Error::ProcessorNotFound(format!(
+                    "the stub stream runs no `GraphInput` declaring the Input `{input_name}`"
+                )))
+            })
+        }
     };
 }
 pub(crate) use every_reserved_slot_reader_is_unreachable;

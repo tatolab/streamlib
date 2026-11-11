@@ -19,7 +19,7 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
 };
 use crate::core::graph_interface_resolution::{
-    GraphInterfaceAsDrawn, GraphInterfacePort, GraphInterfacePortDirection,
+    GraphInterfaceAsDrawn, GraphInterfaceLevel, GraphInterfacePort, GraphInterfacePortDirection,
     is_a_graph_interface_node_type,
 };
 use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
@@ -196,7 +196,7 @@ fn flatten_one_level(
             groups: Vec::new(),
             studio: None,
         }
-        .with_graph_interface_resolved()
+        .with_graph_interface_resolved(GraphInterfaceLevel::AFragment)
         .map_err(|refusal| {
             Error::GraphError(format!(
                 "fragment `{fragment_path_of_names}` does not flatten: {refusal}"
