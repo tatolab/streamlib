@@ -232,7 +232,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — How a stream is loaded and kept. `tatolab start` loads it, and the
   runtime records the graph its function compiled to at that load, the project's venv path and
   the exposures in its state directory, and re-loads that recorded graph on every start, a
-  crash's restart included. There are no restart policies: a recorded stream always comes back
+  crash's restart included. There are no stream restart policies: a recorded stream always comes back
   unless stopped or failed. `tatolab stop` unloads every stream of a project and remembers each
   as stopped, across restarts too; `tatolab start` starts a stopped project again; `tatolab rm`
   forgets every stream of a project, the only verb that loses one (owner, 2026-10-02,
@@ -1028,7 +1028,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls; unbuilt: fragments; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls; unbuilt: fragments; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -1185,7 +1185,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   inbound link holding that link's dropped-message count, and the parent reads it whenever
   `graph` renders, without waiting on the child. The last counts a crashed helper wrote stay
   readable; a dead writer can no longer update its entries, so a respawned helper gets a
-  fresh board. A helper's write refused at the ceiling is
+  fresh board, and each wiring still in place keeps its counts cumulative across the restart:
+  the parent adds what the dead helper's board last held to what the new board reads, so a
+  link's losses never go backwards in `graph`, while a reconnect still starts from zero. A helper's write refused at the ceiling is
   counted the same way. The node's `metrics` key then renders for a helper-placed processor
   as it does for an app-process one.
   Five readings the build settled. **An entry is a slot carrying its wiring**: a
@@ -1814,6 +1816,35 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; macos-platform-floor —
   SHIPPED #2357; macos-capability-parity — SHIPPED #2410; runtime-hosting — SHIPPED #2721,
   #2722]
+- **DECIDED** — A helper that dies on its own is restarted by its node's host. "On its own" is
+  every exit the engine did not ask for — a crash, a signal, an exit of any status — and never
+  one on the shutdown ladder, at node removal, at stream stop, or by the stream's watchdog; a
+  helper on the ladder is never restarted. The death path runs as above (process group down,
+  escalate socket shut, surface-share admission and iceoryx2 nodes reclaimed, pending links
+  refused), then the node waits its backoff and starts again as the same node with a new
+  processor instance: a fresh interpreter re-imports the class and constructs the instance,
+  `setup()` runs on it with the node's current config, the setup command carries every link the
+  node holds, and `run` follows. No lifecycle call ever reaches the dead instance, and the node's
+  id, config, links and place in the graph never change, so nothing upstream or downstream is
+  re-planned. A link `wired` before the death reads `wired` throughout; one still `pending` at the
+  death is refused on the death path, reads `error`, and is left off the new helper's setup
+  command. A frame or message in flight at the death is lost and never replayed, and a Python
+  processor's in-memory state is gone, as at every start. A helper whose escalate socket closed
+  is given 5 s to exit before it is taken to have stopped answering, so a dying helper is
+  restarted rather than failed. The backoff is a monotonic deadline checked in the runner's
+  100 ms poll, never a sleep, so a shutdown during the wait is seen within one poll. Budgets are
+  engine-chosen and not authorable.
+  One restart policy serves every child process the runtime keeps alive:
+  `ChildProcessRestartBackoff` waits 1 s before a start, doubling to 30 s, back to 1 s after a run
+  of 60 s, and counts deaths in a row that each came within 60 s of their start. A helper and the
+  shared native services' children (`SupervisedChildProcess`) give up at the fifth such death; each
+  owner keeps its own loop and asks the type when to start and whether to give up. A node past
+  its crash-loop limit reads `Error` with the last death's reason and stays down while the rest of
+  its stream runs; a restart whose `setup()` refuses, or whose helper refuses the engine's build
+  id, counts as a death in a row and its refusal is the reason. Re-running the project
+  (`reload_project`) starts it with a fresh count; no verb restarts one node. Owner, 2026-11-03.
+  Rejected: never giving up on a helper — a node whose `setup()` always raises would spin every
+  30 s and hide its failure (owner, 2026-11-03). [helper-process-restart — SHIPPED #3111]
 - **DECIDED** — A link onto a helper reads `wired` only once the helper says so. The helper
   answers every `wire_link` it receives with a link-scoped `wired` or `wire_failed` reply,
   `wire_failed` carrying the reason its open failed; the reply rides its own rpc tag, which
@@ -1828,7 +1859,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a helper reads commands only between callbacks, so waiting would put a control-plane call
   behind user code, and the isolation axis settles it over the caller-learns-its-outcome
   one. A helper that dies with a link unconfirmed takes the link down on the same death path
-  the ladder runs; the link never reads `wired`. A link an engine-to-helper wire has not yet
+  the ladder runs; the link never reads `wired`, reads `error`, and a restarted helper's setup
+  command leaves it off. A link an engine-to-helper wire has not yet
   confirmed is never re-planned as unadded.
   [local-transport-hardening — SHIPPED #2265]
 - **DECIDED** — A helper refuses to start unless the engine it imported is its parent's
@@ -2056,7 +2088,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   engine ends every stream on the machine, and the runtime restarts and re-loads every stream neither stopped nor failed from
   its persisted graph (§Product); a hang is
   bounded per node by the existing abandon budget and ends only that stream; Python crashes and hangs
-  stay in their own process. "Restart the runtime and the streams come back" means re-loading
+  stay in their own process, and a crashed helper is restarted within its crash-loop limit. "Restart the runtime and the streams come back" means re-loading
   from persisted graphs, never re-attaching — processor interpreters die with their parent by
   construction and surfaces cannot outlive the device's owner — so the runtime keeps each
   stream's graph in its state directory (§Product), the runtime directory staying ephemeral.
@@ -2568,8 +2600,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   not wrong pixels, and the alternative costs every reader a re-plug mid-stream. And a
   device-configuration refusal — an `S_FMT` or `REQBUFS` that fails — latches for the
   processor's life, so one transient device failure ends that camera's run; whether a retry
-  is owed, and whether it belongs to this module or to the runtime's restart policy, is
-  undecided.
+  is owed, and whether it belongs to this module or to a restart policy (the runtime has one
+  for helpers only), is undecided.
 - **DECIDED** — First-party modules are written against the same handle-shaped hardware
   primitives third parties get — DMA-BUF / OPAQUE_FD / IOSurface import-export, audio clock, color resolution, and the audio device, video device and video codec
   backend seams — never against private engine guts;
@@ -3968,7 +4000,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio; amended by gateway-nodes: the helper bundle holds no `moq-relay`]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, helper-process-restart, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes, control-api-contract, live-graph-inputs, asset-media-facts-and-previews, playback-controls)
+## Control plane & observability — IN-FLIGHT (→ runtime-description, gateway-nodes, project-and-assets, typed-stream-facts, project-action-contract, studio-view-nodes, control-api-contract, live-graph-inputs, asset-media-facts-and-previews, playback-controls)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -4048,6 +4080,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   subscriber slot beyond its fixed cap, the exposed-port publisher's, and no other.
   [zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; package-split-and-lend — SHIPPED
   #2691, #2697; runtime-hosting — SHIPPED #2715; moq-relays — SHIPPED #2853; amended by gateway-nodes: `exposed` leaves `graph`, reference edges join it, and no channel reserves a publisher's slot]
+- **DECIDED** — `graph` says what a helper's restart did. A helper-placed node's
+  `components.state` reads `Restarting` between a death and its next `ready`, and its
+  `components.helper_process_restarts` carries `restart_count` (restarts since the stream loaded)
+  and `last_exit_reason` (the exit status or signal, its pid, and the tail of the helper's
+  standard error). A node past its crash-loop limit reads `Error`, carrying why in
+  `components.failed_because`; readiness waits through `Restarting`, so its error names the
+  crash loop and the last death's reason. The MCP instructions name `Restarting` and the
+  restart record. [helper-process-restart — SHIPPED #3111]
 - **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
   hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
