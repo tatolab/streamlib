@@ -20,6 +20,8 @@ mod project_repositories_open_in_this_runtime;
 #[cfg(feature = "history")]
 mod project_repository;
 mod project_repository_refusal;
+#[cfg(feature = "store")]
+mod project_store;
 mod project_stream_document;
 mod project_transaction;
 mod project_views;
@@ -69,6 +71,11 @@ pub use project_repository::{
     ProjectImportListed, ProjectPythonRequirementsLock, ProjectRepository,
 };
 pub use project_repository_refusal::ProjectRepositoryRefusal;
+#[cfg(feature = "store")]
+pub use project_store::{
+    PROJECT_STORE_FILE_NAME, PROJECT_STORE_WRITE_DEBOUNCE_WINDOW, ProjectStore,
+    ProjectStoreRefusal, ProjectStoreTableName,
+};
 pub use project_stream_document::{
     ProjectStreamDocument, STREAM_DOCUMENT_ASSET_KEY, STREAM_DOCUMENT_DISPLAY_NAME_KEY,
     project_stream_documents,
@@ -122,8 +129,8 @@ pub use stream_graph_studio_contract::{
     StreamGraphNoteFields, StudioCanvasPair,
 };
 
-/// The directory inside a project that holds what the runtime keeps for it: history, content and
-/// staged imports.
+/// The directory inside a project that holds what the runtime keeps for it: history, content,
+/// staged imports and the project's store.
 pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";
 pub use tatolab_view_manifest::{
     TatolabViewAcceptedFiles, TatolabViewCapability, TatolabViewDeclaredPort, TatolabViewManifest,

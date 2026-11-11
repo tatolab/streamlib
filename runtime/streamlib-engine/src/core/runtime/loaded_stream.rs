@@ -296,6 +296,9 @@ impl LoadedStreamInThisRuntime {
                 function_node_states: engine_resources_shared_by_every_stream
                     .function_node_states_carried_for_every_stream
                     .of_the_stream(&stream_id),
+                project_stores: Arc::clone(
+                    &engine_resources_shared_by_every_stream.project_stores_open_in_this_runtime,
+                ),
             }),
             processor_interpreter_launch_record: Arc::new(
                 ProcessorInterpreterLaunchRecordOfOneStream::new(

@@ -4417,6 +4417,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redb"
+version = "4.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b317ef681e18f6091efbfab532eaf924a135c492d9d0299d0fbfae07e92a39b"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5698,6 +5707,7 @@ dependencies = [
  "git2",
  "libz-sys",
  "parking_lot",
+ "redb",
  "schemars 1.2.2",
  "serde",
  "serde_json",
