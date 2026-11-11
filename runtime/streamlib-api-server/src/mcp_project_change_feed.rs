@@ -23,8 +23,9 @@ use streamlib_project_repository::{
     ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionUndoState,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    ProjectActionRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire, ProjectTransactionOnTheWire,
-    ProjectTransactionsResourceContents, RefusedProjectActionOnTheWire,
+    AssetMediaFactsReadOnTheWire, ProjectActionRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire,
+    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents,
+    RefusedProjectActionOnTheWire,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
@@ -118,19 +119,24 @@ impl ProjectActionsRefusedSinceTheRuntimeStarted {
     }
 }
 
-/// `applied`, newest first, and `refused`, newest first, merged newest first; a refusal in the
-/// same second as an applied transaction comes before it.
+/// `applied`, `media_facts_read` and `refused`, each newest first, merged newest first; in the
+/// same second a refusal comes first, then a finished media facts read, then an applied
+/// transaction.
 fn the_change_feed_newest_first(
     applied: Vec<AppliedProjectTransaction>,
     undo_state_of_each_transaction: &HashMap<Uuid, ProjectTransactionUndoState>,
+    media_facts_read: Vec<(i64, AssetMediaFactsReadOnTheWire)>,
     refused: Vec<(i64, RefusedProjectActionOnTheWire)>,
 ) -> Vec<ProjectChangeFeedEntryOnTheWire> {
-    let mut change_feed: Vec<(i64, bool, ProjectChangeFeedEntryOnTheWire)> = applied
+    const APPLIED_IN_THE_SAME_SECOND_RANK: u8 = 0;
+    const MEDIA_FACTS_READ_IN_THE_SAME_SECOND_RANK: u8 = 1;
+    const REFUSED_IN_THE_SAME_SECOND_RANK: u8 = 2;
+    let mut change_feed: Vec<(i64, u8, ProjectChangeFeedEntryOnTheWire)> = applied
         .into_iter()
         .map(|applied| {
             (
                 applied.applied_at_unix_seconds,
-                false,
+                APPLIED_IN_THE_SAME_SECOND_RANK,
                 ProjectChangeFeedEntryOnTheWire::Applied(project_transaction_on_the_wire(
                     applied,
                     undo_state_of_each_transaction,
@@ -138,24 +144,35 @@ fn the_change_feed_newest_first(
             )
         })
         .chain(
+            media_facts_read
+                .into_iter()
+                .map(|(read_at_unix_seconds, read)| {
+                    (
+                        read_at_unix_seconds,
+                        MEDIA_FACTS_READ_IN_THE_SAME_SECOND_RANK,
+                        ProjectChangeFeedEntryOnTheWire::MediaFactsRead(read),
+                    )
+                }),
+        )
+        .chain(
             refused
                 .into_iter()
                 .map(|(refused_at_unix_seconds, refused_action)| {
                     (
                         refused_at_unix_seconds,
-                        true,
+                        REFUSED_IN_THE_SAME_SECOND_RANK,
                         ProjectChangeFeedEntryOnTheWire::Refused(refused_action),
                     )
                 }),
         )
         .collect();
-    change_feed.sort_by(|(at, is_refused, _), (other_at, other_is_refused, _)| {
-        (other_at, other_is_refused).cmp(&(at, is_refused))
+    change_feed.sort_by(|(at, rank, _), (other_at, other_rank, _)| {
+        (other_at, other_rank).cmp(&(at, rank))
     });
     change_feed.into_iter().map(|(_, _, entry)| entry).collect()
 }
 
-fn the_wall_clock_in_unix_seconds() -> i64 {
+pub(crate) fn the_wall_clock_in_unix_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since_the_epoch| {
@@ -193,7 +210,7 @@ pub(crate) fn project_transactions_resource_template() -> ResourceTemplate {
         "project-transactions",
     )
     .with_title("Project transactions")
-    .with_description("A project's change feed, by its UUID as `list_assets` answers it under `transactions_resource_uri`: its newest transactions and the actions refused since the runtime started, newest first, each tagged by `status`. An `applied` one carries its `transaction` UUID, its `commit`, its `parent_commit`, its author's kind and name, its `operations` and `inverse_operations`, its `format_version`, its `idempotency_key` when it had one, and `applied_at`. A `refused` one carries its author's kind and name, its `mode`, the `operations` it asked for, its `idempotency_key` when it had one, the `refusal` in the runtime's own words, and `refused_at`; the runtime keeps the latest 100 of each project in memory only. Name the URI in `subscriptions/listen`'s resource subscriptions to be sent `notifications/resources/updated` for it each time a transaction applies or an action is refused. Served for a project an asset tool has opened since the runtime started.")
+    .with_description("A project's change feed, by its UUID as `list_assets` answers it under `transactions_resource_uri`: its newest transactions, the actions refused and the assets whose media facts were read since the runtime started, newest first, each tagged by `status`. An `applied` one carries its `transaction` UUID, its `commit`, its `parent_commit`, its author's kind and name, its `operations` and `inverse_operations`, its `format_version`, its `idempotency_key` when it had one, and `applied_at`. A `refused` one carries its author's kind and name, its `mode`, the `operations` it asked for, its `idempotency_key` when it had one, the `refusal` in the runtime's own words, and `refused_at`; the runtime keeps the latest 100 of each project in memory only. A `media_facts_read` one carries the `asset`, the `content_sha256` of the bytes read, its `media_facts_state`, `read` or `unreadable`, and `read_at`, after which `describe_asset` answers what was read; the runtime keeps the latest 100 of each project in memory only. Name the URI in `subscriptions/listen`'s resource subscriptions to be sent `notifications/resources/updated` for it each time a transaction applies, an action is refused or an asset's media facts are read. Served for a project an asset tool has opened since the runtime started.")
     .with_mime_type("application/json")
 }
 
@@ -264,6 +281,7 @@ pub(crate) async fn announce_project_transactions_until_the_listen_ends(
 pub(crate) async fn read_project_transactions_resource(
     project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
     project_actions_refused: Arc<ProjectActionsRefusedSinceTheRuntimeStarted>,
+    asset_media_facts_reads: Arc<crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime>,
     uri: &str,
     project: Uuid,
 ) -> Result<ReadResourceResult, McpError> {
@@ -289,6 +307,7 @@ pub(crate) async fn read_project_transactions_resource(
         let transactions = the_change_feed_newest_first(
             applied_transactions,
             &undo_state_of_each_transaction,
+            asset_media_facts_reads.the_finished_reads_newest_first(project),
             project_actions_refused.the_refused_actions_newest_first(project),
         );
         serde_json::to_string_pretty(&ProjectTransactionsResourceContents {

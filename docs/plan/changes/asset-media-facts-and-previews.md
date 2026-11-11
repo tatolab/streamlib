@@ -68,8 +68,9 @@ could not read is `null`, never an error, and an asset whose facts are not yet r
 "preview": { "pixel_width": 512, "pixel_height": 288, "media_type": "image/png" }
 ```
 
-- `media_facts_state` is `read`, `reading` or `unreadable` (no reader for the file, or the reader
-  refused it; `media_facts_unreadable_because` carries the reader's own words).
+- `media_facts_state` is `read`, `reading` or `unreadable` (no file at the asset's path, no
+  reader for the file, or the reader refused it; `media_facts_unreadable_because` carries the
+  reader's own words), and `null` for a stream asset.
 - `video` and `audio` are both present for a video with sound. `image` carries `pixel_width`
   and `pixel_height`. `lut` carries `lut_1d_size` or `lut_3d_size` and `domain_min`/`domain_max`.
   `scene` carries `prim_count`, `null` until the runtime has a scene reader.
@@ -78,7 +79,7 @@ could not read is `null`, never an error, and an asset whose facts are not yet r
 A new operation answers the picture: `read_asset_preview(project_directory, asset)` answers
 `media_type`, `pixel_width`, `pixel_height`, `byte_len` and `content_base64`, the shape
 `read_project_file` already uses. It is refused, in the runtime's words, for an asset with no
-preview, and answers `reading` while one is being made.
+preview, for a stream asset, and while the asset's bytes are still being read.
 
 ### Where it is kept
 
@@ -90,9 +91,10 @@ project rebuilds them on first read.
 
 After `import_asset` or `replace_asset` commits, the runtime reads the new bytes off the async
 runtime, beside the transaction, never inside it, so an import is never slower or refused
-because of a file the runtime cannot read. A cache miss on `describe_asset` or
+because of a file the runtime cannot read. A cache miss on `list_assets`, `describe_asset` or
 `read_asset_preview` (an asset imported before this change, a project copied in) queues the same
-read. A project's change feed announces the asset again once its facts are read, so a consumer
+read; the call itself reads no file. The runtime reads one asset at a time, on one thread of its
+own. A project's change feed announces the asset again once its facts are read, so a consumer
 subscribed to `transactions_resource_uri` can refresh a card.
 
 The announcement is a feed entry with `status: "media_facts_read"` naming the asset, not a
@@ -102,19 +104,19 @@ shows many cards and polling each is wasteful (owner, 2026-11-11).
 
 ### The readers
 
-One module per file family in a new crate, `streamlib-asset-media-facts`, which the project
-repository calls and nothing else does. Each reader takes a path and answers facts and an
-optional picture.
+One module per file family in a new crate, `streamlib-asset-media-facts`, which the asset tools
+call and nothing else does. Each reader takes a path and answers facts and an optional picture;
+the crate also keeps the cache.
 
 - **Images** (PNG, JPEG, WebP, GIF, BMP, TIFF, HDR, EXR): the `image` crate (MIT or
   Apache-2.0) reads the size from the header and decodes the picture for the preview, scaled to
   512 px on its longest edge.
-- **Video containers** (MP4, MOV): box parsing reads duration, picture size, frame rate and
-  codec from `mvhd`, `tkhd`, `stsd` and `stts`, and sample rate and channel count from an audio
-  track's `stsd`. MKV and WebM through an EBML reader in the same crate. AVI and MXF answer
+- **Video containers** (MP4, MOV, M4V, M4A): box parsing reads duration from `mvhd`, and from
+  each track's `mdhd`, `hdlr`, `stsd` and `stts` its picture size, frame rate and codec, or its
+  sample rate, channel count and codec. MKV and WebM through an EBML reader in the same crate. AVI and MXF answer
   `unreadable` for now.
-- **Audio files**: WAV and AIFF headers parsed directly; FLAC's `STREAMINFO`; MP3, AAC, Ogg and
-  Opus through a probe library (see below).
+- **Audio files** (WAV, AIFF, FLAC, MP3, AAC, Ogg, Opus, CAF): the container probed through
+  `symphonia` (see below), never decoded.
 - **LUTs**: `.cube` files' `LUT_1D_SIZE` or `LUT_3D_SIZE` and domain lines, read as text.
 - **Scenes**: no reader. `scene` is `null` and the asset has no preview until a scene reader
   exists, which this change does not add.
@@ -166,9 +168,9 @@ Nothing. The change only adds.
 1. **Facts and image previews.** The crate with the image, MP4/MOV, MKV/WebM, audio and LUT
    readers; the cache; the read after import and replace and on a miss; the new fields on
    `describe_asset` and `list_assets`; `read_asset_preview`; the change-feed entry. Proven by
-   project-repository tests over committed sample files (a few kilobytes each, generated in the
-   test where the format allows) and an api-server test that imports an MP4, a PNG and a `.cube`
-   and reads facts and a preview back.
+   the crate's tests over files each test writes (an MP4, a WebM, a WAV, a PNG, a `.cube`) and an
+   api-server test that imports a PNG, a `.cube` and an FMU, waits for each read on the change
+   feed, and reads facts and a preview back.
 2. **Video posters** through `OwnedDeviceVideoDecoder`, proven by `/verify-live` on each
    platform's decoder.
 3. Tato Studio's Library reads them (tatolab-app, after slice 1 ships in a runtime release).

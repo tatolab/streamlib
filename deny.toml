@@ -58,6 +58,11 @@ allow = [
     "ISC",
     "MIT",
     "MIT-0",
+    # `symphonia`, the audio container probe `streamlib-asset-media-facts` reads
+    # an audio asset's duration, sample rate and channels through. File-level
+    # copyleft: it binds only symphonia's own files, which ship unmodified, and
+    # the notices carry its text.
+    "MPL-2.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
@@ -162,6 +167,11 @@ license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-processor-schema"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-asset-media-facts"
 expression = "BUSL-1.1"
 license-files = []
 

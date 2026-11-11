@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as STANDARD_BASE64;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::schemars::JsonSchema;
 use rmcp::service::RequestContext;
@@ -16,6 +18,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib::sdk::error::Result as StreamlibResult;
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, StreamActionQueued};
+use streamlib_asset_media_facts::{
+    AssetMediaFactsCacheOfAProject, AssetMediaFactsCachedInTheProject,
+};
 use streamlib_project_repository::{
     AppliedProjectTransaction, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectActionIdempotencyKey,
     ProjectAsset, ProjectAssetAction, ProjectAssetImportSource, ProjectAssetKind,
@@ -25,10 +30,11 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, DescribeAssetToolResult, ListAssetsToolResult,
-    ProjectAssetOnTheWire,
+    ProjectAssetOnTheWire, ProjectAssetWithItsMediaFactsOnTheWire, ReadAssetPreviewToolResult,
 };
 use uuid::Uuid;
 
+use crate::asset_media_facts_reads::AssetMediaFactsNow;
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
 use crate::mcp_project_change_feed::project_transactions_resource_uri;
 
@@ -116,6 +122,16 @@ struct ListAssetsToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct DescribeAssetToolArguments {
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    project_directory: PathBuf,
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    asset: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ReadAssetPreviewToolArguments {
     #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     project_directory: PathBuf,
     #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
@@ -269,7 +285,7 @@ struct SetStreamDisplayNameToolArguments {
 #[tool_router(router = project_asset_tool_router, vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, and its `import_settings`, with the project's UUID, `project_name`, `project_description`, `project_cover` — the UUID of the image asset it is shown by — and `project_last_edited_at`, when its history last changed in seconds since the Unix epoch, each `null` when it has none, and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
+        description = "List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, its `import_settings`, and what the runtime has read from its bytes — `media_facts_state` (`read`, `reading`, `unreadable` with `media_facts_unreadable_because`, or `null` for a stream), `media_facts` and `preview`, as `describe_asset` answers them, each from what is already read, an asset not yet read queued for a read — with the project's UUID, `project_name`, `project_description`, `project_cover` — the UUID of the image asset it is shown by — and `project_last_edited_at`, when its history last changed in seconds since the Unix epoch, each `null` when it has none, and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`."
     )]
     async fn list_assets(
         &self,
@@ -279,18 +295,28 @@ impl LocalApiMcpServerHandler {
         }): Parameters<ListAssetsToolArguments>,
     ) -> ToolCallAnswer {
         let kind = kind.map(ProjectAssetKind::from);
+        let asset_media_facts_reads = Arc::clone(&self.asset_media_facts_reads_in_this_runtime);
         let listed = self
             .a_project_repository_call_off_the_async_runtime(
                 "list_assets",
                 project_directory,
                 move |project_repository| {
-                    let mut assets: Vec<ProjectAssetOnTheWire> = project_repository
-                        .assets()?
-                        .iter()
-                        .filter(|asset| kind.is_none_or(|kind| asset.kind == kind))
-                        .map(project_asset_on_the_wire)
-                        .collect();
-                    assets.sort_by(|first, second| first.path.cmp(&second.path));
+                    let project = project_repository.project_file().project;
+                    let mut assets: Vec<ProjectAssetWithItsMediaFactsOnTheWire> =
+                        project_repository
+                            .assets()?
+                            .iter()
+                            .filter(|asset| kind.is_none_or(|kind| asset.kind == kind))
+                            .map(|asset| {
+                                asset_media_facts_reads.the_asset_with_its_media_facts(
+                                    project,
+                                    project_repository.project_directory(),
+                                    asset,
+                                    project_asset_on_the_wire(asset),
+                                )
+                            })
+                            .collect();
+                    assets.sort_by(|first, second| first.asset.path.cmp(&second.asset.path));
                     Ok(ListAssetsToolResult {
                         project_directory: project_repository.project_directory().to_path_buf(),
                         project: project_repository.project_file().project.to_string(),
@@ -313,7 +339,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of its bytes, its import settings, and `file_at_its_path`, whether a file is at its path."
+        description = "Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of its bytes, its import settings, `file_at_its_path`, whether a file is at its path, and what the runtime has read from its bytes, which it reads once per SHA-256 after an import or a replace and keeps in the project's `.tatolab/`. `media_facts_state` is `read`, `reading` — a read queued or under way, after which the project's change feed carries a `media_facts_read` entry — `unreadable`, with why in `media_facts_unreadable_because`, or `null` for a stream asset. `media_facts` carries `duration_ms`; `video` with `pixel_width`, `pixel_height`, `frames_per_second` and `codec`; `audio` with `sample_rate_hz`, `channel_count` and `codec`; `image` with `pixel_width` and `pixel_height`; `lut` with `lut_1d_size` or `lut_3d_size`, `domain_min` and `domain_max`; and `scene` — each `null` when the file does not hold or state it. `preview` is the size and `media_type` of the picture `read_asset_preview` answers, `null` when the asset has none."
     )]
     async fn describe_asset(
         &self,
@@ -323,6 +349,7 @@ impl LocalApiMcpServerHandler {
         }): Parameters<DescribeAssetToolArguments>,
     ) -> ToolCallAnswer {
         let asset = the_asset_a_call_names("describe_asset", "asset", &asset)?;
+        let asset_media_facts_reads = Arc::clone(&self.asset_media_facts_reads_in_this_runtime);
         let described = self
             .a_project_repository_call_off_the_async_runtime(
                 "describe_asset",
@@ -334,12 +361,110 @@ impl LocalApiMcpServerHandler {
                             .path
                             .on_disk_under(project_repository.project_directory())
                             .is_file(),
-                        asset: project_asset_on_the_wire(&described_asset),
+                        asset: asset_media_facts_reads.the_asset_with_its_media_facts(
+                            project_repository.project_file().project,
+                            project_repository.project_directory(),
+                            &described_asset,
+                            project_asset_on_the_wire(&described_asset),
+                        ),
                     })
                 },
             )
             .await?;
         serialized_tool_result("describe_asset", &described)
+    }
+
+    #[tool(
+        description = "Read an asset's preview picture, which the runtime makes from its bytes and keeps in the project's `.tatolab/`: a PNG at most 512 pixels on its longest edge, answered as `content_base64`, standard base64 with padding, with its `media_type`, `pixel_width`, `pixel_height` and `byte_len`. An image has one; video, audio, a LUT, a scene and other data have none yet, as `describe_asset`'s `preview` being `null` says. Refused while the runtime is still reading the asset's bytes — `describe_asset`'s `media_facts_state` reads `reading`, and the project's change feed carries a `media_facts_read` entry once it is done — for an asset with no preview, and for a stream asset."
+    )]
+    async fn read_asset_preview(
+        &self,
+        Parameters(ReadAssetPreviewToolArguments {
+            project_directory,
+            asset,
+        }): Parameters<ReadAssetPreviewToolArguments>,
+    ) -> ToolCallAnswer {
+        let asset = the_asset_a_call_names("read_asset_preview", "asset", &asset)?;
+        let asset_media_facts_reads = Arc::clone(&self.asset_media_facts_reads_in_this_runtime);
+        let previewed = self
+            .a_project_repository_call_off_the_async_runtime(
+                "read_asset_preview",
+                project_directory,
+                move |project_repository| {
+                    let previewed_asset = project_repository.asset(asset)?;
+                    Ok((
+                        asset_media_facts_reads.the_media_facts_of(
+                            project_repository.project_file().project,
+                            project_repository.project_directory(),
+                            &previewed_asset,
+                        ),
+                        project_repository.project_directory().to_path_buf(),
+                        previewed_asset.content_sha256,
+                    ))
+                },
+            )
+            .await?;
+        let (media_facts_now, project_directory, content_sha256) = previewed;
+        let preview = match media_facts_now {
+            AssetMediaFactsNow::NotRead => {
+                return Err(format!(
+                    "read_asset_preview failed: asset {asset} is a stream, which has no preview; `graph` serves its graph"
+                ));
+            }
+            AssetMediaFactsNow::Reading => {
+                return Err(format!(
+                    "read_asset_preview failed: the runtime is still reading asset {asset}'s bytes; read again once `describe_asset` answers its `media_facts_state` as `read`"
+                ));
+            }
+            AssetMediaFactsNow::NoFileAtItsPath => {
+                return Err(format!(
+                    "read_asset_preview failed: no file is at asset {asset}'s path"
+                ));
+            }
+            AssetMediaFactsNow::Kept(AssetMediaFactsCachedInTheProject::Unreadable {
+                media_facts_unreadable_because,
+            }) => {
+                return Err(format!(
+                    "read_asset_preview failed: asset {asset}'s bytes did not read, so it has no preview: {media_facts_unreadable_because}"
+                ));
+            }
+            AssetMediaFactsNow::Kept(AssetMediaFactsCachedInTheProject::Read {
+                preview: None,
+                ..
+            }) => {
+                return Err(format!(
+                    "read_asset_preview failed: asset {asset} has no preview picture; the runtime makes one for an image"
+                ));
+            }
+            AssetMediaFactsNow::Kept(AssetMediaFactsCachedInTheProject::Read {
+                preview: Some(preview),
+                ..
+            }) => preview,
+        };
+        let png_bytes = tokio::task::spawn_blocking(move || {
+            AssetMediaFactsCacheOfAProject::of_the_project_at(&project_directory)
+                .preview_png_bytes(&content_sha256)
+        })
+        .await
+        .map_err(|join_failure| {
+            format!("read_asset_preview failed: the read did not finish: {join_failure}")
+        })?
+        .ok_or_else(|| {
+            format!(
+                "read_asset_preview failed: asset {asset}'s preview picture is gone from the project's `.tatolab/`; it is made again after the asset's next `replace_asset`"
+            )
+        })?;
+        serialized_tool_result(
+            "read_asset_preview",
+            &ReadAssetPreviewToolResult {
+                asset: asset.to_string(),
+                pixel_width: preview.pixel_width,
+                pixel_height: preview.pixel_height,
+                media_type: preview.media_type,
+                byte_len: png_bytes.len() as u64,
+                content_base64: STANDARD_BASE64.encode(&png_bytes),
+            },
+        )
     }
 
     #[tool(
@@ -613,6 +738,7 @@ impl LocalApiMcpServerHandler {
         change: ProjectAssetAction,
     ) -> ToolCallAnswer {
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
+        let asset_media_facts_reads = Arc::clone(&self.asset_media_facts_reads_in_this_runtime);
         let (mut answered, project, project_directory, transaction_applied_now) = self
             .a_project_repository_call_off_the_async_runtime(
                 tool_name,
@@ -634,6 +760,13 @@ impl LocalApiMcpServerHandler {
                     } = outcome.into_applied_transaction();
                     let changed_asset =
                         project_repository.the_asset_a_transaction_changed(&transaction)?;
+                    if applied_now {
+                        asset_media_facts_reads.the_media_facts_of(
+                            project_repository.project_file().project,
+                            project_repository.project_directory(),
+                            &changed_asset,
+                        );
+                    }
                     Ok((
                         AssetTransactionToolResult {
                             asset: project_asset_on_the_wire(&changed_asset),

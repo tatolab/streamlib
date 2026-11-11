@@ -1,0 +1,31 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-asset-media-facts"
+description = "engine-free: what a project asset's bytes hold — duration, picture size, frame rate, codec, sample rate, LUT size — and its preview picture, read once per content hash and kept in the project's .tatolab/"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_asset_media_facts"
+path = "src/lib.rs"
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff", "hdr", "exr"] }
+serde.workspace = true
+serde_json.workspace = true
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.59" }
+# MPL-2.0, file-level: it binds only its own files. Format readers alone; no audio is decoded.
+symphonia = { version = "0.5.4", default-features = false, features = ["aac", "adpcm", "aiff", "alac", "caf", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

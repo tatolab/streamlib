@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+mod asset_media_facts_reads;
 mod axum_router_served_until_stopped;
 #[cfg(test)]
 mod control_plane_stub_support;

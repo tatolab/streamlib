@@ -43,6 +43,7 @@ accepted = [
     "Apache-2.0 WITH LLVM-exception",
     "BUSL-1.1",
     "CDLA-Permissive-2.0",
+    "MPL-2.0",
 ]
 
 # No `targets`, so the notices cover every platform's crates rather than the
