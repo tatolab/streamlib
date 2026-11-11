@@ -75,19 +75,24 @@
 
 ## Assumed
 
-The owner approved the proposal with these four open; each is the session's recommendation,
-built as stated until the owner says otherwise (session, 2026-11-11).
+The owner approved the proposal with these four open. The first is the owner's answer; the rest
+are the session's recommendation, built as stated until the owner says otherwise (session,
+2026-11-11).
 
-1. **A reader linked or restarted after a write gets the current value.** The node holds its
-   current value and resends it to a reader the last write missed
-   (`has_a_reader_the_last_write_missed`), so a restart never silently empties a control. It lives
-   in the shared seam, so view nodes gain it too.
-2. **Studio reads the current value through a viewer on `value`,** the existing `open_viewer`,
-   which 1 makes see the last value; `graph` carries no written value.
+1. **No resend to a late reader.** A Graph Input's value is a flow of data: a reader linked or
+   restarted after a write sees nothing until the next write, as a view node's reader does today.
+   Revisited once Perform is in use (owner, 2026-11-11).
+2. **`graph` shows a Graph Input's current value.** The node keeps the last value written to it,
+   or its `default` before any write, and `graph` renders it on the node, so a control that opens
+   late reads where it stands. Nothing is resent to any reader; the value lives in memory and is
+   gone on reload.
 3. **A `default` on a fragment's `GraphInput` is refused,** naming the node: a fragment's Input
    runs nothing, so a default there would be a separate change.
-4. **No control-kind hint here.** Studio renders a control by family until slider, toggle and
-   colour hints are agreed.
+4. **A Graph Input's `range`, and no control key.** Its config takes an optional
+   `range: [lowest, highest]`, lowest first, as a view manifest's declared port does, refused on a
+   family that takes no number. Studio picks the control from the `default`'s shape: a bool a
+   toggle, a number a slider, three or four numbers a colour. An explicit control key waits until
+   guessing proves wrong. A Channels value also takes a bool, read as a control value is.
 
 ## Consumers
 
