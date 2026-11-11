@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-h265"
-version = "0.68.64"
+version = "0.68.65"
 description = "H.265 encode and decode for Tatolab streams, on a Vulkan device the module owns."
 readme = "README.md"
 requires-python = ">=3.12"
