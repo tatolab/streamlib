@@ -1,6 +1,6 @@
 # kept-node-values
 
-> **Proposed, awaiting the owner (session, 2026-11-11).** Each node value has a lifetime: `kept`
+> **Decided by the owner, 2026-11-11 (project thread).** Each node value has a lifetime: `kept`
 > values survive Stop, Play, close and a runtime restart; `reset` values are forgotten at Stop.
 > The state board becomes the one node value store, keyed by node UUID, and holds any
 > serializable value. Memory is the truth at full rate; one writer per project flushes kept
@@ -37,19 +37,24 @@
 - **Defaults.** A function node's `State` is `reset`, as stateless nodes and today's nodes
   expect. A top-level `GraphInput` is `kept` (owner, 2026-11-11). A `GraphInput`'s config takes an
   optional `lifetime: "kept" | "reset"`; `GraphInputConfig` gains `lifetime: NotRequired[...]`.
-- **Any serializable value.** A kept value is the value the node's family takes, as JSON: a
+- **Any serializable value.** A kept value is the value the node's family takes, saved as JSON: a
   Records object, an Array number or list, a Channels number, block or bool (owner, 2026-11-11).
   Function-node state keeps its numeric slots on the board's wire; only its saved form is JSON.
+- **The project database.** Each project has one embedded database, `.tatolab/project.redb`
+  (redb: one file, ACID and crash-safe, pure Rust), owned by one engine module and written only by
+  the runtime. It is the project's backing store for runtime-kept data: each concern is a named
+  table in it, never a file or a store of its own. Its first table is `node_values`, keyed by
+  stream then node UUID, its value the node value as JSON. It holds no media, which stays as files
+  in the project (owner, 2026-11-11: "start with redb and evaluate how it goes").
 - **Memory at full rate, a debounced writer to disk.** A write changes the value in memory at
   once and readers take every change, at whatever rate a control moves. One writer per held
-  project flushes the latest value of each changed kept key to
-  `.tatolab/node-values.json` (whole-file write to a temporary file, then rename) at most once per
-  debounce window, every value changed in that window batched into the one write, so the file
-  never runs at a control's rate and never sees concurrent writes. The writer runs off every
-  processing and request path: a control write never waits on disk (owner, 2026-11-11).
-  Stop, `close_project` and a clean runtime shutdown flush at once. A crash loses at most one
-  window. Nothing reaches the graph document or Git history (owner, 2026-11-11).
-- **Restore.** `open_project` and the runtime's start read the file; Play hands each kept value
+  project commits the latest value of each changed kept key at most once per debounce window,
+  every value changed in that window batched into one write transaction, so the disk never runs
+  at a control's rate and never sees concurrent writes. The writer runs off every processing and
+  request path: a control write never waits on disk. Stop, `close_project` and a clean runtime
+  shutdown flush at once. A crash loses at most one window. Nothing reaches the graph document or
+  Git history (owner, 2026-11-11).
+- **Restore.** `open_project` and the runtime's start read `node_values`; Play hands each kept value
   to its node before the first frame, so a `GraphInput` publishes the kept value instead of its
   `default`. A key whose node no longer exists, or whose value its family no longer takes, is
   dropped with a log record naming it.
@@ -73,7 +78,10 @@
 - REMOVED: by_function_node_name
 - REMOVED: and the value is gone on the next load
 
-## [Assumed] Session recommendations, built as stated unless the owner says otherwise
+## Assumed
+
+The owner approved the proposal with these open; they are the session's recommendation, built
+as stated until the owner says otherwise (session, 2026-11-11).
 
 1. **The debounce window is 250 ms.** Short enough that a crash loses a blink, long enough that a
    60 Hz slider writes four times a second at most.
@@ -89,8 +97,8 @@
 1. **Kept Graph Input values** — the store, the debounced writer, restore at open, start and Play,
    `lifetime` on `GraphInputConfig`, `graph` reading the store. Engine tests over a real engine:
    a kept Input written then Stop, Play reaches its readers with the written value; a reset Input
-   returns to its `default`; 1,000 writes in one second flush the file at most four times and the
-   file holds the last; a restart restores the kept value.
+   returns to its `default`; 1,000 writes in one second commit at most four write transactions and
+   the database holds the last; a restart restores the kept value.
 2. **Function-node state in the store** — the board keyed by UUID, carried state moved from the
    stream record to the store, `kept` declarable on `State`.
 
