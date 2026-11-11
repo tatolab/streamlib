@@ -80,13 +80,13 @@ The owner approved the proposal with these four open. The first is the owner's a
 are the session's recommendation, built as stated until the owner says otherwise (session,
 2026-11-11).
 
-1. **No resend to a late reader.** A Graph Input's value is a flow of data: a reader linked or
-   restarted after a write sees nothing until the next write, as a view node's reader does today.
-   Revisited once Perform is in use (owner, 2026-11-11).
+1. **A late reader is handed the current value.** A channel keeps no history, so the node hands
+   its current value, the last write or its `default` before any, to each reader the last send
+   missed (`has_a_reader_the_last_write_missed`). That is how the default reaches readers that
+   subscribe after the first send, and a restarted reader is covered too (owner, 2026-11-11).
 2. **`graph` shows a Graph Input's current value.** The node keeps the last value written to it,
    or its `default` before any write, and `graph` renders it on the node, so a control that opens
-   late reads where it stands. Nothing is resent to any reader; the value lives in memory and is
-   gone on reload.
+   late reads where it stands. The value lives in memory and is gone on reload.
 3. **A `default` on a fragment's `GraphInput` is refused,** naming the node: a fragment's Input
    runs nothing, so a default there would be a separate change.
 4. **A Graph Input's `range`, and no control key.** Its config takes an optional
