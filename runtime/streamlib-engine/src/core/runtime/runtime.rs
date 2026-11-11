@@ -200,7 +200,7 @@ impl EngineResourcesSharedByEveryStream {
                     let created = GpuContext::init_for_platform_sync()?;
                     tracing::info!("[start] The engine's GPU context is initialized");
                     #[cfg(target_os = "linux")]
-                    self.serve_display_importable_frames_from(Arc::new(created.clone()));
+                    self.serve_viewed_frames_from(Arc::new(created.clone()));
                     gpu_context_slot.insert(created).clone()
                 }
             };
@@ -221,12 +221,12 @@ impl EngineResourcesSharedByEveryStream {
     /// Serve viewers' asks for frames their display imports from `source`
     /// through the surface-sharing service, while it runs.
     #[cfg(target_os = "linux")]
-    pub(crate) fn serve_display_importable_frames_from(
+    pub(crate) fn serve_viewed_frames_from(
         &self,
-        source: Arc<dyn crate::linux::surface_share::DisplayImportableFrameSource>,
+        source: Arc<dyn crate::linux::surface_share::ViewedFrameSource>,
     ) {
         if let Some(surface_service) = self.surface_service.lock().as_ref() {
-            surface_service.serve_display_importable_frames_from(source);
+            surface_service.serve_viewed_frames_from(source);
         }
     }
 

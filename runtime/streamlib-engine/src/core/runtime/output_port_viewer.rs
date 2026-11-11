@@ -718,12 +718,13 @@ mod tests {
             PixelFormat::Bgra32,
         );
 
-        /// The engine's answer for a slot already in memory a display imports.
+        /// The engine's answer for a slot already in memory the viewer reads.
         struct TheFramesOwnPoolSlot;
-        impl crate::linux::surface_share::DisplayImportableFrameSource for TheFramesOwnPoolSlot {
-            fn surface_share_id_a_display_imports_for_the_frame(
+        impl crate::linux::surface_share::ViewedFrameSource for TheFramesOwnPoolSlot {
+            fn surface_share_id_a_viewer_reads_the_frame_through(
                 &self,
                 frame_id: &str,
+                _read_by: streamlib_surface_client::ViewedFrameReadBy,
                 _layout_the_producer_left_the_frame_in: Option<
                     streamlib_consumer_rhi::VulkanLayout,
                 >,
@@ -734,7 +735,7 @@ mod tests {
 
         let camera = ARunningCameraWithNoLinks::load();
         let engine_resources = Arc::clone(camera.stream.engine_resources_shared_by_every_stream());
-        engine_resources.serve_display_importable_frames_from(Arc::new(TheFramesOwnPoolSlot));
+        engine_resources.serve_viewed_frames_from(Arc::new(TheFramesOwnPoolSlot));
         let engine_surface_store = engine_resources
             .a_connected_surface_store_owned_by("engine:a-viewed-pool".to_string())
             .expect("the engine's surface store connects");
@@ -804,7 +805,10 @@ mod tests {
             ImageFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body);
         assert_eq!((frame.width, frame.height), (WIDTH, HEIGHT));
 
-        let importer = GpuPoolFrameImporterOfAViewer::new(surface_share_address);
+        let importer = GpuPoolFrameImporterOfAViewer::new(
+            surface_share_address,
+            streamlib_surface_client::ViewedFrameReadBy::CpuRead,
+        );
         let held = importer
             .hold_the_frame(frame.slot)
             .expect("the viewer holds the frame the message names");

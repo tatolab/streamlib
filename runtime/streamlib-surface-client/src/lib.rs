@@ -27,13 +27,14 @@
 //! bootstrap name, and validates each sender by the audit token the kernel
 //! appends.
 
-mod display_importable_frame;
 mod gpu_pool_claim_table_hand_over;
 mod published_frame_id_grammar;
+mod viewed_frame;
 
-pub use display_importable_frame::{
-    SURFACE_SHARE_DISPLAY_IMPORTS_HELD_FIELD, SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD,
-    SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP,
+pub use viewed_frame::{
+    SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD, SURFACE_SHARE_IMPORT_VIEWED_FRAME_OP,
+    SURFACE_SHARE_VIEWED_FRAME_IMPORTS_HELD_FIELD, SURFACE_SHARE_VIEWED_FRAME_READ_BY_FIELD,
+    ViewedFrameReadBy,
 };
 
 pub use gpu_pool_claim_table_hand_over::{
