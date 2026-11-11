@@ -33,6 +33,8 @@ pub enum ProjectChangeOnTheFeed {
     Applied(Box<AppliedProjectTransaction>),
     /// The runtime refused an action on the project, which no history records.
     Refused,
+    /// The runtime finished reading an asset's media facts, which no history records.
+    MediaFactsRead,
 }
 
 /// One project the runtime holds open, which only one caller writes at a time.
@@ -106,6 +108,14 @@ impl ProjectRepositoriesOpenInThisRuntime {
         self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement {
             project,
             change: ProjectChangeOnTheFeed::Refused,
+        });
+    }
+
+    /// Announce that the runtime finished reading the media facts of an asset of `project`.
+    pub fn announce_media_facts_read(&self, project: Uuid) {
+        self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement {
+            project,
+            change: ProjectChangeOnTheFeed::MediaFactsRead,
         });
     }
 

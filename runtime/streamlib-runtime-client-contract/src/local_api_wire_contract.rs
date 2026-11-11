@@ -568,6 +568,122 @@ pub struct ProjectAssetOnTheWire {
     pub import_settings: serde_json::Map<String, serde_json::Value>,
 }
 
+/// What the runtime read from a media, scene or data asset's bytes; a fact it could not read is
+/// `null`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AssetMediaFactsOnTheWire {
+    /// How long the media plays, in whole milliseconds.
+    pub duration_ms: Option<u64>,
+    /// The first video track's facts, `null` for a file with no video.
+    pub video: Option<AssetVideoFactsOnTheWire>,
+    /// The first audio track's facts, `null` for a file with no audio.
+    pub audio: Option<AssetAudioFactsOnTheWire>,
+    /// A still image's facts, `null` for anything else.
+    pub image: Option<AssetImageFactsOnTheWire>,
+    /// A colour lookup table's facts, `null` for anything else.
+    pub lut: Option<AssetLutFactsOnTheWire>,
+    /// A 3D scene's facts, `null` for anything else.
+    pub scene: Option<AssetSceneFactsOnTheWire>,
+}
+
+/// A video track's facts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetVideoFactsOnTheWire {
+    /// The coded picture's width in pixels.
+    pub pixel_width: Option<u32>,
+    /// The coded picture's height in pixels.
+    pub pixel_height: Option<u32>,
+    /// The average frame rate, in frames per second.
+    pub frames_per_second: Option<f64>,
+    /// The codec, such as `h264`, `h265`, `av1`, `vp9` or `prores`.
+    pub codec: Option<String>,
+}
+
+/// An audio track's facts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetAudioFactsOnTheWire {
+    /// Samples per second of each channel.
+    pub sample_rate_hz: Option<u32>,
+    /// How many channels it carries.
+    pub channel_count: Option<u32>,
+    /// The codec, such as `aac`, `mp3`, `opus`, `flac` or `pcm`.
+    pub codec: Option<String>,
+}
+
+/// A still image's facts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetImageFactsOnTheWire {
+    /// Its width in pixels.
+    pub pixel_width: u32,
+    /// Its height in pixels.
+    pub pixel_height: u32,
+}
+
+/// A colour lookup table's facts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetLutFactsOnTheWire {
+    /// Entries per channel of a 1D table, `null` for a 3D one.
+    pub lut_1d_size: Option<u32>,
+    /// Entries along each edge of a 3D table's cube, `null` for a 1D one.
+    pub lut_3d_size: Option<u32>,
+    /// The input value each channel's first entry maps, `[0, 0, 0]` when the file states none.
+    pub domain_min: [f64; 3],
+    /// The input value each channel's last entry maps, `[1, 1, 1]` when the file states none.
+    pub domain_max: [f64; 3],
+}
+
+/// A 3D scene's facts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetSceneFactsOnTheWire {
+    /// How many prims the scene defines.
+    pub prim_count: Option<u64>,
+}
+
+/// An asset's preview picture, which `read_asset_preview` answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetPreviewOnTheWire {
+    /// The picture's width in pixels.
+    pub pixel_width: u32,
+    /// The picture's height in pixels.
+    pub pixel_height: u32,
+    /// The picture's media type, `image/png`.
+    pub media_type: String,
+}
+
+/// One asset with what the runtime has read from its bytes, as `list_assets` and
+/// `describe_asset` answer it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectAssetWithItsMediaFactsOnTheWire {
+    /// The asset.
+    #[serde(flatten)]
+    pub asset: ProjectAssetOnTheWire,
+    /// `read`, `reading` or `unreadable`; `null` for a stream asset, whose graph `graph` serves.
+    pub media_facts_state: Option<String>,
+    /// Why the runtime could not read the asset's bytes, in its own words, while `unreadable`.
+    pub media_facts_unreadable_because: Option<String>,
+    /// What the runtime read, while `read`.
+    pub media_facts: Option<AssetMediaFactsOnTheWire>,
+    /// The asset's preview picture, `null` for an asset with none or not yet read.
+    pub preview: Option<AssetPreviewOnTheWire>,
+}
+
+/// The `read_asset_preview` tool's result.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReadAssetPreviewToolResult {
+    /// The asset's UUID.
+    pub asset: String,
+    /// The picture's width in pixels.
+    pub pixel_width: u32,
+    /// The picture's height in pixels.
+    pub pixel_height: u32,
+    /// The picture's media type, `image/png`.
+    pub media_type: String,
+    /// The picture's length in bytes.
+    pub byte_len: u64,
+    /// The picture's bytes, standard base64 with padding.
+    pub content_base64: String,
+}
+
 /// The `list_assets` tool's result: the project's assets, ordered by path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListAssetsToolResult {
@@ -584,8 +700,9 @@ pub struct ListAssetsToolResult {
     /// When the project's history last changed, in whole seconds since the Unix epoch, for
     /// display only; `null` before its first commit.
     pub project_last_edited_at: Option<i64>,
-    /// The assets, narrowed to one kind when the call named one.
-    pub assets: Vec<ProjectAssetOnTheWire>,
+    /// The assets, narrowed to one kind when the call named one, each with the media facts
+    /// already read and no file read for the listing.
+    pub assets: Vec<ProjectAssetWithItsMediaFactsOnTheWire>,
     /// The project's change feed: the resource a client reads for its newest transactions and
     /// names in `subscriptions/listen` to be told of each new one.
     pub transactions_resource_uri: String,
@@ -660,6 +777,22 @@ pub enum ProjectChangeFeedEntryOnTheWire {
     Applied(ProjectTransactionOnTheWire),
     /// An action the runtime refused since it started, which no history records.
     Refused(RefusedProjectActionOnTheWire),
+    /// The runtime finished reading an asset's media facts since it started; no history
+    /// records it.
+    MediaFactsRead(AssetMediaFactsReadOnTheWire),
+}
+
+/// An asset whose media facts the runtime finished reading, as a project's change feed holds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetMediaFactsReadOnTheWire {
+    /// The asset's UUID.
+    pub asset: String,
+    /// The SHA-256 of the bytes read, in lowercase hex.
+    pub content_sha256: String,
+    /// `read` or `unreadable`.
+    pub media_facts_state: String,
+    /// When the read finished, RFC 3339 in UTC to the second.
+    pub read_at: String,
 }
 
 /// What a refused action answers under `refusal` in its tool result's `structuredContent`,
@@ -795,8 +928,8 @@ pub struct ProjectTransactionsResourceContents {
 /// The `describe_asset` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DescribeAssetToolResult {
-    /// The asset.
-    pub asset: ProjectAssetOnTheWire,
+    /// The asset, with what the runtime has read from its bytes.
+    pub asset: ProjectAssetWithItsMediaFactsOnTheWire,
     /// Whether a file is at the asset's path.
     pub file_at_its_path: bool,
 }

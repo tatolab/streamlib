@@ -370,7 +370,7 @@ jobs:
           -p streamlib-runtime-client-contract -p streamlib-engine
           -p streamlib-media-builtins -p streamlib-consumer-rhi -p streamlib-vulkan-video
           -p streamlib-video-bitstream -p streamlib-owned-device-video-codec-nodes -p tatolab-cli -p streamlib-python-wheel -p tatolab-module-sdk -p tatolab-module-sdk-macros
-          -p tatolab-read-track -p streamlib-relay-track-reader
+          -p tatolab-read-track -p streamlib-relay-track-reader -p streamlib-asset-media-facts
           --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,streamlib-vulkan-video/hardware-tests,streamlib-owned-device-video-codec-nodes/hardware-tests,tatolab-module-sdk/pyo3,tatolab-module-sdk/function-node
           --lib --bins --tests
 

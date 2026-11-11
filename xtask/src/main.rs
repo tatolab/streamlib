@@ -382,6 +382,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "tatolab-read-track",
                 "-p",
                 "streamlib-relay-track-reader",
+                "-p",
+                "streamlib-asset-media-facts",
                 "--features",
                 "streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests,tatolab-module-sdk/pyo3,tatolab-module-sdk/function-node",
                 "--lib",
