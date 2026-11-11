@@ -2553,6 +2553,13 @@ fn dma_buf_texture_registration_payload(
         .unwrap_or_else(|_| vec![(0, 0)]);
     let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();
     let plane_strides: Vec<u64> = plane_layout.iter().map(|(_, s)| *s).collect();
+    // A one-plane image's plane spans its whole allocation, which a display
+    // importer (Chromium's native pixmap) is handed as the plane's size. A
+    // multi-plane image states no per-plane size, so its planes carry none.
+    let plane_sizes: Vec<u64> = match plane_layout.len() {
+        1 => vec![texture.vma_allocation_size()],
+        plane_count => vec![0; plane_count],
+    };
 
     serde_json::json!({
         "op": "register",
@@ -2562,6 +2569,7 @@ fn dma_buf_texture_registration_payload(
         "height": texture.height(),
         "format": texture.format().wire_name(),
         "resource_type": SURFACE_RESOURCE_TYPE_TEXTURE,
+        "plane_sizes": plane_sizes,
         "plane_offsets": plane_offsets,
         "plane_strides": plane_strides,
         "drm_format_modifier": texture.chosen_drm_format_modifier(),
