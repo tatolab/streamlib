@@ -3860,7 +3860,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   frames in `graph` — `H264Encoder` either encoding or, on a runner with no encoder, refusing
   by name while the stream stays loaded. On release a failed macOS proof of
   the runtime unit withholds the PyPI upload, as a failed build of any distribution does. A
-  pull request builds no distribution; on `main`, `ci.yml` also builds the debug runtime
+  pull request builds no distribution; nightly on `main`, `ci.yml` also builds the debug runtime
   unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
   Python suite and the integration suite's GPU-free half on it.
   [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697;
@@ -3868,7 +3868,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
   it. On every PR `Build (macOS)` compiles the whole workspace with the wheel in it
   (clippy on default targets, `check --all-targets`); on `main` it also runs the Rust
-  suites and the wheel crate's unit tests, and `Integration test (macOS)` gates
+  suites and the wheel crate's unit tests, and nightly `Integration test (macOS)` checks
   `_engine.pyi` with `stubtest` against the macOS binary — one stub for both floors — and
   runs the Python suite's GPU-free half. The test
   target's pipe is `std::io::pipe()`, and `check-no-inheritable-descriptor` accepts that
