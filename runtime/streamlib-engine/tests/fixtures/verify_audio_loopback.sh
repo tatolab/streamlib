@@ -39,7 +39,7 @@
 # be asked at all is an error, before anything starts.
 #
 # The fixture starts the runtime unit's `tatolabd` and loads the stream into it
-# as a project of its own with `tatolab start --dir` (see fixture_runtime_unit.sh),
+# as a project of its own with `tatolab open --play --dir` (see fixture_runtime_unit.sh),
 # so it refuses to run while another runtime holds the machine.
 #
 # Usage:
@@ -99,7 +99,7 @@ fi
 
 PROJECT_DIR="$OUTPUT_DIR/audio-loopback"
 # The runtime's output — the engine's log mirror, the stream's records among
-# it — with `tatolab start`'s beside it.
+# it — with `tatolab open --play`'s beside it.
 NODE_LOG="$OUTPUT_DIR/node.log"
 STREAM_RUN_LOG="$OUTPUT_DIR/stream_run.log"
 SHARED_TAP_HOLDER_PID=""

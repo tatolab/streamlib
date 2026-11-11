@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The integration suite's fixtures: one `tatolabd` per test, and streams run on it with `tatolab start`.
+"""The integration suite's fixtures: one `tatolabd` per test, and streams run on it with `tatolab open --play`.
 
 Every test drives the runtime unit's own binaries under a machine root of its
 own — `TATOLAB_TEST_MACHINE_ROOT`, a short fresh directory under `/tmp` — so
@@ -10,7 +10,7 @@ its `tatolabd` takes that root's machine lock, serves its local API at
 machine's. Whatever a test started is killed however it ends, and the root is
 removed.
 
-A stream reaches the runtime only as a user's does: `tatolab start --dir`
+A stream reaches the runtime only as a user's does: `tatolab open --play --dir`
 queues a load of a project, prints the action and returns — the runtime
 reads each graph document of the project, records each stream and runs it
 until `tatolab stop` or `tatolab rm` — or `tatolab dev`, which queues the load
@@ -35,7 +35,7 @@ Fixtures, each documented where it is defined:
 - `runtime_unit` — the runtime unit under test; one without the test-root marker ends the session.
 - `private_machine_directories` — this test's machine root, its directories and environment.
 - `start_tatolabd` — start this test's `tatolabd`; returns a `TatolabdUnderTest`.
-- `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it with `tatolab start`.
+- `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it with `tatolab open --play`.
 - `run_stream_on_tatolabd_with_no_vulkan_driver` — the GPU-free run: loaded and failed at the GPU, or failed or refused before it.
 - `make_tatolab_project` — a project directory whose `.venv` is the suite venv, or one the runtime makes.
 - `run_tatolab` / `start_tatolab` — any `tatolab` command to completion, or started.
@@ -45,7 +45,7 @@ Fixtures, each documented where it is defined:
 `TatolabdUnderTest` is the started `tatolabd`: every wait of a
 `RuntimeProcessUnderTest` (marker lines of every loaded stream land on its
 standard error), plus `local_api_socket_path`, `await_serving()`,
-`local_api_client()` and `run_stream(stream_or_graph, ...)`, which starts `tatolab start --dir` →
+`local_api_client()` and `run_stream(stream_or_graph, ...)`, which starts `tatolab open --play --dir` →
 `TatolabRunOrDevOnTheRuntime`. `tatolabd.interrupt()` is a machine shutdown:
 every loaded stream is unloaded and `tatolabd` exits.
 `TatolabRunOrDevOnTheRuntime.await_loaded()` follows the load it queued with
@@ -143,11 +143,15 @@ STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN = re.compile(
     r"\[stop\] Queued removal of (?P<processor_count>\d+) processor\(s\)"
 )
 
-#: The line `tatolab start`, `reload`, `stop` and `rm` print for the stream action they queued, and
-#: `tatolab dev`'s note on standard error for each load it queues, prefixed `tatolab dev: `.
+#: The line `tatolab open`, `play`, `reload`, `stop` and `rm` print for the stream action they
+#: queued, and `tatolab dev`'s note on standard error for each action it queues, prefixed
+#: `tatolab dev: `.
 QUEUED_STREAM_ACTION_LINE_PATTERN = re.compile(
-    r"^(?:tatolab dev: )?(?P<action>\S+) queued: ", re.MULTILINE
+    r"^(?:tatolab dev: )?(?P<action>\S+) queued: (?P<kind>\S+) of ", re.MULTILINE
 )
+
+#: The verb `run_stream` starts a stream with: the open of its project, its playback queued behind.
+OPEN_AND_PLAY_VERB = "open"
 
 TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS = 120.0
 
@@ -342,12 +346,14 @@ def started_runtime_processes() -> "Iterator[StartedRuntimeProcesses]":
 
 
 class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
-    """A started `tatolab start` or `tatolab dev`. `start` prints `<action> queued: load of
-    <project>` and exits 0 once the load is queued, and 1 with its refusal on standard error.
-    `dev` writes that line as a note on standard error for each load it queues — the first,
-    then one per settled save — and follows the project's log on standard output; a Ctrl-C to
-    it ends the following and leaves the streams loaded. What a load did is its action's, read
-    with `describe_stream_action`, and its streams' listing."""
+    """A started `tatolab open --play` or `tatolab dev`. `open --play` prints `<action> queued:
+    open of <project>`, then `<action> queued: start_playback of <project>`, and exits 0 once
+    both are queued, and 1 with its refusal on standard error. `dev` writes those lines as notes
+    on standard error — its open, its playback, then a load per settled save — and follows the
+    project's log on standard output; a Ctrl-C to it ends the following and leaves the streams
+    loaded. The playback is the load a test follows: what it did is its action's, read with
+    `describe_stream_action`, and its streams' listing; a stream the open failed is read from the
+    open's action."""
 
     def __init__(
         self,
@@ -376,30 +382,38 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
             self._tatolab_commands.private_machine_directories.machine_directories.local_api_socket_path
         )
 
+    def _actions_open_and_play_queued(
+        self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS
+    ) -> "list[re.Match[str]]":
+        """Each action `open --play` queued, the open's first, once it exited 0; a refused one
+        fails the test with the refusal."""
+        exit_status = self.await_exit(timeout=timeout)
+        assert exit_status == 0, (
+            f"`{self.command_description}` exited {exit_status}, its load refused: "
+            f"{self.refusal()}\nstandard error:\n{self.recent_stderr()}"
+        )
+        queued_actions = list(QUEUED_STREAM_ACTION_LINE_PATTERN.finditer(self.stdout_text))
+        assert queued_actions, (
+            f"`{self.command_description}` exited 0 naming no action; standard output:\n"
+            f"{self.stdout_text}"
+        )
+        return queued_actions
+
     def queued_action(
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS, occurrence: int = 1
     ) -> str:
-        """The id of the `occurrence`-th load this verb queued. `start` queues one: it is waited
-        to its exit, and a refused load fails the test with the refusal."""
+        """The id of the `occurrence`-th load this verb queued, the playback first. `open --play`
+        queues one: it is waited to its exit, and a refused load fails the test with the
+        refusal."""
         if self.verb != "dev":
-            assert occurrence == 1, "`tatolab start` queues one load"
-            exit_status = self.await_exit(timeout=timeout)
-            assert exit_status == 0, (
-                f"`{self.command_description}` exited {exit_status}, its load refused: "
-                f"{self.refusal()}\nstandard error:\n{self.recent_stderr()}"
-            )
-            queued_load = QUEUED_STREAM_ACTION_LINE_PATTERN.search(self.stdout_text)
-            assert queued_load is not None, (
-                f"`{self.command_description}` exited 0 naming no action; standard output:\n"
-                f"{self.stdout_text}"
-            )
-            return queued_load.group("action")
+            assert occurrence == 1, "`tatolab open --play` queues one playback"
+            return self._actions_open_and_play_queued(timeout=timeout)[-1].group("action")
         queued_note_count = 0
 
         def observe(line: str) -> Any:
             nonlocal queued_note_count
             queued_note = QUEUED_STREAM_ACTION_LINE_PATTERN.match(line.rstrip("\n"))
-            if queued_note is None:
+            if queued_note is None or queued_note.group("kind") == "open":
                 return NOT_YET_SEEN
             queued_note_count += 1
             return queued_note.group("action") if queued_note_count == occurrence else NOT_YET_SEEN
@@ -459,11 +473,19 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
     def failed_stream(
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS, occurrence: int = 1
     ) -> "tuple[str, str] | None":
-        """The stream the `occurrence`-th load recorded failed and why, as the runtime lists it;
-        `None` when it took in none failed."""
-        ended_action = self.action_once_ended(timeout=timeout, occurrence=occurrence)
+        """The stream the `occurrence`-th load — or, for `open --play`, its open — recorded
+        failed and why, as the runtime lists it; `None` when it took in none failed."""
+        ended_actions = [self.action_once_ended(timeout=timeout, occurrence=occurrence)]
+        if self.verb != "dev":
+            ended_actions = [
+                self._local_api().stream_action_once_ended(queued.group("action"), timeout=timeout)
+                for queued in self._actions_open_and_play_queued(timeout=timeout)
+            ]
         failed_stream_ids = [
-            stream["stream"] for stream in ended_action["streams"] if stream["state"] == "failed"
+            stream["stream"]
+            for ended_action in ended_actions
+            for stream in ended_action["streams"]
+            if stream["state"] == "failed"
         ]
         if not failed_stream_ids:
             return None
@@ -503,7 +525,7 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
 @dataclass
 class TatolabCommandsOfThisTest:
     """Starts the runtime unit's `tatolab` in this test's machine environment, and
-    turns what a test hands a loading fixture into the project `tatolab start` loads."""
+    turns what a test hands a loading fixture into the project `tatolab open --play` loads."""
 
     runtime_unit: RuntimeUnitUnderTest
     private_machine_directories: PrivateMachineDirectories
@@ -548,7 +570,7 @@ class TatolabCommandsOfThisTest:
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
     ) -> TatolabRunOfAProject:
-        """The `tatolab start` that loads `stream_or_graph`; see the module docstring."""
+        """The `tatolab open --play` that loads `stream_or_graph`; see the module docstring."""
         if isinstance(stream_or_graph, TatolabRunOfAProject):
             assert project_directory is None and processor_interpreter is None, (
                 "a project run as it is names its own project"
@@ -574,7 +596,7 @@ class TatolabCommandsOfThisTest:
 
 class TatolabdUnderTest(RuntimeProcessUnderTest):
     """This test's started `tatolabd`, its local API at `<root>/run/local-api.sock`,
-    and the streams run on it with `tatolab start`."""
+    and the streams run on it with `tatolab open --play`."""
 
     def __init__(
         self,
@@ -587,7 +609,7 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         )
         self._tatolab_commands = tatolab_commands
         self.machine_directories = tatolab_commands.private_machine_directories.machine_directories
-        #: Each `tatolab start` or `dev` started on this `tatolabd`, in order.
+        #: Each `tatolab open --play` or `dev` started on this `tatolabd`, in order.
         self.stream_runs: "list[TatolabRunOrDevOnTheRuntime]" = []
 
     @property
@@ -626,9 +648,9 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
     def await_the_latest_stream_loaded(
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS
     ) -> str:
-        """Follow the latest `tatolab start`'s load to its end; return the id of the stream it
+        """Follow the latest `tatolab open --play`'s load to its end; return the id of the stream it
         loaded."""
-        assert self.stream_runs, "no `tatolab start` was started on this tatolabd"
+        assert self.stream_runs, "no `tatolab open --play` was started on this tatolabd"
         return self.stream_runs[-1].await_loaded(timeout=timeout)["stream_id"]
 
     def run_stream(
@@ -638,9 +660,9 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         project_directory: "Path | None" = None,
         processor_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
-        verb: str = "start",
+        verb: str = OPEN_AND_PLAY_VERB,
     ) -> TatolabRunOrDevOnTheRuntime:
-        """Start `tatolab start --dir` (or `verb`, such as `dev`) on the project of
+        """Start `tatolab open --play --dir` (or `verb`, such as `dev`) on the project of
         `stream_or_graph`; return it started.
 
         `extra_environment` reaches the `tatolab` process alone: a stream's
@@ -652,7 +674,7 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
             processor_interpreter=processor_interpreter,
         )
         stream_run = self._tatolab_commands.start_tatolab(
-            verb,
+            *([verb, "--play"] if verb == OPEN_AND_PLAY_VERB else [verb]),
             "--dir",
             tatolab_run.dir_argument,
             working_directory=tatolab_run.working_directory,
@@ -743,13 +765,13 @@ def start_tatolabd(
 def start_tatolabd_running_stream(
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ) -> "Callable[..., TatolabdUnderTest]":
-    """Start this test's `tatolabd`, then run `stream_or_graph` on it with `tatolab start`.
+    """Start this test's `tatolabd`, then run `stream_or_graph` on it with `tatolab open --play`.
 
     `start_tatolabd_running_stream(stream_or_graph, *,
     project_directory=None, processor_interpreter=None, extra_environment=None,
     working_directory=None) -> TatolabdUnderTest`. `extra_environment` and
     `working_directory` are `tatolabd`'s, so the stream's processor interpreters
-    inherit the environment. Returns as soon as `tatolab start` is started, its
+    inherit the environment. Returns as soon as `tatolab open --play` is started, its
     load not awaited: the run is `tatolabd.stream_runs[-1]`, and
     `await_loaded()` on it waits for the load, while a refused load ends that
     run with its refusal and leaves `tatolabd` serving.
@@ -778,7 +800,7 @@ def start_tatolabd_running_stream(
 
 @dataclass(frozen=True)
 class StreamRunWithNoVulkanDriverOutcome:
-    """How one `tatolab start` on a `tatolabd` that reaches no Vulkan driver ended."""
+    """How one `tatolab open --play` on a `tatolabd` that reaches no Vulkan driver ended."""
 
     #: Whether the stream's graph loaded — its start then refused at the GPU.
     loaded: bool
@@ -790,14 +812,14 @@ class StreamRunWithNoVulkanDriverOutcome:
     #: recorded failed.
     failed_or_refused: bool
     #: Why: the failed stream's `failed_because` as the runtime listed it, the failed load's
-    #: `failed_because`, or `tatolab start`'s refusal, from its `error: <reason>` line on.
+    #: `failed_because`, or `tatolab open --play`'s refusal, from its `error: <reason>` line on.
     failed_or_refused_because: "str | None"
     tatolab_run_stderr_text: str
-    #: `tatolabd`'s standard error from the moment `tatolab start` started.
+    #: `tatolabd`'s standard error from the moment `tatolab open --play` started.
     tatolabd_stderr_text_during_the_run: str
     #: The runtime it ran on, still serving.
     tatolabd: TatolabdUnderTest
-    #: The `tatolab start` that loaded it: for a hand-written graph, its project's
+    #: The `tatolab open --play` that loaded it: for a hand-written graph, its project's
     #: `working_directory/.venv/bin/python` is the wrapper the runtime started.
     tatolab_run: TatolabRunOfAProject
 

@@ -1054,6 +1054,11 @@ impl LoadedStreamInThisRuntime {
         self.is_held_stopped.load(Ordering::Acquire)
     }
 
+    /// Hold this stream, loaded and never started, stopped until its start.
+    pub fn hold_stopped_without_a_start(&self) {
+        self.is_held_stopped.store(true, Ordering::Release);
+    }
+
     /// The processors whose threads were abandoned past their shutdown budget
     /// and have not returned since.
     pub fn processor_threads_abandoned_and_still_running(

@@ -171,8 +171,12 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
     create_once_ended = local_api.stream_action_once_ended(created["action"])
     assert create_once_ended["state"] == "done", create_once_ended
     assert create_once_ended["streams"] == [
-        {"stream": created["stream"], "display_name": "bright-lens", "state": "running"}
+        {"stream": created["stream"], "display_name": "bright-lens", "state": "stopped"}
     ], create_once_ended
+    queued_playback = local_api.call_tool(
+        "start_playback", {"project_directory": str(project_directory)}
+    )
+    assert local_api.stream_action_once_ended(queued_playback["action"])["state"] == "done"
     for file_a_new_project_starts_with in FILES_A_NEW_PROJECT_STARTS_WITH:
         assert (project_directory / file_a_new_project_starts_with).is_file(), (
             file_a_new_project_starts_with
@@ -209,11 +213,15 @@ def test_create_project_through_tatolab_mcp_runs_the_scaffold_under_its_folder_a
         project_log
     )
 
-    queued_stop = local_api.call_tool("stop_project", {"project_directory": str(project_directory)})
-    assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
+    queued_close = local_api.call_tool("close_project", {"project_directory": str(project_directory)})
+    assert local_api.stream_action_once_ended(queued_close["action"])["state"] == "done"
     shutil.rmtree(project_directory / ".venv")
     point_the_scaffolds_tatolab_distributions_at_this_checkout(project_directory)
-    queued_start = local_api.call_tool("start_project", {"project_directory": str(project_directory)})
+    queued_open = local_api.call_tool("open_project", {"project_directory": str(project_directory)})
+    assert local_api.stream_action_once_ended(queued_open["action"])["state"] == "done"
+    queued_start = local_api.call_tool(
+        "start_playback", {"project_directory": str(project_directory)}
+    )
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 
     assert start_once_ended["state"] == "done", start_once_ended
@@ -268,7 +276,7 @@ def test_create_project_with_no_network_and_empty_uv_caches_runs_the_starter_and
     create_once_ended = local_api.stream_action_once_ended(created["action"])
     assert create_once_ended["state"] == "done", create_once_ended
     assert create_once_ended["streams"] == [
-        {"stream": created["stream"], "display_name": "quiet-otter", "state": "running"}
+        {"stream": created["stream"], "display_name": "quiet-otter", "state": "stopped"}
     ], create_once_ended
     assert_every_first_party_package_came_from_the_runtime_unit(project_directory)
     assert (project_directory / ".tatolab" / "carried-wheels").resolve().is_dir()
@@ -276,10 +284,14 @@ def test_create_project_with_no_network_and_empty_uv_caches_runs_the_starter_and
         "the Python came from the runtime unit"
     )
 
-    queued_stop = local_api.call_tool("stop_project", {"project_directory": str(project_directory)})
-    assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
+    queued_close = local_api.call_tool("close_project", {"project_directory": str(project_directory)})
+    assert local_api.stream_action_once_ended(queued_close["action"])["state"] == "done"
     shutil.rmtree(project_directory / ".venv")
-    queued_start = local_api.call_tool("start_project", {"project_directory": str(project_directory)})
+    queued_open = local_api.call_tool("open_project", {"project_directory": str(project_directory)})
+    assert local_api.stream_action_once_ended(queued_open["action"])["state"] == "done"
+    queued_start = local_api.call_tool(
+        "start_playback", {"project_directory": str(project_directory)}
+    )
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 
     assert start_once_ended["state"] == "done", start_once_ended

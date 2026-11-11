@@ -309,7 +309,7 @@ fn a_write_the_port_or_node_does_not_take_is_refused_naming_why() {
 
 #[test]
 #[serial]
-fn a_write_onto_a_view_node_of_a_stopped_project_says_the_project_is_stopped_and_how_to_start_it() {
+fn a_write_onto_a_view_node_of_a_stopped_project_says_the_project_is_stopped_and_how_to_play_it() {
     let stream = AStreamOfAProjectBringingViews::load();
     let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
     let deck_uuid = stream.run(&deck_id);
@@ -323,7 +323,7 @@ fn a_write_onto_a_view_node_of_a_stopped_project_says_the_project_is_stopped_and
         .expect_err("a stopped project runs no node to publish")
         .to_string();
     assert!(refusal.contains("is stopped"), "{refusal}");
-    assert!(refusal.contains("`start_project` starts it"), "{refusal}");
+    assert!(refusal.contains("`start_playback` plays it"), "{refusal}");
     assert!(!refusal.contains("Resource not found"), "{refusal}");
 }
 

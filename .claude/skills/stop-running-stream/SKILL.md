@@ -13,14 +13,14 @@ Ends a stream's work without touching the runtime. The machine's runtime stays o
 ```bash
 tatolab stop --dir <project directory>
 ```
-Queues the stop of the whole project (`--dir` defaults to the working directory) and prints its action id at once (`<action> queued: stop of <project>`); every stream of the project shows `stopping` until the stop has run, then `stopped`, and the project stays stopped across the runtime's restarts until `tatolab start` starts it again. A project runs and stops as a whole: no verb stops one stream of it. A failed action naming a stream that was not recorded stopped means a restart of the runtime loads that stream again.
+Queues the stop of the whole project (`--dir` defaults to the working directory) and prints its action id at once (`<action> queued: stop of <project>`); every stream of the project shows `stopping` until the stop has run, then `stopped` — still loaded, its graph there to read and edit, every processor instance and device claim released — and the project stays stopped across the runtime's restarts until `tatolab play` plays it again. `tatolab close` also unloads every stream of it, until `tatolab open`. A project runs and stops as a whole: no verb stops one stream of it. A failed action naming a stream that was not recorded stopped means a restart of the runtime loads that stream again.
 
 ```bash
 tatolab rm --dir <project directory>
 ```
 Queues the removal of the whole project (`--dir` defaults to the working directory): every stream of it is unloaded and forgotten, stopped or failed ones included. No verb removes one stream — a `@graph_generator` in `stream.py` runs; comment it out to drop it.
 
-Ctrl-C on `tatolab dev` or `tatolab logs -f` ends only the following; the stream stays loaded, so `stop` or `rm` it as above. A `tatolab stop` while `dev` runs stops the project for good: each saved edit then asks for a reload, which the runtime refuses for a stopped project and `dev` notes; `tatolab start` starts it again.
+Ctrl-C on `tatolab dev` or `tatolab logs -f` ends only the following; the stream stays loaded, so `stop` or `rm` it as above. A `tatolab stop` while `dev` runs stops the playback: each saved edit then reloads the project held stopped, and `tatolab play` plays it again.
 
 ### 2. Confirm it is gone
 ```bash

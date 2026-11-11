@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab start`, `reload`, `stop`, `pause`, `resume`, `rm`, `streams` and `clock` run as a user runs
-//! them, against a stub local API at an isolated machine's fixed socket: the tool each calls, the
-//! arguments it sends, the one line or table it prints, and how a refusal reads. A verb naming one
+//! `tatolab open`, `reload`, `close`, `play`, `stop`, `pause`, `resume`, `rm`, `streams` and
+//! `clock` run as a user runs them, against a stub local API at an isolated machine's fixed
+//! socket: the tool each calls, the arguments it sends, the one line or table it prints, and how
+//! a refusal reads. A verb naming one
 //! stream resolves its argument through `list_streams` — by id, by a display name one stream
 //! holds, or by the working directory — and the tool sees the id alone.
 
@@ -19,7 +20,7 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    StubToolCallTransport, start_or_reload_project_tool_result_text,
+    StubToolCallTransport, open_or_reload_project_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -101,15 +102,18 @@ fn printed_by_a_successful(
 }
 
 #[test]
-fn start_and_reload_queue_a_load_of_the_project_print_the_action_and_how_to_follow_it_and_return() {
-    for (verb, start_or_reload_tool_name) in
-        [("start", "start_project"), ("reload", "reload_project")]
-    {
+fn open_reload_close_and_play_queue_their_action_print_it_and_how_to_follow_it_and_return() {
+    for (verb, start_or_reload_tool_name, stream_action_kind) in [
+        ("open", "open_project", "open"),
+        ("reload", "reload_project", "load"),
+        ("close", "close_project", "close"),
+        ("play", "start_playback", "start_playback"),
+    ] {
         let project_directory = tempfile::tempdir().unwrap();
         let canonical_project_directory = project_directory.path().canonicalize().unwrap();
         let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
             start_or_reload_tool_name,
-            StubToolAnswer::tool_result(&start_or_reload_project_tool_result_text(
+            StubToolAnswer::tool_result(&open_or_reload_project_tool_result_text(
                 "Rabc-1",
                 &canonical_project_directory,
             )),
@@ -123,7 +127,8 @@ fn start_and_reload_queue_a_load_of_the_project_print_the_action_and_how_to_foll
         assert_eq!(
             printed,
             format!(
-                "Rabc-1 queued: load of {0}\n  follow it: tatolab logs -f --dir {0}\n",
+                "Rabc-1 queued: {stream_action_kind} of {0}\n  follow it: tatolab logs -f --dir \
+                 {0}\n",
                 canonical_project_directory.display()
             )
         );
@@ -144,10 +149,68 @@ fn start_and_reload_queue_a_load_of_the_project_print_the_action_and_how_to_foll
 }
 
 #[test]
-fn start_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag() {
+fn open_with_play_queues_the_open_then_the_playback_and_prints_each_action() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let stub_local_api_server =
+        isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+            tool_answers_by_name: HashMap::from([
+                (
+                    "open_project".to_owned(),
+                    vec![StubToolAnswer::tool_result(
+                        &open_or_reload_project_tool_result_text(
+                            "Rabc-1",
+                            &canonical_project_directory,
+                        ),
+                    )],
+                ),
+                (
+                    "start_playback".to_owned(),
+                    vec![StubToolAnswer::tool_result(
+                        &open_or_reload_project_tool_result_text(
+                            "Rabc-2",
+                            &canonical_project_directory,
+                        ),
+                    )],
+                ),
+            ]),
+            ..StubLocalApiScript::default()
+        });
+
+    let printed = printed_by_a_successful(
+        &isolated_machine_directories,
+        &[
+            "open",
+            "--play",
+            "--dir",
+            project_directory.path().to_str().unwrap(),
+        ],
+    );
+
+    assert_eq!(
+        printed,
+        format!(
+            "Rabc-1 queued: open of {0}\n  follow it: tatolab logs -f --dir {0}\nRabc-2 queued: \
+             start_playback of {0}\n  follow it: tatolab logs -f --dir {0}\n",
+            canonical_project_directory.display()
+        )
+    );
+    assert_eq!(
+        stub_local_api_server
+            .recorded_tool_calls()
+            .into_iter()
+            .map(|recorded_tool_call| recorded_tool_call.tool_name)
+            .collect::<Vec<_>>(),
+        ["open_project", "start_playback"]
+    );
+}
+
+#[test]
+fn open_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, stub_local_api_server) =
-        a_runtime_answering("start_project", StubToolAnswer::tool_failure("unreached"));
+        a_runtime_answering("open_project", StubToolAnswer::tool_failure("unreached"));
 
     for refused_arguments in [
         &["stream.py:main"][..],
@@ -157,7 +220,7 @@ fn start_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag
         &["-d"],
         &["--detach"],
     ] {
-        let mut tatolab_arguments = vec!["start"];
+        let mut tatolab_arguments = vec!["open"];
         tatolab_arguments.extend_from_slice(refused_arguments);
         tatolab_arguments.extend(["--dir", project_directory.path().to_str().unwrap()]);
         let refused = isolated_machine_directories.run_tatolab(&tatolab_arguments);
@@ -176,12 +239,12 @@ fn start_takes_the_project_alone_never_a_function_a_file_a_name_or_a_detach_flag
 fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "start_project",
+        "open_project",
         StubToolAnswer::tool_failure("`project_directory` must be absolute"),
     );
 
     let refused = isolated_machine_directories.run_tatolab(&[
-        "start",
+        "open",
         "--dir",
         project_directory.path().to_str().unwrap(),
     ]);
@@ -189,18 +252,18 @@ fn a_refused_load_prints_the_runtimes_refusal_and_exits_one() {
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         standard_error_text(&refused),
-        "error: start_project failed: `project_directory` must be absolute\n"
+        "error: open_project failed: `project_directory` must be absolute\n"
     );
     assert_eq!(standard_output_text(&refused), "");
 }
 
 #[test]
-fn start_of_a_dir_that_is_not_a_directory_is_refused_before_any_call() {
+fn open_of_a_dir_that_is_not_a_directory_is_refused_before_any_call() {
     let (isolated_machine_directories, stub_local_api_server) =
-        a_runtime_answering("start_project", StubToolAnswer::tool_failure("unreached"));
+        a_runtime_answering("open_project", StubToolAnswer::tool_failure("unreached"));
 
     let refused =
-        isolated_machine_directories.run_tatolab(&["start", "--dir", "/nonexistent-project"]);
+        isolated_machine_directories.run_tatolab(&["open", "--dir", "/nonexistent-project"]);
 
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
@@ -217,7 +280,7 @@ fn stop_queues_the_stop_of_the_working_directorys_project_or_the_one_dir_names()
     let stop_answer =
         json!({"action": "R-1", "project_directory": canonical_project_directory}).to_string();
     let (isolated_machine_directories, stub_local_api_server) =
-        a_runtime_answering("stop_project", StubToolAnswer::tool_result(&stop_answer));
+        a_runtime_answering("stop_playback", StubToolAnswer::tool_result(&stop_answer));
 
     let in_the_project = run_tatolab_in(
         &isolated_machine_directories,
@@ -246,7 +309,7 @@ fn stop_queues_the_stop_of_the_working_directorys_project_or_the_one_dir_names()
         );
     }
     assert_eq!(
-        stub_local_api_server.recorded_arguments_of("stop_project"),
+        stub_local_api_server.recorded_arguments_of("stop_playback"),
         [
             json!({"project_directory": canonical_project_directory}),
             json!({"project_directory": canonical_project_directory}),
@@ -259,8 +322,8 @@ fn pause_and_resume_act_on_the_working_directorys_project_or_the_one_dir_names_a
     let project_directory = tempfile::tempdir().unwrap();
     let canonical_project_directory = project_directory.path().canonicalize().unwrap();
     for (verb, tool_name, printed_verb) in [
-        ("pause", "pause_project", "paused"),
-        ("resume", "resume_project", "resumed"),
+        ("pause", "pause_playback", "paused"),
+        ("resume", "resume_playback", "resumed"),
     ] {
         let answer = json!({
             "project_directory": canonical_project_directory,
@@ -310,7 +373,7 @@ fn pause_and_resume_act_on_the_working_directorys_project_or_the_one_dir_names_a
 fn a_refused_resume_prints_the_runtimes_refusal_and_exits_one() {
     let project_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
-        "resume_project",
+        "resume_playback",
         StubToolAnswer::tool_failure(
             "the project in /srv/cam is not paused, so there is none to resume",
         ),
@@ -325,7 +388,7 @@ fn a_refused_resume_prints_the_runtimes_refusal_and_exits_one() {
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(
         standard_error_text(&refused),
-        "error: resume_project failed: the project in /srv/cam is not paused, so there is none \
+        "error: resume_playback failed: the project in /srv/cam is not paused, so there is none \
          to resume\n"
     );
 }

@@ -125,8 +125,8 @@ pub use runtime_shutdown_request::{
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
-    CreateProjectRequest, LoadedStreamHolding, ProjectCreationQueued, ProjectPausedOrResumed,
-    ProjectStartOrReloadRequest, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, StreamListing,
+    CreateProjectRequest, LoadedStreamHolding, ProjectCreationQueued, ProjectOpenOrReloadRequest,
+    ProjectPausedOrResumed, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, StreamListing,
     StreamListingState, StreamReloadAtTheStart,
 };
 pub use stream_environment::StreamEnvironment;

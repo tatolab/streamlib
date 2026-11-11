@@ -163,7 +163,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(
-                "the control plane never asks a stream to shut down; `stop_project` unloads it"
+                "the control plane never asks a stream to shut down; `close_project` unloads it"
             )
         }
         fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
@@ -340,17 +340,33 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             fn ids_of_the_loaded_streams(&self) -> Vec<String> {
                 vec![$crate::control_plane_stub_support::STUB_STREAM_ID.to_string()]
             }
-            fn start_project(
+            fn open_project(
                 &self,
-                _request: ::streamlib::sdk::runtime::ProjectStartOrReloadRequest,
+                _request: ::streamlib::sdk::runtime::ProjectOpenOrReloadRequest,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "start_project",
+                    "open_project",
+                ))
+            }
+            fn close_project(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "close_project",
+                ))
+            }
+            fn start_playback(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "start_playback",
                 ))
             }
             fn reload_project(
                 &self,
-                _request: ::streamlib::sdk::runtime::ProjectStartOrReloadRequest,
+                _request: ::streamlib::sdk::runtime::ProjectOpenOrReloadRequest,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
                     "reload_project",
@@ -398,12 +414,12 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "delete_asset",
                 ))
             }
-            fn stop_project(
+            fn stop_playback(
                 &self,
                 _project_directory: &::std::path::Path,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "stop_project",
+                    "stop_playback",
                 ))
             }
             fn remove_project(
@@ -422,22 +438,22 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "delete_project",
                 ))
             }
-            fn pause_project(
+            fn pause_playback(
                 &self,
                 _project_directory: &::std::path::Path,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProjectPausedOrResumed>
             {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "pause_project",
+                    "pause_playback",
                 ))
             }
-            fn resume_project(
+            fn resume_playback(
                 &self,
                 _project_directory: &::std::path::Path,
             ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProjectPausedOrResumed>
             {
                 Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
-                    "resume_project",
+                    "resume_playback",
                 ))
             }
             fn show_the_stream_of_a_stream_asset_under(
@@ -629,7 +645,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(
-                "the control plane never asks a stream to shut down; `stop_project` unloads it"
+                "the control plane never asks a stream to shut down; `close_project` unloads it"
             )
         }
         fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
