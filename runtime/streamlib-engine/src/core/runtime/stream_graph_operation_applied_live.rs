@@ -119,6 +119,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveGroup { .. }
             | StreamGraphOperation::FoldIntoFragment { .. }
             | StreamGraphOperation::UnfoldFragment { .. }
+            | StreamGraphOperation::EditInsideFragment { .. }
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => {
@@ -155,6 +156,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveGroup { .. }
             | StreamGraphOperation::FoldIntoFragment { .. }
             | StreamGraphOperation::UnfoldFragment { .. }
+            | StreamGraphOperation::EditInsideFragment { .. }
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => true,

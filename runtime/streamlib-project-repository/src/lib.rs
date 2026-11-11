@@ -27,6 +27,7 @@ mod stream_fragment_references;
 mod stream_graph_action;
 mod stream_graph_document;
 mod stream_graph_fragment_fold;
+mod stream_graph_fragment_level;
 mod stream_graph_studio_contract;
 mod tatolab_view_manifest;
 

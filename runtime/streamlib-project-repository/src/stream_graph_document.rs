@@ -7,7 +7,9 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
-use crate::stream_graph_fragment_fold::StreamGraphFragmentFold;
+use crate::stream_graph_fragment_fold::{
+    StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,
+};
 use crate::stream_graph_studio_contract::{
     StreamGraphDocumentNote, StreamGraphNodeStudioFields, StreamGraphNoteFields,
     a_documents_studio_holding, the_notes_of_a_documents_studio,
@@ -237,6 +239,17 @@ pub enum StreamGraphOperation {
     FoldIntoFragment { fold: StreamGraphFragmentFold },
     /// The fold's fragment node was replaced with the plain nodes and links it stands for.
     UnfoldFragment { fold: StreamGraphFragmentFold },
+    /// `edit` was made inside the authored fragment node `fragment` of this level, each link of
+    /// this level in `port_links_taken_out` taken out and each in `port_links_put_back` put
+    /// back, at its position.
+    EditInsideFragment {
+        fragment: Uuid,
+        edit: Box<StreamGraphOperation>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        port_links_taken_out: Vec<StreamGraphDocumentValueAtItsPosition>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        port_links_put_back: Vec<StreamGraphDocumentValueAtItsPosition>,
+    },
 }
 
 impl StreamGraphOperation {
@@ -299,6 +312,17 @@ impl StreamGraphOperation {
             },
             Self::FoldIntoFragment { fold } => Self::UnfoldFragment { fold },
             Self::UnfoldFragment { fold } => Self::FoldIntoFragment { fold },
+            Self::EditInsideFragment {
+                fragment,
+                edit,
+                port_links_taken_out,
+                port_links_put_back,
+            } => Self::EditInsideFragment {
+                fragment,
+                edit: Box::new(edit.inverse()),
+                port_links_taken_out: port_links_put_back,
+                port_links_put_back: port_links_taken_out,
+            },
         }
     }
 
@@ -345,6 +369,9 @@ impl StreamGraphOperation {
                 fold.fragment_node().unwrap_or_default(),
                 fold.fragment_name()
             ),
+            Self::EditInsideFragment { fragment, edit, .. } => {
+                format!("inside {fragment}: {}", edit.summary())
+            }
         }
     }
 
@@ -360,6 +387,7 @@ impl StreamGraphOperation {
             | Self::RefreshFragment { node, .. }
             | Self::SetExposedConfigFields { node, .. } => Some(*node),
             Self::FoldIntoFragment { fold } | Self::UnfoldFragment { fold } => fold.fragment_node(),
+            Self::EditInsideFragment { edit, .. } => edit.node(),
             Self::AddGroup { .. }
             | Self::SetGroupFields { .. }
             | Self::RemoveGroup { .. }
@@ -399,6 +427,7 @@ impl StreamGraphOperation {
                     );
                 }
             }
+            Self::EditInsideFragment { edit, .. } => return edit.configs_it_sets(),
             _ => {}
         }
         configs
@@ -743,6 +772,17 @@ impl StreamGraphDocument {
                 &fold.fragment_links,
                 &fold.nodes,
                 &fold.links,
+            ),
+            StreamGraphOperation::EditInsideFragment {
+                fragment,
+                edit,
+                port_links_taken_out,
+                port_links_put_back,
+            } => self.apply_the_edit_inside_a_fragment(
+                *fragment,
+                edit,
+                port_links_taken_out,
+                port_links_put_back,
             ),
             StreamGraphOperation::Disconnect { link } => {
                 let index = self
