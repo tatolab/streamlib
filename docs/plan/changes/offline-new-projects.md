@@ -78,6 +78,18 @@ tatolab-stream slice of #3502 (#3505).
   for the scaffold's `.python-version` on each platform (`uv python list --only-downloads`), from
   python-build-standalone's GitHub release, and `build-runtime` places it in
   `lib/tatolab/python-downloads/<build>/<file name>`, the layout uv reads from a mirror.
+- **Signed for Apple's notary on macOS.** Apple's notary opens `.whl` and `.tar.gz` archives and
+  refuses any Mach-O in them not signed with a Developer ID and a secure timestamp. So
+  `build-runtime --macos-developer-id-application-identity <identity>` signs every Mach-O inside
+  each carried wheel and the Python archive, with the hardened runtime. The Python's
+  `python/bin/` executables also get `xtask/carried_python.entitlements`. Each signed wheel
+  member's `RECORD` line takes its new sha256 and size.
+  (`xtask/src/sign_the_carried_packages_with_a_developer_id.rs`).
+- **The carried Python's sha256, named to uv.** uv checks every Python download against a
+  sha256, a mirrored one included, so `build-runtime` writes
+  `python-downloads/uv-python-downloads.json`. It names the carried build by uv's key, with the
+  sha256 of the archive as placed. The runtime passes it as `UV_PYTHON_DOWNLOADS_JSON_URL` with
+  the mirror.
 - **A project's link to the carried wheels.** Each time the runtime makes, syncs or locks a
   project's `.venv`, it links `.tatolab/carried-wheels` to the unit's folder, beside
   `.tatolab/first-party-imports/`, and names the link in the project's `pyproject.toml` as

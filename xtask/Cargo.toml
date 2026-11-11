@@ -39,6 +39,9 @@ zip = { version = "8.6", default-features = false, features = ["deflate-flate2-z
 # Checks the runtime unit's uv archive against its pinned sha256.
 sha2 = "0.10"
 
+# A wheel RECORD's hash: the urlsafe base64 of a member's sha256.
+base64 = "0.22"
+
 # The Slang compiler release and library file names `runtime_unit_layout`
 # reads, included by path above.
 streamlib-slang-shader-compiler = { path = "../runtime/streamlib-slang-shader-compiler" }

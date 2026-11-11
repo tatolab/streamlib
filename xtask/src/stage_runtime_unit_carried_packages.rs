@@ -15,8 +15,14 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::build_runtime::{
-    carried_python_downloads_directory_beside_the_lend, carried_wheels_directory_beside_the_lend,
-    runtime_unit_lend_directory_in_the_workspace,
+    carried_python_downloads_directory_beside_the_lend, carried_python_downloads_metadata_file_in,
+    carried_wheels_directory_beside_the_lend, runtime_unit_lend_directory_in_the_workspace,
+};
+use crate::sign_the_carried_packages_with_a_developer_id::{
+    CARRIED_PYTHON_ENTITLEMENTS_RELATIVE_TO_WORKSPACE, CarriedPythonDownloadForUv,
+    CodesignWithADeveloperIdApplicationIdentity, MachOFileSigner,
+    sign_the_mach_o_inside_the_python_archive, sign_the_mach_o_inside_the_wheel,
+    write_the_uv_python_download_metadata,
 };
 use crate::stage_first_party_modules::FIRST_PARTY_PACKAGES_THE_RUNTIME_UNIT_CARRIES_RELATIVE_TO_WORKSPACE;
 use crate::stage_runtime_unit_uv::{
@@ -52,6 +58,12 @@ pub struct RuntimeUnitPlatform {
     pub uv_python_platform: &'static str,
     /// The start of uv's Python download key after `cpython-<version>-`.
     pub uv_python_download_key_platform: &'static str,
+    /// What uv's download metadata names the operating system.
+    pub uv_python_download_operating_system: &'static str,
+    /// What uv's download metadata names the architecture family.
+    pub uv_python_download_architecture_family: &'static str,
+    /// What uv's download metadata names the C library.
+    pub uv_python_download_libc: &'static str,
 }
 
 /// Every platform the runtime unit ships for.
@@ -60,11 +72,17 @@ pub const RUNTIME_UNIT_PLATFORMS: [RuntimeUnitPlatform; 2] = [
         target_triple: "aarch64-apple-darwin",
         uv_python_platform: "aarch64-apple-darwin",
         uv_python_download_key_platform: "macos-aarch64-none",
+        uv_python_download_operating_system: "darwin",
+        uv_python_download_architecture_family: "aarch64",
+        uv_python_download_libc: "none",
     },
     RuntimeUnitPlatform {
         target_triple: "x86_64-unknown-linux-gnu",
         uv_python_platform: "x86_64-manylinux_2_28",
         uv_python_download_key_platform: "linux-x86_64-gnu",
+        uv_python_download_operating_system: "linux",
+        uv_python_download_architecture_family: "x86_64",
+        uv_python_download_libc: "gnu",
     },
 ];
 
@@ -124,9 +142,27 @@ pub fn read_the_carried_package_pins(
 }
 
 /// Replace the unit's carried wheels and Python downloads directories with this host's pinned
-/// downloads, each checked against its sha256.
-pub fn stage_the_carried_packages(workspace_root: &Path) -> Result<()> {
+/// downloads, each checked against its sha256, sign every Mach-O inside them with
+/// `macos_developer_id_application_identity` when one is named, and write the uv download
+/// metadata that names the carried Python's sha256 as placed.
+pub fn stage_the_carried_packages(
+    workspace_root: &Path,
+    macos_developer_id_application_identity: Option<&str>,
+) -> Result<()> {
     let target_triple = pinned_uv_release_archive_for_this_host()?.target_triple;
+    let platform = RUNTIME_UNIT_PLATFORMS
+        .into_iter()
+        .find(|platform| platform.target_triple == target_triple)
+        .with_context(|| format!("the runtime unit ships for no platform named {target_triple}"))?;
+    let mach_o_file_signer = match macos_developer_id_application_identity {
+        Some(_) if platform.uv_python_download_operating_system != "darwin" => bail!(
+            "a Developer ID signs only the macOS unit's carried packages, not {target_triple}'s"
+        ),
+        Some(identity) => {
+            Some(CodesignWithADeveloperIdApplicationIdentity::for_the_identity(identity)?)
+        }
+        None => None,
+    };
     let pins = read_the_carried_package_pins(workspace_root)?;
     let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
     let carried_wheels_directory = carried_wheels_directory_beside_the_lend(&lend_directory)
@@ -174,12 +210,73 @@ pub fn stage_the_carried_packages(workspace_root: &Path) -> Result<()> {
         &python_for_this_host,
         &carried_python_downloads_directory,
     )?;
+    let carried_python_download = python_for_this_host[0];
+    let placed_python_archive =
+        carried_python_downloads_directory.join(&carried_python_download.path_in_the_unit);
+    if let Some(mach_o_file_signer) = &mach_o_file_signer {
+        sign_the_mach_o_inside_the_placed_packages(
+            workspace_root,
+            &wheels_for_this_host,
+            &carried_wheels_directory,
+            &placed_python_archive,
+            mach_o_file_signer,
+        )?;
+    }
+    let build = carried_python_download
+        .path_in_the_unit
+        .split('/')
+        .next()
+        .with_context(|| {
+            format!(
+                "{} names no build",
+                carried_python_download.path_in_the_unit
+            )
+        })?;
+    write_the_uv_python_download_metadata(
+        &carried_python_downloads_metadata_file_in(&carried_python_downloads_directory),
+        &CarriedPythonDownloadForUv {
+            version: &pins.python.version,
+            build,
+            uv_operating_system: platform.uv_python_download_operating_system,
+            uv_architecture_family: platform.uv_python_download_architecture_family,
+            uv_libc: platform.uv_python_download_libc,
+            url: &carried_python_download.url,
+            sha256: &sha256_hex_of_the_file(&placed_python_archive)?,
+        },
+    )?;
     tracing::info!(
         "build-runtime: {} carried wheels in {} and Python {} in {}",
         wheels_for_this_host.len(),
         carried_wheels_directory.display(),
         pins.python.version,
         carried_python_downloads_directory.display()
+    );
+    Ok(())
+}
+
+/// Sign every Mach-O inside each placed wheel and the placed Python archive.
+fn sign_the_mach_o_inside_the_placed_packages(
+    workspace_root: &Path,
+    wheels: &[&CarriedDownloadPin],
+    carried_wheels_directory: &Path,
+    placed_python_archive: &Path,
+    mach_o_file_signer: &dyn MachOFileSigner,
+) -> Result<()> {
+    let mut signed_mach_o_count = 0;
+    for wheel in wheels {
+        signed_mach_o_count += sign_the_mach_o_inside_the_wheel(
+            &carried_wheels_directory.join(&wheel.path_in_the_unit),
+            mach_o_file_signer,
+        )?;
+    }
+    signed_mach_o_count += sign_the_mach_o_inside_the_python_archive(
+        placed_python_archive,
+        &workspace_root.join(CARRIED_PYTHON_ENTITLEMENTS_RELATIVE_TO_WORKSPACE),
+        mach_o_file_signer,
+    )?;
+    tracing::info!(
+        "build-runtime: signed {signed_mach_o_count} Mach-O inside the carried wheels and Python \
+         with the Developer ID"
     );
     Ok(())
 }

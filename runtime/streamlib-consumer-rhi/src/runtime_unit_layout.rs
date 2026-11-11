@@ -177,6 +177,18 @@ pub fn carried_python_downloads_directory_beside_the_lend(
     )
 }
 
+/// The file in the carried Python downloads directory that names the carried CPython build and
+/// its sha256 to uv as `UV_PYTHON_DOWNLOADS_JSON_URL`. uv checks every Python download against
+/// a sha256, a mirrored one included, and the macOS unit's archive is re-signed after its pin.
+pub const CARRIED_PYTHON_DOWNLOADS_METADATA_FILE_NAME: &str = "uv-python-downloads.json";
+
+/// The uv download metadata file in `carried_python_downloads_directory`.
+pub fn carried_python_downloads_metadata_file_in(
+    carried_python_downloads_directory: &Path,
+) -> PathBuf {
+    carried_python_downloads_directory.join(CARRIED_PYTHON_DOWNLOADS_METADATA_FILE_NAME)
+}
+
 /// The browser host's executable beside the lend at `lend_directory`, or `None`
 /// for a lend at the filesystem root: in its directory on Linux, inside its
 /// app bundle there on macOS.

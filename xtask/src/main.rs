@@ -30,6 +30,7 @@ pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 pub mod psnr;
+pub mod sign_the_carried_packages_with_a_developer_id;
 pub mod source_call_site_scan;
 pub mod stage_browser_host;
 pub mod stage_first_party_modules;
@@ -654,6 +655,11 @@ enum Commands {
         /// unit so, for the integration suite. Never for a release.
         #[arg(long)]
         machine_directories_under_a_test_root: bool,
+        /// Sign every Mach-O inside the carried wheels and the carried Python with this
+        /// `Developer ID Application: …` identity, which a keychain on the search list holds,
+        /// so a bundle carrying them passes Apple's notary. macOS only.
+        #[arg(long)]
+        macos_developer_id_application_identity: Option<String>,
     },
 
     /// Download uv's release archive for this host at its pinned version,
@@ -782,12 +788,14 @@ fn main() -> Result<()> {
         Commands::BuildRuntime {
             release,
             machine_directories_under_a_test_root,
+            macos_developer_id_application_identity,
         } => build_runtime::run(
             &workspace_root()?,
             build_runtime::RuntimeUnitBuildProfile::from_release_flag(release),
             build_runtime::RuntimeUnitMachineDirectories::from_machine_directories_under_a_test_root_flag(
                 machine_directories_under_a_test_root,
             ),
+            macos_developer_id_application_identity.as_deref(),
         )?,
         Commands::StageRuntimeUnitUv => {
             stage_runtime_unit_uv::stage_the_runtime_unit_uv(&workspace_root()?)?;

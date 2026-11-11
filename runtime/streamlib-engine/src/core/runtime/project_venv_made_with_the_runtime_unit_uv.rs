@@ -32,8 +32,8 @@ use crate::core::error::Error;
 use crate::core::runtime::project_stream_action_queue::StreamActionVenvSyncReport;
 use crate::core::runtime::what_interrupted_a_load;
 use streamlib_consumer_rhi::runtime_unit_layout::{
-    carried_python_downloads_directory_beside_the_lend, carried_wheels_directory_beside_the_lend,
-    first_party_modules_directory_beside_the_lend,
+    carried_python_downloads_directory_beside_the_lend, carried_python_downloads_metadata_file_in,
+    carried_wheels_directory_beside_the_lend, first_party_modules_directory_beside_the_lend,
 };
 use streamlib_project_repository::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
@@ -634,6 +634,14 @@ fn install_the_carried_python_unless_the_machine_has_one(
         UV_PYTHON_INSTALL_MIRROR_VARIABLE,
         the_file_url_of(carried_python_downloads_directory),
     );
+    let carried_python_downloads_metadata_file =
+        carried_python_downloads_metadata_file_in(carried_python_downloads_directory);
+    if carried_python_downloads_metadata_file.is_file() {
+        install.env(
+            UV_PYTHON_DOWNLOADS_JSON_URL_VARIABLE,
+            carried_python_downloads_metadata_file,
+        );
+    }
     for (step, mut command) in [("uv python find", find), ("uv python install", install)] {
         let run = match run_a_child_process_to_its_exit_within(
             &mut command,
@@ -674,6 +682,10 @@ fn install_the_carried_python_unless_the_machine_has_one(
 
 /// `uv` names the folder it reads Python downloads from instead of their release with this.
 const UV_PYTHON_INSTALL_MIRROR_VARIABLE: &str = "UV_PYTHON_INSTALL_MIRROR";
+
+/// `uv` reads the Python downloads it may install, each with the sha256 it checks, from the file
+/// this names instead of the list built into it.
+const UV_PYTHON_DOWNLOADS_JSON_URL_VARIABLE: &str = "UV_PYTHON_DOWNLOADS_JSON_URL";
 
 /// `directory` as a `file://` URL.
 fn the_file_url_of(directory: &Path) -> String {
@@ -1668,6 +1680,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(carried_python_downloads_directory.join("20261013")).unwrap();
+        std::fs::write(
+            carried_python_downloads_metadata_file_in(&carried_python_downloads_directory),
+            "{}",
+        )
+        .unwrap();
         PackagesTheRuntimeUnitCarries {
             first_party_module_wheels: Vec::new(),
             carried_wheels_directory: Some(carried_wheels_directory),
@@ -1680,7 +1697,7 @@ mod tests {
         format!(
             "case \"$1 $2\" in\n\
              'python find') exit 2 ;;\n\
-             'python install') echo \"mirror=$UV_PYTHON_INSTALL_MIRROR\" >> \"$(dirname \"$0\")/uv-environment\"; exit 0 ;;\n\
+             'python install') echo \"mirror=$UV_PYTHON_INSTALL_MIRROR downloads=$UV_PYTHON_DOWNLOADS_JSON_URL\" >> \"$(dirname \"$0\")/uv-environment\"; exit 0 ;;\n\
              esac\n{sync_body}"
         )
     }
@@ -1715,13 +1732,18 @@ mod tests {
                 .unwrap()
                 .trim(),
             format!(
-                "mirror=file://{}",
+                "mirror=file://{} downloads={}",
                 carried
                     .carried_python_downloads_directory
                     .as_ref()
                     .unwrap()
-                    .display()
-            )
+                    .display(),
+                carried_python_downloads_metadata_file_in(
+                    carried.carried_python_downloads_directory.as_ref().unwrap()
+                )
+                .display()
+            ),
+            "uv reads the carried Python's sha256 from the unit's metadata, not its own list"
         );
         assert_eq!(
             std::fs::read_link(project.project_directory.join(".tatolab/carried-wheels")).unwrap(),

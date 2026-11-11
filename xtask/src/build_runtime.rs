@@ -38,7 +38,8 @@ pub(crate) use runtime_unit_layout::{
 };
 pub(crate) use runtime_unit_layout::{
     browser_host_directory_beside_the_lend, carried_python_downloads_directory_beside_the_lend,
-    carried_wheels_directory_beside_the_lend, first_party_modules_directory_beside_the_lend,
+    carried_python_downloads_metadata_file_in, carried_wheels_directory_beside_the_lend,
+    first_party_modules_directory_beside_the_lend,
 };
 use std::path::{Path, PathBuf};
 
@@ -189,6 +190,7 @@ pub fn run(
     workspace_root: &Path,
     build_profile: RuntimeUnitBuildProfile,
     machine_directories: RuntimeUnitMachineDirectories,
+    macos_developer_id_application_identity: Option<&str>,
 ) -> Result<()> {
     let maturin_project_directory =
         workspace_root.join(RUNTIME_UNIT_MATURIN_PROJECT_RELATIVE_TO_WORKSPACE);
@@ -237,7 +239,7 @@ pub fn run(
 
     stage_the_browser_host(workspace_root)?;
     stage_the_first_party_modules(workspace_root)?;
-    stage_the_carried_packages(workspace_root)?;
+    stage_the_carried_packages(workspace_root, macos_developer_id_application_identity)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
     let mut built_binaries = build_runtime_unit_binaries(
