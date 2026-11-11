@@ -27,8 +27,8 @@ use crate::core::graph_variable_resolution::{
     SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
 };
 use crate::core::json_schema::{
-    GraphFragmentOutput, GraphResponse, LinkOutput, LinkPortRefOutput, NodeKindOutput,
-    ProcessorNodeOutput, ProcessorNodePortsOutput,
+    GraphFragmentOutput, GraphResponse, LinkOutput, LinkPortRefOutput, LinkStateOutput,
+    NodeKindOutput, ProcessorNodeOutput, ProcessorNodePortsOutput,
 };
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::utils::compute_json_checksum;
@@ -53,14 +53,19 @@ pub struct GraphFragmentAsDrawn {
     pub interface_as_drawn: GraphInterfaceAsDrawn,
     /// Every fragment this one holds.
     pub fragments_it_holds: Vec<GraphFragmentAsDrawn>,
+    /// Each of its own links with an end on a fragment it holds.
+    pub links_touching_a_fragment_it_holds: Vec<LinkTouchingAFragmentAsDrawn>,
 }
 
-/// One link of the stream's own level with an end on a fragment, as drawn.
+/// One link of a level with an end on a fragment the level holds, as drawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkTouchingAFragmentAsDrawn {
     pub link: GraphSnapshotLink,
-    /// Where the link sat among the graph's links.
+    /// Where the link sat among its level's links.
     pub position_among_the_graphs_links: usize,
+    /// The links it was carried to through the fragment's ports, each end named as the graph
+    /// the runtime runs names it.
+    pub links_it_is_carried_to: Vec<GraphSnapshotLink>,
 }
 
 /// What a graph's fragments flattened from, so `graph` renders each back as a container.
@@ -206,6 +211,7 @@ fn flatten_one_level(
             position_among_its_levels_nodes: node_position,
             interface_as_drawn: interface.interface_as_drawn,
             fragments_it_holds: inner.fragments,
+            links_touching_a_fragment_it_holds: inner.links_touching_a_fragment,
         });
     }
 
@@ -247,15 +253,18 @@ fn flatten_one_level(
                 .clone(),
             None => vec![end_on_this_level(&link.target, &name_on_this_level)],
         };
-        links_carried_through_a_fragment.extend(targets.into_iter().map(|target| {
-            GraphSnapshotLink {
+        let links_it_is_carried_to: Vec<GraphSnapshotLink> = targets
+            .into_iter()
+            .map(|target| GraphSnapshotLink {
                 source: source.clone(),
                 target,
-            }
-        }));
+            })
+            .collect();
+        links_carried_through_a_fragment.extend(links_it_is_carried_to.iter().cloned());
         links_touching_a_fragment.push(LinkTouchingAFragmentAsDrawn {
             link: link.clone(),
             position_among_the_graphs_links: link_position,
+            links_it_is_carried_to,
         });
     }
 
@@ -429,24 +438,42 @@ impl GraphFragmentAsDrawn {
             rendered.name = cast_or_as_written(&node.name);
             nodes.push(rendered);
         }
+        let mut running_node_names_cast_inside = HashSet::new();
+        self.running_node_names_cast(&mut running_node_names_cast_inside);
         let links = stored
             .links
             .iter()
-            .map(|link| {
-                let source_runs_as =
-                    cast_or_as_written(&self.name_of_a_node_it_holds(&link.source.node));
-                let target_runs_as =
-                    cast_or_as_written(&self.name_of_a_node_it_holds(&link.target.node));
-                let mut rendered = running_links
+            .enumerate()
+            .map(|(link_position, link)| {
+                let links_it_runs_as = match self
+                    .links_touching_a_fragment_it_holds
                     .iter()
-                    .find(|running| {
-                        running.source.node == source_runs_as
-                            && running.source.port == cast_or_as_written(&link.source.port)
-                            && running.target.node == target_runs_as
-                            && running.target.port == cast_or_as_written(&link.target.port)
+                    .find(|drawn| drawn.position_among_the_graphs_links == link_position)
+                {
+                    Some(drawn) => drawn.links_it_is_carried_to.clone(),
+                    None => vec![GraphSnapshotLink {
+                        source: LinkPortRefOutput {
+                            node: self.name_of_a_node_it_holds(&link.source.node),
+                            port: link.source.port.clone(),
+                        },
+                        target: LinkPortRefOutput {
+                            node: self.name_of_a_node_it_holds(&link.target.node),
+                            port: link.target.port.clone(),
+                        },
+                    }],
+                };
+                let running_links_it_stands_for: Vec<&LinkOutput> = links_it_runs_as
+                    .iter()
+                    .flat_map(|link_it_runs_as| {
+                        self.running_links_a_link_inside_it_stands_for(
+                            link_it_runs_as,
+                            &running_node_names_cast_inside,
+                            running_links,
+                        )
                     })
-                    .cloned()
-                    .unwrap_or_else(|| rendered_as_drawn(link));
+                    .collect();
+                let mut rendered =
+                    rendered_with_the_live_keys_of(link, &running_links_it_stands_for);
                 rendered.source.node = cast_or_as_written(&link.source.node);
                 rendered.target.node = cast_or_as_written(&link.target.node);
                 rendered
@@ -486,6 +513,44 @@ impl GraphFragmentAsDrawn {
                 groups: stored.groups.clone(),
             }),
         }
+    }
+
+    /// The running links `link_it_runs_as`, a link inside the fragment named as the graph the
+    /// runtime runs names its ends, stands for: from one of its `GraphInput` nodes, the link
+    /// into the input it feeds; into one of its `GraphOutput` nodes, each link from the port it
+    /// reads to a node outside the fragment; between two running nodes, that link.
+    fn running_links_a_link_inside_it_stands_for<'running>(
+        &self,
+        link_it_runs_as: &GraphSnapshotLink,
+        running_node_names_cast_inside: &HashSet<String>,
+        running_links: &'running [LinkOutput],
+    ) -> Vec<&'running LinkOutput> {
+        let is_an_interface_node_of_it = |end: &LinkPortRefOutput, direction| {
+            self.interface_as_drawn
+                .interface_node_named(&end.node)
+                .is_some_and(|interface_node| interface_node.declared_port.direction == direction)
+        };
+        let from_a_graph_input =
+            is_an_interface_node_of_it(&link_it_runs_as.source, GraphInterfacePortDirection::Input);
+        let into_a_graph_output = is_an_interface_node_of_it(
+            &link_it_runs_as.target,
+            GraphInterfacePortDirection::Output,
+        );
+        running_links
+            .iter()
+            .filter(|running| {
+                let source_matches = || ends_match(&running.source, &link_it_runs_as.source);
+                let target_matches = || ends_match(&running.target, &link_it_runs_as.target);
+                if from_a_graph_input {
+                    target_matches()
+                } else if into_a_graph_output {
+                    source_matches()
+                        && !running_node_names_cast_inside.contains(&running.target.node)
+                } else {
+                    source_matches() && target_matches()
+                }
+            })
+            .collect()
     }
 
     fn validate(
@@ -599,10 +664,48 @@ impl GraphFragmentsAsDrawn {
             let position = drawn
                 .position_among_the_graphs_links
                 .min(graph_response.links.len());
-            graph_response
-                .links
-                .insert(position, rendered_as_drawn(&drawn.link));
+            let running_links_it_stands_for: Vec<&LinkOutput> = drawn
+                .links_it_is_carried_to
+                .iter()
+                .flat_map(|carried| {
+                    running_links.iter().filter(move |running| {
+                        ends_match(&running.source, &carried.source)
+                            && ends_match(&running.target, &carried.target)
+                    })
+                })
+                .collect();
+            graph_response.links.insert(
+                position,
+                rendered_with_the_live_keys_of(&drawn.link, &running_links_it_stands_for),
+            );
         }
+    }
+}
+
+/// Whether `running`, an end of a running link as `graph` renders it, is `drawn` cast.
+fn ends_match(running: &LinkPortRefOutput, drawn: &LinkPortRefOutput) -> bool {
+    running.node == cast_or_as_written(&drawn.node)
+        && running.port == cast_or_as_written(&drawn.port)
+}
+
+/// `link` rendered with the live keys of the running links it stands for: the first of them
+/// not wired, else the first; with its ends alone when it stands for none.
+fn rendered_with_the_live_keys_of(
+    link: &GraphSnapshotLink,
+    running_links_it_stands_for: &[&LinkOutput],
+) -> LinkOutput {
+    let drawn = rendered_as_drawn(link);
+    let Some(running) = running_links_it_stands_for
+        .iter()
+        .find(|running| running.state != LinkStateOutput::Wired)
+        .or_else(|| running_links_it_stands_for.first())
+    else {
+        return drawn;
+    };
+    LinkOutput {
+        source: drawn.source,
+        target: drawn.target,
+        ..(*running).clone()
     }
 }
 
@@ -665,7 +768,6 @@ fn cast_or_as_written(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::graph_interface_resolution::{GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE};
-    use crate::core::json_schema::LinkStateOutput;
 
     const LOOK_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a01";
     const SOFT_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a02";
@@ -1043,6 +1145,84 @@ mod tests {
                 .unwrap()
                 .graph_the_runtime_runs
         );
+    }
+
+    fn ids_and_states_of(links: &[LinkOutput]) -> Vec<(&str, LinkStateOutput)> {
+        links
+            .iter()
+            .map(|link| (link.id.as_str(), link.state))
+            .collect()
+    }
+
+    #[test]
+    fn each_drawn_link_through_a_fragment_renders_the_running_link_it_stands_for() {
+        let flattening =
+            flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
+        let mut render = a_render_of(&flattening.graph_the_runtime_runs);
+        flattening.fragments_as_drawn.render_into(&mut render);
+
+        let camera_into_blur = ("camera->look/soft/blur", LinkStateOutput::Wired);
+        let tint_into_display = ("look/soft/tint->display", LinkStateOutput::Wired);
+        assert_eq!(
+            ids_and_states_of(&render.links),
+            [camera_into_blur, tint_into_display]
+        );
+        let look_holds = render.nodes[1].fragment.as_ref().expect("look holds");
+        assert_eq!(
+            ids_and_states_of(&look_holds.links),
+            [camera_into_blur, tint_into_display]
+        );
+        let soft_holds = look_holds.nodes[1].fragment.as_ref().expect("soft holds");
+        assert_eq!(
+            ids_and_states_of(&soft_holds.links),
+            [
+                camera_into_blur,
+                ("look/soft/blur->look/soft/tint", LinkStateOutput::Wired),
+                tint_into_display,
+            ]
+        );
+        let outer_ends: Vec<(&str, &str)> = render
+            .links
+            .iter()
+            .map(|link| (link.source.node.as_str(), link.target.node.as_str()))
+            .collect();
+        assert_eq!(outer_ends, [("camera", "look"), ("look", "display")]);
+    }
+
+    #[test]
+    fn a_drawn_link_into_a_fragment_renders_pending_while_the_link_it_stands_for_is() {
+        let flattening =
+            flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
+        let mut render = a_render_of(&flattening.graph_the_runtime_runs);
+        for link in &mut render.links {
+            if link.id == "camera->look/soft/blur" {
+                link.state = LinkStateOutput::Pending;
+            }
+        }
+        flattening.fragments_as_drawn.render_into(&mut render);
+
+        assert_eq!(
+            ids_and_states_of(&render.links),
+            [
+                ("camera->look/soft/blur", LinkStateOutput::Pending),
+                ("look/soft/tint->display", LinkStateOutput::Wired),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_drawn_link_into_a_fragment_port_nothing_runs_behind_renders_with_its_ends_alone() {
+        let flattening =
+            flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
+        let mut render = a_render_of(&flattening.graph_the_runtime_runs);
+        render
+            .links
+            .retain(|link| link.id != "camera->look/soft/blur");
+        flattening.fragments_as_drawn.render_into(&mut render);
+
+        let camera_into_look = &render.links[0];
+        assert_eq!(camera_into_look.id, "");
+        assert_eq!(camera_into_look.state, LinkStateOutput::Pending);
     }
 
     #[test]

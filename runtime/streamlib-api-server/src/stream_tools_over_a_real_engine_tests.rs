@@ -3204,6 +3204,17 @@ async fn a_collapsed_selection_runs_the_same_nodes_and_its_undo_restores_the_exa
         json!(sink),
         "{live_subgraph}"
     );
+    let running_link_into_the_subgraph = &live["links"][0];
+    assert!(
+        running_link_into_the_subgraph["id"]
+            .as_str()
+            .is_some_and(|link_id| !link_id.is_empty()),
+        "the drawn link into the subgraph renders the running link it stands for: {live}"
+    );
+    assert_eq!(
+        live_subgraph["fragment"]["links"][0]["id"], running_link_into_the_subgraph["id"],
+        "{live_subgraph}"
+    );
 
     call(
         "unlock_generator_fragment",
