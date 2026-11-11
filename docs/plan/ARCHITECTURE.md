@@ -2179,7 +2179,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   poster decoded by the engine's own decoders in `tatolab-video-poster-frame`, a helper the
   runtime unit carries, never in the runtime's process — off the transaction that imported or
   replaced them, one asset at a time, and kept in `.tatolab/asset-media/` by the bytes' SHA-256,
-  never in history, rebuilt whenever they are missing; a fact the runtime cannot read is absent,
+  never in history, and read again whenever the facts are missing (a preview missing beside
+  facts that remain is not rebuilt, and `read_asset_preview` refuses it); a fact the runtime cannot read is absent,
   never an error, and the change feed announces the asset once its facts are read. Single player first; the cloud hub, branches, roles and releases build on
   the same transactions and history. Owner, 2026-11-07, 2026-11-08 and 2026-11-09. [project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; self-contained-project-imports — SHIPPED #3402, #3405; project-action-contract — SHIPPED #3430, #3436, #3438; asset-media-facts-and-previews — SHIPPED #3522, #3546]
   Rejected: a consumer polling `describe_asset` for facts still being read (owner, 2026-11-11).
