@@ -39,8 +39,8 @@ fn the_retired_verbs_and_flags_are_usage_errors() {
             "unexpected argument '--count'",
         ),
         (
-            &["start", "stream.py:main"][..],
-            "unexpected argument 'stream.py:main'",
+            &["start", "--dir", "."][..],
+            "unrecognized subcommand 'start'",
         ),
         (&["run"][..], "unrecognized subcommand 'run'"),
         (&["dev", "-f", "x.py"][..], "unexpected argument '-f'"),
@@ -79,7 +79,9 @@ mod against_an_isolated_machine {
         );
 
         for verb_arguments in [
-            &["start", "--dir", project_directory][..],
+            &["open", "--dir", project_directory][..],
+            &["play", "--dir", project_directory][..],
+            &["close", "--dir", project_directory][..],
             &["reload", "--dir", project_directory][..],
             &["dev", "--dir", project_directory][..],
             &["stop", "--dir", project_directory][..],

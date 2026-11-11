@@ -38,7 +38,9 @@ pub use project_asset::{
     every_asset_uuid_the_project_holds, the_file_of_an_asset,
 };
 #[cfg(feature = "history")]
-pub use project_asset_file_bytes::{PROJECT_UPLOADS_DIRECTORY, the_upload_file_of};
+pub use project_asset_file_bytes::{
+    PROJECT_UPLOADS_DIRECTORY, content_sha256_of, the_upload_file_of,
+};
 pub use project_file::{
     PROJECT_FILE_NAME, ProjectImport, THIS_RUNTIME_VERSION, TatolabProjectFile,
 };

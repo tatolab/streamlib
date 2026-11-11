@@ -12,8 +12,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 
 use super::operations::RuntimeOperations;
 use super::{
-    CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectPausedOrResumed,
-    ProjectStartOrReloadRequest, Runner, StreamAction, StreamActionQueued, StreamListing,
+    CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectOpenOrReloadRequest,
+    ProjectPausedOrResumed, Runner, StreamAction, StreamActionQueued, StreamListing,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::context::StreamClockReading;
@@ -24,8 +24,8 @@ use crate::core::processors::InstalledModuleOfANodeType;
 /// stream a call names, a stream's node catalog, and the stream
 /// actions.
 ///
-/// `start_project`, `reload_project`, `stop_project` and `remove_project` answer at
-/// once, their actions running on the project's stream action queue; every
+/// `open_project`, `reload_project`, `close_project`, `remove_project` and the
+/// `start_playback` and `stop_playback` calls answer at once, their actions running on the project's stream action queue; every
 /// other call may block on the stream table, so the local API calls each from a
 /// blocking task.
 ///
@@ -85,11 +85,17 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// The ids of the loaded streams, in order.
     fn ids_of_the_loaded_streams(&self) -> Vec<String>;
 
-    /// [`Runner::start_project`].
-    fn start_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued>;
+    /// [`Runner::open_project`].
+    fn open_project(&self, request: ProjectOpenOrReloadRequest) -> Result<StreamActionQueued>;
 
     /// [`Runner::reload_project`].
-    fn reload_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued>;
+    fn reload_project(&self, request: ProjectOpenOrReloadRequest) -> Result<StreamActionQueued>;
+
+    /// [`Runner::close_project`].
+    fn close_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
+
+    /// [`Runner::start_playback`].
+    fn start_playback(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
     /// [`Runner::create_project`].
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued>;
@@ -116,8 +122,8 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_asset: Uuid,
     ) -> Result<Option<String>>;
 
-    /// [`Runner::stop_project`].
-    fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
+    /// [`Runner::stop_playback`].
+    fn stop_playback(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
     /// [`Runner::remove_project`].
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
@@ -125,11 +131,11 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::delete_project`].
     fn delete_project(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
-    /// [`Runner::pause_project`].
-    fn pause_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
+    /// [`Runner::pause_playback`].
+    fn pause_playback(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
 
-    /// [`Runner::resume_project`].
-    fn resume_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
+    /// [`Runner::resume_playback`].
+    fn resume_playback(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed>;
 
     /// [`Runner::show_the_stream_of_a_stream_asset_under`].
     fn show_the_stream_of_a_stream_asset_under(
@@ -239,12 +245,20 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::ids_of_the_loaded_streams(self)
     }
 
-    fn start_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
-        Runner::start_project(self, request)
+    fn open_project(&self, request: ProjectOpenOrReloadRequest) -> Result<StreamActionQueued> {
+        Runner::open_project(self, request)
     }
 
-    fn reload_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
+    fn reload_project(&self, request: ProjectOpenOrReloadRequest) -> Result<StreamActionQueued> {
         Runner::reload_project(self, request)
+    }
+
+    fn close_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::close_project(self, project_directory)
+    }
+
+    fn start_playback(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::start_playback(self, project_directory)
     }
 
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued> {
@@ -278,16 +292,16 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::forget_the_stream_of_a_deleted_stream_asset(self, project, stream_asset)
     }
 
-    fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
-        Runner::stop_project(self, project_directory)
+    fn stop_playback(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        Runner::stop_playback(self, project_directory)
     }
 
-    fn pause_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
-        Runner::pause_project(self, project_directory)
+    fn pause_playback(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
+        Runner::pause_playback(self, project_directory)
     }
 
-    fn resume_project(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
-        Runner::resume_project(self, project_directory)
+    fn resume_playback(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
+        Runner::resume_playback(self, project_directory)
     }
 
     fn remove_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {

@@ -11,11 +11,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::LoadedStreamInThisRuntime;
+use super::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 use crate::core::compiler::compiler_ops::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
-use crate::core::error::{Error, Result};
+use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{
     Graph, OutputLinkPortRef, ProcessorNode, names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
@@ -188,13 +189,19 @@ impl LoadedStreamInThisRuntime {
         let stream_id = self.stream_id().to_string();
         let node_id = node_id.to_string();
         let port_name = port_name.to_string();
+        let why_a_node_that_has_not_failed_does_not_run =
+            self.why_a_node_of_this_stream_that_has_not_failed_does_not_run();
         // A stream's graph lock is held across a compile, which may take a
         // processor's whole setup, so the open waits off the async workers.
         let viewer_held_open = tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 let (node_name, source_side) = compiler.scope(|graph, _tx| -> Result<_> {
                     let node = the_running_node_with_its_output_port(
-                        graph, &stream_id, &node_id, &port_name,
+                        graph,
+                        &stream_id,
+                        &node_id,
+                        &port_name,
+                        why_a_node_that_has_not_failed_does_not_run,
                     )?;
                     let node_name = node.display_name.clone();
                     let source = OutputLinkPortRef::new(node.id.clone(), port_name.as_str());
@@ -270,12 +277,14 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// The node of the stream's graph whose UUID is `node_id`, refused unless it runs and has
-/// output port `port_name`.
+/// output port `port_name`; a node that does not run is refused for its failure, or else for
+/// `why_a_node_that_has_not_failed_does_not_run`.
 fn the_running_node_with_its_output_port<'graph>(
     graph: &'graph Graph,
     stream_id: &str,
     node_id: &str,
     port_name: &str,
+    why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
 ) -> Result<&'graph ProcessorNode> {
     let Some(node) = graph
         .traversal()
@@ -307,11 +316,15 @@ fn the_running_node_with_its_output_port<'graph>(
         });
     }
     if !node.runs_its_processor() {
-        return Err(Error::Link(format!(
-            "node `{node_id}` ({}) of the stream `{stream_id}` is not running, so its port \
-             `{port_name}` writes nothing yet",
-            node.display_name,
-        )));
+        return Err(the_refusal_of_a_reach_for_a_node_not_running(
+            node,
+            why_a_node_that_has_not_failed_does_not_run,
+            format!(
+                "node `{node_id}` ({}) of the stream `{stream_id}` is not running, so its port \
+                 `{port_name}` writes nothing yet",
+                node.display_name,
+            ),
+        ));
     }
     Ok(node)
 }
@@ -331,7 +344,9 @@ mod tests {
     use streamlib_ipc_types::{MessageReadFromAReservedSlot, OutputPortViewerReader};
 
     use super::*;
-    use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
+    use crate::core::graph::{
+        GraphNodeWithComponents, ProcessorInstanceWithItsOutOfProcessLinkWiring,
+    };
     use crate::core::processors::{ProcessorInstance, ProcessorSpec};
     use crate::core::runtime::{Runner, RuntimeOperations};
     use crate::core::test_support::{
@@ -540,6 +555,80 @@ mod tests {
         assert!(
             no_such_port.contains("out9") && no_such_port.contains("out1"),
             "{no_such_port}"
+        );
+    }
+
+    /// A viewer of a node that does not run is refused naming why: the stream
+    /// preparing, its playback paused or stopped, or the node's own failure.
+    #[test]
+    #[serial]
+    fn a_viewer_of_a_node_that_does_not_run_is_refused_naming_why() {
+        let camera = ARunningCameraWithNoLinks::load();
+        let microphone_id = camera
+            .stream
+            .add_processor(
+                ProcessorSpec::new(
+                    MockOutputOnlyProcessor::processor_class_import_path(),
+                    Value::Null,
+                )
+                .with_display_name("microphone".to_string()),
+            )
+            .expect("the node is added");
+        let microphone_node_uuid = camera.stream.compiler.scope(|graph, _tx| {
+            graph
+                .traversal_mut()
+                .v(&microphone_id)
+                .first_mut()
+                .expect("the node is in the stream")
+                .node_uuid
+                .to_string()
+        });
+        let why_the_viewer_is_refused = || match camera
+            .async_runtime
+            .block_on(camera.stream.open_a_viewer_of_an_output_port(
+                microphone_node_uuid.clone(),
+                "out1".into(),
+                None,
+            ))
+            .expect_err("a node that does not run has nothing to view")
+        {
+            Error::NodeOfAStreamIsNotRunning {
+                not_running_because,
+                runtime_words,
+            } => {
+                assert!(runtime_words.contains("microphone"), "{runtime_words}");
+                not_running_because
+            }
+            other => panic!("refused for another reason: {other}"),
+        };
+
+        assert_eq!(
+            why_the_viewer_is_refused(),
+            WhyANodeOfAStreamIsNotRunning::Preparing
+        );
+        *camera.stream.status.lock() = crate::core::runtime::RuntimeStatus::Paused;
+        assert_eq!(
+            why_the_viewer_is_refused(),
+            WhyANodeOfAStreamIsNotRunning::PlaybackPaused
+        );
+        camera.stream.hold_stopped_without_a_start();
+        assert_eq!(
+            why_the_viewer_is_refused(),
+            WhyANodeOfAStreamIsNotRunning::PlaybackStopped
+        );
+        camera.stream.compiler.scope(|graph, _tx| {
+            graph
+                .traversal_mut()
+                .v(&microphone_id)
+                .first_mut()
+                .expect("the node is in the stream")
+                .insert(crate::core::graph::StateComponent::new(
+                    crate::core::graph::ProcessorState::Error,
+                ));
+        });
+        assert_eq!(
+            why_the_viewer_is_refused(),
+            WhyANodeOfAStreamIsNotRunning::NodeFailed
         );
     }
 

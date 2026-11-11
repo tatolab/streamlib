@@ -1721,14 +1721,16 @@ impl ProjectRepository {
     }
 
     /// Write `content` to the project's file at `path` by `author` as one transaction, whose
-    /// inverse puts back what the file held or takes a new file out; sent again under the same
-    /// `idempotency_key`, it answers the first transaction.
+    /// inverse puts back what the file held or takes a new file out; refused, the file left as
+    /// it is, when `sha256_of_the_content_last_read` names other bytes than the file holds now.
+    /// Sent again under the same `idempotency_key`, it answers the first transaction.
     pub fn write_project_file(
         &mut self,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
         path: &str,
         content: &[u8],
+        sha256_of_the_content_last_read: Option<&str>,
     ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
         refuse_an_author_without_a_name(author)?;
         if let Some(applied_before) =
@@ -1747,8 +1749,17 @@ impl ProjectRepository {
         } else {
             None
         };
+        if let Some(sha256_of_the_content_last_read) = sha256_of_the_content_last_read {
+            refuse_a_file_changed_since_it_was_read(
+                &path,
+                sha256_of_the_content_last_read,
+                bytes_on_disk_now.as_deref(),
+            )?;
+        }
         if bytes_on_disk_now.as_deref() == Some(content) {
-            return Err(ProjectRepositoryRefusal::EmptyTransaction);
+            return Err(
+                ProjectRepositoryRefusal::ProjectFileAlreadyHoldsThisContent(path.to_string()),
+            );
         }
         self.record_the_file_when_history_holds_other_bytes(&path, bytes_on_disk_now.as_deref())?;
         let staged_at = format!("{PROJECT_FILE_WRITE_STAGING_DIRECTORY}/{}", Uuid::new_v4());
@@ -1797,7 +1808,7 @@ impl ProjectRepository {
                 parsed_path.as_str().to_owned(),
             ));
         }
-        self.write_project_file(author, idempotency_key, path, content)
+        self.write_project_file(author, idempotency_key, path, content, None)
     }
 
     /// Commit the project's files as they are now when history holds other bytes at `path`
@@ -3365,6 +3376,34 @@ fn refuse_an_author_without_a_name(
     } else {
         Ok(())
     }
+}
+
+/// Refuse a write over a file that no longer holds the bytes the caller last read, named by
+/// `sha256_of_the_content_last_read`: other bytes, or no file at all.
+fn refuse_a_file_changed_since_it_was_read(
+    path: &ProjectRelativeFilePath,
+    sha256_of_the_content_last_read: &str,
+    bytes_on_disk_now: Option<&[u8]>,
+) -> Result<(), ProjectRepositoryRefusal> {
+    if !is_a_sha256_digest(sha256_of_the_content_last_read) {
+        return Err(ProjectRepositoryRefusal::ExpectedSha256IsNotADigest(
+            sha256_of_the_content_last_read.to_owned(),
+        ));
+    }
+    let Some(bytes_on_disk_now) = bytes_on_disk_now else {
+        return Err(ProjectRepositoryRefusal::ProjectFileRemovedSinceItWasRead(
+            path.to_string(),
+        ));
+    };
+    let sha256_on_disk_now = content_sha256_of(bytes_on_disk_now);
+    if sha256_on_disk_now.eq_ignore_ascii_case(sha256_of_the_content_last_read) {
+        return Ok(());
+    }
+    Err(ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRead {
+        path: path.to_string(),
+        sha256_read: sha256_of_the_content_last_read.to_ascii_lowercase(),
+        sha256_on_disk_now,
+    })
 }
 
 /// `display_name` trimmed, refused when it shows nothing.

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tatolab-ops"
-version = "0.68.62"
+version = "0.68.66"
 description = "The small function nodes every Tatolab stream can wire: math, shaping, logic, gating, values, noise and time, compiled to native code."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -18,7 +18,7 @@ classifiers = [
 # The stream package; Numba, which compiles each node's body when the helper
 # that reads it loads; and NumPy and Pillow, with which `ImageFile` decodes an
 # image asset. A minimum, never an exact pin.
-dependencies = ["tatolab-stream>=0.68.62", "numba>=0.61", "numpy>=1.26", "pillow>=10.0"]  # x-release-please-version
+dependencies = ["tatolab-stream>=0.68.66", "numba>=0.61", "numpy>=1.26", "pillow>=10.0"]  # x-release-please-version
 
 # The node catalog lists these in every stream whose environment installs this
 # distribution, before a graph names them.

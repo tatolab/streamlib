@@ -70,13 +70,14 @@ impl ProjectHistoryRecordingFirstPartyPackageMoves
             Some(&move_key),
             PROJECT_UV_LOCK_FILE_NAME,
             uv_lock,
+            None,
         ) {
             Ok(outcome) => {
                 open_projects
                     .announce_the_transaction_if_applied_now(&project_repository, &outcome);
                 Ok(())
             }
-            Err(ProjectRepositoryRefusal::EmptyTransaction) => Ok(()),
+            Err(ProjectRepositoryRefusal::ProjectFileAlreadyHoldsThisContent(_)) => Ok(()),
             Err(refusal) => Err(refusal.to_string()),
         }
     }
@@ -113,6 +114,7 @@ mod tests {
                     None,
                     PROJECT_UV_LOCK_FILE_NAME,
                     b"the lock at 0.68.27\n",
+                    None,
                 )
                 .expect("the first lock");
             drop(repository);

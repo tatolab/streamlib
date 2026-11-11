@@ -7,7 +7,7 @@ use serde_json::Map;
 use streamlib_project_repository::{
     ProjectActionApplyOutcome, ProjectAssetAction, ProjectAssetImportSource, ProjectRepository,
     ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionReversal,
+    ProjectTransactionReversal, content_sha256_of,
 };
 
 const A_PNG_HEADER_AND_HIGH_BYTES: &[u8] = &[
@@ -35,7 +35,7 @@ impl AProjectWithNodeCode {
 
     fn write(&mut self, path: &str, content: &[u8]) -> Result<(), ProjectRepositoryRefusal> {
         self.repository
-            .write_project_file(&a_person(), None, path, content)
+            .write_project_file(&a_person(), None, path, content, None)
             .map(|outcome| assert!(matches!(outcome, ProjectActionApplyOutcome::AppliedNow(_))))
     }
 
@@ -183,7 +183,13 @@ fn an_undo_or_a_redo_is_refused_once_the_file_changed_after_it_was_recorded() {
     project.write("nodes/camera.py", b"first\n").unwrap();
     project
         .repository
-        .write_project_file(&an_agent(), None, "nodes/camera.py", b"by the agent\n")
+        .write_project_file(
+            &an_agent(),
+            None,
+            "nodes/camera.py",
+            b"by the agent\n",
+            None,
+        )
         .unwrap();
     let undo = project.repository.undo_by(&a_person());
     assert_the_reversal_is_refused(&mut project, undo);
@@ -230,14 +236,186 @@ fn an_agent() -> ProjectTransactionAuthor {
 }
 
 #[test]
-fn the_same_content_is_an_empty_transaction() {
+fn the_same_content_is_refused_as_already_held() {
     let mut project = AProjectWithNodeCode::new();
     project.write("stream.py", b"same\n").unwrap();
 
+    let refused = project.write("stream.py", b"same\n").unwrap_err();
+
     assert!(matches!(
-        project.write("stream.py", b"same\n"),
-        Err(ProjectRepositoryRefusal::EmptyTransaction)
+        &refused,
+        ProjectRepositoryRefusal::ProjectFileAlreadyHoldsThisContent(path) if path == "stream.py"
     ));
+    assert_eq!(
+        refused.to_string(),
+        "`stream.py` already holds this content, so the write has nothing to change"
+    );
+}
+
+impl AProjectWithNodeCode {
+    fn write_expecting(
+        &mut self,
+        path: &str,
+        content: &[u8],
+        sha256_of_the_content_last_read: &str,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        self.repository
+            .write_project_file(
+                &a_person(),
+                None,
+                path,
+                content,
+                Some(sha256_of_the_content_last_read),
+            )
+            .map(|outcome| assert!(matches!(outcome, ProjectActionApplyOutcome::AppliedNow(_))))
+    }
+
+    fn commits_in_history(&self) -> usize {
+        self.repository
+            .history()
+            .commits_newest_first()
+            .unwrap()
+            .len()
+    }
+}
+
+#[test]
+fn a_write_carrying_the_hash_of_what_the_file_holds_applies() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"as read\n").unwrap();
+    let read = project
+        .repository
+        .read_project_file("nodes/camera.py")
+        .unwrap();
+
+    project
+        .write_expecting("nodes/camera.py", b"saved\n", &content_sha256_of(&read))
+        .unwrap();
+
+    assert_eq!(project.on_disk("nodes/camera.py").unwrap(), b"saved\n");
+}
+
+#[test]
+fn a_write_carrying_the_hash_in_uppercase_applies() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"as read\n").unwrap();
+
+    project
+        .write_expecting(
+            "nodes/camera.py",
+            b"saved\n",
+            &content_sha256_of(b"as read\n").to_ascii_uppercase(),
+        )
+        .unwrap();
+
+    assert_eq!(project.on_disk("nodes/camera.py").unwrap(), b"saved\n");
+}
+
+#[test]
+fn a_write_carrying_a_stale_hash_is_refused_and_leaves_the_file_untouched() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"as read\n").unwrap();
+    let sha256_read = content_sha256_of(b"as read\n");
+    project.write("nodes/camera.py", b"by the agent\n").unwrap();
+    let commits_before = project.commits_in_history();
+
+    let refused = project
+        .write_expecting("nodes/camera.py", b"the studio save\n", &sha256_read)
+        .unwrap_err();
+
+    assert!(matches!(
+        &refused,
+        ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRead {
+            path,
+            sha256_read: refused_sha256_read,
+            sha256_on_disk_now,
+        } if path == "nodes/camera.py"
+            && *refused_sha256_read == sha256_read
+            && *sha256_on_disk_now == content_sha256_of(b"by the agent\n")
+    ));
+    assert_eq!(
+        refused.to_string(),
+        "`nodes/camera.py` changed since it was read, so this write would overwrite that change; \
+         nothing was written. Read the file again to see what it holds now"
+    );
+    assert_eq!(
+        project.on_disk("nodes/camera.py").unwrap(),
+        b"by the agent\n"
+    );
+    assert_eq!(project.commits_in_history(), commits_before);
+}
+
+#[test]
+fn a_write_carrying_a_hash_of_content_already_overwritten_outside_the_runtime_is_refused() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"as read\n").unwrap();
+    std::fs::write(
+        project.project_directory.join("nodes/camera.py"),
+        b"by an editor\n",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        project.write_expecting(
+            "nodes/camera.py",
+            b"by an editor\n",
+            &content_sha256_of(b"as read\n")
+        ),
+        Err(ProjectRepositoryRefusal::ProjectFileChangedSinceItWasRead { .. })
+    ));
+    assert_eq!(
+        project.on_disk("nodes/camera.py").unwrap(),
+        b"by an editor\n"
+    );
+}
+
+#[test]
+fn a_write_carrying_a_hash_of_a_file_taken_out_since_is_refused_and_writes_nothing() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"as read\n").unwrap();
+    std::fs::remove_file(project.project_directory.join("nodes/camera.py")).unwrap();
+
+    let refused = project
+        .write_expecting(
+            "nodes/camera.py",
+            b"the studio save\n",
+            &content_sha256_of(b"as read\n"),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        &refused,
+        ProjectRepositoryRefusal::ProjectFileRemovedSinceItWasRead(path) if path == "nodes/camera.py"
+    ));
+    assert!(project.on_disk("nodes/camera.py").is_none());
+}
+
+#[test]
+fn a_write_carrying_something_that_is_not_a_sha256_digest_is_refused() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"as read\n").unwrap();
+
+    assert!(matches!(
+        project.write_expecting("nodes/camera.py", b"saved\n", "not-a-digest"),
+        Err(ProjectRepositoryRefusal::ExpectedSha256IsNotADigest(sent)) if sent == "not-a-digest"
+    ));
+    assert_eq!(project.on_disk("nodes/camera.py").unwrap(), b"as read\n");
+}
+
+#[test]
+fn a_write_with_no_hash_goes_over_whatever_the_file_holds() {
+    let mut project = AProjectWithNodeCode::new();
+    project.write("nodes/camera.py", b"as read\n").unwrap();
+    project.write("nodes/camera.py", b"by the agent\n").unwrap();
+
+    project
+        .write("nodes/camera.py", b"the studio save\n")
+        .unwrap();
+
+    assert_eq!(
+        project.on_disk("nodes/camera.py").unwrap(),
+        b"the studio save\n"
+    );
 }
 
 #[test]

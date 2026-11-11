@@ -110,7 +110,7 @@ pub(crate) fn read_an_audio_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_the_media_facts_of_an_asset_file;
+    use crate::{AssetMediaFactsReadersOfThisRuntime, read_the_media_facts_of_an_asset_file};
 
     /// A 16-bit PCM WAV of `seconds` of silence.
     fn a_wav_of_silence(sample_rate_hz: u32, channel_count: u16, seconds: u32) -> Vec<u8> {
@@ -137,7 +137,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let wav = directory.path().join("tone.wav");
         std::fs::write(&wav, a_wav_of_silence(48_000, 2, 3)).unwrap();
-        let read = read_the_media_facts_of_an_asset_file(&wav).unwrap();
+        let read = read_the_media_facts_of_an_asset_file(
+            &wav,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
+        .unwrap();
         assert_eq!(read.media_facts.duration_ms, Some(3_000));
         assert_eq!(
             read.media_facts.audio,
@@ -156,7 +160,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mp3 = directory.path().join("noise.mp3");
         std::fs::write(&mp3, b"not an mp3 at all").unwrap();
-        let refused = read_the_media_facts_of_an_asset_file(&mp3).unwrap_err();
+        let refused = read_the_media_facts_of_an_asset_file(
+            &mp3,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
+        .unwrap_err();
         assert!(
             refused.0.starts_with("the audio container did not read"),
             "{refused}"

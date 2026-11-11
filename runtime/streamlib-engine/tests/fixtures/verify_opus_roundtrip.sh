@@ -19,7 +19,7 @@
 # Exit status is the verdict, stdout is the report JSON and nothing else, so a
 # caller can pipe it. Progress goes to stderr. The fixture starts the runtime
 # unit's `tatolabd` and loads the stream into it as a project of its own with
-# `tatolab start --dir` (see fixture_runtime_unit.sh), so it refuses to run while
+# `tatolab open --play --dir` (see fixture_runtime_unit.sh), so it refuses to run while
 # another runtime holds the machine.
 set -uo pipefail
 
@@ -71,7 +71,7 @@ if ! STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
     exit 1
 fi
 # The runtime's output — the engine's log mirror, the stream's records among
-# it — with `tatolab start`'s beside it.
+# it — with `tatolab open --play`'s beside it.
 NODE_LOG="$OUTPUT_DIR/node.log"
 STREAM_RUN_LOG="$OUTPUT_DIR/stream_run.log"
 

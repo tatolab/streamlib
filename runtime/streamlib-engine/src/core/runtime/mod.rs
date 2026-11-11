@@ -16,6 +16,7 @@ mod machine_name;
 mod machine_state_directory;
 mod new_project_name_drawing;
 mod new_project_scaffold;
+mod node_of_a_stream_not_running;
 mod open_descriptor_soft_limit;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
@@ -24,6 +25,7 @@ mod output_port_viewer;
 mod processor_interpreter_launch_record;
 mod project_first_party_packages_moved_to_the_runtime_version;
 mod project_folder_moved_to_the_trash;
+mod project_node_code_a_load_describes;
 mod project_stream_action_queue;
 mod project_venv_made_with_the_runtime_unit_uv;
 mod project_venv_sync_progress;
@@ -125,8 +127,8 @@ pub use runtime_shutdown_request::{
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_actions_of_this_runtime::{
-    CreateProjectRequest, LoadedStreamHolding, ProjectCreationQueued, ProjectPausedOrResumed,
-    ProjectStartOrReloadRequest, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, StreamListing,
+    CreateProjectRequest, LoadedStreamHolding, ProjectCreationQueued, ProjectOpenOrReloadRequest,
+    ProjectPausedOrResumed, RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM, StreamListing,
     StreamListingState, StreamReloadAtTheStart,
 };
 pub use stream_environment::StreamEnvironment;

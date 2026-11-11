@@ -176,7 +176,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Duplicate a project into `into`, a folder that does not exist yet, as a project of its own: every file a copy of it carries, its `imports/` included, and its whole history, so its edits can still be undone in the copy, under a new project UUID and the name `<name> copy`, the duplicate recorded as a commit on its history by `author`. Its `.venv` and the rest of its `.tatolab/` stay behind, and the duplicate is not started: `start_project` starts it. Answers the duplicate's `project_directory`, `project`, `project_name` and `commit`. Refused, nothing left at `into`, for a relative `into`, one that exists, and one inside the project."
+        description = "Duplicate a project into `into`, a folder that does not exist yet, as a project of its own: every file a copy of it carries, its `imports/` included, and its whole history, so its edits can still be undone in the copy, under a new project UUID and the name `<name> copy`, the duplicate recorded as a commit on its history by `author`. Its `.venv` and the rest of its `.tatolab/` stay behind, and the duplicate is not opened: `open_project` opens it. Answers the duplicate's `project_directory`, `project`, `project_name` and `commit`. Refused, nothing left at `into`, for a relative `into`, one that exists, and one inside the project."
     )]
     async fn duplicate_project(
         &self,

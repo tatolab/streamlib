@@ -185,22 +185,24 @@ no directory, the runtime creates the project in a new folder under `~/streams` 
 `<adjective>-<noun>`.
 
 `tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
-starts one. `dev` queues a load of the project in the working directory and follows the project's
+starts one. `dev` opens the project in the working directory, plays it and follows the project's
 log: the runtime syncs the project's `.venv` with the uv it carries, reads every graph document
-in the project, loads each one as its own stream and starts it, and `dev` prints every record in
-your terminal. Save an edit and `dev` queues another load, and the runtime replaces the running
-streams with the edit. An edit that fails unloads its stream and records it failed: the reason
+in the project, loads each one as its own stream, and starts its playback, and `dev` prints every
+record in your terminal. Save an edit and `dev` queues a reload, and the runtime replaces the
+streams with the edit, keeping the project's playback. An edit that fails unloads its stream and records it failed: the reason
 lands in the log `dev` prints, and the next save loads it again. An edit that leaves
 `tatolab-project.json` unreadable fails the load itself and leaves the running streams as they
 were. Ctrl-C ends `dev`
-and leaves the streams running. A project runs and stops as a whole: every stream the runtime
-loads is recorded, the project runs until `tatolab stop` or `tatolab rm`, and the runtime loads it
-again each time it starts. `tatolab start`
-queues the load once, without watching for edits, prints the action's id and returns at once;
-`tatolab logs -f` follows the load and the streams' records. `tatolab cancel <action>` takes an
+and leaves the streams running. A project is open or closed, and an open project's playback is
+stopped, playing or paused; its graph reads and edits whatever its playback does. A project plays
+and stops as a whole: every stream the runtime loads is recorded, the project stays open until
+`tatolab close` or `tatolab rm`, and the runtime opens it again, held stopped or playing as it
+was, each time it starts. `tatolab open` queues the open once, without watching for edits, prints
+the action's id and returns at once, and `tatolab open --play` also queues its playback;
+`tatolab logs -f` follows the actions and the streams' records. `tatolab cancel <action>` takes an
 action back: a queued one is dropped, and a running load stops at the step it is on, its uv sync
-killed, leaving the streams it had not reached as they were. A stop or `rm` that has
-begun unloading runs to the end.
+killed, leaving the streams it had not reached as they were. A stop, close or `rm` that has
+begun runs to the end.
 
 ## Writing a stream
 
@@ -273,11 +275,13 @@ holds the stream.
 
 ```text
 tatolab new [DIRECTORY]
-tatolab start [--dir DIR]
+tatolab open [--dir DIR] [--play]
+tatolab close [--dir DIR]
 tatolab reload [--dir DIR]
 tatolab dev [--dir DIR]
 
 tatolab streams
+tatolab play [--dir DIR]
 tatolab stop [--dir DIR]
 tatolab pause [--dir DIR]
 tatolab resume [--dir DIR]
@@ -299,20 +303,31 @@ tatolab enable-virtual-camera [--print]
   prints `<action> queued: create of <project>` and `follow it: tatolab logs -f --dir
   <project>`, then returns 0 at once. The action writes `tatolab-project.json`,
   `streams/main.graph.json`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
-  `.gitignore`, makes the project's first commit, then loads the project as `run` does, showing
-  its stream under the folder's name. A directory already holding one of those files fails the
+  `.gitignore`, makes the project's first commit, then opens the project as `open` does, its
+  playback stopped, showing its stream under the folder's name. A directory already holding one of those files fails the
   action with nothing written.
-- **`run`** queues a load of the project on the project's queue and prints
-  `<action> queued: load of <project>` and how to follow it, then returns 0 at once. The runtime
-  syncs the project's `.venv`, reads every graph document in the project, and loads and
-  records each one; `tatolab logs --action <action>` and `tatolab streams` show how it went. A
-  stream whose document does not load is not refused: the runtime records it failed, with why in
-  the project's log. `run` exits 1 only when the load is not queued: the runtime refuses it or
-  cannot be reached, or `--dir` names no directory. The runtime
-  loads each stream again at each of its own starts until `stop` or `rm`, and loading the same
-  project again replaces its streams under the same ids — failed ones included.
-- **`dev`** is `run`, then the project's log followed from where it ended, with another load
-  queued on every saved edit to a `.py` file, a `.graph.json` document, `pyproject.toml` or
+- **`open`** queues the open of the project on the project's queue and prints
+  `<action> queued: open of <project>` and how to follow it, then returns 0 at once. The runtime
+  syncs the project's `.venv`, reads every graph document in the project, and loads and records
+  each one with its playback stopped, its graph there to read and edit; `tatolab logs --action
+  <action>` and `tatolab streams` show how it went. With `--play` it also queues
+  `start_playback`, printing that action too. A stream whose document does not load is not
+  refused: the runtime records it failed, with why in the project's log. `open` exits 1 only when
+  an action is not queued: the runtime refuses it — the project is already open, which `reload`
+  refreshes — or cannot be reached, or `--dir` names no directory. The runtime opens the project
+  again at each of its own starts until `close` or `rm`.
+- **`close`** queues the end of the project's playback and the unload of every stream of it,
+  recording each closed and deleting nothing; `open` opens it again.
+- **`reload`** queues a soft reload of an open project from disk, keeping its playback. While the
+  project's node code — its `.py` files, `pyproject.toml`, `uv.lock` and views' manifests — is as
+  it was at a stream's load, the stream stays loaded and its graph is brought to its document in
+  place: only the nodes and links that changed change. Otherwise the stream is loaded again under
+  the same id, a failed one retried. A project that is not
+  open is refused, naming `open`.
+- **`play`** queues the playback of an open project: every stream starts fresh from the graph it
+  holds, reading no document.
+- **`dev`** is `open` (or `reload`, when the project is already open), then `play` once, then the
+  project's log followed from where it ended, with a reload queued on every saved edit to a `.py` file, a `.graph.json` document, `pyproject.toml` or
   `tatolab-project.json` in the project; the runtime replaces the running streams, and an edit
   that fails unloads its stream and records it failed, why printed from the log, until the next
   save; an edit that leaves `tatolab-project.json` missing or unreadable fails the load and leaves
@@ -330,18 +345,23 @@ tatolab enable-virtual-camera [--print]
   working directory, stopped and failed ones included. An argument several streams match, or none,
   is refused listing each candidate's id and display name. `graph --stream` is the exception: it
   takes a stream id, and omitted it means every loaded stream.
-- **`stop`** unloads every stream of the project in `--dir`, or the working directory, and the
-  project stays stopped across the runtime's restarts until **`run`** runs it again; `run` also
-  retries a failed stream. **`rm`** unloads every stream of the project and forgets them. Each
+- **`stop`** ends the playback of the project in `--dir`, or the working directory: every
+  processor instance, device claim, function-node state and the clock are torn down, and each
+  stream stays loaded with its graph to read and edit. The project stays stopped across the
+  runtime's restarts until **`play`** plays it again, starting fresh. **`pause`** holds every
+  processor's state and a scaled or stepped clock until **`resume`**, across the runtime's
+  restarts too. **`rm`** unloads every stream of the project
+  and forgets them. Each
   queues its action on the project's queue and prints its id at once: `tatolab streams` shows the
   streams `stopping` until it has run, and a runtime that crashes first finishes it at its next
   start.
-- **`cancel`** takes back the action whose id `run`, `dev`, `stop` or `rm` printed. A
+- **`cancel`** takes back the action whose id `open`, `reload`, `play`, `dev`, `stop`, `close` or
+  `rm` printed. A
   queued action is dropped, its streams' records left as they were, and `cancel` prints
   `<action> cancelled`. A running load stops at the step it is on: its uv sync is
   killed and a half-made `.venv` removed, a stream it was loading is recorded failed,
   and the streams it had not reached stay as they were; `cancel` prints `<action> cancelling`.
-  A running stop or `rm` has begun unloading and cannot be cut short, so `cancel` is refused and
+  A running stop, close or `rm` has begun and cannot be cut short, so `cancel` is refused and
   the action ends done.
 - **`clock`** runs a started stream's scaled clock at another `--scale`, live: stream time carries
   on from where it stands, and every node's time, write stamps and continuous pace follow it. A
@@ -415,17 +435,17 @@ the host's connection: an agent's next session finds it in `list_streams`.
 
 The tools are `graph`, `logs` and `describe_runtime` — the runtime's version, build id, uptime
 and the folder of its own log — to observe; `add_node`, `connect`, `disconnect` and
-`remove_node` to change a running graph; `start_project`, which queues the start of a project
-that does not run, and `reload_project`, which queues a re-read from disk of one that does,
+`remove_node` to change a graph; `open_project`, which queues the open of a project, its
+playback stopped, and `reload_project`, which queues a soft re-read from disk of an open one,
 each answering at once with an action `describe_stream_action` follows and `cancel_stream_action` ends
 early, `create_project`, which creates a project as `tatolab new` does and queues its run the
 same way, and `list_assets`, `describe_asset`, `import_asset`, `relocate_asset`, `replace_asset`,
 `set_asset_settings` and `delete_asset` over the project's assets, and `create_stream`, `delete_stream` and
 `set_stream_display_name` over its streams, and `list_project_files`, `read_project_file` and
 `write_project_file` over its other files, and `create_node_file`, which writes a new node
-file from the runtime's node template; `stop_project`, which stops a whole project until
-`start_project` starts it again, `pause_project` and `resume_project`, which pause and resume a
-whole project at once, `remove_project`, `set_stream_clock_scale` and
+file from the runtime's node template; `start_playback` and `stop_playback`, which queue the
+playback of a whole open project and its end, `pause_playback` and `resume_playback`, which pause
+and resume it at once, `close_project`, which ends its playback and unloads it, `remove_project`, `set_stream_clock_scale` and
 `list_streams` to manage the streams the runtime holds; and `open_viewer` and `close_viewer` to hold a node's output port open for a viewer on this
 machine, naming the node by the `id` `graph` lists, and `write_studio_view_output` to hand a
 node of one of the project's Tato Studio views a value it publishes on an output. Every tool
@@ -454,14 +474,14 @@ machine's lock, so a second `tatolabd` is refused naming the first one's user, p
 and serves its local socket at a fixed path. It keeps its state in
 `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
 Support/Tatolab/` on macOS: a record of each stream it runs — its project and stream asset,
-interpreter, and whether it is stopped — and its own log. At each start it loads every
-recorded stream that is neither stopped nor failed.
+interpreter, and whether it is stopped or closed — and its own log. At each start it loads every
+recorded stream that is neither closed nor failed, holding each stopped one stopped.
 
-`tatolab start` queues a load of a project. The runtime syncs the project's `.venv`, reads
-`tatolab-project.json` and each graph document in the project, then loads each graph, starts it
-and records it, writing every step to the project's log;
-`tatolab start` returns as soon as the load is queued, and `tatolab reload` queues the same
-load of a project that already runs, keeping it paused if it is.
+`tatolab open` queues the open of a project. The runtime syncs the project's `.venv`, reads
+`tatolab-project.json` and each graph document in the project, then loads each graph, holds it
+stopped and records it, writing every step to the project's log; `tatolab play` starts its
+playback. Each returns as soon as its action is queued, and `tatolab reload` queues a soft
+reload of an open project, keeping its playback.
 
 `tatolabd` is native: the engine, the built-in nodes, and the local socket the CLI and MCP hosts
 talk to. No Python runs in its process, and it never imports your code — it learns a Python node's

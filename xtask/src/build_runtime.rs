@@ -84,8 +84,11 @@ fn runtime_unit_wheel_directory_in_the_workspace(workspace_root: &Path) -> PathB
 
 /// Each binary the runtime unit carries, as the cargo package that builds it
 /// and the binary target's name, which is also its file name in `bin/`.
-const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 2] =
-    [("tatolabd", "tatolabd"), ("tatolab-cli", "tatolab")];
+const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 3] = [
+    ("tatolabd", "tatolabd"),
+    ("tatolab-cli", "tatolab"),
+    ("tatolab-video-poster-frame", "tatolab-video-poster-frame"),
+];
 
 /// The cargo feature that moves the machine runtime lock, the state directory
 /// and the runtime directory under `TATOLAB_TEST_MACHINE_ROOT`; each runtime-unit
@@ -93,7 +96,7 @@ const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 2] =
 pub const MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE: &str =
     "machine-directories-under-a-test-root";
 
-/// The file at the runtime unit's root whose presence says both binaries were
+/// The file at the runtime unit's root whose presence says every binary was
 /// built with [`MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE`]; a harness
 /// refuses a unit without it, so a test never touches the real machine's lock.
 pub const MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_MARKER_FILE_NAME: &str =
@@ -258,13 +261,13 @@ pub fn run(
     });
     replace_runtime_unit_binaries_in(&bin_directory, &built_binaries)?;
     tracing::info!(
-        "build-runtime: tatolabd, tatolab and uv placed in {}",
+        "build-runtime: tatolabd, tatolab, tatolab-video-poster-frame and uv placed in {}",
         bin_directory.display()
     );
     if machine_directories == RuntimeUnitMachineDirectories::UnderATestRoot {
         write_the_machine_directories_marker(&machine_directories_marker)?;
         tracing::info!(
-            "build-runtime: both binaries keep the machine's directories under \
+            "build-runtime: every binary keeps the machine's directories under \
              TATOLAB_TEST_MACHINE_ROOT; {} says so",
             machine_directories_marker.display()
         );
@@ -933,6 +936,10 @@ mod tests {
             r#"{"reason":"build-script-executed","package_id":"x"}"#.to_owned(),
             a_compiler_artifact_message("tatolabd", Some("/target/debug/tatolabd")),
             a_compiler_artifact_message("tatolab", Some("/target/debug/tatolab")),
+            a_compiler_artifact_message(
+                "tatolab-video-poster-frame",
+                Some("/target/debug/tatolab-video-poster-frame"),
+            ),
             a_compiler_artifact_message("generate_openapi", Some("/target/debug/generate_openapi")),
             r#"{"reason":"build-finished","success":true}"#.to_owned(),
         ]
@@ -951,6 +958,10 @@ mod tests {
                 BuiltRuntimeUnitBinary {
                     binary_target_name: "tatolab".to_owned(),
                     built_executable: PathBuf::from("/target/debug/tatolab"),
+                },
+                BuiltRuntimeUnitBinary {
+                    binary_target_name: "tatolab-video-poster-frame".to_owned(),
+                    built_executable: PathBuf::from("/target/debug/tatolab-video-poster-frame"),
                 },
             ]
         );
@@ -1013,18 +1024,26 @@ mod tests {
     }
 
     #[test]
-    fn a_unit_for_the_machine_builds_both_binary_packages_without_the_test_root_feature() {
+    fn a_unit_for_the_machine_builds_every_binary_package_without_the_test_root_feature() {
         assert_eq!(
             runtime_unit_binaries_cargo_build_selection(
                 RuntimeUnitBuildProfile::Release,
                 RuntimeUnitMachineDirectories::TheMachines,
             ),
-            ["-p", "tatolabd", "-p", "tatolab-cli", "--release"]
+            [
+                "-p",
+                "tatolabd",
+                "-p",
+                "tatolab-cli",
+                "-p",
+                "tatolab-video-poster-frame",
+                "--release"
+            ]
         );
     }
 
     #[test]
-    fn a_unit_under_a_test_root_builds_both_binary_packages_with_the_feature() {
+    fn a_unit_under_a_test_root_builds_every_binary_package_with_the_feature() {
         assert_eq!(
             runtime_unit_binaries_cargo_build_selection(
                 RuntimeUnitBuildProfile::Debug,
@@ -1035,9 +1054,12 @@ mod tests {
                 "tatolabd",
                 "-p",
                 "tatolab-cli",
+                "-p",
+                "tatolab-video-poster-frame",
                 "--features",
                 "tatolabd/machine-directories-under-a-test-root,\
-                 tatolab-cli/machine-directories-under-a-test-root",
+                 tatolab-cli/machine-directories-under-a-test-root,\
+                 tatolab-video-poster-frame/machine-directories-under-a-test-root",
             ]
         );
     }

@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.68.66](https://github.com/tatolab/streamlib/compare/v0.68.65...v0.68.66) (2026-11-11)
+
+
+### Features
+
+* **engine:** pause holds the stream clock and is recorded ([e7d91ff](https://github.com/tatolab/streamlib/commit/e7d91ff17c38bdc18ff88f8953c9a0834d8e39eb))
+* **engine:** pause holds the stream clock and is recorded ([a8c4f68](https://github.com/tatolab/streamlib/commit/a8c4f68c9989efdb19db6f19a20c031fb059fc7b))
+
+## [0.68.65](https://github.com/tatolab/streamlib/compare/v0.68.64...v0.68.65) (2026-11-11)
+
+
+### Features
+
+* **runtime:** reload_project keeps each loaded stream and reconciles it to its document while the node code is unchanged ([bee0b4e](https://github.com/tatolab/streamlib/commit/bee0b4e6cb5f52b3ac922bcdb6a94f381e23d20e))
+* **runtime:** reload_project keeps each loaded stream and reconciles it to its document while the node code is unchanged ([c725abc](https://github.com/tatolab/streamlib/commit/c725abc7c7a509d1ba4021b69dcd53e8df16df08))
+
+## [0.68.64](https://github.com/tatolab/streamlib/compare/v0.68.63...v0.68.64) (2026-11-11)
+
+
+### Bug Fixes
+
+* **runtime:** a refused add_node leaves no node, and an exposed config field's link loads again ([7dbdc71](https://github.com/tatolab/streamlib/commit/7dbdc71fe2e61cd94c90c58ffd82e4f6da00f1dc))
+
+## [0.68.63](https://github.com/tatolab/streamlib/compare/v0.68.62...v0.68.63) (2026-11-11)
+
+
+### Features
+
+* **asset-media:** video poster frames decoded by a helper the runtime unit carries ([e533167](https://github.com/tatolab/streamlib/commit/e533167060e946f8610c64d602cae589e2c39489))
+* **asset-media:** video poster frames decoded by a helper the runtime unit carries ([cd92329](https://github.com/tatolab/streamlib/commit/cd923299797bd20904b0989e93d3140602e451d1))
+* **runtime:** Stop ends a project's playback and keeps its graph to edit ([695a1fb](https://github.com/tatolab/streamlib/commit/695a1fba284a8d3788c9771c5fe0a41999e5fa59))
+* **runtime:** Stop ends a project's playback and keeps its graph to edit (playback-controls, ticket 1) ([93c2ba6](https://github.com/tatolab/streamlib/commit/93c2ba6a38854c3806b608edd63a65302bddb525))
+
+
+### Bug Fixes
+
+* **runtime:** answer the review of the held-stopped playback ([dc5487a](https://github.com/tatolab/streamlib/commit/dc5487a7a44020e882bd7b8790e3859807ca3761))
+
 ## [0.68.62](https://github.com/tatolab/streamlib/compare/v0.68.61...v0.68.62) (2026-11-11)
 
 

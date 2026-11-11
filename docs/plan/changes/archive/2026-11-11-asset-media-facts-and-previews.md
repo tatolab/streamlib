@@ -123,12 +123,18 @@ the crate also keeps the cache.
 - **Scenes**: no reader. `scene` is `null` and the asset has no preview until a scene reader
   exists, which this change does not add.
 
-**The video poster frame** comes from the engine's own `OwnedDeviceVideoDecoder`: it decodes the
-first sync sample on the device, and the frame is read back and scaled on the CPU. The first slice
-ships facts for every family and pictures for images; the poster follows as its own slice, and
-Studio shows the kind colour for video until then (owner, 2026-11-11).
+**The video poster frame** comes from the engine's own decoders, run in a helper the runtime unit
+carries, `tatolab-video-poster-frame`, never in the runtime's process: the runtime finds an MP4 or
+QuickTime file's first sync sample, hands it to the helper as one Annex-B access unit led by its
+parameter sets, and scales the RGBA picture the helper answers to the 512 px preview. On Linux the
+helper decodes on an owned Vulkan Video device with the decoder's RGBA readback; on macOS on
+VideoToolbox, the NV12 picture converted on the CPU. A file, codec or driver fault ends only the
+helper, which the runtime stops after 20 s, and the video keeps its facts with `preview: null`
+(owner, 2026-11-11). H.264 and H.265 are the codecs it decodes; MKV and WebM have no poster yet.
 Rejected: a CPU software decoder added for posters alone — a second decoder in the tree and a new
 codec licence to carry (owner, 2026-11-11).
+Rejected: decoding the poster inside the runtime's process — a driver fault on one file would end
+every stream on the machine (owner, 2026-11-11).
 
 **Compressed audio's facts** come from `symphonia`'s probe, which reads duration, sample rate and
 channels for MP3, AAC, Ogg, Opus and more, under MPL-2.0, linked only into
@@ -160,6 +166,8 @@ Add after "Data on links and runtime state are never saved.":
 
 - `runtime/streamlib-asset-media-facts`, the readers. Dependencies: `image` (MIT or Apache-2.0)
   and `symphonia` (MPL-2.0).
+- `runtime/tatolab-video-poster-frame`, the runtime unit's poster frame helper, beside `tatolabd`
+  in `bin/` and in a macOS app's `Contents/MacOS`.
 
 ### REMOVED
 
@@ -173,8 +181,8 @@ Nothing. The change only adds.
    the crate's tests over files each test writes (an MP4, a WebM, a WAV, a PNG, a `.cube`) and an
    api-server test that imports a PNG, a `.cube` and an FMU, waits for each read on the change
    feed, and reads facts and a preview back.
-2. **Video posters** through `OwnedDeviceVideoDecoder`, proven by `/verify-live` on each
-   platform's decoder.
+2. **Video posters** through `tatolab-video-poster-frame`, proven by its hardware tests on each
+   platform's decoder (`cargo test -p tatolab-video-poster-frame --features hardware-tests`).
 3. Tato Studio's Library reads them (tatolab-app, after slice 1 ships in a runtime release).
 
 ## What this does not do

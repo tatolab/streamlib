@@ -81,7 +81,9 @@ fn help_lists_exactly_the_served_verbs() {
         listed_verbs,
         [
             "new",
-            "start",
+            "open",
+            "close",
+            "play",
             "reload",
             "dev",
             "stop",

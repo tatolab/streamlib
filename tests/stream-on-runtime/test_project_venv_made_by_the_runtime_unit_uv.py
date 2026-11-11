@@ -105,7 +105,7 @@ def assert_uv_made_a_venv_whose_interpreter_runs(project_directory: Path) -> Non
     assert probed.returncode == 0, probed.stdout + probed.stderr
 
 
-def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_on_a_start(
+def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_an_open_and_on_a_reload(
     runtime_unit: RuntimeUnitUnderTest,
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     tmp_path: Path,
@@ -123,7 +123,7 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
     )
     local_api = tatolabd.local_api_client()
 
-    queued_load = local_api.call_tool("start_project", {"project_directory": str(project_directory)})
+    queued_load = local_api.call_tool("open_project", {"project_directory": str(project_directory)})
     load_once_ended = local_api.stream_action_once_ended(queued_load["action"])
 
     assert load_once_ended["state"] == "done", load_once_ended
@@ -135,7 +135,7 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
     assert not (tmp_path / "another-venv").exists(), "uv made the venv VIRTUAL_ENV names"
 
     shutil.rmtree(project_directory / ".venv")
-    queued_start = local_api.call_tool("start_project", {"project_directory": str(project_directory)})
+    queued_start = local_api.call_tool("reload_project", {"project_directory": str(project_directory)})
     start_once_ended = local_api.stream_action_once_ended(queued_start["action"])
 
     assert start_once_ended["state"] == "done", start_once_ended
@@ -151,7 +151,7 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_a_load_and_
 PROJECT_VENV_UV_SYNC_LOG_LABEL = "project-venv-uv-sync"
 
 
-def test_a_start_project_answers_at_once_and_its_action_makes_the_venv_loads_and_logs_by_action(
+def test_an_open_project_answers_at_once_and_its_action_makes_the_venv_loads_and_logs_by_action(
     runtime_unit: RuntimeUnitUnderTest,
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     tmp_path: Path,
@@ -160,7 +160,7 @@ def test_a_start_project_answers_at_once_and_its_action_makes_the_venv_loads_and
     tatolabd = start_tatolabd(extra_environment={"PATH": path_without_any_uv()})
     local_api = tatolabd.local_api_client()
 
-    queued = local_api.call_tool("start_project", {"project_directory": str(project_directory)})
+    queued = local_api.call_tool("open_project", {"project_directory": str(project_directory)})
     action = queued["action"]
     listed_while_it_runs = local_api.call_tool("list_streams", {})
 
@@ -292,7 +292,7 @@ def test_tatolab_cancel_during_a_sync_kills_uv_and_the_load_ends_cancelled_with_
         extra_environment={"PATH": path_without_any_uv(), "UV_HTTP_TIMEOUT": "600"}
     )
     local_api = tatolabd.local_api_client()
-    action = local_api.call_tool("start_project", {"project_directory": str(project_directory)})[
+    action = local_api.call_tool("open_project", {"project_directory": str(project_directory)})[
         "action"
     ]
     while_uv_waits = the_step_once_uv_asked_the_index(

@@ -73,7 +73,7 @@ pub(crate) fn read_a_cube_lut_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_the_media_facts_of_an_asset_file;
+    use crate::{AssetMediaFactsReadersOfThisRuntime, read_the_media_facts_of_an_asset_file};
 
     #[test]
     fn a_cube_reads_its_size_and_domain_from_its_header() {
@@ -84,7 +84,11 @@ mod tests {
             "# Created by hand\nTITLE \"Film\"\nLUT_3D_SIZE 33\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n\n0.0 0.0 0.0\n",
         )
         .unwrap();
-        let read = read_the_media_facts_of_an_asset_file(&cube).unwrap();
+        let read = read_the_media_facts_of_an_asset_file(
+            &cube,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
+        .unwrap();
         assert_eq!(
             read.media_facts.lut,
             Some(AssetLutFactsOnTheWire {
@@ -101,6 +105,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let cube = directory.path().join("empty.cube");
         std::fs::write(&cube, "TITLE \"nothing\"\n0.1 0.2 0.3\n").unwrap();
-        assert!(read_the_media_facts_of_an_asset_file(&cube).is_err());
+        assert!(
+            read_the_media_facts_of_an_asset_file(
+                &cube,
+                &AssetMediaFactsReadersOfThisRuntime::default()
+            )
+            .is_err()
+        );
     }
 }

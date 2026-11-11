@@ -4,14 +4,14 @@
 //! The stream tools over a real engine: a stream run over a `/mcp/stdio`
 //! connection outlives the connection and the local API, `logs` pages a
 //! stream's records by sequence number, and `list_streams`,
-//! `stop_project`, `remove_project` and the stream asset tools act on
+//! `stop_playback`, `remove_project` and the stream asset tools act on
 //! an engine recording its streams in a temporary state
 //! directory, `open_viewer` opens only over `/mcp/stdio`, and graph edits are
 //! transactions kept in a stream's graph document that each author's `undo` reverses.
 //!
 //! A stream's start creates the engine's GPU context, so the GPU-free tests
 //! load without starting — through the engine's own loads, or a runtime whose
-//! `start_project` loads an empty stream — and the tests that run a project's
+//! `open_project` loads an empty stream — and the tests that run a project's
 //! graph document end to end are gated on `hardware-tests`.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
-    ProjectStartOrReloadRequest, Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment,
+    ProjectOpenOrReloadRequest, Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment,
     StreamListing, StreamLocation, StreamRecord, StreamRecordAsRead,
     StreamRecordsInTheStateDirectory,
 };
@@ -358,7 +358,7 @@ async fn tool_call_over_the_connection(
 /// answers every run with.
 const ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS: &str = "R-empty-1";
 
-/// A runtime whose `start_project` and `reload_project` load an empty stream under the project
+/// A runtime whose `open_project` and `reload_project` load an empty stream under the project
 /// folder's name, standing in for an id, without reading or starting it — a
 /// GPU-free stand-in for the engine's own run — answering
 /// [`ACTION_ID_THE_EMPTY_STREAM_RUN_ANSWERS`], and hands every other call to the engine.
@@ -438,7 +438,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn ids_of_the_loaded_streams(&self) -> Vec<String> {
         self.engine.ids_of_the_loaded_streams()
     }
-    fn start_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
+    fn open_project(&self, request: ProjectOpenOrReloadRequest) -> Result<StreamActionQueued> {
         let stream_id = request
             .project_directory
             .file_name()
@@ -455,8 +455,20 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory: request.project_directory,
         })
     }
-    fn reload_project(&self, request: ProjectStartOrReloadRequest) -> Result<StreamActionQueued> {
-        self.start_project(request)
+    fn reload_project(&self, request: ProjectOpenOrReloadRequest) -> Result<StreamActionQueued> {
+        self.open_project(request)
+    }
+    fn close_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::close_project(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
+    fn start_playback(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::start_playback(
+            self.engine.as_ref(),
+            project_directory,
+        )
     }
     fn create_project(
         &self,
@@ -495,26 +507,26 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         self.engine
             .forget_the_stream_of_a_deleted_stream_asset(project, stream_asset)
     }
-    fn stop_project(&self, project_directory: &Path) -> Result<StreamActionQueued> {
-        OperationsOnTheStreamsLoadedInThisRuntime::stop_project(
+    fn stop_playback(&self, project_directory: &Path) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::stop_playback(
             self.engine.as_ref(),
             project_directory,
         )
     }
-    fn pause_project(
+    fn pause_playback(
         &self,
         project_directory: &Path,
     ) -> Result<streamlib::sdk::runtime::ProjectPausedOrResumed> {
-        OperationsOnTheStreamsLoadedInThisRuntime::pause_project(
+        OperationsOnTheStreamsLoadedInThisRuntime::pause_playback(
             self.engine.as_ref(),
             project_directory,
         )
     }
-    fn resume_project(
+    fn resume_playback(
         &self,
         project_directory: &Path,
     ) -> Result<streamlib::sdk::runtime::ProjectPausedOrResumed> {
-        OperationsOnTheStreamsLoadedInThisRuntime::resume_project(
+        OperationsOnTheStreamsLoadedInThisRuntime::resume_playback(
             self.engine.as_ref(),
             project_directory,
         )
@@ -617,7 +629,7 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_it_and_lists_running
     let run = tool_answer(
         &tool_call_over_the_connection(
             &client,
-            "start_project",
+            "open_project",
             a_run_request_of_the_project_in("camera"),
         )
         .await,
@@ -654,7 +666,7 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_the_local_api_stoppi
     tool_answer(
         &tool_call_over_the_connection(
             &client,
-            "start_project",
+            "open_project",
             a_run_request_of_the_project_in("camera"),
         )
         .await,
@@ -863,12 +875,35 @@ async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
 
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
-    let not_running =
-        tool_answer(&tool_call_over_the_connection(&client, "open_viewer", the_ports_viewer).await)
-            .expect_err("a node that is not running has nothing to view");
+    let not_running_result =
+        tool_call_over_the_connection(&client, "open_viewer", the_ports_viewer.clone()).await;
+    let not_running = tool_answer(&not_running_result)
+        .expect_err("a node that is not running has nothing to view");
     assert!(
         not_running.contains("source") && not_running.contains("not running"),
         "{not_running}"
+    );
+    let refusal = &not_running_result["structuredContent"]["refusal"];
+    assert_eq!(refusal["action"], "open_viewer", "{refusal}");
+    assert_eq!(refusal["not_running_because"], "preparing", "{refusal}");
+    assert_eq!(
+        format!(
+            "open_viewer failed: {}",
+            refusal["runtime_words"].as_str().unwrap()
+        ),
+        not_running
+    );
+
+    engine
+        .engine
+        .loaded_stream_of_the_id(&live)
+        .expect("the stream is loaded")
+        .hold_stopped_without_a_start();
+    let stopped_result =
+        tool_call_over_the_connection(&client, "open_viewer", the_ports_viewer).await;
+    assert_eq!(
+        stopped_result["structuredContent"]["refusal"]["not_running_because"], "playback_stopped",
+        "{stopped_result}"
     );
     let unknown = tool_answer(
         &tool_call_over_the_connection(
@@ -923,7 +958,7 @@ async fn set_stream_clock_scale_refuses_a_stream_with_no_clock_running() {
 /// answers it at once, refuses what it cannot do naming why with nothing
 /// queued, and its action leaves the state directory as it says.
 #[tokio::test(flavor = "multi_thread")]
-async fn stop_project_and_remove_project_queue_actions_on_the_streams_the_runtime_holds() {
+async fn stop_playback_and_remove_project_queue_actions_on_the_streams_the_runtime_holds() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
@@ -938,7 +973,7 @@ async fn stop_project_and_remove_project_queue_actions_on_the_streams_the_runtim
     };
 
     let refusal = call(
-        "stop_project",
+        "stop_playback",
         json!({ "project_directory": "relative/project" }),
     )
     .await
@@ -946,7 +981,7 @@ async fn stop_project_and_remove_project_queue_actions_on_the_streams_the_runtim
     assert!(refusal.contains("absolute"), "{refusal}");
 
     let stop = call(
-        "stop_project",
+        "stop_playback",
         json!({ "project_directory": project.path() }),
     )
     .await
@@ -975,7 +1010,7 @@ async fn stop_project_and_remove_project_queue_actions_on_the_streams_the_runtim
     assert_eq!(stopped["streams"][0]["state"], "stopped", "{stopped}");
     assert!(engine.engine.ids_of_the_loaded_streams().is_empty());
     let refusal = call(
-        "stop_project",
+        "stop_playback",
         json!({ "project_directory": project.path() }),
     )
     .await
@@ -1349,21 +1384,36 @@ async fn a_run_of_a_folder_that_is_no_project_fails_its_action_saying_why() {
     );
 }
 
-/// `describe_stream_action`'s answer for the run of `project_directory` that
-/// `start_project` queued, once it has finished.
+/// `describe_stream_action`'s answer for the open of `project_directory` that
+/// `open_project` queued, once it has finished.
 async fn the_run_of_the_project_once_finished(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    project_directory: &Path,
+) -> Value {
+    the_project_action_once_finished(
+        "open_project",
+        operations_on_the_loaded_streams,
+        project_directory,
+    )
+    .await
+}
+
+/// `describe_stream_action`'s answer for the action the tool `tool_name` queued on
+/// `project_directory`, once it has finished.
+async fn the_project_action_once_finished(
+    tool_name: &str,
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     project_directory: &Path,
 ) -> Value {
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "start_project",
+            tool_name,
             json!({ "project_directory": project_directory }),
         )
         .await,
     )
-    .expect("a run of a project is queued");
+    .expect("an action on a project is queued");
     the_stream_action_once_finished(
         operations_on_the_loaded_streams,
         queued["action"].as_str().expect("the action's id"),
@@ -1638,10 +1688,10 @@ async fn create_project_with_a_relative_directory_is_refused() {
     assert!(!Path::new("a-relative-project").exists());
 }
 
-/// `start_project` answers its action at once, and the action is followed to `done` with the
+/// `open_project` answers its action at once, and the action is followed to `done` with the
 /// stream of the graph document that does not load failed.
 #[tokio::test(flavor = "multi_thread")]
-async fn start_project_queues_a_load_followed_by_describe_stream_action() {
+async fn open_project_queues_an_open_followed_by_describe_stream_action() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
@@ -1651,7 +1701,7 @@ async fn start_project_queues_a_load_followed_by_describe_stream_action() {
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "start_project",
+            "open_project",
             json!({ "project_directory": project.path() }),
         )
         .await,
@@ -1670,7 +1720,7 @@ async fn start_project_queues_a_load_followed_by_describe_stream_action() {
         json!({
             "action": action,
             "project_directory": project_directory,
-            "kind": "load",
+            "kind": "open",
             "state": "done",
             "step": null,
             "venv_sync": null,
@@ -1708,7 +1758,7 @@ exec sleep 30
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "start_project",
+            "open_project",
             json!({ "project_directory": project.path() }),
         )
         .await,
@@ -1800,7 +1850,7 @@ exit 1
     let queued = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "start_project",
+            "open_project",
             json!({ "project_directory": project.path() }),
         )
         .await,
@@ -1845,7 +1895,7 @@ exit 1
 /// An action the runtime never queued, and a relative project directory, are refused
 /// saying so.
 #[tokio::test(flavor = "multi_thread")]
-async fn describe_stream_action_and_start_project_refuse_what_the_runtime_cannot_hold() {
+async fn describe_stream_action_and_open_project_refuse_what_the_runtime_cannot_hold() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
 
@@ -1865,7 +1915,7 @@ async fn describe_stream_action_and_start_project_refuse_what_the_runtime_cannot
     let relative = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
-            "start_project",
+            "open_project",
             json!({ "project_directory": "desk" }),
         )
         .await,
@@ -1881,23 +1931,31 @@ async fn describe_stream_action_and_start_project_refuse_what_the_runtime_cannot
 // End to end on the engine's own run — the start creates its GPU context
 // ============================================================================
 
-/// A project run over a `/mcp/stdio` connection is recorded and runs on once
-/// the connection drops, and stop_project, start_project and remove_project act on it through the
-/// tools.
+/// A project opened and played over a `/mcp/stdio` connection is recorded and plays on once
+/// the connection drops, and `stop_playback`, `start_playback`, `close_project` and
+/// `remove_project` act on it through the tools.
 #[tokio::test(flavor = "multi_thread")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
 )]
-async fn a_started_project_end_to_end_outlives_its_connection_through_stop_start_and_remove() {
+async fn a_played_project_end_to_end_outlives_its_connection_through_stop_play_close_and_remove() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
     let camera_stream_id = project.stream_id_of("camera");
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
+    let opened = the_run_over_the_connection_once_finished(
+        "open_project",
+        &client,
+        &engine.operations_on_the_loaded_streams(),
+        project.path(),
+    )
+    .await;
+    assert_eq!(opened["streams"][0]["state"], "stopped", "{opened}");
     let run = the_run_over_the_connection_once_finished(
-        "start_project",
+        "start_playback",
         &client,
         &engine.operations_on_the_loaded_streams(),
         project.path(),
@@ -1935,14 +1993,19 @@ async fn a_started_project_end_to_end_outlives_its_connection_through_stop_start
     let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
     for (tool_name, arguments, state_the_action_leaves) in [
         (
-            "stop_project",
+            "stop_playback",
             json!({ "project_directory": project.path() }),
             json!("stopped"),
         ),
         (
-            "start_project",
+            "start_playback",
             json!({ "project_directory": project.path() }),
             json!("running"),
+        ),
+        (
+            "close_project",
+            json!({ "project_directory": project.path() }),
+            Value::Null,
         ),
         (
             "remove_project",
@@ -1994,7 +2057,14 @@ async fn a_run_of_a_recorded_location_replaces_its_stream_from_any_connection() 
     };
 
     the_run_over_the_connection_once_finished(
-        "start_project",
+        "open_project",
+        &first_connection,
+        &operations_on_the_loaded_streams,
+        project.path(),
+    )
+    .await;
+    the_run_over_the_connection_once_finished(
+        "start_playback",
         &first_connection,
         &operations_on_the_loaded_streams,
         project.path(),
@@ -3859,16 +3929,18 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
         "the view node takes the view's ports: {deck}"
     );
 
-    let refusal = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "write_studio_view_output",
-            json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
-                    "value": 0.5 }),
-        )
-        .await,
+    let refused_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "write_studio_view_output",
+        json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
+                "value": 0.5 }),
     )
-    .expect_err("a node not running publishes nothing");
+    .await;
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
+        "{refused_result}"
+    );
+    let refusal = tool_answer(&refused_result).expect_err("a node not running publishes nothing");
     assert!(
         refusal.starts_with("write_studio_view_output failed:") && refusal.contains("not running"),
         "{refusal}"
@@ -3958,15 +4030,18 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
         );
     }
 
-    let refusal = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "write_graph_input",
-            json!({ "stream": stream_id, "input": "cue", "value": { "track": "drop" } }),
-        )
-        .await,
+    let refused_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "write_graph_input",
+        json!({ "stream": stream_id, "input": "cue", "value": { "track": "drop" } }),
     )
-    .expect_err("an Input whose node does not run reaches no reader");
+    .await;
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
+        "{refused_result}"
+    );
+    let refusal = tool_answer(&refused_result)
+        .expect_err("an Input whose node does not run reaches no reader");
     assert!(
         refusal.starts_with("write_graph_input failed:") && refusal.contains("not running"),
         "{refusal}"
@@ -4288,9 +4363,14 @@ async fn a_project_imported_from_a_zip_of_one_runs_its_stream() {
         &project_directory,
     )
     .await;
-    let finished =
-        the_run_of_the_project_once_finished(operations_on_the_loaded_streams, &project_directory)
-            .await;
+    the_run_of_the_project_once_finished(operations_on_the_loaded_streams, &project_directory)
+        .await;
+    let finished = the_project_action_once_finished(
+        "start_playback",
+        operations_on_the_loaded_streams,
+        &project_directory,
+    )
+    .await;
 
     assert_eq!(finished["state"], "done", "{finished}");
     assert_eq!(
@@ -4378,7 +4458,7 @@ mkdir -p .venv/bin && printf '#!/bin/sh\\nexit 0\\n' > .venv/bin/python && chmod
     let queued = tool_answer(
         &tool_call_over_the_connection(
             &following_connection,
-            "start_project",
+            "open_project",
             json!({ "project_directory": project.path() }),
         )
         .await,

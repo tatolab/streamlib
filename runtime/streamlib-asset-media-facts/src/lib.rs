@@ -8,15 +8,26 @@
 mod asset_media_facts_cache;
 mod audio_file_media_facts;
 mod cube_lut_file_media_facts;
+mod first_video_sync_sample;
 mod image_file_media_facts;
 mod iso_base_media_file_facts;
 mod matroska_file_media_facts;
+mod video_poster_frame;
 
 use std::path::Path;
+
+pub use video_poster_frame::{
+    Nv12PictureColour, RgbaPictureFromThePosterFrameHelper,
+    VIDEO_POSTER_FRAME_HELPER_CODEC_ARGUMENT, VIDEO_POSTER_FRAME_HELPER_EXECUTABLE_FILE_NAME,
+    VideoPosterFrameHelper, rgba_of_an_nv12_picture,
+};
 
 pub use asset_media_facts_cache::{
     ASSET_MEDIA_FACTS_CACHE_DIRECTORY, AssetMediaFactsCacheOfAProject,
     AssetMediaFactsCachedInTheProject,
+};
+pub use first_video_sync_sample::{
+    FirstVideoSyncSampleAsAnnexB, PosterFrameVideoCodec, first_video_sync_sample_of_a_video_file,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::AssetMediaFactsOnTheWire;
 
@@ -57,10 +68,18 @@ impl AssetMediaFactsUnreadable {
     }
 }
 
+/// What the readers may use beyond the file itself.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AssetMediaFactsReadersOfThisRuntime {
+    /// The helper that decodes a video's poster frame; without it a video has no preview.
+    pub video_poster_frame_helper: Option<VideoPosterFrameHelper>,
+}
+
 /// Read the media facts and preview picture of the asset file at `asset_file_path`, choosing
 /// the reader by its file extension.
 pub fn read_the_media_facts_of_an_asset_file(
     asset_file_path: &Path,
+    readers: &AssetMediaFactsReadersOfThisRuntime,
 ) -> Result<AssetMediaFactsReadFromTheFile, AssetMediaFactsUnreadable> {
     if !asset_file_path.is_file() {
         return Err(AssetMediaFactsUnreadable::because(
@@ -73,7 +92,7 @@ pub fn read_the_media_facts_of_an_asset_file(
             image_file_media_facts::read_an_image_file(asset_file_path)
         }
         "mp4" | "m4v" | "mov" | "m4a" => {
-            iso_base_media_file_facts::read_an_iso_base_media_file(asset_file_path)
+            iso_base_media_file_facts::read_an_iso_base_media_file(asset_file_path, readers)
         }
         "mkv" | "webm" | "mka" => matroska_file_media_facts::read_a_matroska_file(asset_file_path),
         "wav" | "mp3" | "flac" | "aac" | "ogg" | "oga" | "opus" | "aiff" | "aif" | "caf" => {
@@ -117,13 +136,19 @@ mod tests {
         let weights = directory.path().join("weights.safetensors");
         std::fs::write(&weights, b"not media").unwrap();
         assert_eq!(
-            read_the_media_facts_of_an_asset_file(&weights),
+            read_the_media_facts_of_an_asset_file(
+                &weights,
+                &AssetMediaFactsReadersOfThisRuntime::default()
+            ),
             Err(AssetMediaFactsUnreadable::because(
                 "the runtime has no reader for `.safetensors` files"
             ))
         );
         assert_eq!(
-            read_the_media_facts_of_an_asset_file(&directory.path().join("gone.png")),
+            read_the_media_facts_of_an_asset_file(
+                &directory.path().join("gone.png"),
+                &AssetMediaFactsReadersOfThisRuntime::default()
+            ),
             Err(AssetMediaFactsUnreadable::because(
                 "no file is at the asset's path"
             ))

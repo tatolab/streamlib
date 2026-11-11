@@ -285,7 +285,7 @@ pub(crate) fn read_a_matroska_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read_the_media_facts_of_an_asset_file;
+    use crate::{AssetMediaFactsReadersOfThisRuntime, read_the_media_facts_of_an_asset_file};
 
     fn an_element(id: u64, data: &[u8]) -> Vec<u8> {
         let id_bytes = id.to_be_bytes();
@@ -358,7 +358,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let webm = directory.path().join("loop.webm");
         std::fs::write(&webm, a_vp9_and_opus_webm()).unwrap();
-        let read = read_the_media_facts_of_an_asset_file(&webm).unwrap();
+        let read = read_the_media_facts_of_an_asset_file(
+            &webm,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        )
+        .unwrap();
         assert_eq!(read.media_facts.duration_ms, Some(3_500));
         assert_eq!(
             read.media_facts.video,
@@ -384,6 +388,12 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mkv = directory.path().join("broken.mkv");
         std::fs::write(&mkv, b"RIFF....").unwrap();
-        assert!(read_the_media_facts_of_an_asset_file(&mkv).is_err());
+        assert!(
+            read_the_media_facts_of_an_asset_file(
+                &mkv,
+                &AssetMediaFactsReadersOfThisRuntime::default()
+            )
+            .is_err()
+        );
     }
 }

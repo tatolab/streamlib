@@ -16,6 +16,7 @@ use rmcp::service::RequestContext;
 use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use streamlib::sdk::error::{Error, WhyANodeOfAStreamIsNotRunning};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamLocation,
 };
@@ -43,7 +44,7 @@ use streamlib_project_repository::{
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
     GraphTransactionAddedNote, GraphTransactionConnectedLink, GraphTransactionToolResult,
-    ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
+    NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
 };
 use uuid::Uuid;
 
@@ -1429,6 +1430,7 @@ impl GraphTransactionRefusal {
             refused_node: what_the_refused_operation_names.node,
             refused_link: what_the_refused_operation_names.link,
             refused_field: what_the_refused_operation_names.field,
+            not_running_because: None,
             runtime_words: self.runtime_words,
         }
     }
@@ -1441,6 +1443,44 @@ fn a_tool_result_of_the_refusal(refusal: ProjectActionRefusalOnTheWire) -> CallT
     let mut tool_result = CallToolResult::error(vec![ContentBlock::text(text)]);
     tool_result.structured_content = Some(json!({ "refusal": refusal }));
     tool_result
+}
+
+/// The answer of the tool `tool_name` refused for `refusal`: a structured refusal naming
+/// `not_running_because` when the node it reached for does not run, and its words otherwise.
+pub(crate) fn the_answer_to_a_refused_reach_for_a_node(
+    tool_name: &str,
+    refusal: Error,
+) -> ToolCallAnswer {
+    match refusal {
+        Error::NodeOfAStreamIsNotRunning {
+            not_running_because,
+            runtime_words,
+        } => Ok(a_tool_result_of_the_refusal(
+            ProjectActionRefusalOnTheWire {
+                action: tool_name.to_owned(),
+                refused_operation_index: None,
+                refused_node: None,
+                refused_link: None,
+                refused_field: None,
+                not_running_because: Some(match not_running_because {
+                    WhyANodeOfAStreamIsNotRunning::PlaybackStopped => {
+                        NodeNotRunningBecauseOnTheWire::PlaybackStopped
+                    }
+                    WhyANodeOfAStreamIsNotRunning::PlaybackPaused => {
+                        NodeNotRunningBecauseOnTheWire::PlaybackPaused
+                    }
+                    WhyANodeOfAStreamIsNotRunning::Preparing => {
+                        NodeNotRunningBecauseOnTheWire::Preparing
+                    }
+                    WhyANodeOfAStreamIsNotRunning::NodeFailed => {
+                        NodeNotRunningBecauseOnTheWire::NodeFailed
+                    }
+                }),
+                runtime_words,
+            },
+        )),
+        refusal => Err(format!("{tool_name} failed: {refusal}")),
+    }
 }
 
 impl From<ProjectRepositoryRefusal> for GraphTransactionRefusal {

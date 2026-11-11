@@ -53,7 +53,7 @@ asks why every Python processor is a child process.
    hard-fail criteria in both reviewers, and `xtask check-no-in-process-placement`.~~
    > Superseded 2026-11-06 by owner ruling: the rule file, the reviewer hard-fails and the
    > gate are retired — rules do not dictate architecture; the plan does. The plan's
-   > placement entry is amended by `docs/plan/changes/lightweight-node-kinds.md`, which
+   > placement entry is amended by `docs/plan/changes/archive/2026-11-10-lightweight-node-kinds.md`, which
    > keeps a Python class node in its own process and adds node kinds that run without one.
 
 ## Why
