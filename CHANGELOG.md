@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.60](https://github.com/tatolab/streamlib/compare/v0.68.59...v0.68.60) (2026-11-11)
+
+
+### Bug Fixes
+
+* **tatolab-ops:** declare ImageFile at its own import path so a stream can add it ([1e823ce](https://github.com/tatolab/streamlib/commit/1e823cec9af7936a60a184e092f51206a3809a00))
+* **tatolab-ops:** declare ImageFile at its own import path so a stream can add it ([edb03cc](https://github.com/tatolab/streamlib/commit/edb03cc9d5b7e464718267d00744e2d07cf359e0)), closes [#3506](https://github.com/tatolab/streamlib/issues/3506)
+
 ## [0.68.59](https://github.com/tatolab/streamlib/compare/v0.68.58...v0.68.59) (2026-11-10)
 
 

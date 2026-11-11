@@ -30,12 +30,12 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.59" }
-streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.68.59" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.60" }
+streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.68.60" }
 streamlib-api-server = { path = "../streamlib-api-server" }
 streamlib-project-repository = { path = "../streamlib-project-repository" }
 # The machine runtime lock and the state directory the runtime takes at start.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.59" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.60" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

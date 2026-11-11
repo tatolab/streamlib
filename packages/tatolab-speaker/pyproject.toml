@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-speaker"
-version = "0.68.59"
+version = "0.68.60"
 description = "The speaker node for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
