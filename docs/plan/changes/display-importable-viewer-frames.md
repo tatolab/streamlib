@@ -33,9 +33,14 @@ viewer imports that; a frame already in a display-importable image still crosses
 - A LINEAR DMA-BUF — a pixel-pool `VkBuffer` or a LINEAR-modifier image — imports as solid
   black with no error anywhere: LINEAR is sampler-only on NVIDIA. So today's Linux viewer path
   for pixel buffers (`DRM_FORMAT_MOD_LINEAR`) shows nothing on NVIDIA either.
-- Under X11 on NVIDIA no case shows: the GPU process has no shared-image backing for a native
-  pixmap (`shared_image_factory.cc: Could not find SharedImageBackingFactory`), with every flag
-  combination tried.
+- Under Wayland with `--use-angle=vulkan`, a LINEAR DMA-BUF (a pixel-pool `VkBuffer` or a
+  LINEAR image) and a tiled one all import with every pixel right. LINEAR is black only under
+  Chromium's default ANGLE-on-GL backend.
+- Under X11 on NVIDIA no case shows in an on-screen window. The default backend has no
+  shared-image backing for a native pixmap (`shared_image_factory.cc: Could not find
+  SharedImageBackingFactory`); `--use-gl=angle --use-angle=gl-egl` fails creating the window
+  surface (`eglCreateWindowSurface ... EGL_BAD_MATCH`); ANGLE-Vulkan and Chromium's Vulkan
+  compositing import and read zeros. Only an offscreen window under gl-egl shows a tiled image.
 - `importSharedTexture` never threw in any failing case; a failure is visible only as blank
   pixels or in the GPU process log.
 
@@ -45,8 +50,10 @@ The entry's "an Image frame is shared, not copied — Studio imports the surface
 imports it — so a preview is zero-copy" becomes: an Image frame in memory Studio's display
 imports is shared, not copied; one that is not is copied once on the engine's GPU into an image
 the display imports, only while a viewer reads it, and never reaches the CPU.
-Rejected: a CPU readback for a viewer — a copy through host memory per frame, against the
-zero-copy preview (owner, 2026-11-11). Rejected: allocating node output textures as DMA-BUF so
+A viewer whose display shows no DMA-BUF it imports (Chromium on NVIDIA under X11) reads a
+host-visible copy instead, through the CPU (owner, 2026-11-11, below). Rejected: a CPU readback
+for every viewer — a copy through host memory per frame, against the zero-copy preview (owner,
+2026-11-11). Rejected: allocating node output textures as DMA-BUF so
 the viewer needs no copy — strands every CUDA consumer of them, since NVIDIA exports one flavour
 per allocation (owner, 2026-11-11).
 
@@ -73,17 +80,20 @@ residencies, `DeviceLocal` and `HostVisible`, both `VkBuffer`s. This change adds
   existing residencies are (`GpuContext::evict_surface_export_stagings`). About 8.3 MB per
   1080p RGBA slot.
 
-## ADDED: a viewer's ask for a frame it can display
+## ADDED: a viewer's ask for a frame it can read
 
-- ADDED: SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP
+- ADDED: SURFACE_SHARE_IMPORT_VIEWED_FRAME_OP
   A surface-share op a viewer sends with the frame its message named, after claiming it in the
-  pool's claim table as it does now. The engine answers with the frame's own slot when that is
-  display-importable, and otherwise refills the slot's `DisplayImportable` staging from the
-  frame and answers with the staging's registration and its handles. The engine serves it with
+  pool's claim table as it does now, and how it reads the frame (`ViewedFrameReadBy`:
+  `display_import` or `cpu_read`). For a display import the engine answers with the frame's own
+  slot when that is display-importable, and otherwise refills the slot's `DisplayImportable`
+  staging from the frame; for a CPU read it refills the slot's `HostVisible` staging, which
+  states the device that exported it. Either way it answers with the registration and its
+  handles. The engine serves it with
   the one `GpuContext` (`EngineResourcesSharedByEveryStream`), so the surface-share service
   gains a handle to it once the context exists, and refuses the op by name before then.
-- `GpuPoolFrameImporterOfAViewer::hold_the_frame` sends it on Linux in place of
-  `import_pool_slot` for an Image frame; the held frame keeps the source's claim until it
+- `GpuPoolFrameImporterOfAViewer` is made on Linux with how it reads frames, and `hold_the_frame`
+  sends the op in place of `import_pool_slot` for an Image frame; the held frame keeps the source's claim until it
   drops, so the slot is not reused under a refill.
 
 [NEEDS DECISION] Who drives the copy.
@@ -96,9 +106,10 @@ residencies, `DeviceLocal` and `HostVisible`, both `VkBuffer`s. This change adds
 Recommendation: (a). It extends the surface-share service and the export staging, adds no
 parallel channel, and copies nothing a viewer does not read.
 
-[NEEDS DECISION] An NVIDIA X11 session, where no import shows — on the decision card in
-#3499's project thread. Whatever is chosen there, a viewer on such a session shows a refusal
-in words, never a silent black frame.
+DECIDED (owner, 2026-11-11): an NVIDIA X11 session reads by CPU. Studio picks the reading
+before its first frame, because there the import reports success and shows black, and runs
+with `--use-angle=vulkan` on Linux; Studio warns while it runs on X11 (tatolab-app#279,
+tatolab-app#280).
 
 ## MODIFIED: the viewer's import client
 
@@ -108,8 +119,10 @@ in words, never a silent black frame.
 
 ## Not in this change
 
-- Tato Studio's addon reading the plane layout and modifier (tatolab-app#275) and its Wayland
-  launch: app work against this contract, filed there.
+- Tato Studio's addon reading the plane layout and modifier (tatolab-app#275), choosing the
+  reading and launch switch (tatolab-app#279) and its X11 warning (tatolab-app#280): app work
+  against this contract, filed there.
+- A CPU read at the viewer's on-screen size rather than the frame's: the copy is full-size.
 - macOS: IOSurface crosses as today.
 - AMD and Intel: LINEAR may import there; the op answers the source's own slot wherever the
   engine knows the device's display imports it, which this change measures on NVIDIA only.

@@ -205,6 +205,37 @@ struct Inner {
     surfaces: RwLock<HashMap<String, SurfaceMetadata>>,
     surface_counter: AtomicU64,
     check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
+    /// What copies a frame for a viewer to read, once the engine's GPU
+    /// context exists; `None` before then and after the service stops.
+    viewed_frame_source: RwLock<Option<Arc<dyn ViewedFrameSource>>>,
+}
+
+/// What answers a viewer's ask for a frame in memory it reads the frame by.
+pub trait ViewedFrameSource: Send + Sync {
+    /// The surface-share id of memory holding the frame `frame_id` names the
+    /// way `read_by` reads it, which the service then hands the viewer.
+    fn surface_share_id_a_viewer_reads_the_frame_through(
+        &self,
+        frame_id: &str,
+        read_by: streamlib_surface_client::ViewedFrameReadBy,
+        layout_the_producer_left_the_frame_in: Option<streamlib_consumer_rhi::VulkanLayout>,
+    ) -> crate::core::error::Result<String>;
+}
+
+impl ViewedFrameSource for crate::core::context::GpuContext {
+    fn surface_share_id_a_viewer_reads_the_frame_through(
+        &self,
+        frame_id: &str,
+        read_by: streamlib_surface_client::ViewedFrameReadBy,
+        layout_the_producer_left_the_frame_in: Option<streamlib_consumer_rhi::VulkanLayout>,
+    ) -> crate::core::error::Result<String> {
+        crate::core::context::GpuContext::surface_share_id_a_viewer_reads_the_frame_through(
+            self,
+            frame_id,
+            read_by,
+            layout_the_producer_left_the_frame_in,
+        )
+    }
 }
 
 /// Result of [`SurfaceShareState::get_surface_planes`] — everything a
@@ -501,6 +532,21 @@ impl SurfaceShareState {
     /// anything.
     pub fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
         &self.inner.check_out_leases
+    }
+
+    /// Serve viewers' asks for viewed frames from `source`.
+    pub fn serve_viewed_frames_from(&self, source: Arc<dyn ViewedFrameSource>) {
+        *self.inner.viewed_frame_source.write() = Some(source);
+    }
+
+    /// Stop serving viewed frames, letting go of their source.
+    pub fn stop_serving_viewed_frames(&self) {
+        *self.inner.viewed_frame_source.write() = None;
+    }
+
+    /// What serves viewed frames now, if anything does.
+    pub fn viewed_frame_source(&self) -> Option<Arc<dyn ViewedFrameSource>> {
+        self.inner.viewed_frame_source.read().clone()
     }
 
     /// Surface ids registered by `runtime_id`. Used by the EPOLLHUP watchdog

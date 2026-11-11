@@ -1211,6 +1211,7 @@ impl SurfaceStoreInner {
         width: u32,
         height: u32,
         format: PixelFormat,
+        exporting_device_uuid: [u8; 16],
         refill_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
         // Read ahead of the export so a staging with no allocation to
@@ -1246,6 +1247,7 @@ impl SurfaceStoreInner {
             height,
             format,
             memory_type_index,
+            &streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(exporting_device_uuid),
             refill_done.is_some(),
         );
 
@@ -2421,6 +2423,7 @@ fn surface_export_staging_registration_payload(
     height: u32,
     format: PixelFormat,
     memory_type_index: u32,
+    exporting_device_uuid: &str,
     refill_done_timeline_crosses: bool,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -2437,6 +2440,7 @@ fn surface_export_staging_registration_payload(
         SURFACE_REPLY_HAS_PRODUCE_DONE_FD: refill_done_timeline_crosses,
         SURFACE_REPLY_HAS_CONSUME_DONE_FD: false,
         SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX: memory_type_index,
+        SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID: exporting_device_uuid,
     })
 }
 
@@ -2553,6 +2557,13 @@ fn dma_buf_texture_registration_payload(
         .unwrap_or_else(|_| vec![(0, 0)]);
     let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();
     let plane_strides: Vec<u64> = plane_layout.iter().map(|(_, s)| *s).collect();
+    // A one-plane image's plane spans its whole allocation, which a display
+    // importer (Chromium's native pixmap) is handed as the plane's size. A
+    // multi-plane image states no per-plane size, so its planes carry none.
+    let plane_sizes: Vec<u64> = match plane_layout.len() {
+        1 => vec![texture.vma_allocation_size()],
+        plane_count => vec![0; plane_count],
+    };
 
     serde_json::json!({
         "op": "register",
@@ -2562,6 +2573,7 @@ fn dma_buf_texture_registration_payload(
         "height": texture.height(),
         "format": texture.format().wire_name(),
         "resource_type": SURFACE_RESOURCE_TYPE_TEXTURE,
+        "plane_sizes": plane_sizes,
         "plane_offsets": plane_offsets,
         "plane_strides": plane_strides,
         "drm_format_modifier": texture.chosen_drm_format_modifier(),
@@ -3706,6 +3718,31 @@ mod opaque_fd_texture_registration_payload_tests {
 mod surface_export_staging_registration_payload_tests {
     use super::*;
 
+    const STAGING_EXPORTING_DEVICE_UUID: &str = "00112233445566778899aabbccddeeff";
+
+    /// A consumer importing the staging's OPAQUE_FD onto its own device (a
+    /// viewer's CPU read) checks the exporter is that device.
+    #[test]
+    fn a_staging_registration_states_the_device_that_exported_it() {
+        let payload = surface_export_staging_registration_payload(
+            "surface-under-test-hostvisible",
+            "runtime-under-test",
+            4096,
+            32,
+            32,
+            PixelFormat::Rgba32,
+            0,
+            STAGING_EXPORTING_DEVICE_UUID,
+            true,
+        );
+        assert_eq!(
+            payload
+                .get(SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID)
+                .and_then(|value| value.as_str()),
+            Some(STAGING_EXPORTING_DEVICE_UUID),
+        );
+    }
+
     #[test]
     fn a_staging_registration_states_the_exporters_memory_type_index() {
         const EXPORTER_MEMORY_TYPE_INDEX: u32 = 4;
@@ -3719,6 +3756,7 @@ mod surface_export_staging_registration_payload_tests {
             64,
             PixelFormat::Rgba32,
             EXPORTER_MEMORY_TYPE_INDEX,
+            STAGING_EXPORTING_DEVICE_UUID,
             refill_done_timeline_crosses,
         );
 
@@ -3750,6 +3788,7 @@ mod surface_export_staging_registration_payload_tests {
             32,
             PixelFormat::Rgba32,
             0,
+            STAGING_EXPORTING_DEVICE_UUID,
             refill_done_timeline_crosses,
         );
         assert_eq!(
@@ -3773,6 +3812,7 @@ mod surface_export_staging_registration_payload_tests {
                 32,
                 PixelFormat::Rgba32,
                 0,
+                STAGING_EXPORTING_DEVICE_UUID,
                 refill_done_timeline_crosses,
             )
         };

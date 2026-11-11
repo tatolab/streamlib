@@ -14,14 +14,15 @@
 //! allocated once per surface, refilled by a GPU copy each time a
 //! consumer asks.
 //!
-//! One machine, two residencies ([`SurfaceExportStagingResidency`]).
+//! One machine, three residencies ([`SurfaceExportStagingResidency`]).
 //! Everything below — the per-surface lifetime, the source resolve, the
 //! frame-identity guards, the timeline, the reused recorder, the
 //! surface-share publication — is the same whether the consumer reads
-//! the staging with the GPU or with the CPU. The only axis that differs
-//! is where the memory lives, and it is never inferred: the caller names
-//! it, because CPU residency is the compatibility path a consumer opts
-//! into deliberately, not one it can fall into.
+//! the staging with the GPU, with the CPU, or through a display's import.
+//! The only axis that differs is what the memory is and where it lives,
+//! and it is never inferred: the caller names it, because CPU residency
+//! is the compatibility path a consumer opts into deliberately, not one
+//! it can fall into.
 //!
 //! What the blit reads is the surface's own pooled backing whenever it
 //! has one — a producer's registered texture is a frames-in-flight
@@ -69,11 +70,14 @@ use crate::core::context::surface_backing_resolution::{
 };
 use crate::core::context::texture_registration::TextureLayoutSettledByThisCopy;
 use crate::core::error::{Error, Result};
+use crate::core::rhi::Texture;
 use crate::host_rhi::HostGpuDeviceExt as _;
+#[cfg(target_os = "linux")]
+use crate::host_rhi::HostTextureExt as _;
 use crate::vulkan::rhi::{
     HostVulkanBuffer, HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder,
 };
-use streamlib_consumer_rhi::{PixelFormat, VulkanLayout};
+use streamlib_consumer_rhi::{PixelFormat, TextureFormat, VulkanLayout};
 
 /// Bound on the host wait for a staging refill. The copy is a GPU copy
 /// of one frame (tens of microseconds); a wait that reaches this bound
@@ -99,6 +103,12 @@ pub enum SurfaceExportStagingResidency {
     /// residency reads the mapping; write-combined memory elsewhere,
     /// which is slower to read but never unavailable.
     HostVisible,
+    /// A DMA-BUF image with an explicit tiled DRM format modifier — what a
+    /// display (Chromium's shared-image import in Tato Studio's viewer)
+    /// imports and samples. An OPAQUE_FD image or a LINEAR DMA-BUF does not
+    /// show on NVIDIA, so a viewer of such a frame reads this copy of it.
+    /// Read-only: nothing writes a viewer's copy back.
+    DisplayImportable,
 }
 
 impl SurfaceExportStagingResidency {
@@ -109,6 +119,7 @@ impl SurfaceExportStagingResidency {
         match self {
             Self::DeviceLocal => "device-export-staging",
             Self::HostVisible => "cpu-readback-staging",
+            Self::DisplayImportable => "display-importable-staging",
         }
     }
 }
@@ -118,6 +129,7 @@ impl std::fmt::Display for SurfaceExportStagingResidency {
         f.write_str(match self {
             Self::DeviceLocal => "device-local",
             Self::HostVisible => "host-visible",
+            Self::DisplayImportable => "display-importable",
         })
     }
 }
@@ -171,8 +183,17 @@ struct RefillSubmission {
     next_signal_value: u64,
 }
 
-/// One surface's export staging: the OPAQUE_FD buffer a consumer one hop
-/// away imports, the timeline that orders refills, and the recorder that
+/// The memory a staging is, decided by its residency.
+enum SurfaceExportStagingMemory {
+    /// An OPAQUE_FD `VkBuffer`, device-local or host-visible.
+    OpaqueFdBuffer(Arc<HostVulkanBuffer>),
+    /// A DMA-BUF image with an explicit tiled modifier, for a display.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    DisplayImportableImage(Texture),
+}
+
+/// One surface's export staging: the memory a consumer one hop away
+/// imports, the timeline that orders refills, and the recorder that
 /// reuses one command pool across them.
 pub struct SurfaceExportStaging {
     /// The slot-normalized key of the surface this staging exports —
@@ -185,7 +206,9 @@ pub struct SurfaceExportStaging {
     /// the GPU and another reading on the CPU are two allocations, never
     /// one reinterpreted.
     residency: SurfaceExportStagingResidency,
-    staging_buffer: Arc<HostVulkanBuffer>,
+    staging_memory: SurfaceExportStagingMemory,
+    /// UUID of the Vulkan device that owns the staging allocation.
+    exporting_device_uuid: [u8; 16],
     refill_done_timeline: Arc<HostVulkanTimelineSemaphore>,
     /// Whether `refill_done_timeline` was minted exportable — true exactly
     /// where the device exports a timeline semaphore as an OPAQUE_FD.
@@ -255,8 +278,11 @@ impl SurfaceExportStaging {
 
     /// Whether a consumer may write and copy back — derived from the
     /// backing kind the staging was minted over, so each kind's write
-    /// rule lives on its own variant.
+    /// rule lives on its own variant. A display's copy is never written.
     pub fn writable(&self) -> bool {
+        if self.residency == SurfaceExportStagingResidency::DisplayImportable {
+            return false;
+        }
         match self.backing_kind_at_mint {
             SurfaceExportStagingBackingKindAtMint::RegisteredTexture {
                 texture_takes_a_recorded_copy_in,
@@ -272,9 +298,17 @@ impl SurfaceExportStaging {
         self.residency
     }
 
-    /// Borrow the staging allocation (for export or import bookkeeping).
-    pub fn staging_buffer(&self) -> &Arc<HostVulkanBuffer> {
-        &self.staging_buffer
+    /// Borrow the staging buffer (for export or import bookkeeping),
+    /// refusing a display's staging, which is an image.
+    pub fn staging_buffer(&self) -> Result<&Arc<HostVulkanBuffer>> {
+        match &self.staging_memory {
+            SurfaceExportStagingMemory::OpaqueFdBuffer(staging_buffer) => Ok(staging_buffer),
+            SurfaceExportStagingMemory::DisplayImportableImage(_) => Err(Error::GpuError(format!(
+                "the {} export staging for surface {} is an image a display imports, not a \
+                     buffer",
+                self.residency, self.source_surface_key
+            ))),
+        }
     }
 
     /// The exported timeline a consumer in another process waits on, or
@@ -291,7 +325,7 @@ impl SurfaceExportStaging {
     /// external device API must import onto this GPU; picking any other
     /// reads the wrong memory rather than failing.
     pub fn exporting_device_uuid(&self) -> [u8; 16] {
-        self.staging_buffer.vulkan_device().physical_device_uuid()
+        self.exporting_device_uuid
     }
 }
 
@@ -361,6 +395,24 @@ struct SurfaceExportStagingShape {
     surface_height: u32,
     pixel_format: PixelFormat,
     backing_kind_at_mint: SurfaceExportStagingBackingKindAtMint,
+    /// The image format a display's staging of this source is allocated
+    /// in, `None` where no single-plane colour format carries it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    display_importable_image_format: Option<TextureFormat>,
+}
+
+/// The single-plane colour format of a pixel buffer's byte order, which
+/// a display's staging image of it is allocated in.
+fn display_importable_image_format_of_pixel_format(
+    pixel_format: PixelFormat,
+) -> Option<TextureFormat> {
+    match pixel_format {
+        PixelFormat::Rgba32 => Some(TextureFormat::Rgba8Unorm),
+        PixelFormat::Bgra32 => Some(TextureFormat::Bgra8Unorm),
+        PixelFormat::Rgba16Float => Some(TextureFormat::Rgba16Float),
+        PixelFormat::Rgba32Float => Some(TextureFormat::Rgba32Float),
+        _ => None,
+    }
 }
 
 impl GpuContext {
@@ -408,6 +460,7 @@ impl GpuContext {
                         SurfaceExportStagingBackingKindAtMint::RegisteredTexture {
                             texture_takes_a_recorded_copy_in: source_takes_a_write_back,
                         },
+                    display_importable_image_format: Some(texture.format()),
                 }
             }
             ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
@@ -429,32 +482,53 @@ impl GpuContext {
                             pooled_allocation_was_the_only_backing_at_mint:
                                 source_takes_a_write_back,
                         },
+                    display_importable_image_format:
+                        display_importable_image_format_of_pixel_format(pixel_format),
                 }
             }
         };
 
         let vulkan_device = self.device().vulkan_device();
-        // The one line the residency decides. Both are OPAQUE_FD so the
-        // check-out and import path is identical either way; only the
-        // memory properties differ, and with them who can read it.
-        let staging_buffer = Arc::new(match residency {
+        // The one line the residency decides. Both buffers are OPAQUE_FD so
+        // their check-out and import path is identical; only the memory
+        // properties differ, and with them who can read it.
+        let staging_memory = match residency {
             SurfaceExportStagingResidency::DeviceLocal => {
-                HostVulkanBuffer::new_opaque_fd_export_device_local(
-                    vulkan_device,
-                    shape.staging_byte_size,
-                )?
+                SurfaceExportStagingMemory::OpaqueFdBuffer(Arc::new(
+                    HostVulkanBuffer::new_opaque_fd_export_device_local(
+                        vulkan_device,
+                        shape.staging_byte_size,
+                    )?,
+                ))
             }
             SurfaceExportStagingResidency::HostVisible => {
-                HostVulkanBuffer::new_opaque_fd_export_host_cached(
-                    vulkan_device,
-                    shape.staging_byte_size,
-                )?
+                SurfaceExportStagingMemory::OpaqueFdBuffer(Arc::new(
+                    HostVulkanBuffer::new_opaque_fd_export_host_cached(
+                        vulkan_device,
+                        shape.staging_byte_size,
+                    )?,
+                ))
             }
-        });
+            #[cfg(target_os = "linux")]
+            SurfaceExportStagingResidency::DisplayImportable => {
+                SurfaceExportStagingMemory::DisplayImportableImage(
+                    self.acquire_a_display_importable_staging_image(surface_id, &shape)?,
+                )
+            }
+            #[cfg(not(target_os = "linux"))]
+            SurfaceExportStagingResidency::DisplayImportable => {
+                return Err(Error::NotSupported(format!(
+                    "surface {surface_id}: a display's staging is a DMA-BUF image, which only \
+                     Linux allocates; an IOSurface frame crosses to a display as it is"
+                )));
+            }
+        };
         // A device that exports no timeline (the software device) refuses an
         // exportable one at creation; its copies are retired on the host
-        // before they return, so an in-process timeline is all it needs.
-        let refill_done_timeline_crosses_processes = vulkan_device.supports_semaphore_export();
+        // before they return, so an in-process timeline is all it needs. A
+        // display waits on no Vulkan timeline, so its staging's stays here.
+        let refill_done_timeline_crosses_processes = vulkan_device.supports_semaphore_export()
+            && residency != SurfaceExportStagingResidency::DisplayImportable;
         let refill_done_timeline = if refill_done_timeline_crosses_processes {
             self.create_exportable_timeline_semaphore(0)?
         } else {
@@ -468,7 +542,8 @@ impl GpuContext {
         let staging = Arc::new(SurfaceExportStaging {
             source_surface_key: source_surface_key.to_string(),
             residency,
-            staging_buffer,
+            staging_memory,
+            exporting_device_uuid: vulkan_device.physical_device_uuid(),
             refill_done_timeline,
             refill_done_timeline_crosses_processes,
             refill_submission,
@@ -493,6 +568,89 @@ impl GpuContext {
         }
         by_residency.insert(residency, Arc::clone(&staging));
         Ok(staging)
+    }
+
+    /// A DMA-BUF image at the source's extent, in the colour format of its
+    /// byte order, allocated through the render-target probe — refused where
+    /// the probe settles on LINEAR, which a display on NVIDIA shows as black.
+    #[cfg(target_os = "linux")]
+    fn acquire_a_display_importable_staging_image(
+        &self,
+        surface_id: &str,
+        shape: &SurfaceExportStagingShape,
+    ) -> Result<Texture> {
+        let image_format = shape.display_importable_image_format.ok_or_else(|| {
+            Error::GpuError(format!(
+                "surface {surface_id} is {:?}, which no single-plane colour image carries, so a \
+                 display cannot be handed a copy of it",
+                shape.pixel_format
+            ))
+        })?;
+        let staging_image = self.acquire_render_target_dma_buf_image(
+            shape.surface_width,
+            shape.surface_height,
+            image_format,
+        )?;
+        if !staging_image
+            .vulkan_inner()
+            .is_a_dma_buf_image_with_a_tiled_drm_format_modifier()
+        {
+            return Err(Error::GpuError(format!(
+                "this device allocates {image_format:?} render targets only with the LINEAR \
+                 modifier, which a display imports as black; surface {surface_id} cannot be \
+                 shown in a viewer on this device"
+            )));
+        }
+        Ok(staging_image)
+    }
+
+    /// The surface-share id of memory holding the frame `frame_id` names the
+    /// way a viewer reads it by `read_by`. A display import answers the
+    /// frame's own pool slot when that is already a DMA-BUF image with a
+    /// tiled modifier, and otherwise the slot's display staging; a CPU read
+    /// answers the slot's host-visible staging. A staging is refilled from
+    /// this frame on the GPU unless it already holds it, and every copy
+    /// retires on the host before this answers.
+    ///
+    /// `layout_the_producer_left_the_frame_in` is the layout the frame's
+    /// message states, read in place of the registration's when present.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn surface_share_id_a_viewer_reads_the_frame_through(
+        &self,
+        frame_id: &str,
+        read_by: streamlib_surface_client::ViewedFrameReadBy,
+        layout_the_producer_left_the_frame_in: Option<VulkanLayout>,
+    ) -> Result<String> {
+        self.refuse_a_retired_frame_id(frame_id)?;
+        let residency = match read_by {
+            streamlib_surface_client::ViewedFrameReadBy::DisplayImport => {
+                if let ResolvedSurfaceBacking::RegisteredTexture(registration) =
+                    self.resolve_device_export_source(frame_id)?
+                    && registration
+                        .texture()
+                        .vulkan_inner()
+                        .is_a_dma_buf_image_with_a_tiled_drm_format_modifier()
+                {
+                    return Ok(crate::core::rhi::pool_slot_key_of_surface_id(frame_id).to_string());
+                }
+                SurfaceExportStagingResidency::DisplayImportable
+            }
+            streamlib_surface_client::ViewedFrameReadBy::CpuRead => {
+                SurfaceExportStagingResidency::HostVisible
+            }
+        };
+        let staging = self.surface_export_staging(frame_id, residency)?;
+        let staging_already_holds_the_frame =
+            staging.frame_last_read_into_this_staging.lock().as_deref() == Some(frame_id);
+        if !staging_already_holds_the_frame {
+            self.refill_a_staging_a_viewer_reads(
+                &staging,
+                frame_id,
+                layout_the_producer_left_the_frame_in,
+            )?;
+        }
+        let (shared_id, _) = self.share_surface_export_staging(&staging)?;
+        Ok(shared_id)
     }
 
     /// Publish this staging and its refill timeline to the surface-share
@@ -542,20 +700,29 @@ impl GpuContext {
             staging.source_surface_key,
             staging.residency.surface_share_id_suffix()
         );
-        // `host_inner`-direct for the same reason the passthroughs below
-        // are: the plugin ABI is not grown a vtable slot for a surface
-        // #1715 deletes. A cdylib caller panics at the guard.
-        surface_store.host_inner().register_surface_export_staging(
-            &shared_id,
-            &staging.staging_buffer,
-            staging.staging_byte_size,
-            staging.surface_width,
-            staging.surface_height,
-            pixel_format,
-            staging
-                .refill_done_timeline_another_process_waits_on()
-                .map(Arc::as_ref),
-        )?;
+        // `host_inner`-direct: the plugin ABI is not grown a vtable slot for
+        // this surface. A cdylib caller panics at the guard.
+        match &staging.staging_memory {
+            SurfaceExportStagingMemory::OpaqueFdBuffer(staging_buffer) => {
+                surface_store.host_inner().register_surface_export_staging(
+                    &shared_id,
+                    staging_buffer,
+                    staging.staging_byte_size,
+                    staging.surface_width,
+                    staging.surface_height,
+                    pixel_format,
+                    staging.exporting_device_uuid,
+                    staging
+                        .refill_done_timeline_another_process_waits_on()
+                        .map(Arc::as_ref),
+                )?
+            }
+            // Every refill releases the image to the external queue family
+            // in GENERAL, so that is the layout an importer finds it in.
+            SurfaceExportStagingMemory::DisplayImportableImage(staging_image) => surface_store
+                .host_inner()
+                .register_texture(&shared_id, staging_image, None, None, VulkanLayout::GENERAL)?,
+        }
         *registration_id = Some(shared_id.clone());
         Ok((shared_id, pixel_format))
     }
@@ -780,8 +947,35 @@ impl GpuContext {
             staging,
             surface_id,
             FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
-            |recorder| Self::record_refill(staging, &source, recorder),
+            |recorder| Self::record_refill(staging, &source, None, recorder),
         )
+    }
+
+    /// [`Self::refill_surface_export_staging`] for a staging a viewer reads,
+    /// with the layout the frame's message states read in place of the
+    /// registration's when present.
+    #[cfg(target_os = "linux")]
+    fn refill_a_staging_a_viewer_reads(
+        &self,
+        staging: &SurfaceExportStaging,
+        frame_id: &str,
+        layout_the_producer_left_the_frame_in: Option<VulkanLayout>,
+    ) -> Result<()> {
+        let source = self.resolve_refill_source(staging, frame_id)?;
+        self.submit_staging_copy_and_wait(
+            staging,
+            frame_id,
+            FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(frame_id),
+            |recorder| {
+                Self::record_refill(
+                    staging,
+                    &source,
+                    layout_the_producer_left_the_frame_in,
+                    recorder,
+                )
+            },
+        )?;
+        Ok(())
     }
 
     /// The guards every refill runs, plus the freshly-resolved source.
@@ -806,8 +1000,22 @@ impl GpuContext {
     fn record_refill(
         staging: &SurfaceExportStaging,
         source: &ResolvedSurfaceBacking,
+        layout_the_producer_left_the_frame_in: Option<VulkanLayout>,
         recorder: &mut RhiCommandRecorder,
     ) -> Result<Option<TextureLayoutSettledByThisCopy>> {
+        let staging_buffer = match &staging.staging_memory {
+            SurfaceExportStagingMemory::OpaqueFdBuffer(staging_buffer) => staging_buffer,
+            SurfaceExportStagingMemory::DisplayImportableImage(staging_image) => {
+                Self::record_display_importable_refill(
+                    staging,
+                    staging_image,
+                    source,
+                    layout_the_producer_left_the_frame_in,
+                    recorder,
+                )?;
+                return Ok(None);
+            }
+        };
         match source {
             ResolvedSurfaceBacking::RegisteredTexture(registration) => {
                 let texture = registration.texture();
@@ -819,12 +1027,13 @@ impl GpuContext {
                 )?;
                 let settled_layout = recorder.record_image_read_as_transfer_source(
                     texture,
-                    registration.current_layout(),
+                    layout_the_producer_left_the_frame_in
+                        .unwrap_or_else(|| registration.current_layout()),
                     |recorder| {
                         recorder.record_copy_image_to_buffer(
                             texture,
                             VulkanLayout::TRANSFER_SRC_OPTIMAL,
-                            staging.staging_buffer.as_ref(),
+                            staging_buffer.as_ref(),
                             ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
                         )
                     },
@@ -847,12 +1056,78 @@ impl GpuContext {
                 recorder.record_buffer_barrier_before_a_transfer_read(pixel_buffer)?;
                 recorder.record_copy_buffer_to_buffer(
                     pixel_buffer,
-                    staging.staging_buffer.as_ref(),
+                    staging_buffer.as_ref(),
                     staging.staging_byte_size,
                 )?;
                 Ok(None)
             }
         }
+    }
+
+    /// Record one surface→display-image copy and release the image to the
+    /// external queue family in GENERAL. The image's old contents are
+    /// discarded (every pixel is rewritten), so it is transitioned from
+    /// UNDEFINED and needs no acquire back from the importer.
+    ///
+    /// A texture source's layout is left where it was: an image-to-image
+    /// copy refuses a source that was never written, and returns any other
+    /// to its own layout.
+    fn record_display_importable_refill(
+        staging: &SurfaceExportStaging,
+        staging_image: &Texture,
+        source: &ResolvedSurfaceBacking,
+        layout_the_producer_left_the_frame_in: Option<VulkanLayout>,
+        recorder: &mut RhiCommandRecorder,
+    ) -> Result<()> {
+        let staging_image_layout = match source {
+            ResolvedSurfaceBacking::RegisteredTexture(registration) => {
+                let texture = registration.texture();
+                Self::refuse_a_texture_this_staging_cannot_copy_with(
+                    staging,
+                    &staging.source_surface_key,
+                    texture,
+                    SurfaceExportStagingTextureCopyDirection::RefillIntoStaging,
+                )?;
+                recorder.record_copy_image_to_image(
+                    texture,
+                    layout_the_producer_left_the_frame_in
+                        .unwrap_or_else(|| registration.current_layout()),
+                    staging_image,
+                    VulkanLayout::UNDEFINED,
+                )?
+            }
+            ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
+                if pixel_buffer.plane_size(0) != staging.staging_byte_size {
+                    return Err(Error::GpuError(format!(
+                        "surface {} now resolves to a {}-byte buffer; its display staging \
+                         holds {}x{} tightly packed pixels ({} bytes) — resolve the surface again",
+                        staging.source_surface_key,
+                        pixel_buffer.plane_size(0),
+                        staging.surface_width,
+                        staging.surface_height,
+                        staging.staging_byte_size,
+                    )));
+                }
+                recorder.record_buffer_barrier_before_a_transfer_read(pixel_buffer)?;
+                recorder.record_image_write_as_transfer_destination(
+                    staging_image,
+                    VulkanLayout::UNDEFINED,
+                    |recorder| {
+                        recorder.record_copy_buffer_to_image(
+                            pixel_buffer,
+                            staging_image,
+                            VulkanLayout::TRANSFER_DST_OPTIMAL,
+                            ImageCopyRegion::tightly_packed(
+                                staging.surface_width,
+                                staging.surface_height,
+                            ),
+                        )
+                    },
+                )?
+            }
+        };
+        recorder
+            .record_image_release_to_the_external_queue_family(staging_image, staging_image_layout)
     }
 
     /// Copy a written staging buffer back into its source surface, so an
@@ -953,6 +1228,12 @@ impl GpuContext {
         surface_id: &str,
         coverage: StagedWriteBackCoverage,
     ) -> Result<ResolvedWriteBackDestination> {
+        if staging.residency == SurfaceExportStagingResidency::DisplayImportable {
+            return Err(Error::GpuError(format!(
+                "surface {surface_id}'s display staging is a viewer's copy of the frame; nothing \
+                 is written back from it"
+            )));
+        }
         Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
         match staging.backing_kind_at_mint {
@@ -1036,10 +1317,11 @@ impl GpuContext {
         destination: &ResolvedWriteBackDestination,
         recorder: &mut RhiCommandRecorder,
     ) -> Result<Option<TextureLayoutSettledByThisCopy>> {
+        let staging_buffer = staging.staging_buffer()?;
         match destination {
             ResolvedWriteBackDestination::PixelBuffer(pixel_buffer) => {
                 recorder.record_copy_buffer_to_buffer(
-                    staging.staging_buffer.as_ref(),
+                    staging_buffer.as_ref(),
                     pixel_buffer,
                     staging.staging_byte_size,
                 )?;
@@ -1053,7 +1335,7 @@ impl GpuContext {
                     registration.current_layout(),
                     |recorder| {
                         recorder.record_copy_buffer_to_image(
-                            staging.staging_buffer.as_ref(),
+                            staging_buffer.as_ref(),
                             texture,
                             VulkanLayout::TRANSFER_DST_OPTIMAL,
                             ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
@@ -1076,12 +1358,8 @@ impl GpuContext {
         &self,
         staging: &SurfaceExportStaging,
     ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
-        let fd = staging.staging_buffer.export_opaque_fd_memory()?;
-        let uuid = staging
-            .staging_buffer
-            .vulkan_device()
-            .physical_device_uuid();
-        Ok((fd, staging.staging_byte_size, uuid))
+        let fd = staging.staging_buffer()?.export_opaque_fd_memory()?;
+        Ok((fd, staging.staging_byte_size, staging.exporting_device_uuid))
     }
 }
 
@@ -1153,9 +1431,9 @@ impl crate::core::context::GpuContextLimitedAccess {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
-    use crate::core::rhi::{PixelBuffer, Texture, TextureDescriptor, TextureUsages};
+    use crate::core::rhi::{PixelBuffer, TextureDescriptor, TextureUsages};
     use crate::host_rhi::{VulkanAccess, VulkanStage};
-    use streamlib_consumer_rhi::TextureFormat;
+    use streamlib_surface_client::ViewedFrameReadBy;
 
     const SURFACE_WIDTH: u32 = 64;
     const SURFACE_HEIGHT: u32 = 64;
@@ -1246,7 +1524,7 @@ mod tests {
         recorder.begin().expect("begin readback");
         recorder
             .record_copy_buffer_to_buffer(
-                staging.staging_buffer().as_ref(),
+                staging.staging_buffer().expect("a buffer staging").as_ref(),
                 &host_readback,
                 byte_size,
             )
@@ -1292,7 +1570,7 @@ mod tests {
         recorder
             .record_copy_buffer_to_buffer(
                 &host_upload,
-                staging.staging_buffer().as_ref(),
+                staging.staging_buffer().expect("a buffer staging").as_ref(),
                 byte_size,
             )
             .expect("copy the edit into the staging");
@@ -1893,7 +2171,10 @@ mod tests {
     /// does: straight off the mapping, with no device-to-host hop. That
     /// this is a plain pointer read *is* the residency's whole point.
     fn read_cpu_readback_staging_through_its_mapping(staging: &SurfaceExportStaging) -> Vec<u8> {
-        let mapped = staging.staging_buffer().mapped_ptr();
+        let mapped = staging
+            .staging_buffer()
+            .expect("a buffer staging")
+            .mapped_ptr();
         assert!(
             !mapped.is_null(),
             "a host-visible staging must be mapped; a null pointer here means the residency \
@@ -1971,7 +2252,10 @@ mod tests {
         gpu.refill_surface_export_staging(&staging, &surface_id)
             .expect("refill before editing");
 
-        let mapped = staging.staging_buffer().mapped_ptr();
+        let mapped = staging
+            .staging_buffer()
+            .expect("a buffer staging")
+            .mapped_ptr();
         assert!(!mapped.is_null(), "a host-visible staging must be mapped");
         unsafe {
             std::ptr::write_bytes(
@@ -2019,7 +2303,11 @@ mod tests {
             "one surface's two residencies must be two allocations"
         );
         assert!(
-            !host_visible.staging_buffer().mapped_ptr().is_null(),
+            !host_visible
+                .staging_buffer()
+                .expect("a buffer staging")
+                .mapped_ptr()
+                .is_null(),
             "the host-visible residency is mapped"
         );
 
@@ -2032,6 +2320,7 @@ mod tests {
             assert_eq!(
                 host_visible
                     .staging_buffer()
+                    .expect("a buffer staging")
                     .vma_allocation_is_host_cached(),
                 Some(true),
                 "a device with a cached exportable type must mint the HostVisible \
@@ -2331,5 +2620,367 @@ mod tests {
             "the refill, read off the mapping the moment it returns",
         );
         surface_share.stop();
+    }
+
+    /// The render-target probe's tiled DMA-BUF image, or `None` where this
+    /// device allocates one only LINEAR (the software device) or not at all
+    /// — where a display's staging cannot exist.
+    fn a_tiled_render_target_image_or_skip(gpu: &GpuContext) -> Option<Texture> {
+        use crate::core::test_support::rig_only_capability_skip::{
+            RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
+        };
+        match gpu.acquire_render_target_dma_buf_image(
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+            TextureFormat::Rgba8Unorm,
+        ) {
+            Ok(image)
+                if image
+                    .vulkan_inner()
+                    .is_a_dma_buf_image_with_a_tiled_drm_format_modifier() =>
+            {
+                Some(image)
+            }
+            Ok(_) => {
+                skip_because_this_machine_lacks_naming_the_refusal(
+                    RigOnlyCapability::DmaBufModifiers,
+                    "this device allocates render targets only LINEAR".to_string(),
+                );
+                None
+            }
+            Err(unavailable) => {
+                skip_because_this_machine_lacks_naming_the_refusal(
+                    RigOnlyCapability::DmaBufModifiers,
+                    format!("no DMA-BUF render target on this device: {unavailable}"),
+                );
+                None
+            }
+        }
+    }
+
+    /// A display's staging image read back through a host-visible copy.
+    fn read_display_importable_staging_into_host_bytes(
+        gpu: &GpuContext,
+        staging: &SurfaceExportStaging,
+    ) -> Vec<u8> {
+        let SurfaceExportStagingMemory::DisplayImportableImage(staging_image) =
+            &staging.staging_memory
+        else {
+            panic!("a display's staging is an image");
+        };
+        let byte_size = staging.staging_byte_size();
+        let host_readback = gpu
+            .acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(byte_size)
+                    .expect("a non-zero staging"),
+            )
+            .expect("host-visible readback allocation");
+        let mut recorder = gpu
+            .create_command_recorder("display_importable_staging_test_readback")
+            .expect("readback recorder");
+        recorder.begin().expect("begin readback");
+        recorder
+            .record_image_read_as_transfer_source(
+                staging_image,
+                VulkanLayout::GENERAL,
+                |recorder| {
+                    recorder.record_copy_image_to_buffer(
+                        staging_image,
+                        VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                        &host_readback,
+                        ImageCopyRegion::tightly_packed(
+                            staging.surface_width,
+                            staging.surface_height,
+                        ),
+                    )
+                },
+            )
+            .expect("copy the staging image into the readback allocation");
+        recorder
+            .record_buffer_barrier(
+                &host_readback,
+                VulkanStage::ALL_TRANSFER,
+                VulkanStage::HOST,
+                VulkanAccess::TRANSFER_WRITE,
+                VulkanAccess::HOST_READ,
+            )
+            .expect("readback host-read barrier");
+        recorder.submit_and_wait().expect("submit the readback");
+        let mapped = host_readback.mapped_ptr();
+        assert!(!mapped.is_null(), "the readback allocation must be mapped");
+        unsafe { std::slice::from_raw_parts(mapped, byte_size as usize) }.to_vec()
+    }
+
+    /// A viewed texture frame in memory a display does not import (here a
+    /// device-local OPTIMAL texture, as an OPAQUE_FD pool slot is) is copied
+    /// on the GPU into a tiled DMA-BUF image registered with surface-share,
+    /// holding the frame's pixels. GPU-gated: skips where the device has no
+    /// tiled render target.
+    #[test]
+    fn a_viewed_texture_frame_is_copied_into_a_tiled_dma_buf_image_holding_its_pixels() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        if a_tiled_render_target_image_or_skip(&gpu).is_none() {
+            return;
+        }
+        let surface_share =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        let viewed_texture = create_producer_owned_texture(&gpu);
+        gpu.register_texture_with_layout(
+            &surface_id,
+            viewed_texture.clone(),
+            VulkanLayout::UNDEFINED,
+        );
+        let (_, upload_source) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame's upload source");
+        stamp_every_byte_of_pooled_backing(&upload_source, KERNEL_OUTPUT_STAMP);
+        gpu.copy_pixel_buffer_to_texture(
+            &upload_source,
+            &viewed_texture,
+            &surface_id,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+        )
+        .expect("render the viewed frame");
+
+        let import_id = gpu
+            .surface_share_id_a_viewer_reads_the_frame_through(
+                &surface_id,
+                ViewedFrameReadBy::DisplayImport,
+                None,
+            )
+            .expect("the frame is copied for a display");
+        assert_eq!(
+            import_id,
+            format!("{surface_id}-display-importable-staging")
+        );
+        let registered = surface_share
+            .state
+            .get_surface_planes(&import_id)
+            .expect("the service holds the display staging's registration");
+        assert_eq!(registered.handle_type, "dma_buf");
+        assert_ne!(
+            registered.drm_format_modifier, 0,
+            "a display's staging carries a tiled modifier, never LINEAR"
+        );
+        let staging = gpu
+            .surface_export_staging(
+                &surface_id,
+                SurfaceExportStagingResidency::DisplayImportable,
+            )
+            .expect("the display staging is cached");
+        assert_every_byte_is(
+            &read_display_importable_staging_into_host_bytes(&gpu, &staging),
+            KERNEL_OUTPUT_STAMP,
+            "the display's copy of a viewed texture frame",
+        );
+        surface_share.stop();
+    }
+
+    /// A viewer reading by CPU is answered the frame's host-visible staging,
+    /// registered as an OPAQUE_FD buffer that states the device it was
+    /// exported on and holding the frame's pixels, and a second ask copies
+    /// nothing more. GPU-gated: skips when no device is present.
+    #[test]
+    fn a_viewed_texture_frame_read_by_cpu_is_copied_into_a_cpu_readback_staging() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_share =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        let viewed_texture = create_producer_owned_texture(&gpu);
+        gpu.register_texture_with_layout(
+            &surface_id,
+            viewed_texture.clone(),
+            VulkanLayout::UNDEFINED,
+        );
+        let (_, upload_source) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame's upload source");
+        stamp_every_byte_of_pooled_backing(&upload_source, KERNEL_OUTPUT_STAMP);
+        gpu.copy_pixel_buffer_to_texture(
+            &upload_source,
+            &viewed_texture,
+            &surface_id,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+        )
+        .expect("render the viewed frame");
+
+        let import_id = gpu
+            .surface_share_id_a_viewer_reads_the_frame_through(
+                &surface_id,
+                ViewedFrameReadBy::CpuRead,
+                None,
+            )
+            .expect("the frame is copied for a CPU read");
+        assert_eq!(import_id, format!("{surface_id}-cpu-readback-staging"));
+        let registered = surface_share
+            .state
+            .get_surface_planes(&import_id)
+            .expect("the service holds the CPU read staging's registration");
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("the CPU read staging is cached");
+        assert_eq!(registered.handle_type, "opaque_fd");
+        assert_eq!(
+            registered.exporting_device_uuid,
+            Some(streamlib_consumer_rhi::lowercase_hex_of_vulkan_device_uuid(
+                staging.exporting_device_uuid()
+            )),
+            "a viewer imports the staging only on the device that exported it"
+        );
+        assert_every_byte_is(
+            &read_cpu_readback_staging_through_its_mapping(&staging),
+            KERNEL_OUTPUT_STAMP,
+            "the CPU read copy of a viewed texture frame",
+        );
+        let signal_value_before_the_second_ask = staging.refill_submission.lock().next_signal_value;
+        gpu.surface_share_id_a_viewer_reads_the_frame_through(
+            &surface_id,
+            ViewedFrameReadBy::CpuRead,
+            None,
+        )
+        .expect("a second ask for the same frame");
+        assert_eq!(
+            staging.refill_submission.lock().next_signal_value,
+            signal_value_before_the_second_ask,
+            "a staging already holding the frame is not copied into again"
+        );
+        surface_share.stop();
+    }
+
+    /// A viewed pixel-buffer frame (LINEAR memory, which a display on NVIDIA
+    /// imports as black) is copied into the display's staging, and a second
+    /// ask for the same frame reuses that copy rather than copying again.
+    /// GPU-gated: skips where the device has no tiled render target.
+    #[test]
+    fn a_viewed_pixel_buffer_frame_is_copied_once_into_a_display_importable_image() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        if a_tiled_render_target_image_or_skip(&gpu).is_none() {
+            return;
+        }
+        let surface_share =
+            crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+        let (pool_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the viewed frame");
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
+        let surface_id = pool_id.to_string();
+
+        let import_id = gpu
+            .surface_share_id_a_viewer_reads_the_frame_through(
+                &surface_id,
+                ViewedFrameReadBy::DisplayImport,
+                None,
+            )
+            .expect("the frame is copied for a display");
+        let staging = gpu
+            .surface_export_staging(
+                &surface_id,
+                SurfaceExportStagingResidency::DisplayImportable,
+            )
+            .expect("the display staging is cached");
+        assert_every_byte_is(
+            &read_display_importable_staging_into_host_bytes(&gpu, &staging),
+            PUBLISHED_FRAME_STAMP,
+            "the display's copy of a viewed pixel-buffer frame",
+        );
+
+        stamp_every_byte_of_pooled_backing(&pooled_backing, TWO_FRAMES_LATER_STAMP);
+        assert_eq!(
+            gpu.surface_share_id_a_viewer_reads_the_frame_through(
+                &surface_id,
+                ViewedFrameReadBy::DisplayImport,
+                None
+            )
+            .expect("the same frame is asked again"),
+            import_id
+        );
+        assert_every_byte_is(
+            &read_display_importable_staging_into_host_bytes(&gpu, &staging),
+            PUBLISHED_FRAME_STAMP,
+            "a second ask for a frame the staging already holds copies nothing",
+        );
+        surface_share.stop();
+    }
+
+    /// A frame already in a tiled DMA-BUF image crosses as its own slot, with
+    /// no copy and no staging.
+    /// GPU-gated: skips where the device has no tiled render target.
+    #[test]
+    fn a_viewed_frame_already_in_a_tiled_dma_buf_image_answers_its_own_slot() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let Some(render_target) = a_tiled_render_target_image_or_skip(&gpu) else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        gpu.register_texture_with_layout(&surface_id, render_target, VulkanLayout::GENERAL);
+
+        assert_eq!(
+            gpu.surface_share_id_a_viewer_reads_the_frame_through(
+                &surface_id,
+                ViewedFrameReadBy::DisplayImport,
+                None
+            )
+            .expect("a display-importable frame is answered as it is"),
+            surface_id
+        );
+        assert!(
+            !gpu.surface_export_stagings
+                .lock()
+                .get(surface_id.as_str())
+                .is_some_and(|by_residency| {
+                    by_residency.contains_key(&SurfaceExportStagingResidency::DisplayImportable)
+                }),
+            "no display staging is minted for a frame a display already imports"
+        );
+    }
+
+    /// A display's staging is a viewer's copy: it is never a buffer to export
+    /// and never written back into the frame.
+    /// GPU-gated: skips where the device has no tiled render target.
+    #[test]
+    fn a_display_importable_staging_refuses_a_buffer_export_and_a_write_back() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        if a_tiled_render_target_image_or_skip(&gpu).is_none() {
+            return;
+        }
+        let (pool_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the viewed frame");
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
+        let surface_id = pool_id.to_string();
+        let staging = gpu
+            .surface_export_staging(
+                &surface_id,
+                SurfaceExportStagingResidency::DisplayImportable,
+            )
+            .expect("a display staging mints");
+        assert!(!staging.writable());
+        assert!(staging.staging_buffer().is_err());
+        assert!(
+            gpu.export_surface_export_staging_opaque_fd(&staging)
+                .is_err()
+        );
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("the refill copies the frame");
+        let refused = gpu
+            .copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect_err("a viewer's copy is never written back");
+        assert!(
+            refused.to_string().contains("nothing is written back"),
+            "{refused}"
+        );
     }
 }

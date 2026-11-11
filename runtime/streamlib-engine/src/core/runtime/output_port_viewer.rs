@@ -667,12 +667,14 @@ mod tests {
 
     /// A viewer holds the frame an Image message names through the
     /// surface-sharing socket its hand-off names, claimed in its pool's claim
-    /// table until it drops, and reads the very memory the engine wrote. Needs a Vulkan device that
-    /// exports OPAQUE_FD memory; skips where none comes up.
+    /// table until it drops, and imports the registration the engine names
+    /// for its display — here the slot itself, so it reads the very memory
+    /// the engine wrote. Needs a Vulkan device that exports OPAQUE_FD memory;
+    /// skips where none comes up.
     #[cfg(target_os = "linux")]
     #[test]
     #[serial]
-    fn a_viewer_imports_the_pool_slot_an_image_message_names_from_its_hand_off() {
+    fn a_viewer_imports_the_registration_the_engine_names_for_an_image_message() {
         use streamlib_consumer_rhi::ConsumerVulkanDevice;
         use streamlib_gpu_frame_import_client::GpuPoolFrameImporterOfAViewer;
         use streamlib_ipc_types::{
@@ -716,8 +718,24 @@ mod tests {
             PixelFormat::Bgra32,
         );
 
+        /// The engine's answer for a slot already in memory the viewer reads.
+        struct TheFramesOwnPoolSlot;
+        impl crate::linux::surface_share::ViewedFrameSource for TheFramesOwnPoolSlot {
+            fn surface_share_id_a_viewer_reads_the_frame_through(
+                &self,
+                frame_id: &str,
+                _read_by: streamlib_surface_client::ViewedFrameReadBy,
+                _layout_the_producer_left_the_frame_in: Option<
+                    streamlib_consumer_rhi::VulkanLayout,
+                >,
+            ) -> crate::core::error::Result<String> {
+                Ok(crate::core::rhi::pool_slot_key_of_surface_id(frame_id).to_string())
+            }
+        }
+
         let camera = ARunningCameraWithNoLinks::load();
         let engine_resources = Arc::clone(camera.stream.engine_resources_shared_by_every_stream());
+        engine_resources.serve_viewed_frames_from(Arc::new(TheFramesOwnPoolSlot));
         let engine_surface_store = engine_resources
             .a_connected_surface_store_owned_by("engine:a-viewed-pool".to_string())
             .expect("the engine's surface store connects");
@@ -787,7 +805,10 @@ mod tests {
             ImageFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body);
         assert_eq!((frame.width, frame.height), (WIDTH, HEIGHT));
 
-        let importer = GpuPoolFrameImporterOfAViewer::new(surface_share_address);
+        let importer = GpuPoolFrameImporterOfAViewer::new(
+            surface_share_address,
+            streamlib_surface_client::ViewedFrameReadBy::CpuRead,
+        );
         let held = importer
             .hold_the_frame(frame.slot)
             .expect("the viewer holds the frame the message names");
