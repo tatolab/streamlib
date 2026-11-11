@@ -41,6 +41,28 @@ fn the_deck_manifest() -> JsonValue {
 }
 
 #[test]
+fn a_view_node_takes_only_the_settings_its_view_declares_unless_the_view_opens_them() {
+    let config_schema_of = |manifest: JsonValue| {
+        the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", manifest))
+            .expect("a node view that opens is a node type")
+            .config_schema
+            .expect("a view node publishes a config schema")
+    };
+    let mut no_settings = the_deck_manifest();
+    no_settings.as_object_mut().unwrap().remove("settings");
+    assert_eq!(
+        config_schema_of(no_settings),
+        json!({ "type": "object", "properties": {}, "additionalProperties": false })
+    );
+    let mut open_settings = the_deck_manifest();
+    open_settings["settings"]["additionalProperties"] = json!(true);
+    assert_eq!(
+        config_schema_of(open_settings)["additionalProperties"],
+        json!(true)
+    );
+}
+
+#[test]
 fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
     let descriptor =
         the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", the_deck_manifest()))
@@ -54,7 +76,9 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
     assert_eq!(descriptor.description, "Two turntables and a crossfader.");
     assert_eq!(
         descriptor.config_schema,
-        Some(the_deck_manifest()["settings"].clone())
+        Some(json!({ "type": "object",
+                     "properties": { "bpm": { "type": "number", "default": 120 } },
+                     "additionalProperties": false }))
     );
     let ports = |ports: &[PortDescriptor]| -> Vec<(String, String, Vec<PortFamily>, bool)> {
         ports

@@ -2,7 +2,7 @@
 
 Rationale for the `[project-and-assets]` entries in `docs/plan/ARCHITECTURE.md` §Processor model &
 scheduling, §Product and §Control plane & observability, decided 2026-11-07 and 2026-11-08 and amended 2026-11-09 by
-`docs/plan/changes/self-contained-project-imports.md`. It
+`docs/plan/changes/archive/2026-11-09-self-contained-project-imports.md`. It
 supersedes "the graph is emitted, never authored" in `one-runtime-per-machine.md`. Node kinds, the
 five families, variables, Graph Input and Output nodes, islands and viewers are unchanged; a
 stream's graph document stores them.

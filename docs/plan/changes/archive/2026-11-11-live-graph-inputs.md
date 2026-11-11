@@ -72,7 +72,10 @@
 ## REMOVED
 
 - REMOVED: An interface node runs nothing.
-- REMOVED: so no panel writes its outputs
+
+The plan's "so no panel writes its outputs" clause on interface nodes is deleted from the
+interface entry; the view-node seam's own refusal of a node that is not a view keeps that wording
+(`view_node_output_written_by_a_panel.rs`), since a Graph Input enters the seam by its own name.
 
 ## Assumed
 

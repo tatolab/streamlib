@@ -15,7 +15,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::service::RequestContext;
 use rmcp::{RoleServer, tool, tool_router};
 use serde::Deserialize;
-use streamlib_project_repository::AppliedProjectTransaction;
+use streamlib_project_repository::{AppliedProjectTransaction, content_sha256_of};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CreateNodeFileToolResult, ListProjectFilesToolResult, ProjectFileOnTheWire,
     ProjectFileTransactionToolResult, ReadProjectFileToolResult,
@@ -74,6 +74,10 @@ struct WriteProjectFileToolArguments {
         description = "The file's whole new content as standard base64 with padding, for bytes that are not text. Send this or `content`, never both."
     )]
     content_base64: Option<String>,
+    #[schemars(
+        description = "The `content_sha256` `read_project_file` or the last `write_project_file` answered for the file: the write is refused, and the file left as it is, when the file no longer holds those bytes. Omitted, the write goes over whatever the file holds."
+    )]
+    expected_sha256: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
     author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
@@ -130,7 +134,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Read one of the project's files whole, answering its bytes as `content_base64`, standard base64 with padding, and its `byte_len`. Refused for a path that is not a file of the project."
+        description = "Read one of the project's files whole, answering its bytes as `content_base64`, standard base64 with padding, its `byte_len`, and its `content_sha256`, which a `write_project_file` sends back as `expected_sha256`. Refused for a path that is not a file of the project."
     )]
     async fn read_project_file(
         &self,
@@ -153,6 +157,7 @@ impl LocalApiMcpServerHandler {
                 path,
                 byte_len: bytes.len() as u64,
                 content_base64: STANDARD_BASE64.encode(&bytes),
+                content_sha256: content_sha256_of(&bytes),
             },
         )
     }
@@ -210,7 +215,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Write one of the project's files whole, as one transaction: a new file is created with its folders, an existing one overwritten. An undo puts back what the file held, or takes a new file out. Answers the `path`, with the `transaction` and `commit`; content the file already holds applies nothing and is refused as an empty transaction. Refused for what another tool changes — a stream's graph document, an asset's sidecar or bytes (`replace_asset`), `tatolab-project.json`, a file under `imports/` — and for a file inside a hidden folder or a Python virtual environment, which history does not record."
+        description = "Write one of the project's files whole, as one transaction: a new file is created with its folders, an existing one overwritten. An undo puts back what the file held, or takes a new file out. Answers the `path`, the `content_sha256` of the bytes written, and the `transaction` and `commit`. With `expected_sha256`, refused when the file changed or was taken out since it was read, so a save never overwrites another change. Content the file already holds is refused, as it changes nothing. Refused for what another tool changes — a stream's graph document, an asset's sidecar or bytes (`replace_asset`), `tatolab-project.json`, a file under `imports/` — and for a file inside a hidden folder or a Python virtual environment, which history does not record."
     )]
     async fn write_project_file(
         &self,
@@ -220,6 +225,7 @@ impl LocalApiMcpServerHandler {
             path,
             content,
             content_base64,
+            expected_sha256,
             author,
             idempotency_key,
         }): Parameters<WriteProjectFileToolArguments>,
@@ -237,6 +243,7 @@ impl LocalApiMcpServerHandler {
                 );
             }
         };
+        let content_sha256 = content_sha256_of(&bytes);
         let author = the_author_of_a_change(author, &tool_call_request_context);
         let path_written = path.clone();
         let project_repositories = Arc::clone(&self.project_repositories_open_in_this_runtime);
@@ -255,6 +262,7 @@ impl LocalApiMcpServerHandler {
                         idempotency_key.as_ref(),
                         &path_written,
                         &bytes,
+                        expected_sha256.as_deref(),
                     )?;
                     project_repositories
                         .announce_the_transaction_if_applied_now(project_repository, &outcome);
@@ -266,6 +274,7 @@ impl LocalApiMcpServerHandler {
             "write_project_file",
             &ProjectFileTransactionToolResult {
                 path,
+                content_sha256,
                 transaction: transaction.transaction.to_string(),
                 commit,
             },

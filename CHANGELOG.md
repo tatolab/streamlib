@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.68.63](https://github.com/tatolab/streamlib/compare/v0.68.62...v0.68.63) (2026-11-11)
+
+
+### Features
+
+* **asset-media:** video poster frames decoded by a helper the runtime unit carries ([e533167](https://github.com/tatolab/streamlib/commit/e533167060e946f8610c64d602cae589e2c39489))
+* **asset-media:** video poster frames decoded by a helper the runtime unit carries ([cd92329](https://github.com/tatolab/streamlib/commit/cd923299797bd20904b0989e93d3140602e451d1))
+* **runtime:** Stop ends a project's playback and keeps its graph to edit ([695a1fb](https://github.com/tatolab/streamlib/commit/695a1fba284a8d3788c9771c5fe0a41999e5fa59))
+* **runtime:** Stop ends a project's playback and keeps its graph to edit (playback-controls, ticket 1) ([93c2ba6](https://github.com/tatolab/streamlib/commit/93c2ba6a38854c3806b608edd63a65302bddb525))
+
+
+### Bug Fixes
+
+* **runtime:** answer the review of the held-stopped playback ([dc5487a](https://github.com/tatolab/streamlib/commit/dc5487a7a44020e882bd7b8790e3859807ca3761))
+
 ## [0.68.62](https://github.com/tatolab/streamlib/compare/v0.68.61...v0.68.62) (2026-11-11)
 
 
