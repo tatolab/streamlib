@@ -23,18 +23,32 @@ predates the markers.
 **Stream** _(user)_: the unit a person builds and runs: a stream asset of a project, its graph
 document `streams/<name>.graph.json`, in a project with `pyproject.toml` and one venv that may
 hold several; its Input and Output nodes are its interface. A `@graph_generator` builds part of
-one as a fragment. Once loaded it persists until stopped or removed. _Avoid_: "app", "pipeline", "dataflow",
+one as a fragment. Once loaded it is held with its project, readable and editable whatever its
+**playback** does, until its project is closed or removed. _Avoid_: "app", "pipeline", "dataflow",
 "workflow", "graph" for the unit; "attached stream", "kept stream", "detach" (every loaded
 stream persists).
 
 **Project** _(user)_: a self-contained directory holding `tatolab-project.json`, its streams' graph
 documents, its assets, its node code, its `pyproject.toml` and its imports, so a copied or zipped
 folder opens to the same state anywhere; `tatolab new` and `create_project` make one, its
-scaffold holding one stream. Loading a project loads every stream in it, each its own unit.
-_Avoid_: "stream project" (a project holds many streams), "app".
+scaffold holding one stream. Opening a project holds every stream in it, each its own unit, and
+closing it lets them go. _Avoid_: "stream project" (a project holds many streams), "app".
 
-**Stream action** _(crosses)_: one queued load or unload of a project's streams — a run, a
-start, a create, a stop, a remove, or the runtime's re-load at start — answered at once with its
+**Playback** _(user)_: whether an open project runs — `stopped`, `playing` or `paused` — driven
+by `start_playback`, `stop_playback`, `pause_playback` and `resume_playback` (`tatolab play`,
+`stop`, `pause`, `resume`), which never load. Stop tears every node instance, device claim,
+function-node state and the clock down and keeps the graph; Play starts fresh from the graph
+held; Pause gates every node and holds a scaled or stepped clock. A project's playback is
+recorded and comes back across the runtime's restarts. _Avoid_: "running" for a held project,
+"stop" for a close.
+
+**Hold** _(crosses)_: a project the runtime holds open — its streams' graphs, types and catalog,
+readable and editable over the local API whatever its playback does — from `open_project` until
+`close_project` or `remove_project`. _Avoid_: "loaded" as the opposite of "stopped".
+
+**Stream action** _(crosses)_: one queued change to a project's hold or playback — an open, a
+reload, a create, a playback start or stop, a close, a remove, or the runtime's re-load at
+start — answered at once with its
 **action id** and carried out in the background, one at a time per project. It ends done or
 failed or cancelled; `describe_stream_action` reads it and `cancel_stream_action` ends it
 early. A project's actions form one serial queue. `set_stream_display_name` is a transaction on the

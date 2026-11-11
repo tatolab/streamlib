@@ -870,12 +870,35 @@ async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
 
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
     let client = rmcp_client_over_the_upgraded_stream(&served).await;
-    let not_running =
-        tool_answer(&tool_call_over_the_connection(&client, "open_viewer", the_ports_viewer).await)
-            .expect_err("a node that is not running has nothing to view");
+    let not_running_result =
+        tool_call_over_the_connection(&client, "open_viewer", the_ports_viewer.clone()).await;
+    let not_running = tool_answer(&not_running_result)
+        .expect_err("a node that is not running has nothing to view");
     assert!(
         not_running.contains("source") && not_running.contains("not running"),
         "{not_running}"
+    );
+    let refusal = &not_running_result["structuredContent"]["refusal"];
+    assert_eq!(refusal["action"], "open_viewer", "{refusal}");
+    assert_eq!(refusal["not_running_because"], "preparing", "{refusal}");
+    assert_eq!(
+        format!(
+            "open_viewer failed: {}",
+            refusal["runtime_words"].as_str().unwrap()
+        ),
+        not_running
+    );
+
+    engine
+        .engine
+        .loaded_stream_of_the_id(&live)
+        .expect("the stream is loaded")
+        .hold_stopped_without_a_start();
+    let stopped_result =
+        tool_call_over_the_connection(&client, "open_viewer", the_ports_viewer).await;
+    assert_eq!(
+        stopped_result["structuredContent"]["refusal"]["not_running_because"], "playback_stopped",
+        "{stopped_result}"
     );
     let unknown = tool_answer(
         &tool_call_over_the_connection(
@@ -3865,16 +3888,18 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
         "the view node takes the view's ports: {deck}"
     );
 
-    let refusal = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "write_studio_view_output",
-            json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
-                    "value": 0.5 }),
-        )
-        .await,
+    let refused_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "write_studio_view_output",
+        json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
+                "value": 0.5 }),
     )
-    .expect_err("a node not running publishes nothing");
+    .await;
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
+        "{refused_result}"
+    );
+    let refusal = tool_answer(&refused_result).expect_err("a node not running publishes nothing");
     assert!(
         refusal.starts_with("write_studio_view_output failed:") && refusal.contains("not running"),
         "{refusal}"
@@ -3964,15 +3989,18 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
         );
     }
 
-    let refusal = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "write_graph_input",
-            json!({ "stream": stream_id, "input": "cue", "value": { "track": "drop" } }),
-        )
-        .await,
+    let refused_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "write_graph_input",
+        json!({ "stream": stream_id, "input": "cue", "value": { "track": "drop" } }),
     )
-    .expect_err("an Input whose node does not run reaches no reader");
+    .await;
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
+        "{refused_result}"
+    );
+    let refusal = tool_answer(&refused_result)
+        .expect_err("an Input whose node does not run reaches no reader");
     assert!(
         refusal.starts_with("write_graph_input failed:") && refusal.contains("not running"),
         "{refusal}"

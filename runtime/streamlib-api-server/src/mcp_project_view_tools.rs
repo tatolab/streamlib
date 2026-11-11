@@ -19,6 +19,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
 use crate::mcp_project_asset_tools::ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION;
+use crate::mcp_stream_graph_tools::the_answer_to_a_refused_reach_for_a_node;
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -147,7 +148,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. A write is live data: the last value written is what a reader keeps, many panels may write one node and the last write wins, and nothing is recorded in the graph document or the project's history. Array, Channels and Records outputs are written; an Image or Packets output is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; and a value its port's family does not take."
+        description = "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. A write is live data: the last value written is what a reader keeps, many panels may write one node and the last write wins, and nothing is recorded in the graph document or the project's history. Array, Channels and Records outputs are written; an Image or Packets output is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; and a value its port's family does not take. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`."
     )]
     async fn write_studio_view_output(
         &self,
@@ -160,10 +161,12 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let stream_operations =
             self.the_stream_a_tool_call_names("write_studio_view_output", &stream)?;
-        stream_operations
+        let written = stream_operations
             .write_a_value_onto_an_output_of_a_view_node(node.clone(), port.clone(), value)
-            .await
-            .map_err(|refusal| format!("write_studio_view_output failed: {refusal}"))?;
+            .await;
+        if let Err(refusal) = written {
+            return the_answer_to_a_refused_reach_for_a_node("write_studio_view_output", refusal);
+        }
         serialized_tool_result(
             "write_studio_view_output",
             &WriteStudioViewOutputToolResult { stream, node, port },
@@ -171,7 +174,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Hand a value to the Input `input` of the running stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process. A write is live data: many clients may write one Input and the last write wins, nothing is recorded in the graph document or the project's history, and the value is gone on the next load. Until a write, the Input carries its config's `default`, if it declares one. `graph` renders the value an Input carries now under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for a stream that is not running, an Input no top-level `GraphInput` declares, and a value its family does not take."
+        description = "Hand a value to the Input `input` of the running stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process. A write is live data: many clients may write one Input and the last write wins, nothing is recorded in the graph document or the project's history, and the value is gone on the next load. Until a write, the Input carries its config's `default`, if it declares one. `graph` renders the value an Input carries now under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for a stream that is not running, an Input no top-level `GraphInput` declares, and a value its family does not take. A refusal because the Input's node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`."
     )]
     async fn write_graph_input(
         &self,
@@ -184,8 +187,13 @@ impl LocalApiMcpServerHandler {
         let stream_operations = self.the_stream_a_tool_call_names("write_graph_input", &stream)?;
         let family = stream_operations
             .write_a_value_to_a_top_level_graph_input(input.clone(), value)
-            .await
-            .map_err(|refusal| format!("write_graph_input failed: {refusal}"))?;
+            .await;
+        let family = match family {
+            Ok(family) => family,
+            Err(refusal) => {
+                return the_answer_to_a_refused_reach_for_a_node("write_graph_input", refusal);
+            }
+        };
         serialized_tool_result(
             "write_graph_input",
             &WriteGraphInputToolResult {
