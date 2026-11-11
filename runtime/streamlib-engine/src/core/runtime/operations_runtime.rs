@@ -607,6 +607,20 @@ impl LoadedStreamInThisRuntime {
             ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
         ))
     }
+
+    /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
+    /// code, as [`Self::reconcile_the_live_graph_to_the_graph_document`] does.
+    pub(super) fn reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
+        self: &Arc<Self>,
+        graph_document: serde_json::Value,
+    ) -> Result<()> {
+        let stream = Arc::clone(self);
+        self.block_on_the_engines_tokio_runtime(async move {
+            stream
+                .reconcile_the_live_graph_to_the_graph_document(graph_document)
+                .await
+        })
+    }
 }
 
 // =============================================================================
