@@ -53,9 +53,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: ./.github/actions/cache-rust-dependencies
+        uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-macos-26-wheel-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Python
         uses: actions/setup-python@v6

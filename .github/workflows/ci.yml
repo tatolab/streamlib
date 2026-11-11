@@ -272,8 +272,13 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             python3-dev
-            python3-msgpack
             strace
+
+      # Engine tests run the system `python3` against msgpack, which PyPI serves
+      # without the Ubuntu mirrors.
+      - name: Install msgpack for the system Python
+        timeout-minutes: 5
+        run: python3 -m pip install --user --break-system-packages 'msgpack>=1.0'
 
       - name: Install the Rust toolchain rust-toolchain.toml pins
         run: rustup toolchain install
