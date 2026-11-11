@@ -340,18 +340,12 @@ def test_a_project_directory_whose_name_is_not_utf8_is_refused_naming_it(
 # ---- refusals ---------------------------------------------------------------
 
 
-def test_an_empty_graph_is_refused_by_name(
+def test_an_empty_graph_loads_as_an_empty_stream(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
-    graph = empty_graph()
-    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(graph)
-    refusal = refused_naming(run_outcome)
-    stream_id = stream_id_of_a_hand_written_graph(
-        graph, project_directory=run_outcome.tatolab_run.working_directory
-    )
+    run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(empty_graph())
 
-    assert f"the stream `{stream_id}` holds no node" in refusal
-    assert "stream_builder.add(" in refusal
+    assert loaded_with(run_outcome) == 0
 
 
 def test_a_graph_naming_no_stream_loads_as_the_main_stream_of_its_project(

@@ -339,43 +339,32 @@ fn a_stream_id_already_loaded_is_refused_naming_where_the_first_came_from() {
     assert_eq!(runner.ids_of_the_loaded_streams(), ["main", "second"]);
 }
 
-/// A stream whose function adds nothing compiles to an empty graph, and the
-/// runtime refuses it by name rather than running nothing.
+/// A graph holding no node loads as an empty stream, so a stream just created
+/// can be targeted by the graph tools that fill it.
 #[test]
 #[serial]
-fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
+fn a_graph_holding_no_node_loads_as_an_empty_stream() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
 
-    let refusal = the_refusal_of(
-        load(
-            &runner,
-            project_directory.path(),
-            serde_json::json!({"stream": "main", "nodes": []}),
-        ),
-        "an empty graph is refused",
+    let empty_stream = load(
+        &runner,
+        project_directory.path(),
+        serde_json::json!({"stream": "main", "nodes": []}),
     )
-    .to_string();
-    assert!(
-        refusal.contains("the stream `main` holds no node"),
-        "{refusal}"
-    );
-    assert!(refusal.contains("stream_builder.add("), "{refusal}");
+    .expect("an empty graph loads");
+    assert_eq!(empty_stream.node_count(), 0);
 
-    let named_by_the_load_refusal = the_refusal_of(
-        runner.load_stream_from_graph_snapshot(
+    runner
+        .load_stream_from_graph_snapshot(
             &the_spec_in(serde_json::json!({"nodes": []})),
             in_the_project(project_directory.path(), "named-by-the-load"),
-        ),
-        "an empty graph is refused",
-    )
-    .to_string();
-    assert!(
-        named_by_the_load_refusal.contains("the stream `named-by-the-load` holds no node"),
-        "{named_by_the_load_refusal}"
-    );
+        )
+        .expect("an empty graph the load names loads");
 
-    assert!(runner.ids_of_the_loaded_streams().is_empty());
+    let mut loaded_stream_ids = runner.ids_of_the_loaded_streams();
+    loaded_stream_ids.sort_unstable();
+    assert_eq!(loaded_stream_ids, ["main", "named-by-the-load"]);
 }
 
 /// A link naming a port its node does not have, in that direction, is

@@ -878,9 +878,9 @@ impl Runner {
     ///
     /// The stream's id — `load_options`' key, else the graph's name, cast
     /// URL-safe — is refused when it casts to nothing, when there is none, and
-    /// when a stream of that id is loaded; a graph holding no node is refused. A
-    /// load refused anywhere after that is torn down through the stream's own
-    /// stop and inserts nothing.
+    /// when a stream of that id is loaded; a graph holding no node loads as an
+    /// empty stream. A load refused anywhere after that is torn down through the
+    /// stream's own stop and inserts nothing.
     pub fn load_stream_from_graph_snapshot(
         &self,
         graph: &GraphSnapshot,
@@ -1305,13 +1305,6 @@ impl Runner {
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         self.refuse_a_load_while_the_machine_shuts_down(&load_options.stream_id)?;
         let stream_id = the_cast_stream_id_a_load_names(&load_options.stream_id)?;
-        if graph.nodes.is_empty() {
-            return Err(Error::GraphError(format!(
-                "the stream `{stream_id}` holds no node — a stream whose function adds \
-                 nothing compiles to an empty graph, and there is nothing to run. Add a node \
-                 with `stream_builder.add(...)`"
-            )));
-        }
         self.build_a_stream(
             stream_id,
             load_options,

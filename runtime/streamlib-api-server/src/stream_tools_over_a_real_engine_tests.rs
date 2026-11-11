@@ -2787,6 +2787,61 @@ async fn an_imported_graph_generator_runs_as_a_fragment_and_a_rerun_keeps_each_n
     );
 }
 
+/// A stream `create_stream` just made loads holding no node, and `import_graph_generator`
+/// fills it as its first content.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_generator_seeds_a_stream_create_stream_just_made() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source()
+        .with_a_generator_run_printed_from_generator_run_json();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+        async move {
+            tool_answer(
+                &tool_call_result(operations_on_the_loaded_streams, tool_name, arguments).await,
+            )
+        }
+    };
+
+    let created = call(
+        "create_stream",
+        json!({
+            "project_directory": project.path(),
+            "path": "streams/looks.graph.json",
+            "display_name": "Looks",
+        }),
+    )
+    .await
+    .expect("the stream is created");
+    let load_of_the_created_stream = the_stream_action_once_finished(
+        &engine.operations_on_the_loaded_streams(),
+        created["action"]
+            .as_str()
+            .expect("the creation queues a load"),
+    )
+    .await;
+    assert_eq!(
+        load_of_the_created_stream["state"], "done",
+        "the empty stream loads: {load_of_the_created_stream}"
+    );
+
+    project.next_look_run_places(a_source_into_a_sink_fragment(false));
+    let placed = call(
+        "import_graph_generator",
+        json!({ "stream": created["asset"]["asset"], "generator": LOOK_GENERATOR }),
+    )
+    .await
+    .expect("the generator seeds the new stream");
+    assert_eq!(placed["added_nodes"][0]["name"], "look", "{placed}");
+    assert_eq!(
+        the_uuid_of_each_node_of_look_in(&project.the_graph_document_of("looks"))
+            .keys()
+            .collect::<Vec<_>>(),
+        ["pass-sink", "pass-source"]
+    );
+}
+
 /// An import under the name of a node that is no fragment is refused naming it, nothing changed.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_import_under_the_name_of_a_node_that_is_no_fragment_is_refused() {
