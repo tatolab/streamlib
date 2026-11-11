@@ -36,10 +36,10 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.60" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.61" }
 # The runtime directory the local API's socket is bound in, and the wire names and tool result
 # shapes it serves.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.60" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.61" }
 # The projects the asset tools open, each with its one writer.
 streamlib-project-repository = { path = "../streamlib-project-repository", features = ["mcp-tool-json-schema"] }
 # What each asset's bytes hold and its preview picture, read once per content hash.
