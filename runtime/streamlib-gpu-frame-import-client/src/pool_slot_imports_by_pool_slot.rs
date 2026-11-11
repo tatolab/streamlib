@@ -58,6 +58,16 @@ impl<PoolSlotImport: Clone> PoolSlotImportsByPoolSlot<PoolSlotImport> {
         reservation
     }
 
+    /// The pool slot keys this importer holds a filled import of.
+    pub fn pool_slot_keys_imported(&self) -> Vec<String> {
+        self.reservations_by_pool_slot_key
+            .lock()
+            .iter()
+            .filter(|(_, reservation)| reservation.get().is_some())
+            .map(|(pool_slot_key, _)| pool_slot_key.clone())
+            .collect()
+    }
+
     /// Drop every import a surface-share reply lists as retired. A slot this
     /// importer no longer holds is ignored; a frame still reading a dropped
     /// import keeps it alive until that frame drops.

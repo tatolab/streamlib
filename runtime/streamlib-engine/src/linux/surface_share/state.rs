@@ -205,6 +205,34 @@ struct Inner {
     surfaces: RwLock<HashMap<String, SurfaceMetadata>>,
     surface_counter: AtomicU64,
     check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
+    /// What copies a frame for a viewer's display, once the engine's GPU
+    /// context exists; `None` before then and after the service stops.
+    display_importable_frame_source: RwLock<Option<Arc<dyn DisplayImportableFrameSource>>>,
+}
+
+/// What answers a viewer's ask for a frame in memory its display imports.
+pub trait DisplayImportableFrameSource: Send + Sync {
+    /// The surface-share id of memory a display imports holding the frame
+    /// `frame_id` names, which the service then hands the viewer.
+    fn surface_share_id_a_display_imports_for_the_frame(
+        &self,
+        frame_id: &str,
+        layout_the_producer_left_the_frame_in: Option<streamlib_consumer_rhi::VulkanLayout>,
+    ) -> crate::core::error::Result<String>;
+}
+
+impl DisplayImportableFrameSource for crate::core::context::GpuContext {
+    fn surface_share_id_a_display_imports_for_the_frame(
+        &self,
+        frame_id: &str,
+        layout_the_producer_left_the_frame_in: Option<streamlib_consumer_rhi::VulkanLayout>,
+    ) -> crate::core::error::Result<String> {
+        crate::core::context::GpuContext::surface_share_id_a_display_imports_for_the_frame(
+            self,
+            frame_id,
+            layout_the_producer_left_the_frame_in,
+        )
+    }
 }
 
 /// Result of [`SurfaceShareState::get_surface_planes`] — everything a
@@ -501,6 +529,24 @@ impl SurfaceShareState {
     /// anything.
     pub fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
         &self.inner.check_out_leases
+    }
+
+    /// Serve viewers' asks for display-importable frames from `source`.
+    pub fn serve_display_importable_frames_from(
+        &self,
+        source: Arc<dyn DisplayImportableFrameSource>,
+    ) {
+        *self.inner.display_importable_frame_source.write() = Some(source);
+    }
+
+    /// Stop serving display-importable frames, letting go of their source.
+    pub fn stop_serving_display_importable_frames(&self) {
+        *self.inner.display_importable_frame_source.write() = None;
+    }
+
+    /// What serves display-importable frames now, if anything does.
+    pub fn display_importable_frame_source(&self) -> Option<Arc<dyn DisplayImportableFrameSource>> {
+        self.inner.display_importable_frame_source.read().clone()
     }
 
     /// Surface ids registered by `runtime_id`. Used by the EPOLLHUP watchdog

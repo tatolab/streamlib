@@ -79,6 +79,9 @@ pub(super) fn escalate_open_op_name(residency: SurfaceExportStagingResidency) ->
     match residency {
         SurfaceExportStagingResidency::DeviceLocal => "open_device_export_staging",
         SurfaceExportStagingResidency::HostVisible => "open_cpu_readback_staging",
+        SurfaceExportStagingResidency::DisplayImportable => {
+            streamlib_surface_client::SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP
+        }
     }
 }
 

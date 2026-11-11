@@ -27,8 +27,14 @@
 //! bootstrap name, and validates each sender by the audit token the kernel
 //! appends.
 
+mod display_importable_frame;
 mod gpu_pool_claim_table_hand_over;
 mod published_frame_id_grammar;
+
+pub use display_importable_frame::{
+    SURFACE_SHARE_DISPLAY_IMPORTS_HELD_FIELD, SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD,
+    SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP,
+};
 
 pub use gpu_pool_claim_table_hand_over::{
     GpuPoolClaimTableHandOver, GpuPoolClaimTableRowLeasedToASlot,

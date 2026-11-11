@@ -960,6 +960,17 @@ impl HostVulkanTexture {
         self.chosen_drm_format_modifier
     }
 
+    /// Whether this is a DMA-BUF image with an explicit, non-LINEAR DRM
+    /// format modifier — the memory a display compositor or Chromium
+    /// imports and samples on NVIDIA, where a LINEAR import is sampler-only
+    /// and shows black.
+    pub fn is_a_dma_buf_image_with_a_tiled_drm_format_modifier(&self) -> bool {
+        const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+        !self.is_opaque_fd_export
+            && self.vk_image_meta.vk_image_tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT
+            && self.chosen_drm_format_modifier != DRM_FORMAT_MOD_LINEAR
+    }
+
     /// Per-plane DMA-BUF layout for this texture, in plane index order.
     ///
     /// Each entry is `(offset_bytes, row_pitch_bytes)` from

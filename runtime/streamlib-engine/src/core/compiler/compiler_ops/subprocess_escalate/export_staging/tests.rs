@@ -144,7 +144,10 @@ fn the_seam_lands_a_frames_pixels_in_cpu_readable_memory() {
             crate::core::context::SurfaceExportStagingResidency::HostVisible,
         )
         .expect("the op minted the staging the child would check out");
-    let mapped = staging.staging_buffer().mapped_ptr();
+    let mapped = staging
+        .staging_buffer()
+        .expect("a buffer staging")
+        .mapped_ptr();
     assert!(
         !mapped.is_null(),
         "the op must stage into memory a CPU consumer can map"
@@ -240,7 +243,10 @@ fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
             crate::core::context::SurfaceExportStagingResidency::HostVisible,
         )
         .expect("the staging the read minted");
-    let mapped = staging.staging_buffer().mapped_ptr();
+    let mapped = staging
+        .staging_buffer()
+        .expect("a buffer staging")
+        .mapped_ptr();
     assert!(!mapped.is_null(), "a host-visible staging must be mapped");
     unsafe { std::ptr::write_bytes(mapped, EDIT, staging.staging_byte_size() as usize) };
 
@@ -296,7 +302,10 @@ fn the_seam_uploads_a_whole_staging_without_a_read_in() {
             crate::core::context::SurfaceExportStagingResidency::HostVisible,
         )
         .expect("the staging the upload writes");
-    let mapped = staging.staging_buffer().mapped_ptr();
+    let mapped = staging
+        .staging_buffer()
+        .expect("a buffer staging")
+        .mapped_ptr();
     assert!(!mapped.is_null(), "a host-visible staging must be mapped");
     unsafe { std::ptr::write_bytes(mapped, UPLOAD, staging.staging_byte_size() as usize) };
 
@@ -456,7 +465,10 @@ fn a_staging_copy_without_a_timeline_is_retired_before_the_reply() {
                 crate::core::context::SurfaceExportStagingResidency::HostVisible,
             )
             .expect("the staging the op minted");
-        let mapped = staging.staging_buffer().mapped_ptr();
+        let mapped = staging
+            .staging_buffer()
+            .expect("a buffer staging")
+            .mapped_ptr();
         assert!(!mapped.is_null(), "a host-visible staging must be mapped");
         let staged =
             unsafe { std::slice::from_raw_parts(mapped, staging.staging_byte_size() as usize) };

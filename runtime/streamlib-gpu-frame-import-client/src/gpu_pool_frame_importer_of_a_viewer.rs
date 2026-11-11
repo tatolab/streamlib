@@ -2,15 +2,23 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! What a viewer reads an Image port's frames through: each frame an Image
-//! message names, claimed in its pool's claim table and handed over as the
-//! pool slot's memory, imported once per slot.
+//! message names, claimed in its pool's claim table and handed over as
+//! memory a display imports, imported once per registration — on macOS the
+//! pool slot's IOSurface, on Linux the slot itself or the engine's GPU copy
+//! of the frame into a tiled DMA-BUF image.
 
 use std::sync::Arc;
 
 use streamlib_ipc_types::GpuPoolSlotFrameDescriptorBody;
+#[cfg(target_os = "macos")]
+use streamlib_surface_client::SURFACE_SHARE_IMPORT_POOL_SLOT_OP;
+#[cfg(target_os = "linux")]
 use streamlib_surface_client::{
-    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, gpu_pool_uuid_wire_name,
-    refusal_the_surface_share_service_answered,
+    SURFACE_SHARE_DISPLAY_IMPORTS_HELD_FIELD, SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD,
+    SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP, published_frame_id_of_pool_slot,
+};
+use streamlib_surface_client::{
+    gpu_pool_uuid_wire_name, refusal_the_surface_share_service_answered,
 };
 
 use crate::{
@@ -25,8 +33,8 @@ pub struct GpuPoolFrameImporterOfAViewer {
     gpu_pool_claim_tables: GpuPoolClaimTablesOfThisImporter,
 }
 
-/// One frame a viewer holds: its pool slot's memory, kept from being handed
-/// out again until this drops.
+/// One frame a viewer holds: memory a display imports holding it, its pool
+/// slot kept from being handed out again until this drops.
 pub struct GpuPoolFrameHeldByAViewer {
     frame: GpuPoolSlotFrameDescriptorBody,
     #[cfg(target_os = "macos")]
@@ -41,7 +49,8 @@ impl GpuPoolFrameHeldByAViewer {
         &self.frame
     }
 
-    /// The pool slot's memory the frame lies in.
+    /// The memory the frame lies in: its pool slot's, or on Linux the
+    /// engine's display-importable copy of it.
     pub fn pool_slot(&self) -> &GpuPoolSlotOfAViewer {
         &self.pool_slot
     }
@@ -66,11 +75,13 @@ impl GpuPoolFrameImporterOfAViewer {
     }
 
     /// Claim and import the frame `frame` names: the first frame of a pool
-    /// fetches its claim table, the first frame of a slot imports the slot,
-    /// and every later frame over the slot reuses that import. Refused when
-    /// the slot moved past the frame, when its pool's claim table was refused
-    /// to this viewer, and when the table's request failed, which the pool's
-    /// next frame asks again.
+    /// fetches its claim table, the first frame over a registration imports
+    /// it, and every later one reuses that import. On Linux each frame is
+    /// asked of the engine, which copies it on its GPU when its slot is not
+    /// memory a display imports. Refused when the slot moved past the frame,
+    /// when its pool's claim table was refused to this viewer, when the
+    /// table's request failed, which the pool's next frame asks again, and
+    /// when the engine refuses the copy.
     pub fn hold_the_frame(
         &self,
         frame: GpuPoolSlotFrameDescriptorBody,
@@ -95,6 +106,10 @@ impl GpuPoolFrameImporterOfAViewer {
                     )
                 }
             })?;
+        #[cfg(target_os = "linux")]
+        let pool_slot =
+            self.the_display_importable_import_of_the_frame(&frame, claim.pool_slot_key())?;
+        #[cfg(target_os = "macos")]
         let pool_slot = self.the_pool_slot_imported(claim.pool_slot_key())?;
         Ok(GpuPoolFrameHeldByAViewer {
             frame,
@@ -107,6 +122,80 @@ impl GpuPoolFrameImporterOfAViewer {
         })
     }
 
+    #[cfg(target_os = "linux")]
+    fn the_display_importable_import_of_the_frame(
+        &self,
+        frame: &GpuPoolSlotFrameDescriptorBody,
+        pool_slot_key: &str,
+    ) -> Result<Arc<GpuPoolSlotOfAViewer>, String> {
+        let imports = self
+            .surface_share_connection
+            .pool_slot_imports_by_pool_slot();
+        let frame_id = published_frame_id_of_pool_slot(pool_slot_key, frame.generation);
+        let display_imports_held = imports.pool_slot_keys_imported();
+        let (reply, received_handles, import_answered) = self.surface_share_connection.exchange(
+            &serde_json::json!({
+                "op": SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP,
+                "surface_id": frame_id,
+                SURFACE_SHARE_DISPLAY_IMPORTS_HELD_FIELD: display_imports_held,
+                SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD: frame.image_layout,
+            }),
+            Default::default(),
+            |reply| {
+                if refusal_the_surface_share_service_answered(reply).is_some() {
+                    return None;
+                }
+                let import_id = reply.get("surface_id")?.as_str()?.to_string();
+                if display_imports_held.contains(&import_id) {
+                    return Some(DisplayImportAnswered::AlreadyHeld(import_id));
+                }
+                let retired_in_this_reply = pool_slots_a_reply_lists_as_retired(reply)
+                    .any(|retired_pool_slot| retired_pool_slot == import_id);
+                let fresh_import_reservation = (!retired_in_this_reply)
+                    .then(|| imports.reserve_for_a_fresh_import(&import_id));
+                Some(DisplayImportAnswered::Fresh {
+                    import_id,
+                    fresh_import_reservation,
+                })
+            },
+        )?;
+        if let Some(refusal) = refusal_the_surface_share_service_answered(&reply) {
+            return Err(format!(
+                "the surface-share service refused frame {frame_id:?} to this viewer's display: \
+                 {refusal}"
+            ));
+        }
+        match import_answered {
+            None => Err(format!(
+                "the surface-share service answered frame {frame_id:?} without naming the \
+                 registration that holds it"
+            )),
+            Some(DisplayImportAnswered::AlreadyHeld(import_id)) => {
+                imports.import_held_for(&import_id).ok_or_else(|| {
+                    format!(
+                        "the import of {import_id:?} that frame {frame_id:?} lies in was retired \
+                         as it was answered; the next frame imports it again"
+                    )
+                })
+            }
+            Some(DisplayImportAnswered::Fresh {
+                import_id,
+                fresh_import_reservation,
+            }) => {
+                let imported = Arc::new(GpuPoolSlotOfAViewer::from_the_import_reply(
+                    &import_id,
+                    &reply,
+                    received_handles,
+                )?);
+                if let Some(fresh_import_reservation) = fresh_import_reservation {
+                    let _ = fresh_import_reservation.set(Arc::clone(&imported));
+                }
+                Ok(imported)
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
     fn the_pool_slot_imported(
         &self,
         pool_slot_key: &str,
@@ -147,4 +236,18 @@ impl GpuPoolFrameImporterOfAViewer {
         }
         Ok(imported)
     }
+}
+
+/// What the service answered a display's ask for a frame with, decided while
+/// the reply holds the connection.
+#[cfg(target_os = "linux")]
+enum DisplayImportAnswered {
+    /// A registration this viewer already imported; no handle rode the reply.
+    AlreadyHeld(String),
+    /// A registration's handles, imported fresh and kept where reserved.
+    Fresh {
+        import_id: String,
+        fresh_import_reservation:
+            Option<crate::PoolSlotImportReservation<Arc<GpuPoolSlotOfAViewer>>>,
+    },
 }

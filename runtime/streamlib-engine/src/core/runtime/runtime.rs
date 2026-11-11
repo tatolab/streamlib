@@ -199,6 +199,8 @@ impl EngineResourcesSharedByEveryStream {
                     tracing::info!("[start] Initializing the engine's GPU context...");
                     let created = GpuContext::init_for_platform_sync()?;
                     tracing::info!("[start] The engine's GPU context is initialized");
+                    #[cfg(target_os = "linux")]
+                    self.serve_display_importable_frames_from(Arc::new(created.clone()));
                     gpu_context_slot.insert(created).clone()
                 }
             };
@@ -214,6 +216,18 @@ impl EngineResourcesSharedByEveryStream {
             engine_gpu_context
         };
         make_the_starting_streams_view(&engine_gpu_context)
+    }
+
+    /// Serve viewers' asks for frames their display imports from `source`
+    /// through the surface-sharing service, while it runs.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn serve_display_importable_frames_from(
+        &self,
+        source: Arc<dyn crate::linux::surface_share::DisplayImportableFrameSource>,
+    ) {
+        if let Some(surface_service) = self.surface_service.lock().as_ref() {
+            surface_service.serve_display_importable_frames_from(source);
+        }
     }
 
     /// Run every setup hook once — each, even after one fails — and report

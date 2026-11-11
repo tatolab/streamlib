@@ -354,6 +354,54 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
+    /// Release `texture` to `VK_QUEUE_FAMILY_EXTERNAL` in `layout`, after
+    /// every earlier write, so an importer in another process or API
+    /// acquires what was written.
+    pub fn record_image_release_to_the_external_queue_family(
+        &mut self,
+        texture: &Texture,
+        layout: VulkanLayout,
+    ) -> Result<()> {
+        self.expect_recording("record_image_release_to_the_external_queue_family")?;
+
+        use crate::host_rhi::HostTextureExt;
+        let image = texture.vulkan_inner().image().ok_or_else(|| {
+            Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_image_release_to_the_external_queue_family: \
+                 texture has no VkImage",
+                self.label
+            ))
+        })?;
+        let barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::empty())
+            .old_layout(layout.as_vk())
+            .new_layout(layout.as_vk())
+            .src_queue_family_index(self.vulkan_device.queue_family_index())
+            .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1)
+                    .build(),
+            )
+            .build();
+        let barriers = [barrier];
+        let dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&barriers)
+            .build();
+        unsafe {
+            self.device.cmd_pipeline_barrier2(self.command_buffer, &dep);
+        }
+        Ok(())
+    }
+
     /// Buffer memory barrier covering the whole buffer.
     #[tracing::instrument(level = "trace", skip(self, buffer), fields(label = %self.label))]
     pub fn record_buffer_barrier(
@@ -1050,6 +1098,16 @@ impl RhiCommandRecorder {
             from_access,
             to_access,
         )
+    }
+
+    /// See [`RhiCommandRecorderInner::record_image_release_to_the_external_queue_family`].
+    pub fn record_image_release_to_the_external_queue_family(
+        &mut self,
+        texture: &Texture,
+        layout: VulkanLayout,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .record_image_release_to_the_external_queue_family(texture, layout)
     }
 
     /// Buffer memory barrier covering the whole buffer.

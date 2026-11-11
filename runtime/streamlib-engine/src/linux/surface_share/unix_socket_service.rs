@@ -21,11 +21,12 @@ use std::thread;
 use streamlib_surface_client::{
     GpuPoolClaimTableRowLeasedToASlot, MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS,
     SURFACE_SHARE_CLAIM_TABLE_OF_GPU_POOL_OP, SURFACE_SHARE_CLAIMANT_COLUMN_FIELD,
+    SURFACE_SHARE_DISPLAY_IMPORTS_HELD_FIELD, SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD,
     SURFACE_SHARE_GPU_POOL_FIELD, SURFACE_SHARE_HOLDS_POOL_SLOT_IMPORT_FIELD,
-    SURFACE_SHARE_IMPORT_POOL_SLOT_OP, SURFACE_SHARE_POOL_SLOTS_FIELD,
-    SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD, gpu_pool_uuid_of_its_wire_name,
-    gpu_pool_uuid_wire_name, recv_message_with_fds, send_message_with_fds,
-    split_pool_slot_and_frame_generation,
+    SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP, SURFACE_SHARE_IMPORT_POOL_SLOT_OP,
+    SURFACE_SHARE_POOL_SLOTS_FIELD, SURFACE_SHARE_RETIRED_POOL_SLOTS_FIELD,
+    gpu_pool_uuid_of_its_wire_name, gpu_pool_uuid_wire_name, recv_message_with_fds,
+    send_message_with_fds, split_pool_slot_and_frame_generation,
 };
 
 use super::gpu_pool_claimant_process::GpuPoolClaimantProcess;
@@ -107,7 +108,18 @@ impl UnixSocketSurfaceService {
         Ok(())
     }
 
+    /// Serve viewers' asks for display-importable frames from `source`.
+    pub fn serve_display_importable_frames_from(
+        &self,
+        source: Arc<dyn super::DisplayImportableFrameSource>,
+    ) {
+        self.state.serve_display_importable_frames_from(source);
+    }
+
     pub fn stop(&mut self) {
+        // Before the join: a connection thread outlives the listener and
+        // holds the state, so a source left in it would outlive the engine.
+        self.state.stop_serving_display_importable_frames();
         self.shutdown_flag
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
@@ -308,6 +320,13 @@ fn handle_client_connection(
             }
             SURFACE_SHARE_IMPORT_POOL_SLOT_OP => {
                 handle_import_pool_slot(&state, &request, &mut pool_slot_keys_handed_memory)
+            }
+            SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP => {
+                handle_import_display_importable_frame(
+                    &state,
+                    &request,
+                    &mut pool_slot_keys_handed_memory,
+                )
             }
             "unregister" | "release" => handle_unregister(&state, &request),
             "check_in" => handle_check_in(&state, &request, &received_fds),
@@ -901,6 +920,91 @@ fn handle_import_pool_slot(
     )
 }
 
+/// Hand a viewer memory its display imports holding the published frame the
+/// request names, with no lease: the viewer's claim in the pool's claim table
+/// keeps the frame's slot from reuse while the engine copies it. The engine
+/// names the registration — the slot itself, or its GPU copy — and its
+/// handles ride the reply unless the viewer lists that id as imported.
+fn handle_import_display_importable_frame(
+    state: &SurfaceShareState,
+    request: &serde_json::Value,
+    pool_slot_keys_handed_memory: &mut PoolSlotKeysHandedMemoryOnThisConnection,
+) -> (serde_json::Value, Vec<RawFd>) {
+    let Some(frame_id) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
+    };
+    if pool_slot_of_a_published_frame_id(frame_id).is_none() {
+        return (
+            serde_json::json!({"error": format!(
+                "{SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP} names a published frame id \
+                 (<pool slot>#<generation>), never {frame_id:?}"
+            )}),
+            Vec::new(),
+        );
+    }
+    if let Some(refusal) = refusal_of_a_retired_frame_id(state.check_out_leases(), frame_id) {
+        return (refusal, Vec::new());
+    }
+    let Some(display_importable_frame_source) = state.display_importable_frame_source() else {
+        return (
+            serde_json::json!({"error": "the engine has no GPU context yet, so no frame can be \
+                                copied for a display; one exists once a stream has started"}),
+            Vec::new(),
+        );
+    };
+    let layout_the_producer_left_the_frame_in = request
+        .get(SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD)
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|raw_layout| i32::try_from(raw_layout).ok())
+        .filter(|raw_layout| *raw_layout != 0)
+        .map(streamlib_consumer_rhi::VulkanLayout);
+    let import_id = match display_importable_frame_source
+        .surface_share_id_a_display_imports_for_the_frame(
+            frame_id,
+            layout_the_producer_left_the_frame_in,
+        ) {
+        Ok(import_id) => import_id,
+        Err(refusal) => {
+            return (
+                serde_json::json!({"error": refusal.to_string()}),
+                Vec::new(),
+            );
+        }
+    };
+    let Some(checkout) = state.get_surface_planes(&import_id) else {
+        return (
+            serde_json::json!({"error": format!(
+                "the engine named {import_id:?} for frame {frame_id:?}, which surface-share does \
+                 not hold"
+            )}),
+            Vec::new(),
+        );
+    };
+    let the_viewer_holds_the_import = request
+        .get(SURFACE_SHARE_DISPLAY_IMPORTS_HELD_FIELD)
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|held| {
+            held.iter()
+                .any(|held_id| held_id.as_str() == Some(&import_id))
+        });
+    let reply_fds = if the_viewer_holds_the_import {
+        Vec::new()
+    } else {
+        match duplicate_the_handles_of_a_check_out(&checkout) {
+            Ok(duplicated_fds) => duplicated_fds,
+            Err(refusal) => return (refusal, Vec::new()),
+        }
+    };
+    pool_slot_keys_handed_memory.remember(&import_id);
+    (
+        surface_share_check_out_metadata(state, &import_id, checkout),
+        reply_fds,
+    )
+}
+
 fn handle_release_check_out(
     state: &SurfaceShareState,
     request: &serde_json::Value,
@@ -1256,6 +1360,7 @@ mod tests {
     use super::*;
     use crate::core::context::SurfaceCheckOutLeaseRegistry;
     use crate::core::context::surface_share_wire_verbs::release_every_surface_registered_by;
+    use crate::linux::surface_share::DisplayImportableFrameSource;
     use std::os::unix::io::FromRawFd;
     use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
     use tempfile::TempDir;
@@ -3064,6 +3169,161 @@ time.sleep(30)
 
         drop(stream);
         service.stop();
+    }
+
+    /// Stands in for the engine's GPU copy: answers a fixed registration for
+    /// every frame, and records the frame and layout it was asked for.
+    struct DisplayImportableFrameSourceAnsweringOneRegistration {
+        registration_it_answers: String,
+        frames_asked:
+            parking_lot::Mutex<Vec<(String, Option<streamlib_consumer_rhi::VulkanLayout>)>>,
+    }
+
+    impl DisplayImportableFrameSource for DisplayImportableFrameSourceAnsweringOneRegistration {
+        fn surface_share_id_a_display_imports_for_the_frame(
+            &self,
+            frame_id: &str,
+            layout_the_producer_left_the_frame_in: Option<streamlib_consumer_rhi::VulkanLayout>,
+        ) -> crate::core::error::Result<String> {
+            self.frames_asked
+                .lock()
+                .push((frame_id.to_string(), layout_the_producer_left_the_frame_in));
+            Ok(self.registration_it_answers.clone())
+        }
+    }
+
+    fn ask_for_a_display_importable_frame(
+        stream: &UnixStream,
+        frame_id: &str,
+        display_imports_held: &[&str],
+        frame_image_layout: i32,
+    ) -> (serde_json::Value, Vec<RawFd>) {
+        let (reply, reply_fds) = send_request_with_fds(
+            stream,
+            &serde_json::json!({
+                "op": SURFACE_SHARE_IMPORT_DISPLAY_IMPORTABLE_FRAME_OP,
+                "surface_id": frame_id,
+                SURFACE_SHARE_DISPLAY_IMPORTS_HELD_FIELD: display_imports_held,
+                SURFACE_SHARE_FRAME_IMAGE_LAYOUT_FIELD: frame_image_layout,
+            }),
+            &[],
+            MAX_SCM_RIGHTS_FDS,
+        )
+        .expect("display-importable frame request");
+        close_every_fd(&reply_fds);
+        (reply, reply_fds)
+    }
+
+    /// A viewer's ask is answered with the registration the engine names for
+    /// the frame, its handles riding the reply until the viewer lists it as
+    /// held, the frame's stated layout reaching the engine, and no lease taken.
+    #[test]
+    fn a_display_importable_frame_answers_the_registration_the_engine_names() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let display_importable_frame_source =
+            Arc::new(DisplayImportableFrameSourceAnsweringOneRegistration {
+                registration_it_answers: "pool-slot-viewed-display-importable-staging".to_string(),
+                frames_asked: parking_lot::Mutex::new(Vec::new()),
+            });
+        state.serve_display_importable_frames_from(display_importable_frame_source.clone());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+        register_pool_slot(&stream, "pool-slot-viewed");
+        register_pool_slot(&stream, "pool-slot-viewed-display-importable-staging");
+        check_out_leases
+            .publish_frame_generation("pool-slot-viewed", 3)
+            .expect("the pool publishes the frame");
+
+        let (first, first_fds) =
+            ask_for_a_display_importable_frame(&stream, "pool-slot-viewed#3", &[], 1);
+        assert!(first.get("error").is_none(), "{first:?}");
+        assert_eq!(
+            first.get("surface_id").and_then(|v| v.as_str()),
+            Some("pool-slot-viewed-display-importable-staging")
+        );
+        assert_eq!(first_fds.len(), 1);
+
+        let (held, held_fds) = ask_for_a_display_importable_frame(
+            &stream,
+            "pool-slot-viewed#3",
+            &["pool-slot-viewed-display-importable-staging"],
+            0,
+        );
+        assert!(held.get("error").is_none(), "{held:?}");
+        assert!(held_fds.is_empty(), "a held import is sent no handle");
+
+        assert_eq!(
+            *display_importable_frame_source.frames_asked.lock(),
+            vec![
+                (
+                    "pool-slot-viewed#3".to_string(),
+                    Some(streamlib_consumer_rhi::VulkanLayout(1))
+                ),
+                ("pool-slot-viewed#3".to_string(), None),
+            ]
+        );
+        assert_eq!(
+            lease_count_settling_to(&check_out_leases, "pool-slot-viewed#3", 0),
+            0
+        );
+        drop(stream);
+        service.stop();
+    }
+
+    /// The ask names a published frame, the engine must have a GPU context to
+    /// serve it, and a frame its slot moved past is refused before the
+    /// engine is asked.
+    #[test]
+    fn a_display_importable_frame_ask_is_refused_by_name_where_it_cannot_be_served() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let state_the_test_keeps = state.clone();
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+        register_pool_slot(&stream, "pool-slot-unserved");
+        check_out_leases
+            .publish_frame_generation("pool-slot-unserved", 2)
+            .expect("the pool publishes the frame");
+
+        let (not_a_frame, _) =
+            ask_for_a_display_importable_frame(&stream, "pool-slot-unserved", &[], 0);
+        assert!(
+            wire_error_of(&not_a_frame).contains("published frame id"),
+            "{not_a_frame:?}"
+        );
+        let (no_gpu, _) =
+            ask_for_a_display_importable_frame(&stream, "pool-slot-unserved#2", &[], 0);
+        assert!(
+            wire_error_of(&no_gpu).contains("no GPU context"),
+            "{no_gpu:?}"
+        );
+
+        let display_importable_frame_source =
+            Arc::new(DisplayImportableFrameSourceAnsweringOneRegistration {
+                registration_it_answers: "pool-slot-unserved".to_string(),
+                frames_asked: parking_lot::Mutex::new(Vec::new()),
+            });
+        state_the_test_keeps
+            .serve_display_importable_frames_from(display_importable_frame_source.clone());
+        let (retired, _) =
+            ask_for_a_display_importable_frame(&stream, "pool-slot-unserved#1", &[], 0);
+        assert!(retired.get("error").is_some(), "{retired:?}");
+        assert!(
+            display_importable_frame_source
+                .frames_asked
+                .lock()
+                .is_empty()
+        );
+
+        service.stop();
+        assert!(
+            state_the_test_keeps
+                .display_importable_frame_source()
+                .is_none(),
+            "a stopped service lets go of what serves display-importable frames"
+        );
+        drop(stream);
     }
 
     /// An unregistered slot the connection was handed memory for is listed
