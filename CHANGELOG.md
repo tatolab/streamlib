@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.65](https://github.com/tatolab/streamlib/compare/v0.68.64...v0.68.65) (2026-11-11)
+
+
+### Features
+
+* **runtime:** reload_project keeps each loaded stream and reconciles it to its document while the node code is unchanged ([bee0b4e](https://github.com/tatolab/streamlib/commit/bee0b4e6cb5f52b3ac922bcdb6a94f381e23d20e))
+* **runtime:** reload_project keeps each loaded stream and reconciles it to its document while the node code is unchanged ([c725abc](https://github.com/tatolab/streamlib/commit/c725abc7c7a509d1ba4021b69dcd53e8df16df08))
+
 ## [0.68.64](https://github.com/tatolab/streamlib/compare/v0.68.63...v0.68.64) (2026-11-11)
 
 
