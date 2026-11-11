@@ -67,7 +67,7 @@ second one next to it.
    2026-11-11).
 2. **The default lifetime — settled.** A function node's `State` resets at Stop, as stateless
    nodes and today's nodes expect; a Graph Input keeps (owner, 2026-11-11).
-3. **Values the board cannot hold.** The board holds numbers. A Records Graph Input holds
+3. **Values the board cannot hold — settled: any serializable value, as JSON (owner, 2026-11-11).** The board holds numbers. A Records Graph Input holds
    strings and objects too. Either the store grows to hold any family value, or only numeric
    values can be kept in the first slice.
 
@@ -83,6 +83,6 @@ showing which controls are kept, and save-as-default in Studio.
 
 ## Exit
 
-Graduates through `/align` once the owner settles fork 3. It amends playback-controls'
+Graduated to `docs/plan/changes/kept-node-values.md` with every fork settled (owner, 2026-11-11). It amends playback-controls'
 "Stop forgets function-node state" and live-graph-inputs' "gone on the next load", so the delta
 is a change proposal against both.

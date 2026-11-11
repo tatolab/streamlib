@@ -1028,7 +1028,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls; unbuilt: fragments; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ helper-process-restart, gateway-nodes, lightweight-node-kinds, project-and-assets, graph-groups-and-nested-fragments, typed-stream-facts, self-contained-project-imports, project-action-contract, studio-view-nodes, live-graph-inputs, asset-media-facts-and-previews, playback-controls, kept-node-values; unbuilt: fragments; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
