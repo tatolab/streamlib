@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::HashSet;
-
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
@@ -31,7 +29,8 @@ impl StreamGraphDocument {
 
     /// `edit`, an operation on the level inside the authored fragment `level` names, as the
     /// operation on this level that makes it: each link of an enclosing level onto a fragment
-    /// port the edit takes away taken out with it, so its inverse puts the link back.
+    /// port the edit renames carried to the new name, and each onto a port it takes away taken
+    /// out with it, so its inverse puts the link back.
     pub fn the_edit_at_the_level(
         &self,
         level: &[Uuid],
@@ -42,38 +41,67 @@ impl StreamGraphDocument {
         };
         let inside = self.the_level_inside(std::slice::from_ref(fragment))?;
         let edit_inside = inside.the_edit_at_the_level(inner_level, edit)?;
+        let ports_before = FragmentPortsDeclaredInside::of(&inside);
         let mut edited_inside = inside;
         edited_inside.apply(&edit_inside)?;
-        let ports_left = FragmentPortsDeclaredInside::of(&edited_inside);
+        let ports_after = FragmentPortsDeclaredInside::of(&edited_inside);
         let fragment_text = fragment.to_string();
         let fragment_name = self.node(*fragment)?.name;
-        let port_links_taken_out = self
-            .link_values()
-            .iter()
-            .enumerate()
-            .filter(|(_, link)| {
-                let names_a_port_taken_away = |end_key: &str, ports_left: &HashSet<String>| {
-                    let end = &link[end_key];
-                    end["node"]
-                        .as_str()
-                        .is_some_and(|named| named == fragment_text || named == fragment_name)
-                        && end["port"]
-                            .as_str()
-                            .is_some_and(|port| !ports_left.contains(port))
+        let mut port_links_taken_out = Vec::new();
+        let mut port_links_put_back = Vec::new();
+        let mut links_after_the_edit = 0;
+        for (position, link) in self.link_values().iter().enumerate() {
+            let mut link_after_the_edit = link.clone();
+            let mut taken_away = false;
+            for (end_key, direction) in [
+                ("target", FragmentPortDirection::Input),
+                ("source", FragmentPortDirection::Output),
+            ] {
+                let end = &link[end_key];
+                let on_the_fragment = end["node"]
+                    .as_str()
+                    .is_some_and(|named| named == fragment_text || named == fragment_name);
+                let Some(port) = end["port"].as_str().filter(|_| on_the_fragment) else {
+                    continue;
                 };
-                names_a_port_taken_away("target", &ports_left.inputs)
-                    || names_a_port_taken_away("source", &ports_left.outputs)
-            })
-            .map(|(position, link)| StreamGraphDocumentValueAtItsPosition {
-                position,
-                value: link.clone(),
-            })
-            .collect();
+                if ports_after.declares(direction, port) {
+                    continue;
+                }
+                match ports_before
+                    .interface_node_declaring(direction, port)
+                    .and_then(|interface_node| ports_after.port_of(direction, interface_node))
+                {
+                    Some(renamed_port) => {
+                        link_after_the_edit[end_key]["port"] =
+                            Value::String(renamed_port.to_owned());
+                    }
+                    None => taken_away = true,
+                }
+            }
+            if taken_away {
+                port_links_taken_out.push(StreamGraphDocumentValueAtItsPosition {
+                    position,
+                    value: link.clone(),
+                });
+            } else {
+                if link_after_the_edit != *link {
+                    port_links_taken_out.push(StreamGraphDocumentValueAtItsPosition {
+                        position,
+                        value: link.clone(),
+                    });
+                    port_links_put_back.push(StreamGraphDocumentValueAtItsPosition {
+                        position: links_after_the_edit,
+                        value: link_after_the_edit,
+                    });
+                }
+                links_after_the_edit += 1;
+            }
+        }
         Ok(StreamGraphOperation::EditInsideFragment {
             fragment: *fragment,
             edit: Box::new(edit_inside),
             port_links_taken_out,
-            port_links_put_back: Vec::new(),
+            port_links_put_back,
         })
     }
 
@@ -153,36 +181,63 @@ impl StreamGraphDocument {
     }
 }
 
-/// The port names a fragment's `GraphInput` and `GraphOutput` nodes declare on the fragment node.
+#[derive(Clone, Copy, PartialEq)]
+enum FragmentPortDirection {
+    Input,
+    Output,
+}
+
+/// Each `GraphInput` and `GraphOutput` node of a fragment's inside, by UUID, with the port it
+/// declares on the fragment node.
 struct FragmentPortsDeclaredInside {
-    inputs: HashSet<String>,
-    outputs: HashSet<String>,
+    port_of_each_interface_node: Vec<(Uuid, FragmentPortDirection, String)>,
 }
 
 impl FragmentPortsDeclaredInside {
     fn of(inside: &StreamGraphDocument) -> Self {
-        let mut declared = Self {
-            inputs: HashSet::new(),
-            outputs: HashSet::new(),
-        };
-        for node_object in inside.node_objects() {
-            let Some(port) = node_object
-                .get("config")
-                .and_then(|config| config.get(GRAPH_INTERFACE_PORT_CONFIG_KEY))
-                .and_then(Value::as_str)
-            else {
-                continue;
-            };
-            match node_object.get("type").and_then(Value::as_str) {
-                Some(GRAPH_INPUT_NODE_TYPE) => {
-                    declared.inputs.insert(port.to_owned());
-                }
-                Some(GRAPH_OUTPUT_NODE_TYPE) => {
-                    declared.outputs.insert(port.to_owned());
-                }
-                _ => {}
-            }
+        let port_of_each_interface_node = inside
+            .node_objects()
+            .filter_map(|node_object| {
+                let direction = match node_object.get("type").and_then(Value::as_str) {
+                    Some(GRAPH_INPUT_NODE_TYPE) => FragmentPortDirection::Input,
+                    Some(GRAPH_OUTPUT_NODE_TYPE) => FragmentPortDirection::Output,
+                    _ => return None,
+                };
+                let port = node_object
+                    .get("config")?
+                    .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)?
+                    .as_str()?;
+                Some((node_uuid_of(node_object)?, direction, port.to_owned()))
+            })
+            .collect();
+        Self {
+            port_of_each_interface_node,
         }
-        declared
+    }
+
+    fn declares(&self, direction: FragmentPortDirection, port: &str) -> bool {
+        self.interface_node_declaring(direction, port).is_some()
+    }
+
+    fn interface_node_declaring(
+        &self,
+        direction: FragmentPortDirection,
+        port: &str,
+    ) -> Option<Uuid> {
+        self.port_of_each_interface_node
+            .iter()
+            .find(|(_, declared_direction, declared_port)| {
+                *declared_direction == direction && declared_port == port
+            })
+            .map(|(interface_node, ..)| *interface_node)
+    }
+
+    fn port_of(&self, direction: FragmentPortDirection, interface_node: Uuid) -> Option<&str> {
+        self.port_of_each_interface_node
+            .iter()
+            .find(|(declared_by, declared_direction, _)| {
+                *declared_by == interface_node && *declared_direction == direction
+            })
+            .map(|(_, _, port)| port.as_str())
     }
 }

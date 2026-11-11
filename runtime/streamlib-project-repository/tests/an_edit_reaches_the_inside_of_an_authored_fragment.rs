@@ -362,3 +362,37 @@ fn an_edit_inside_a_generators_output_or_a_placed_stream_is_refused_and_changes_
     assert!(edited.apply(&recorded_by_hand).is_err());
     assert_eq!(edited.to_value(), document.to_value());
 }
+
+#[test]
+fn renaming_a_fragments_port_inside_carries_the_links_outside_to_the_new_name() {
+    let document = a_stream_with_blur_and_tint_collapsed_into_look();
+    let look = Uuid::from_u128(LOOK);
+    let graph_output = document
+        .the_level_inside(&[look])
+        .unwrap()
+        .nodes()
+        .into_iter()
+        .find(|node| node.node_type == GRAPH_OUTPUT_NODE_TYPE)
+        .unwrap();
+    let rename_the_port = document
+        .the_edit_at_the_level(
+            &[look],
+            StreamGraphOperation::SetNodeConfig {
+                node: graph_output.id,
+                from: graph_output.config.clone(),
+                to: json!({ "port": "graded", "family": "image" }),
+            },
+        )
+        .unwrap();
+
+    let renamed = applied_with_its_undo_checked(&document, &rename_the_port);
+
+    assert_eq!(
+        renamed.links(),
+        [
+            a_document_link(uuid(SOURCE), "video", look, "blur-video"),
+            a_document_link(look, "graded", uuid(SINK), "video"),
+            a_document_link(look, "graded", uuid(PREVIEW), "video"),
+        ]
+    );
+}
