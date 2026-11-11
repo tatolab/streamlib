@@ -185,7 +185,8 @@ pub enum ListedStreamState {
     /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
     /// start.
     Running,
-    /// Stopped with its project: its graph loaded to read and edit, nothing running, until `start_project`.
+    /// Stopped with its project, nothing running, until `start_project`; its graph is loaded to
+    /// read and edit while `node_count` is set, and not loaded when it is null.
     Stopped,
     /// Loaded with its project paused: its processors process nothing until `resume_project`.
     Paused,

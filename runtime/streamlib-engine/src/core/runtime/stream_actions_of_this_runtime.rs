@@ -1479,7 +1479,7 @@ impl Runner {
             (Some(loaded), Some(_)) => {
                 let recorded_stopped =
                     self.record_the_stream_stopped_finishing_its_pending_stop(stream_id, action_id);
-                self.stop_the_playback_of_a_held_stream(&loaded);
+                self.stop_the_playback_of_a_held_stream(&loaded)?;
                 Ok(match recorded_stopped {
                     Ok(()) => StreamStopOutcome {
                         stream_id: stream_id.to_string(),
@@ -1503,22 +1503,28 @@ impl Runner {
 
     /// End the playback of `loaded`, which stays held: every instance torn down, its graph
     /// kept to read and edit, and its function-node states forgotten so the next start begins
-    /// fresh. A stream whose graph cannot be put back is unloaded, naming why in its log.
-    fn stop_the_playback_of_a_held_stream(&self, loaded: &Arc<LoadedStreamInThisRuntime>) {
+    /// fresh. A stream whose graph cannot be put back is unloaded, and refused naming why.
+    fn stop_the_playback_of_a_held_stream(
+        &self,
+        loaded: &Arc<LoadedStreamInThisRuntime>,
+    ) -> Result<()> {
         let playback_stopped = loaded
             .log_route()
             .run_entered(|| loaded.stop_playback_keeping_the_graph());
         self.forget_the_function_node_states_of_the_stream(loaded.stream_id());
-        if let Err(not_kept) = playback_stopped {
-            loaded.log_route().run_entered(|| {
-                tracing::error!(
-                    "the stream `{}` stopped and its graph was not kept to edit, so it is \
-                     unloaded: {not_kept}",
-                    loaded.stream_id()
-                )
-            });
-            unload_a_stream_an_action_took_back(loaded, "its graph was not kept at its stop");
-        }
+        let Err(not_kept) = playback_stopped else {
+            return Ok(());
+        };
+        let why_it_is_unloaded = format!(
+            "the stream `{}` stopped and its graph was not kept to edit, so it is unloaded: \
+             {not_kept}",
+            loaded.stream_id()
+        );
+        loaded
+            .log_route()
+            .run_entered(|| tracing::error!("{why_it_is_unloaded}"));
+        unload_a_stream_an_action_took_back(loaded, "its graph was not kept at its stop");
+        Err(Error::Runtime(why_it_is_unloaded))
     }
 
     /// Record the stream `stream_id` stopped, finishing the pending stop
@@ -2665,6 +2671,9 @@ impl Runner {
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let mut states = Vec::new();
         for held in self.loaded_streams_of_the_project(project_directory) {
+            if progress.is_cancelled() {
+                break;
+            }
             if !held.is_held_stopped() {
                 continue;
             }
@@ -2802,12 +2811,19 @@ impl Runner {
         match the_last_load_or_stop_queued {
             Some(kind) => kind == StreamActionKind::Load,
             None => {
-                self.loaded_streams_of_the_project(project_directory)
+                let loaded_streams_of_the_project =
+                    self.loaded_streams_of_the_project(project_directory);
+                loaded_streams_of_the_project
                     .iter()
                     .any(|loaded| !loaded.is_held_stopped())
                     || self
                         .current_records_of_the_project(project_directory)
                         .iter()
+                        .filter(|record| {
+                            !loaded_streams_of_the_project
+                                .iter()
+                                .any(|loaded| loaded.stream_id() == record.stream_id)
+                        })
                         .any(|record| record.listing_state() == StreamListingState::Running)
             }
         }

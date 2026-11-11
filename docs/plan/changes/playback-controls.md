@@ -74,12 +74,17 @@ public contract, so it carries an ADR.
   | playing | held | running | running |
   | paused | held | held, gated | held where it stands |
 
-- **The lifecycle verbs.** `open_project {project_directory}` / `tatolab open` reads the
-  project's documents, makes its venv, describes its types and holds every stream asset stopped;
-  `close_project` / `tatolab close` stops playback when it plays and lets the project go, recorded
-  closed so a restart leaves it closed. `reload_project` / `tatolab reload` re-reads a held
-  project from disk in any playback state, keeping that state. `remove_project` closes and
-  forgets.
+- **The lifecycle verbs.** `open_project {project_directory}` / `tatolab open` is the one
+  operation that brings a project into the right state to build in: a queued stream action that
+  runs, in order, the small project operations it is made of — sync its dependencies, make its
+  venv (`uv sync`), read its documents, describe its types — and holds every stream asset
+  stopped. Each of those is a verb of its own an agent or Studio can call alone, and
+  `reload_project` / `tatolab reload` runs them again on a held project in any playback state,
+  keeping that state. Opening reports each step on its action, as a load does today, so Studio
+  opens the window at once and shows a loading state from the action's progress.
+  `close_project` / `tatolab close` stops playback when it plays and lets the project go,
+  recorded closed so a restart leaves it closed; it deletes nothing — the venv, synced
+  dependencies, caches and files stay. `remove_project` closes and forgets.
 - **The playback verbs never load.** `start_playback`, `stop_playback`, `pause_playback` and
   `resume_playback` (`tatolab play`, `stop`, `pause`, `resume`) act on a held project only and
   never read a document, make a venv, describe a type or load a stream; a project not held is
@@ -181,7 +186,10 @@ pressing Stop took the editor down with the flow (owner, 2026-11-11, #3542)."
 1. **A stopped project keeps only the graph model and its described types** — no processor,
    helper instance, GPU surface, device claim or run state (owner, 2026-11-11).
 2. **`open_project` / `close_project` are the lifecycle; the playback verbs are renamed and never
-   load** (owner, 2026-11-11). A failed stream held editable from its document follows from "the
+   load** (owner, 2026-11-11). Open is one queued action composed of separate small operations
+   (dependency sync, `uv sync`, read, describe), each callable alone and reused by reload, with
+   its progress shown as an action; close only reaches the closed state and erases nothing
+   (owner, 2026-11-11). A failed stream held editable from its document follows from "the
    project is always there to build in" (#3542).
 3. **Pause is recorded and comes back paused** (owner, 2026-11-11).
 4. **Pause holds the clock** (owner, 2026-11-11).

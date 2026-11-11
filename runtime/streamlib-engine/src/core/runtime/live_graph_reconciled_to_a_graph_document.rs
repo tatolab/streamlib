@@ -15,8 +15,9 @@ use super::operations_runtime::{
 };
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
-    ProcessorInstanceComponent, ProcessorUniqueId, cast_exposed_name_to_url_safe,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    PendingDeletionComponent, ProcessorInstanceComponent, ProcessorUniqueId,
+    cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
@@ -371,57 +372,65 @@ impl LoadedStreamInThisRuntime {
     }
 
     pub(super) fn the_live_nodes(&self) -> Vec<LiveNodeAsTheGraphHoldsIt> {
-        self.compiler.scope(|this_streams_graph, _tx| {
-            this_streams_graph
-                .traversal()
-                .v(())
-                .iter()
-                .filter(|node| node.get::<PendingDeletionComponent>().is_none())
-                .map(|node| LiveNodeAsTheGraphHoldsIt {
-                    processor_id: node.id.clone(),
-                    node_uuid: node.node_uuid,
-                    display_name: node.display_name.clone(),
-                    processor_type: node.processor_type.clone(),
-                    config: node.config.clone().unwrap_or_default(),
-                    pins: node.pins.clone(),
-                    studio: node.studio.clone(),
-                    exposed_config_fields: node.exposed_config_fields.clone(),
-                })
-                .collect()
-        })
+        self.compiler
+            .scope(|this_streams_graph, _tx| the_live_nodes_of(this_streams_graph))
     }
 
     pub(super) fn the_live_links_by_node_uuid(
         &self,
     ) -> Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)> {
-        self.compiler.scope(|this_streams_graph, _tx| {
-            let node_uuid_of_each_processor: HashMap<ProcessorUniqueId, Uuid> = this_streams_graph
-                .traversal()
-                .v(())
-                .iter()
-                .map(|node| (node.id.clone(), node.node_uuid))
-                .collect();
-            this_streams_graph
-                .traversal()
-                .e(())
-                .iter()
-                .filter(|link| link.get::<PendingDeletionComponent>().is_none())
-                .filter_map(|link| {
-                    Some((
-                        link.id.clone(),
-                        RunningLinkBetweenTwoNodesByUuid {
-                            source_node: *node_uuid_of_each_processor
-                                .get(link.source.processor_id())?,
-                            source_port: link.source.port_name().to_owned(),
-                            target_node: *node_uuid_of_each_processor
-                                .get(link.target.processor_id())?,
-                            target_port: link.target.port_name().to_owned(),
-                        },
-                    ))
-                })
-                .collect()
-        })
+        self.compiler
+            .scope(|this_streams_graph, _tx| the_live_links_by_node_uuid_of(this_streams_graph))
     }
+}
+
+/// Each node `graph` holds that is not pending deletion, as a reconcile compares it.
+pub(super) fn the_live_nodes_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
+    graph
+        .traversal()
+        .v(())
+        .iter()
+        .filter(|node| node.get::<PendingDeletionComponent>().is_none())
+        .map(|node| LiveNodeAsTheGraphHoldsIt {
+            processor_id: node.id.clone(),
+            node_uuid: node.node_uuid,
+            display_name: node.display_name.clone(),
+            processor_type: node.processor_type.clone(),
+            config: node.config.clone().unwrap_or_default(),
+            pins: node.pins.clone(),
+            studio: node.studio.clone(),
+            exposed_config_fields: node.exposed_config_fields.clone(),
+        })
+        .collect()
+}
+
+/// Each link `graph` holds that is not pending deletion, each end its node's UUID.
+pub(super) fn the_live_links_by_node_uuid_of(
+    graph: &Graph,
+) -> Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)> {
+    let node_uuid_of_each_processor: HashMap<ProcessorUniqueId, Uuid> = graph
+        .traversal()
+        .v(())
+        .iter()
+        .map(|node| (node.id.clone(), node.node_uuid))
+        .collect();
+    graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| link.get::<PendingDeletionComponent>().is_none())
+        .filter_map(|link| {
+            Some((
+                link.id.clone(),
+                RunningLinkBetweenTwoNodesByUuid {
+                    source_node: *node_uuid_of_each_processor.get(link.source.processor_id())?,
+                    source_port: link.source.port_name().to_owned(),
+                    target_node: *node_uuid_of_each_processor.get(link.target.processor_id())?,
+                    target_port: link.target.port_name().to_owned(),
+                },
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

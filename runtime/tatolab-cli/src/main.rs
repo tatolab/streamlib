@@ -173,9 +173,11 @@ enum TatolabVerb {
     /// Stop this project's playback: queue the teardown of every running instance, keeping its graph to edit, stopped across restarts.
     #[command(
         long_about = "Queue a stop of the whole project on its stream action queue: once the \
-                      project's earlier actions have run, every stream of it is unloaded and \
-                      recorded stopped, so the runtime leaves the project stopped across its \
-                      restarts until `tatolab start` starts it again. A project runs and stops as a \
+                      project's earlier actions have run, every running instance of it is torn \
+                      down — its device claims, function-node state and clock included — and \
+                      each stream is recorded stopped, its graph kept to read and edit; the \
+                      runtime leaves the project stopped across its restarts until \
+                      `tatolab start` plays it again. A project runs and stops as a \
                       whole; no verb stops one stream of it. Prints `<action> queued: stop of \
                       <project>` and exits 0 once queued; `tatolab streams` shows the project's \
                       streams `stopping` until it is done."
