@@ -145,10 +145,11 @@ enum NoticeRosterCargoAboutCannotProduce {
     CarriedPrebuiltInTheBundledVulkanLoader,
     CarriedPrebuiltByTheMacOSWheel,
     CarriedPrebuiltByTheLinuxWheel,
+    CarriedInTheRuntimeUnitForNewProjects,
 }
 
 impl NoticeRosterCargoAboutCannotProduce {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::CarriedPrebuiltInTheSlangCompiler,
         Self::LinkedThroughOpusicSys,
         Self::LinkedThroughLibgit2Sys,
@@ -157,6 +158,7 @@ impl NoticeRosterCargoAboutCannotProduce {
         Self::CarriedPrebuiltInTheBundledVulkanLoader,
         Self::CarriedPrebuiltByTheMacOSWheel,
         Self::CarriedPrebuiltByTheLinuxWheel,
+        Self::CarriedInTheRuntimeUnitForNewProjects,
     ];
 
     /// How the bullet introduces the projects it then names.
@@ -195,6 +197,11 @@ impl NoticeRosterCargoAboutCannotProduce {
                 "In the Linux wheel only, compiled into the lavapipe library it carries \
                  beside the engine (SPIRV-Headers and Vulkan-Headers reach lavapipe too, \
                  under the notices above)"
+            }
+            Self::CarriedInTheRuntimeUnitForNewProjects => {
+                "In the runtime unit beside the engine, as the wheels and the CPython build a \
+                 new project installs from it with no network, each archive carrying these \
+                 licence files unmodified"
             }
         }
     }
@@ -627,6 +634,72 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
         roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheLinuxWheel,
         carried_by: WheelCarryingTheNotice::TheEngineWheel,
     },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "CPython",
+        upstream_repository_url: "https://github.com/astral-sh/python-build-standalone",
+        // `python/licenses/` of python-build-standalone's full archive for the carried build, which names CPython's licence and each library it links; the carried `install_only_stripped` archive keeps only `LICENSE.txt`.
+        license_summary: "PSF-2.0, with the licences of the libraries python-build-standalone links",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/runtime-unit-carried-package-notices/CPython/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedInTheRuntimeUnitForNewProjects,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "pip",
+        upstream_repository_url: "https://github.com/pypa/pip",
+        // Every file under the `pip-*.dist-info/licenses/` the carried CPython archive installs.
+        license_summary: "MIT, and the licences of the packages pip vendors",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/runtime-unit-carried-package-notices/pip/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedInTheRuntimeUnitForNewProjects,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "NumPy",
+        upstream_repository_url: "https://github.com/numpy/numpy",
+        // Every file under each carried wheel's `numpy-*.dist-info/licenses/`; `LICENSE.txt` differs between the platforms only in the paths of the libraries it names.
+        license_summary: "BSD-3-Clause, and the licences of the code and libraries its wheels vendor",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/runtime-unit-carried-package-notices/numpy/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedInTheRuntimeUnitForNewProjects,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "numba",
+        upstream_repository_url: "https://github.com/numba/numba",
+        // Every file under each carried wheel's `numba-*.dist-info/licenses/`.
+        license_summary: "BSD-2-Clause, and the licences of the code it vendors",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/runtime-unit-carried-package-notices/numba/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedInTheRuntimeUnitForNewProjects,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "llvmlite",
+        upstream_repository_url: "https://github.com/numba/llvmlite",
+        // Every file under each carried wheel's `llvmlite-*.dist-info/licenses/`.
+        license_summary: "BSD-2-Clause, and LLVM's Apache-2.0 WITH LLVM-exception",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/runtime-unit-carried-package-notices/llvmlite/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedInTheRuntimeUnitForNewProjects,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Pillow",
+        upstream_repository_url: "https://github.com/python-pillow/Pillow",
+        // Every file under each carried wheel's `pillow-*.dist-info/licenses/`.
+        license_summary: "MIT-CMU, and the licences of the image libraries its wheels vendor",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/runtime-unit-carried-package-notices/pillow/NOTICE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedInTheRuntimeUnitForNewProjects,
+        carried_by: WheelCarryingTheNotice::TheEngineWheel,
+    },
 ];
 
 /// Which project's notices a run generates.
@@ -717,7 +790,8 @@ impl NoticesGenerationTarget {
                 "Every project below ships inside the wheel and owes terms the generated half above\n\
                  cannot carry: most are compiled in from vendored sources and so appear in no resolve\n\
                  graph `cargo about` walks, and some ship inside the prebuilt Vulkan loader and\n\
-                 driver the macOS or Linux wheel carries. These sections are appended by\n\
+                 driver the macOS or Linux wheel carries, or among the packages the runtime unit\n\
+                 carries for new projects. These sections are appended by\n\
                  `cargo xtask generate-third-party-notices`.\n"
             }
             Self::ExtensionPackage { .. } => {
