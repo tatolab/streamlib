@@ -20,10 +20,11 @@ use uuid::Uuid;
 use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
+    PortInfo, cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, node_names_listed_for_a_refusal,
     port_names_listed_for_a_refusal, refuse_a_reference_to_a_node_of_the_wrong_type,
     refuse_a_second_referrer_of_a_node_that_takes_one,
+    the_input_ports_of_the_exposed_config_fields,
 };
 use crate::core::graph_fragment_flattening::GraphFragmentsAsDrawn;
 use crate::core::graph_interface_resolution::{
@@ -1008,8 +1009,30 @@ fn keys_listed_for_a_refusal(keys: &[&str]) -> String {
     }
 }
 
-/// Refuse `port` unless `node`'s type declares it in `direction`, listing the
-/// ports it does declare there.
+/// The input and output ports node `node_name` of a graph document has: those its type
+/// declares and, among the inputs, one for each config field it exposes. `None` when the
+/// stream resolves no node type of its `type`.
+pub(crate) fn the_ports_of_a_graph_document_node(
+    node_types: &NodeTypesOneStreamResolves,
+    node_name: &str,
+    node: &GraphSnapshotNode,
+) -> Result<Option<(Vec<PortInfo>, Vec<PortInfo>)>> {
+    let Some((mut inputs, outputs)) = node_types.port_info(&node.processor_type) else {
+        return Ok(None);
+    };
+    let declared_ports: Vec<PortInfo> = inputs.iter().chain(&outputs).cloned().collect();
+    inputs.extend(the_input_ports_of_the_exposed_config_fields(
+        node_name,
+        &node.processor_type,
+        node_types,
+        &declared_ports,
+        &node.exposed_config_fields,
+    )?);
+    Ok(Some((inputs, outputs)))
+}
+
+/// Refuse `port` unless `node` has it in `direction`, whether its type declares it or it is
+/// a config field the node exposes, listing the ports it does have there.
 pub(crate) fn refuse_a_port_the_node_does_not_have(
     node_types: &NodeTypesOneStreamResolves,
     node_name: &str,
@@ -1018,8 +1041,7 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
     direction: PortDirection,
 ) -> Result<()> {
     let port_cast = cast_exposed_name_to_url_safe(port)?;
-    let port_names: Vec<String> = node_types
-        .port_info(&node.processor_type)
+    let port_names: Vec<String> = the_ports_of_a_graph_document_node(node_types, node_name, node)?
         .map(|(inputs, outputs)| match direction {
             PortDirection::Input => inputs,
             PortDirection::Output => outputs,
@@ -2308,5 +2330,70 @@ mod tests {
             serde_json::json!([{"id": A_GROUP_UUID, "title": "sources"}])
         );
         assert_eq!(GraphSnapshot::from_graph_document(document).unwrap(), graph);
+    }
+
+    const GLOW_CLASS_FOR_THE_EXPOSED_CONFIG_FIELD_TESTS: &str =
+        "graph_snapshot_exposed_config_field_tests.nodes:Glow";
+
+    /// A stream that described a Python node type `Glow`, reading `video_in` and configured
+    /// by a number `strength`.
+    fn node_types_with_a_glow_configured_by_a_strength() -> NodeTypesOneStreamResolves {
+        let node_types = NodeTypesOneStreamResolves::new();
+        node_types
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type(
+                    GLOW_CLASS_FOR_THE_EXPOSED_CONFIG_FIELD_TESTS,
+                    &["video_in"],
+                    &["video_out"],
+                )
+                .with_config_schema(serde_json::json!({
+                    "type": "object",
+                    "properties": {"strength": {"type": "number", "default": 0.5}},
+                })),
+                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|_node| Err(Error::NotSupported("never constructed".into())))),
+            )
+            .expect("the type is described into the stream");
+        node_types
+    }
+
+    fn a_graph_whose_graph_input_drives_the_glows_strength(
+        exposed_config_fields: &[&str],
+    ) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"id": Uuid::new_v4(), "name": "glow",
+                 "type": GLOW_CLASS_FOR_THE_EXPOSED_CONFIG_FIELD_TESTS,
+                 "exposed_config_fields": exposed_config_fields},
+                {"id": Uuid::new_v4(), "name": "glow_strength", "type": "tatolab.stream:GraphInput",
+                 "config": {"port": "glow_strength", "family": "channels", "range": [0, 1]}},
+            ],
+            "links": [
+                {"source": {"node": "glow_strength", "port": "value"},
+                 "target": {"node": "glow", "port": "strength"}},
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_link_into_a_config_field_the_node_exposes_validates() {
+        a_graph_whose_graph_input_drives_the_glows_strength(&["strength"])
+            .validate(&node_types_with_a_glow_configured_by_a_strength())
+            .expect(
+                "a link into an exposed config field's input validates as the live edit applied it",
+            );
+    }
+
+    #[test]
+    fn a_link_into_a_config_field_the_node_does_not_expose_is_refused_naming_its_inputs() {
+        let refusal = a_graph_whose_graph_input_drives_the_glows_strength(&[])
+            .validate(&node_types_with_a_glow_configured_by_a_strength())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("node `glow` has no input port `strength`")
+                && refusal.contains("video_in"),
+            "{refusal}"
+        );
     }
 }
