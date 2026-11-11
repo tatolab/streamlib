@@ -46,6 +46,10 @@ pub struct StreamRecord {
     /// Whether its project is closed, so a restart leaves it unloaded; a closed stream is
     /// stopped too.
     pub closed: bool,
+    /// Whether its playback is paused, so a restart brings it back paused; a stopped stream
+    /// is never paused.
+    #[serde(default)]
+    pub paused: bool,
     /// Why the stream is failed, so the runtime's start skips it until
     /// an `open_project` or `reload_project` retries it; `None` when it is not failed.
     pub failed_because: Option<String>,
@@ -138,6 +142,7 @@ impl StreamRecord {
             interpreter: stream_environment.interpreter.clone(),
             stopped: false,
             closed: false,
+            paused: false,
             failed_because: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             pending_stream_actions: Vec::new(),
@@ -169,10 +174,12 @@ impl StreamRecord {
     pub fn mark_running_resetting_its_crash_count(&mut self) -> bool {
         let changed = self.stopped
             || self.closed
+            || self.paused
             || self.is_failed()
             || self.runtime_crashes_in_a_row_implicating_it != 0;
         self.stopped = false;
         self.closed = false;
+        self.paused = false;
         self.failed_because = None;
         self.runtime_crashes_in_a_row_implicating_it = 0;
         changed
@@ -190,12 +197,20 @@ impl StreamRecord {
     pub fn mark_open_with_its_playback_stopped(&mut self) {
         self.stopped = true;
         self.closed = false;
+        self.paused = false;
     }
 
     /// Record the stream's project closed, its playback stopped.
     pub fn mark_closed(&mut self) {
         self.stopped = true;
         self.closed = true;
+        self.paused = false;
+    }
+
+    /// Whether a restart brings the stream back paused: its playback paused, and neither
+    /// stopped, closed nor failed.
+    pub fn comes_back_paused_at_a_restart(&self) -> bool {
+        self.paused && !self.stopped && !self.closed && !self.is_failed()
     }
 
     /// Whether the stream is stopped once its pending stops have run.
@@ -230,9 +245,10 @@ impl StreamRecord {
     }
 
     /// Take the record's attributes from `current`, the record as it is on
-    /// disk: the pending actions and the function-node states, neither of which a load
-    /// changes.
+    /// disk: the pending actions, the function-node states and, unless this record holds
+    /// the stream stopped, its pause, none of which a load changes.
     pub fn keep_the_attributes_of(&mut self, current: &StreamRecord) {
+        self.paused = current.paused && !self.stopped;
         self.pending_stream_actions = current.pending_stream_actions.clone();
         self.function_node_states_by_node_name = current.function_node_states_by_node_name.clone();
     }
@@ -973,6 +989,48 @@ mod tests {
         assert_eq!(
             records.read(&written.stream_id).unwrap(),
             Some(current(written))
+        );
+    }
+
+    #[test]
+    fn a_loads_record_keeps_the_pause_unless_the_load_holds_the_stream_stopped() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let mut paused = a_record_of("camera-app", "preview");
+        paused.paused = true;
+        records.write(&paused).unwrap();
+
+        let reloaded_playing = records
+            .write_the_record_a_load_made(a_record_of("camera-app", "preview"))
+            .unwrap();
+        assert!(reloaded_playing.comes_back_paused_at_a_restart());
+
+        let mut held_stopped = a_record_of("camera-app", "preview");
+        held_stopped.mark_open_with_its_playback_stopped();
+        let reloaded_stopped = records.write_the_record_a_load_made(held_stopped).unwrap();
+        assert!(!reloaded_stopped.paused);
+        assert!(!reloaded_stopped.comes_back_paused_at_a_restart());
+    }
+
+    #[test]
+    fn a_record_written_without_a_pause_reads_back_playing() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        let record = a_record_of("camera-app", "preview");
+        let mut written_without_a_pause = serde_json::to_value(&record).unwrap();
+        written_without_a_pause
+            .as_object_mut()
+            .unwrap()
+            .remove("paused");
+        std::fs::write(
+            records.record_path_of(&record.stream_id).unwrap(),
+            serde_json::to_vec(&written_without_a_pause).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            records.read(&record.stream_id).unwrap(),
+            Some(current(record))
         );
     }
 

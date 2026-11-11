@@ -230,9 +230,10 @@ enum TatolabVerb {
     #[command(
         long_about = "Pause the whole project at once, never waiting behind its queued \
                       actions: every processor of each loaded stream holds its state and \
-                      processes nothing, and a graph edit made meanwhile compiles on `tatolab \
-                      resume`. A stream `tatolab reload` or `tatolab dev` loads meanwhile \
-                      starts paused. Pause is never recorded, so a runtime restart plays the project. \
+                      processes nothing, a scaled or stepped stream clock holds where it stands, and a graph \
+                      edit made meanwhile compiles on `tatolab resume`. A stream `tatolab reload` \
+                      or `tatolab dev` loads meanwhile starts paused. Pause is recorded, so a \
+                      runtime restart brings the project back paused. \
                       Prints `paused <project>: <streams>`; `tatolab streams` shows them `paused`."
     )]
     Pause {

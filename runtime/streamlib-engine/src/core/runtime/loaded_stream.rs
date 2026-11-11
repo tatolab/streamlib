@@ -569,6 +569,9 @@ impl LoadedStreamInThisRuntime {
             })?;
 
         let stream_clock = Arc::new(self.this_streams_clock_starting_now(engine)?);
+        if graph_state_at_the_start == GraphState::Paused {
+            stream_clock.hold_where_it_stands_for_a_pause();
+        }
         let audio_clock = platform_audio_clock_for_one_stream();
 
         // The context holds this stream as its runtime operations; the cycle
@@ -1645,6 +1648,11 @@ impl LoadedStreamInThisRuntime {
 
         let processor_ids =
             self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Paused);
+        if let Some(this_streams_runtime_context) = self.runtime_context.lock().clone() {
+            this_streams_runtime_context
+                .stream_clock
+                .hold_where_it_stands_for_a_pause();
+        }
 
         let mut failures = Vec::new();
         for processor_id in &processor_ids {
@@ -1692,6 +1700,11 @@ impl LoadedStreamInThisRuntime {
         *self.status.lock() = RuntimeStatus::Starting;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResuming);
 
+        if let Some(this_streams_runtime_context) = self.runtime_context.lock().clone() {
+            this_streams_runtime_context
+                .stream_clock
+                .carry_on_from_where_the_pause_held_it();
+        }
         let processor_ids =
             self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Running);
 
