@@ -2626,6 +2626,9 @@ mod tests {
     /// device allocates one only LINEAR (the software device) or not at all
     /// — where a display's staging cannot exist.
     fn a_tiled_render_target_image_or_skip(gpu: &GpuContext) -> Option<Texture> {
+        use crate::core::test_support::rig_only_capability_skip::{
+            RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
+        };
         match gpu.acquire_render_target_dma_buf_image(
             SURFACE_WIDTH,
             SURFACE_HEIGHT,
@@ -2639,11 +2642,17 @@ mod tests {
                 Some(image)
             }
             Ok(_) => {
-                println!("Skipping - this device allocates render targets only LINEAR");
+                skip_because_this_machine_lacks_naming_the_refusal(
+                    RigOnlyCapability::DmaBufModifiers,
+                    "this device allocates render targets only LINEAR".to_string(),
+                );
                 None
             }
             Err(unavailable) => {
-                println!("Skipping - no DMA-BUF render target on this device ({unavailable})");
+                skip_because_this_machine_lacks_naming_the_refusal(
+                    RigOnlyCapability::DmaBufModifiers,
+                    format!("no DMA-BUF render target on this device: {unavailable}"),
+                );
                 None
             }
         }
