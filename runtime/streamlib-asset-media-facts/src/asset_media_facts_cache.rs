@@ -13,7 +13,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::{
-    ASSET_PREVIEW_PICTURE_MEDIA_TYPE, AssetMediaFactsReadFromTheFile, AssetMediaFactsUnreadable,
+    ASSET_PREVIEW_PICTURE_MEDIA_TYPE, AssetMediaFactsReadFromTheFile,
+    AssetMediaFactsReadersOfThisRuntime, AssetMediaFactsUnreadable,
     read_the_media_facts_of_an_asset_file, the_lowercase_extension_of,
 };
 
@@ -33,7 +34,7 @@ const UNUSUAL_EXTENSION_FOLDER_NAME: &str = "-unusual";
 
 /// The readers' format: a kept read of another format is read again, so a reader that learns a
 /// new family or fact reaches every asset.
-const ASSET_MEDIA_FACTS_READER_FORMAT_VERSION: u32 = 1;
+const ASSET_MEDIA_FACTS_READER_FORMAT_VERSION: u32 = 2;
 
 /// What the runtime keeps of one read of an asset's bytes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -137,12 +138,11 @@ impl AssetMediaFactsCacheOfAProject {
         &self,
         content_sha256: &str,
         asset_file_path: &Path,
+        readers: &AssetMediaFactsReadersOfThisRuntime,
     ) -> AssetMediaFactsCachedInTheProject {
-        self.read_by_and_keep(
-            content_sha256,
-            asset_file_path,
-            read_the_media_facts_of_an_asset_file,
-        )
+        self.read_by_and_keep(content_sha256, asset_file_path, |asset_file_path| {
+            read_the_media_facts_of_an_asset_file(asset_file_path, readers)
+        })
     }
 
     /// Read the asset file at `asset_file_path` by `reader` and keep what was read; a reader that
@@ -248,7 +248,11 @@ mod tests {
             .unwrap();
         let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(project.path());
         assert_eq!(cache.cached(SHA256_OF_SOMETHING, &cover), None);
-        let read = cache.read_and_keep(SHA256_OF_SOMETHING, &cover);
+        let read = cache.read_and_keep(
+            SHA256_OF_SOMETHING,
+            &cover,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        );
         std::fs::remove_file(&cover).unwrap();
         assert_eq!(
             cache.cached(SHA256_OF_SOMETHING, &cover),
@@ -286,7 +290,11 @@ mod tests {
         let model = project.path().join("weights.onnx");
         std::fs::write(&model, b"weights").unwrap();
         let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(project.path());
-        let read = cache.read_and_keep(SHA256_OF_SOMETHING, &model);
+        let read = cache.read_and_keep(
+            SHA256_OF_SOMETHING,
+            &model,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        );
         assert_eq!(
             read,
             AssetMediaFactsCachedInTheProject::Unreadable {
@@ -304,7 +312,11 @@ mod tests {
         let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(project.path());
         let lut = project.path().join("film.cube");
         std::fs::write(&lut, "LUT_3D_SIZE 2\n").unwrap();
-        cache.read_and_keep("../../escape", &lut);
+        cache.read_and_keep(
+            "../../escape",
+            &lut,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        );
         assert_eq!(cache.cached("../../escape", &lut), None);
         assert!(
             !project
@@ -337,7 +349,11 @@ mod tests {
         image::RgbImage::from_pixel(4, 4, image::Rgb([255, 0, 0]))
             .save_with_format(&logo_as_data, image::ImageFormat::Png)
             .unwrap();
-        let read_as_data = cache.read_and_keep(SHA256_OF_SOMETHING, &logo_as_data);
+        let read_as_data = cache.read_and_keep(
+            SHA256_OF_SOMETHING,
+            &logo_as_data,
+            &AssetMediaFactsReadersOfThisRuntime::default(),
+        );
         assert!(matches!(
             read_as_data,
             AssetMediaFactsCachedInTheProject::Unreadable { .. }
@@ -346,7 +362,11 @@ mod tests {
         std::fs::rename(&logo_as_data, &logo_as_image).unwrap();
         assert_eq!(cache.cached(SHA256_OF_SOMETHING, &logo_as_image), None);
         assert!(matches!(
-            cache.read_and_keep(SHA256_OF_SOMETHING, &logo_as_image),
+            cache.read_and_keep(
+                SHA256_OF_SOMETHING,
+                &logo_as_image,
+                &AssetMediaFactsReadersOfThisRuntime::default()
+            ),
             AssetMediaFactsCachedInTheProject::Read { .. }
         ));
         assert_eq!(

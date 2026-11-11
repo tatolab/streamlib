@@ -6194,6 +6194,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tatolab-video-poster-frame"
+version = "0.68.62"
+dependencies = [
+ "image",
+ "objc2-core-video",
+ "streamlib-asset-media-facts",
+ "streamlib-consumer-rhi",
+ "streamlib-owned-device-video-codec-nodes",
+ "streamlib-video-bitstream",
+ "streamlib-vulkan-video",
+ "tempfile",
+]
+
+[[package]]
 name = "tatolab-vulkanalia"
 version = "0.35.0"
 dependencies = [
