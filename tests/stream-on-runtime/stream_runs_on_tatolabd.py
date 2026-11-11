@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""What a test hands the runtime, turned into the project `tatolab start --dir` loads.
+"""What a test hands the runtime, turned into the project `tatolab open --play --dir` loads.
 
-A stream reaches `tatolabd` only as a user's does: `tatolab start --dir` queues a
+A stream reaches `tatolabd` only as a user's does: `tatolab open --play --dir` queues a
 load of a project, the runtime reading each stream asset's graph document under the
 project and loading its graph, the project's Python node types run in its own
 `.venv/bin/python`. Three shapes reach that call:
@@ -109,7 +109,7 @@ SUITE_DIRECTORY_ENTRIES_A_WRITTEN_PROJECT_LINKS_NONE_OF = frozenset(
 
 @dataclass(frozen=True)
 class TatolabRunOfAProject:
-    """`tatolab start --dir <dir_as_typed>` from `working_directory`: a load of every stream
+    """`tatolab open --play --dir <dir_as_typed>` from `working_directory`: a load of every stream
     of the project `--dir` names, the working directory itself unless `dir_as_typed` is given."""
 
     working_directory: Path
@@ -117,12 +117,12 @@ class TatolabRunOfAProject:
 
     @property
     def dir_argument(self) -> str:
-        """The `--dir` `tatolab start` and `dev` are given."""
+        """The `--dir` `tatolab open --play` and `dev` are given."""
         return self.dir_as_typed if self.dir_as_typed is not None else str(self.working_directory)
 
 
 #: A `@graph_generator` function of a suite module, a hand-written graph (a dict, or its
-#: text verbatim), or a project's own `tatolab start`.
+#: text verbatim), or a project's own `tatolab open --play`.
 StreamOrGraph = Any
 
 
@@ -268,7 +268,7 @@ def write_a_one_stream_project_of_a_suite_stream_function(
 ) -> TatolabRunOfAProject:
     """Write a project at `project_directory` holding one graph document,
     `streams/<function>.graph.json`, the graph `stream_function` compiles to in this
-    process; return the `tatolab start` of it.
+    process; return the `tatolab open --play` of it.
 
     Refused by name for a function whose node classes the project could not import:
     one defined inside another function, in a test module, or in `__main__`.
@@ -394,7 +394,7 @@ class HandWrittenGraphProject:
 
     @property
     def tatolab_run(self) -> TatolabRunOfAProject:
-        """`tatolab start` from the project, loading its graph documents."""
+        """`tatolab open --play` from the project, loading its graph documents."""
         return TatolabRunOfAProject(working_directory=self.project_directory)
 
     @property

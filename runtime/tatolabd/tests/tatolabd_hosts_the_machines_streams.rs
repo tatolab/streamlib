@@ -19,6 +19,7 @@ use common::{
     call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_location_of_the_stream,
     the_mode_of, the_reloads_queued_at_the_start, the_stream_action_once_ended,
 };
+use streamlib::sdk::runtime::StreamRecord;
 
 /// This machine's hostname: the kernel's UTS node name, which `gethostname`
 /// returns on Linux.
@@ -107,14 +108,14 @@ fn the_runtime_keeps_its_state_owner_only_and_writes_its_own_log_beneath_it() {
     );
 }
 
-/// At its start the runtime re-loads every recorded stream neither stopped nor
-/// failed, reporting each by its id: a stopped one is left unloaded, one whose
+/// At its start the runtime re-loads every recorded stream neither closed nor
+/// failed, reporting each by its id: a closed one is left unloaded, one whose
 /// venv a runtime unit with no uv cannot make again is recorded failed for it,
 /// one the engine could not
 /// start — no GPU — is re-loaded at the next start, and a record an earlier
 /// runtime wrote is listed failed, keyed by its file name, the runtime still up.
 #[test]
-fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_is_named() {
+fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_cannot_is_named() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let stream_records = machine_root.stream_records();
@@ -141,6 +142,10 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
             false,
         ),
     ];
+    let parked = StreamRecord {
+        closed: true,
+        ..parked
+    };
     for record in [&front, &parked, &orphan] {
         stream_records.write(record).unwrap();
         assert!(
@@ -216,7 +221,7 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
     );
     assert!(
         standard_error.contains(&format!(
-            "the stream `{}` is stopped, so it is not re-loaded",
+            "the stream `{}` is closed with its project, so it is not re-loaded",
             parked.stream_id
         )),
         "{standard_error}"
@@ -280,7 +285,7 @@ fn every_recorded_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cann
     );
     assert_eq!(
         listing_of(&parked.stream_id),
-        serde_json::json!({"stream": parked.stream_id, "display_name": "parked", "location": location_of("parked"), "state": "stopped", "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
+        serde_json::json!({"stream": parked.stream_id, "display_name": "parked", "location": location_of("parked"), "state": "closed", "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
     );
     let orphan_listing = listing_of(&orphan.stream_id);
     assert_eq!(orphan_listing["state"], "failed", "{listed}");

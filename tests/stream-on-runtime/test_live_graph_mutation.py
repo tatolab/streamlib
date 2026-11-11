@@ -277,7 +277,7 @@ def start_the_pattern_stream(
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     project_files: "dict[str, str]",
 ) -> PatternStreamRunning:
-    """`tatolab start` on a project holding the one-source stream and `project_files`,
+    """`tatolab open --play` on a project holding the one-source stream and `project_files`,
     once its engine has started and its source is running."""
     app_directory = make_tatolab_project(
         {"stream.py": STREAM_WITH_ONE_PATTERN_SOURCE, **project_files}

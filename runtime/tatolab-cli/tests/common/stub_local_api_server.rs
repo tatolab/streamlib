@@ -44,7 +44,7 @@ pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str = "/nonexistent-tatolab-te
 const LOGS_TOOL_NAME: &str = "logs";
 
 /// The local API tools that queue a load of a project.
-const START_OR_RELOAD_PROJECT_TOOL_NAMES: [&str; 2] = ["start_project", "reload_project"];
+const OPEN_OR_RELOAD_PROJECT_TOOL_NAMES: [&str; 2] = ["open_project", "reload_project"];
 
 /// The revision the stub serves, and the only one: a runtime's local API serves the latest alone.
 const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
@@ -129,7 +129,7 @@ pub struct RecordedHttpRequestHead {
 
 /// The project log a stub's `logs` tool pages through: the cursor after record `n` (from 0) is
 /// `1:<n + 1>`, and one call answers at most `page_size` of the records after the call's `after`.
-/// Records `first_written_by_a_run` reach the log once a `start_project` or `reload_project` call is answered, as the
+/// Records `first_written_by_a_run` reach the log once a `open_project` or `reload_project` call is answered, as the
 /// load's own writing does.
 #[derive(Debug, Clone)]
 pub struct StubStreamLogRecords {
@@ -295,7 +295,7 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
 
 impl StubLocalApiState {
     fn answer_for(&self, request: &CallToolRequestParams) -> StubToolAnswer {
-        if START_OR_RELOAD_PROJECT_TOOL_NAMES.contains(&request.name.as_ref()) {
+        if OPEN_OR_RELOAD_PROJECT_TOOL_NAMES.contains(&request.name.as_ref()) {
             let written_by_the_run =
                 std::mem::take(&mut *self.stream_log_records_a_run_writes.lock().unwrap());
             self.stream_log_records
@@ -714,8 +714,8 @@ impl Drop for StubLocalApiServer {
     }
 }
 
-/// The text a runtime's `start_project` or `reload_project` answers with once it queued the load `action` of the
+/// The text a runtime's `open_project` or `reload_project` answers with once it queued the load `action` of the
 /// project in `project_directory`.
-pub fn start_or_reload_project_tool_result_text(action: &str, project_directory: &Path) -> String {
+pub fn open_or_reload_project_tool_result_text(action: &str, project_directory: &Path) -> String {
     serde_json::json!({ "action": action, "project_directory": project_directory }).to_string()
 }

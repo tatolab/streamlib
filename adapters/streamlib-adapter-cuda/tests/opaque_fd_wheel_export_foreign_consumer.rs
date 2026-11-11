@@ -21,7 +21,7 @@
 //!
 //! The stream is the integration suite's own
 //! (`tests/stream-on-runtime/device_exchange_streams.py`), loaded with the
-//! runtime unit's `tatolab start` into the unit's `tatolabd`, which compiles
+//! runtime unit's `tatolab open --play` into the unit's `tatolabd`, which compiles
 //! it in the suite venv and starts its processor interpreters from that same
 //! venv. The unit (`$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else
 //! `target/tatolab-runtime`) is the integration suite's, built by `cargo xtask
@@ -110,7 +110,7 @@ fn runtime_unit_directory() -> PathBuf {
         .unwrap_or_else(|| repository_root().join("target/tatolab-runtime"))
 }
 
-/// The `tatolab start` that asks the runtime to load the handoff stream, and
+/// The `tatolab open --play` that asks the runtime to load the handoff stream, and
 /// the file its output drains into. It runs beside the accept below, so a load
 /// that answers late never holds the probe's connect back; `Drop` kills a run
 /// still waiting when the test ends early.

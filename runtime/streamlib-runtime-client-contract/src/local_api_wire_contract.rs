@@ -47,27 +47,18 @@ pub struct StreamLocationOnTheWire {
     pub stream_asset: uuid::Uuid,
 }
 
-/// The `stop_project` tool's result: the stop of the whole project queued on its queue.
+/// The `pause_playback` tool's result: the project's playback paused, at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StopProjectToolResult {
-    /// The queued stop, as `describe_stream_action` takes it.
-    pub action: String,
-    /// The project whose playback it stops, recording each stream stopped, symlinks resolved.
-    pub project_directory: PathBuf,
-}
-
-/// The `pause_project` tool's result: the project paused, at once.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PauseProjectToolResult {
+pub struct PausePlaybackToolResult {
     /// The project paused, symlinks resolved.
     pub project_directory: PathBuf,
     /// The id of each loaded stream of the project this call paused.
     pub streams: Vec<String>,
 }
 
-/// The `resume_project` tool's result: the project resumed, at once.
+/// The `resume_playback` tool's result: the project's playback resumed, at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResumeProjectToolResult {
+pub struct ResumePlaybackToolResult {
     /// The project resumed, symlinks resolved.
     pub project_directory: PathBuf,
     /// The id of each paused stream of the project this call resumed.
@@ -148,7 +139,7 @@ pub struct ListStreamsToolResultStream {
     pub failed_because: Option<String>,
     /// Each capture device a node of the loaded stream refused because nobody has asked the user
     /// for its access — the runtime re-loaded it on its own at its start — once each; a
-    /// `stop_project` then `start_project` of its project asks. Empty when it is not loaded.
+    /// `close_project` then `open_project` of its project asks. Empty when it is not loaded.
     pub capture_devices_whose_access_was_never_asked_for: Vec<CaptureDeviceOnTheWire>,
     /// The stream action preparing it, as `describe_stream_action` takes it; `null` unless it
     /// is `preparing`.
@@ -182,14 +173,15 @@ impl CaptureDeviceOnTheWire {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ListedStreamState {
-    /// Loaded; or recorded, neither stopped nor failed, and re-loaded at the runtime's next
-    /// start.
+    /// Playing; or recorded playing, and re-loaded playing at the runtime's next start.
     Running,
-    /// Stopped with its project, nothing running, until `start_project`; its graph is loaded to
-    /// read and edit while `node_count` is set, and not loaded when it is null.
+    /// Open with its playback stopped, nothing running, until `start_playback`; its graph is
+    /// loaded to read and edit while `node_count` is set.
     Stopped,
-    /// Loaded with its project paused: its processors process nothing until `resume_project`.
+    /// Open with its playback paused: its processors process nothing until `resume_playback`.
     Paused,
+    /// Closed with its project, not loaded, until `open_project`.
+    Closed,
     /// Skipped at the runtime's start until a `reload_project` of its project retries it.
     Failed,
     /// A stream action of its project that loads it is queued or under way on it.
@@ -205,6 +197,7 @@ impl ListedStreamState {
             ListedStreamState::Running => "running",
             ListedStreamState::Stopped => "stopped",
             ListedStreamState::Paused => "paused",
+            ListedStreamState::Closed => "closed",
             ListedStreamState::Failed => "failed",
             ListedStreamState::Preparing => "preparing",
             ListedStreamState::Stopping => "stopping",
@@ -218,9 +211,10 @@ impl std::fmt::Display for ListedStreamState {
     }
 }
 
-/// The `start_project` or `reload_project` tool's result: the load it queued.
+/// The result of `open_project`, `reload_project`, `start_playback`, `stop_playback` and
+/// `close_project`: the stream action each queued on the project's queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StartOrReloadProjectToolResult {
+pub struct ProjectStreamActionQueuedToolResult {
     /// The queued action's id, which `describe_stream_action` and `logs` take.
     pub action: String,
     /// The project whose queue holds it, symlinks resolved.
@@ -255,15 +249,22 @@ pub struct ImportProjectToolResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamActionKindOnTheWire {
-    /// Loads every graph document of a project.
+    /// Opens a project, holding each of its streams loaded and stopped.
+    Open,
+    /// Re-loads graph documents of an open project, keeping its playback as it is.
     Load,
-    /// Unloads every stream of a project and records each stopped.
+    /// Starts the playback of an open project's held streams.
+    StartPlayback,
+    /// Ends the playback of every stream of a project, holding each with its graph, and records
+    /// each stopped.
     Stop,
+    /// Ends a project's playback and unloads every stream of it, recording each closed.
+    Close,
     /// Unloads every stream of a project and forgets every record of it.
     Remove,
     /// Unloads and forgets every stream of a project, then moves its folder to the Trash.
     Delete,
-    /// Re-loads, at the runtime's start, a project's streams neither stopped nor failed.
+    /// Re-loads, at the runtime's start, a project's streams neither closed nor failed.
     ReloadAtStart,
 }
 
@@ -1338,13 +1339,6 @@ mod tests {
         }
 
         assert_eq!(
-            wire_text(&StopProjectToolResult {
-                action: "R-8".to_owned(),
-                project_directory: PathBuf::from("/srv/project"),
-            }),
-            r#"{"action":"R-8","project_directory":"/srv/project"}"#
-        );
-        assert_eq!(
             wire_text(&RemoveProjectToolResult {
                 action: "R-9".to_owned(),
                 project_directory: PathBuf::from("/srv/project"),
@@ -1403,7 +1397,7 @@ mod tests {
             r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","project":"00000000-0000-0000-0000-000000000001","stream_asset":"00000000-0000-0000-0000-000000000002"},"state":"running","node_count":4,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":["camera","microphone"],"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","capture_devices_whose_access_was_never_asked_for":[],"action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","project":"00000000-0000-0000-0000-000000000003","stream_asset":"00000000-0000-0000-0000-000000000004"},"state":"preparing","node_count":null,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":[],"action":"Rabc-3","step":"making_the_venv"}]}"#
         );
         assert_eq!(
-            wire_text(&StartOrReloadProjectToolResult {
+            wire_text(&ProjectStreamActionQueuedToolResult {
                 action: "Rabc-3".to_owned(),
                 project_directory: PathBuf::from("/srv/desk"),
             }),
@@ -1469,14 +1463,14 @@ mod tests {
             r#"{"action":"Rabc-3","state":"cancelled"}"#
         );
         assert_eq!(
-            wire_text(&PauseProjectToolResult {
+            wire_text(&PausePlaybackToolResult {
                 project_directory: PathBuf::from("/srv/project"),
                 streams: vec!["project-main-1a2b3c".to_owned()],
             }),
             r#"{"project_directory":"/srv/project","streams":["project-main-1a2b3c"]}"#
         );
         assert_eq!(
-            wire_text(&ResumeProjectToolResult {
+            wire_text(&ResumePlaybackToolResult {
                 project_directory: PathBuf::from("/srv/project"),
                 streams: vec!["project-main-1a2b3c".to_owned()],
             }),
@@ -1500,6 +1494,7 @@ mod tests {
             ListedStreamState::Running,
             ListedStreamState::Stopped,
             ListedStreamState::Paused,
+            ListedStreamState::Closed,
             ListedStreamState::Failed,
             ListedStreamState::Preparing,
             ListedStreamState::Stopping,

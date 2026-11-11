@@ -5,7 +5,7 @@
 every verb that manages them reaches it through the real CLI.
 
 Each test drives the runtime unit's own `tatolabd` and `tatolab` under the
-test's machine root, as a user at a terminal does: `tatolab start` from two
+test's machine root, as a user at a terminal does: `tatolab open --play` from two
 project directories, `tatolabd` restarted with a Ctrl-C and again after a
 SIGKILL, `stop`, `rm` and `streams` one call at a time, a
 `tatolab dev` ended by a Ctrl-C and by a SIGKILL leaving its stream running,
@@ -148,7 +148,7 @@ def follow_the_action_the_verb_queued(
     *,
     timeout: float = STREAM_RUNNING_TIMEOUT_SECONDS,
 ) -> "dict[str, Any]":
-    """Follow the stream action a `tatolab start`, `stop` or `rm` printed it queued to
+    """Follow the stream action a `tatolab open --play`, `stop` or `rm` printed it queued to
     `done`; return it as `describe_stream_action` ended it."""
     queued = QUEUED_STREAM_ACTION_LINE_PATTERN.search(verb_standard_output)
     assert queued is not None, verb_standard_output
@@ -565,7 +565,7 @@ def write_the_record_run_leaves(
     *,
     stopped: bool,
 ) -> "dict[str, Any]":
-    """Write the stream record `tatolab start` leaves for the project's
+    """Write the stream record `tatolab open --play` leaves for the project's
     one stream — and, `stopped`, the one a `tatolab stop` after it leaves —
     its location read from the project file and its graph document, under the id
     they compute to; return the record.
@@ -792,7 +792,7 @@ def test_a_stream_dev_loaded_runs_on_past_a_ctrl_c_and_a_killed_cli(
 ):
     """Every load persists: a `tatolab dev` ended by a Ctrl-C, and another
     killed outright, each leave the stream it loaded running and recorded,
-    beside a stream `tatolab start` loaded."""
+    beside a stream `tatolab open --play` loaded."""
     alpha_project = make_project_running_a_pattern_stream(make_tatolab_project, ALPHA_STREAM_FUNCTION)
     alpha_stream_id = stream_id_of_the_pattern_project(alpha_project, ALPHA_STREAM_FUNCTION)
     bravo_project = make_project_running_a_pattern_stream(make_tatolab_project, BRAVO_STREAM_FUNCTION)

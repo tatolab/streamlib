@@ -22,13 +22,14 @@ use crate::core::graph::is_in_exposed_name_cast_form;
 use crate::core::{Error, Result};
 
 /// The schema version of a stream record this runtime writes and reads.
-pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 7;
+pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 8;
 
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
 /// One stream, as its runtime re-loads it from its graph document: its id and location, the
-/// interpreter its processors start in, and whether it was stopped or has failed.
+/// interpreter its processors start in, whether its project is closed or its playback stopped,
+/// and whether it has failed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamRecord {
@@ -40,10 +41,13 @@ pub struct StreamRecord {
     pub location: StreamLocation,
     /// The project's venv interpreter, as it was spelled at the load.
     pub interpreter: PathBuf,
-    /// Whether the owner stopped the stream, so a restart leaves it unloaded.
+    /// Whether its playback is stopped, so a restart holds it loaded and stopped.
     pub stopped: bool,
+    /// Whether its project is closed, so a restart leaves it unloaded; a closed stream is
+    /// stopped too.
+    pub closed: bool,
     /// Why the stream is failed, so the runtime's start skips it until
-    /// a `start_project` or `reload_project` retries it; `None` when it is not failed.
+    /// an `open_project` or `reload_project` retries it; `None` when it is not failed.
     pub failed_because: Option<String>,
     /// How many of the runtime's crashes in a row, the last included, the
     /// stream was implicated in.
@@ -113,6 +117,8 @@ pub struct PendingStreamActionOnTheRecord {
 pub enum PendingStreamActionKind {
     /// Records the stream stopped.
     Stop,
+    /// Records the stream's project closed.
+    Close,
     /// Forgets the record.
     Remove,
 }
@@ -131,6 +137,7 @@ impl StreamRecord {
             location,
             interpreter: stream_environment.interpreter.clone(),
             stopped: false,
+            closed: false,
             failed_because: None,
             runtime_crashes_in_a_row_implicating_it: 0,
             pending_stream_actions: Vec::new(),
@@ -144,10 +151,12 @@ impl StreamRecord {
     }
 
     /// The state the stream is listed in while it is not loaded: failed
-    /// before stopped, and running otherwise.
+    /// before closed, closed before stopped, and running otherwise.
     pub fn listing_state(&self) -> StreamListingState {
         if self.is_failed() {
             StreamListingState::Failed
+        } else if self.closed {
+            StreamListingState::Closed
         } else if self.stopped {
             StreamListingState::Stopped
         } else {
@@ -155,12 +164,15 @@ impl StreamRecord {
         }
     }
 
-    /// Record the stream neither stopped nor failed, its crash count reset;
+    /// Record the stream open and playing, not failed, its crash count reset;
     /// `false` when it already was.
     pub fn mark_running_resetting_its_crash_count(&mut self) -> bool {
-        let changed =
-            self.stopped || self.is_failed() || self.runtime_crashes_in_a_row_implicating_it != 0;
+        let changed = self.stopped
+            || self.closed
+            || self.is_failed()
+            || self.runtime_crashes_in_a_row_implicating_it != 0;
         self.stopped = false;
+        self.closed = false;
         self.failed_because = None;
         self.runtime_crashes_in_a_row_implicating_it = 0;
         changed
@@ -174,13 +186,27 @@ impl StreamRecord {
         }
     }
 
+    /// Record the stream's project open with its playback stopped.
+    pub fn mark_open_with_its_playback_stopped(&mut self) {
+        self.stopped = true;
+        self.closed = false;
+    }
+
+    /// Record the stream's project closed, its playback stopped.
+    pub fn mark_closed(&mut self) {
+        self.stopped = true;
+        self.closed = true;
+    }
+
     /// Whether the stream is stopped once its pending stops have run.
     pub fn is_stopped_once_its_pending_stream_actions_run(&self) -> bool {
         self.stopped
-            || self
-                .pending_stream_actions
-                .iter()
-                .any(|pending| pending.kind == PendingStreamActionKind::Stop)
+            || self.pending_stream_actions.iter().any(|pending| {
+                matches!(
+                    pending.kind,
+                    PendingStreamActionKind::Stop | PendingStreamActionKind::Close
+                )
+            })
     }
 
     /// Queue the pending action `action_id` of `kind` on the record.
@@ -708,8 +734,8 @@ mod tests {
     }
 
     #[test]
-    fn a_record_of_schema_6_or_earlier_is_read_as_an_earlier_runtimes() {
-        for schema_version in [3, 4, 5, 6] {
+    fn a_record_of_schema_7_or_earlier_is_read_as_an_earlier_runtimes() {
+        for schema_version in [3, 4, 5, 6, 7] {
             let state_directory = tempfile::tempdir().unwrap();
             let records = StreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
             std::fs::write(

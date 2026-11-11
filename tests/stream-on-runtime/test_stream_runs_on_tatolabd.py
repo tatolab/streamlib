@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""How the harness turns what a test hands it into the project `tatolab start` loads.
+"""How the harness turns what a test hands it into the project `tatolab open --play` loads.
 
-Needs no runtime: these check the project the harness would hand `tatolab start` — its
+Needs no runtime: these check the project the harness would hand `tatolab open --play` — its
 project file, the graph documents it writes and the venv it links — and the interpreter of
 a hand-written graph's project, run directly.
 """

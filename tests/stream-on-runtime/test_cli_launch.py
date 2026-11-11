@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`tatolab start` / `dev` loading a project's stream into the machine's runtime, end to end.
+"""`tatolab open --play` / `dev` loading a project's stream into the machine's runtime, end to end.
 
 The runtime reads each graph document of the project, runs its Python nodes in
 the project's own venv — here a symlink to the suite venv, holding
@@ -190,13 +190,13 @@ def project_files_with_helper_placed_processors(helper_count: int) -> "dict[str,
 
 
 def load_the_projects_stream(
-    tatolabd: TatolabdUnderTest, app_directory: Path, verb: str = "start"
+    tatolabd: TatolabdUnderTest, app_directory: Path, verb: str = "open"
 ) -> TatolabRunOrDevOnTheRuntime:
     """`tatolab <verb>` from `app_directory`, started on `tatolabd`."""
     return tatolabd.run_stream(TatolabRunOfAProject(working_directory=app_directory), verb=verb)
 
 
-@pytest.mark.parametrize("verb", ["start", "dev"])
+@pytest.mark.parametrize("verb", ["open", "dev"])
 def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop(
     verb: str,
     make_tatolab_project: "Callable[..., Path]",
@@ -204,7 +204,7 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
 ):
     """The MVP minute's observable half, for both verbs.
 
-    `start` returns once the load is accepted and `dev` is ended by a Ctrl-C;
+    `open --play` returns once the open and playback are accepted and `dev` is ended by a Ctrl-C;
     neither ends the stream, which the runtime records and runs on until
     `tatolab stop` — so a divergence in load, listing or persistence between
     them is a defect in the load path itself.
@@ -668,7 +668,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
         STARTER_SOURCE_OUTPUT_PORT,
         SCAFFOLD_OBSERVATION_WINDOW_SECONDS,
     )
-    queued_stop = local_api.call_tool("stop_project", {"project_directory": str(app_directory)})
+    queued_stop = local_api.call_tool("stop_playback", {"project_directory": str(app_directory)})
     assert local_api.stream_action_once_ended(queued_stop["action"])["state"] == "done"
 
     stream_output = the_first_streams_output(tatolabd, stream_id)
@@ -945,7 +945,7 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
     (unsyncable_directory / "stream.py").write_text(STREAM_WITH_ONE_TEST_PATTERN_SOURCE, encoding="utf-8")
     write_the_graph_documents_the_stream_py_compiles_to(unsyncable_directory)
     unsynced_run = client.call_tool(
-        "start_project", {"project_directory": str(unsyncable_directory.resolve())}
+        "open_project", {"project_directory": str(unsyncable_directory.resolve())}
     )
     [unsynced] = client.stream_action_once_ended(unsynced_run["action"])["streams"]
     assert unsynced["state"] == "failed", unsynced
@@ -962,7 +962,9 @@ def test_a_projects_log_holds_every_stream_and_its_failed_syncs_uv_lines_read_by
 
     app_directory = make_tatolab_project({"stream.py": STREAM_PY_WITH_TWO_STREAMS})
     project_directory = str(app_directory.resolve())
-    run = client.call_tool("start_project", {"project_directory": project_directory})
+    opened = client.call_tool("open_project", {"project_directory": project_directory})
+    assert client.stream_action_once_ended(opened["action"])["state"] == "done"
+    run = client.call_tool("start_playback", {"project_directory": project_directory})
     loaded_streams = client.stream_action_once_ended(run["action"])["streams"]
     assert [loaded["state"] for loaded in loaded_streams] == ["running", "running"], loaded_streams
     running_ids = {loaded["stream"] for loaded in loaded_streams}
