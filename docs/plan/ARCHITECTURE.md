@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ runtime-description, runtime-lives-with-tato-studio, first-party-package-index, playback-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
+## Product (the MVP sentence) — IN-FLIGHT (→ first-party-package-index, playback-controls; unbuilt: `H264Encoder`'s CPU arm, the lead demo)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU or with none, or on Apple
   Silicon, has the Tatolab runtime running — Tato Studio open on a Mac or a Linux desktop,
@@ -33,8 +33,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
   SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
   runtime-hosting — SHIPPED #2721, #2722; optional-accelerators — SHIPPED #2761, #2763,
-  #2796; moq-relays — SHIPPED #2853, #2864, #2866; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; amended by runtime-lives-with-tato-studio:
-  the runtime running while Tato Studio runs]
+  #2796; moq-relays — SHIPPED #2853, #2864, #2866; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; runtime-lives-with-tato-studio — SHIPPED #3192]
 - **DECIDED** — Terms of the sentence: Tatolab is a pure-Python stream package,
   `tatolab-stream` from PyPI, beside a native runtime — `tatolabd`, the `tatolab` CLI and
   the `tatolab.runtime` portion processor interpreters borrow, one unit never shipped
@@ -137,7 +136,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the runtime writes. Only `<project>/.venv/bin/python` is taken; a relocated venv is refused
   by name until a need appears. Owner, 2026-10-02.
   [package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED #2711;
-  moq-relays — SHIPPED #2871; runtime-description; stream-identity-and-persistence — SHIPPED
+  moq-relays — SHIPPED #2871; runtime-description — SHIPPED #2924; stream-identity-and-persistence — SHIPPED
   #2965; create-project — SHIPPED #2982, #2995, #3012; queued-stream-actions — SHIPPED #2997,
   #2998, #3004, #3009; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 - **DECIDED** — The machine lock and the state directory. On Linux the lock is the abstract
@@ -204,8 +203,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   that is running. pip distributes the pure-Python stream package and packs of nodes and
   streams, never the runtime. Owner, 2026-09-30: "treat it like Docker"; "pip is just for
   distributing the packaged streams"; and 2026-11-05: no background service for the app.
-  [one-runtime-per-machine; amended by runtime-lives-with-tato-studio: the app hosting the
-  runtime]
+  [one-runtime-per-machine; runtime-lives-with-tato-studio — SHIPPED #3192]
 - **DECIDED** — Who starts the runtime. Tato Studio does, on both desktops: opening the app
   starts `tatolabd` from the runtime unit its bundle carries, as the app's own child process,
   unless a runtime already answers on the local API's socket, which the app connects to
@@ -223,8 +221,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   of their own, the README showing a systemd user unit to copy. Owner, 2026-10-02,
   2026-11-05 and 2026-11-06: "if someone really wants to run it as a service … tell them how
   via the docs without forcing it via the install". [runtime-hosting — SHIPPED #2711, #2721,
-  #2722; amended by runtime-lives-with-tato-studio: the app starting and stopping its child
-  runtime, no installer-registered service]
+  #2722; runtime-lives-with-tato-studio — SHIPPED #3192]
 - **DECIDED** — How a stream is loaded and kept. `tatolab start` loads it, and the
   runtime records the stream's location and the project's venv path in its state directory,
   and re-loads the stream from its graph document on every start, a crash's restart included;
@@ -506,7 +503,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   another's track through gateway nodes (§Networking). Owner, 2026-10-01 and 2026-11-08.
   [one-runtime-per-machine; runtime-hosting — SHIPPED #2715; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384]
 
-## Packages & extension model — IN-FLIGHT (→ browser-and-rive-source-modules, first-party-package-index)
+## Packages & extension model — IN-FLIGHT (→ first-party-package-index)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -579,6 +576,28 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   conversion nodes (§Processor model). Installing the runtime alone gives other applications
   no camera. Owner, 2026-11-02 and 2026-11-06.
   [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; amended by first-party-package-index: the runtime unit carries a wheel of each core module and installs it into every project it makes; every other module is a module project]
+- **DECIDED** — A stream's visual sources include a web page, a Rive animation and their
+  layering, each a first-party module built the way a third party builds one.
+  `tatolab.browser:BrowserSource` renders a URL offscreen with CEF and publishes each painted
+  frame: config `url`, `width`, `height`, `frame_rate`, `transparent_background` and
+  `audio_sample_rate`; each `data` message, a msgpack map, reaches the page as a
+  `tatolab:data` `CustomEvent`; `window.tatolab.publish(object)` writes one map to `events`;
+  the page's audio is published on `audio`; and each wired `video_in_N` or `audio_in_N` reaches
+  the page as `window.tatolab.inputTrack(...)`, a `MediaStreamTrack` built from frames read back
+  to host memory. Every `BrowserSource` on the machine is a tab in one CEF browser host, each
+  running stream its own CEF profile; the host hands each tab's paints to its node zero-copy, a
+  DMA-BUF on Linux and an IOSurface on macOS, or through host memory where the platform cannot
+  share a buffer, and reloads a tab whose renderer dies. `tatolab.rive:RiveSource` plays a
+  `.riv` file's state machine on an external-renderer device straight into the output texture,
+  a `data` message setting view-model properties by path. `tatolab.compositor:AlphaOverCompositor`
+  layers `layer_0` … `layer_N` back to front in premultiplied alpha, on its first layer's
+  cadence. The runtime runs a shared native service, such as the browser host, once per machine:
+  a node's helper takes a lease on it, the first lease starts it as a supervised child under the
+  engine's one restart policy and crash-loop limit, and it stops a grace after the last lease;
+  a service runs no Python and is no processor placement. A unit built without CEF carries no
+  browser host and refuses `BrowserSource` by name. Owner, 2026-11-02 and 2026-11-03.
+  [browser-and-rive-source-modules — SHIPPED #3083, #3085, #3086, #3102, #3108, #3119, #3130, #3133, #3134, #3135, #3137, #3138]
+  Rejected: a CEF per node in the node's helper — it costs a whole Chromium per page (owner, 2026-11-03).
 - **DECIDED** — The module host table. The lent `tatolab.runtime` implements one
   `#[repr(C)]`, append-only function table, versioned major, minor and size, handed to an
   extension wheel's native half as a named capsule from a node's context. It carries opening,
@@ -589,9 +608,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   RHI object. Its one entry the engine calls into module code is the function-node entry: per
   function node a descriptor (ports, families, config, state) and a C evaluate function taking
   the input values, config, `now` and its state and returning its outputs, called only in a
-  helper. A later Python write to a
+  helper. `surface_write_from_host_memory` writes tightly described CPU pixels into an
+  output-pool texture, for a renderer that cannot share a GPU buffer. A later Python write to a
   port handed to native code is refused by name. A module built against minor N loads on any
-  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; virtual-camera-pipewire-door — SHIPPED #3128; lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  runtime at minor ≥ N and is refused by name on an older one. [media-built-ins-become-modules — SHIPPED #3055, #3057, #3060, #3061, #3062, #3064, #3073, #3075, #3082, #3098, #3123; virtual-camera-pipewire-door — SHIPPED #3128; browser-and-rive-source-modules — SHIPPED #3083, #3085, #3086, #3102, #3108, #3119, #3130, #3133, #3134, #3135, #3137, #3138; lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
 - **DECIDED** — `tatolab-module-sdk` is the Rust side of the host table: a published crate
   carrying the table's struct mirror, its layout regression tests, safe Rust wrappers and a
   generated C header, with optional `pyo3` and `napi` features. It depends on no engine crate.
@@ -1039,7 +1059,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ asset-media-facts-and-previews, playback-controls; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ playback-controls; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -2154,8 +2174,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   committing its transactions on both histories. Python stays the
   language of nodes: a `@graph_generator` function, replacing `@stream`, builds graph, and its
   output is stored as a frozen, read-only fragment, never one-to-one with a stream, and nothing writes a graph edit back into Python. Data on links and runtime
-  state are never saved. Single player first; the cloud hub, branches, roles and releases build on
-  the same transactions and history. Owner, 2026-11-07, 2026-11-08 and 2026-11-09. [project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; self-contained-project-imports — SHIPPED #3402, #3405; project-action-contract — SHIPPED #3430, #3436, #3438]
+  state are never saved. An asset's media facts and preview picture are read from its bytes by
+  the runtime — images, MP4 and QuickTime, MKV and WebM, audio files and `.cube` LUTs, a video's
+  poster decoded by the engine's own decoders in `tatolab-video-poster-frame`, a helper the
+  runtime unit carries, never in the runtime's process — off the transaction that imported or
+  replaced them, one asset at a time, and kept in `.tatolab/asset-media/` by the bytes' SHA-256,
+  never in history, rebuilt whenever they are missing; a fact the runtime cannot read is absent,
+  never an error, and the change feed announces the asset once its facts are read. Single player first; the cloud hub, branches, roles and releases build on
+  the same transactions and history. Owner, 2026-11-07, 2026-11-08 and 2026-11-09. [project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; self-contained-project-imports — SHIPPED #3402, #3405; project-action-contract — SHIPPED #3430, #3436, #3438; asset-media-facts-and-previews — SHIPPED #3522, #3546]
+  Rejected: a consumer polling `describe_asset` for facts still being read (owner, 2026-11-11).
+  Rejected: a CPU software decoder for posters alone, or decoding a poster in the runtime's
+  process — a second decoder and codec licence, and a driver fault ending every stream (owner,
+  2026-11-11).
   Rejected: a dependency as another project's Git history fetched and pinned at a commit, its asset
   bytes copied in per commit, its streams pasted as stored copies kept in step by refreshes, and a
   fork copying an asset out of it — copies drift and make a project's state differ per machine
@@ -2394,8 +2424,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `HostVulkanDevice` and, in a helper, the same `ConsumerVulkanDevice`. Metal appears only as
   handles exported from Vulkan objects (`vkExportMetalObjectsEXT`) — the `MTLBuffer` behind an
   imported IOSurface, the shared event behind a timeline. There is no second backend, no
-  per-platform RHI, and no backend selector at build or run time.
-  [macos-platform-floor — SHIPPED #2355, #2356; macos-capability-parity — SHIPPED #2402, #2404]
+  per-platform RHI, and no backend selector at build or run time. The owned-device tier serves
+  video codecs and embedded renderers: `ConsumerVulkanDeviceForExternalRenderer` hands an
+  embedded renderer's own C++ the raw instance, physical device, device, a graphics queue and
+  `vkGetInstanceProcAddr`, and imports a node output texture onto that device as a render
+  target with the surface-share semaphores. It is the one place raw Vulkan handles leave the
+  RHI, named for that purpose; Rust outside the RHI still never names `vulkanalia`.
+  [macos-platform-floor — SHIPPED #2355, #2356; macos-capability-parity — SHIPPED #2402, #2404;
+  browser-and-rive-source-modules — SHIPPED #3083, #3085, #3086, #3102, #3108, #3119, #3130, #3133, #3134, #3135, #3137, #3138]
 - **DECIDED** — Instance and device creation are one probed path on every platform. Host and
   helper instances request `VK_KHR_portability_enumeration` with `ENUMERATE_PORTABILITY_KHR`,
   and both devices request `VK_KHR_portability_subset`, wherever the driver advertises them.
@@ -2813,7 +2849,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   test that builds a device runs on the lane. Owner, 2026-10-13, over the 2026-08-03 rig-only
   ruling. [optional-accelerators — SHIPPED #2778, #2780]
 
-## Media I/O — camera, audio, codecs — IN-FLIGHT (→ runtime-lives-with-tato-studio; unbuilt: `H264Encoder`'s CPU arm)
+## Media I/O — camera, audio, codecs — IN-FLIGHT (unbuilt: `H264Encoder`'s CPU arm)
 
 - **DECIDED** — First-party camera, audio, codecs, the test pattern and the virtual camera
   are modules: Python nodes in their own distributions (`tatolab-camera`, `tatolab-microphone`,
@@ -2946,8 +2982,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   access is granted, because binding an input-enabled unit blocks inside coreaudiod's privacy
   check until the user answers. The engine is never daemonised: detaching breaks the
   attribution chain and silently costs device access. [macos-platform-floor — SHIPPED #2359;
-  macos-capability-parity — SHIPPED #2411; amended by runtime-lives-with-tato-studio: Tato
-  Studio starts the runtime as its child, which never detaches itself]
+  macos-capability-parity — SHIPPED #2411; runtime-lives-with-tato-studio — SHIPPED #3192]
 - **DECIDED** — The runtime opens no windows: no display built-in, no node-owned window, no
   event pump, no present target or swapchain, no `winit`, and no `DISPLAY`, `WAYLAND_DISPLAY`
   or `XAUTHORITY` handling in `tatolabd`. The virtual camera keeps its compositor,
@@ -3634,8 +3669,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   terminal credits that terminal — the
   responsible code — and only Apple's Terminal is exempt from the local-network check.
   Owner, 2026-10-01, on #2560's research, and 2026-11-05. [one-runtime-per-machine;
-  runtime-hosting — SHIPPED #2721; amended by runtime-lives-with-tato-studio: Tato Studio
-  credited as the runtime's parent]
+  runtime-hosting — SHIPPED #2721; runtime-lives-with-tato-studio — SHIPPED #3192]
 
 ## Networking — transport, moq, webrtc — IN-FLIGHT (unbuilt: a publicly valid certificate on a relay a person runs)
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as messages —
@@ -4065,7 +4099,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   encode, two loopback hops and a decode, about ten milliseconds and a lossy codec; data
   pays about a millisecond. [moq-relays]
 
-## Language SDKs & parity — IN-FLIGHT (→ runtime-lives-with-tato-studio)
+## Language SDKs & parity — SHIPPED
 
 - **DECIDED** — Python is the sole focus runtime: `tatolab-stream` is the primary authoring
   surface. TypeScript authoring is paused, not rejected — a future TypeScript SDK follows
@@ -4096,10 +4130,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream's own shutdown runs under that stream's watchdog (§Processor model, several streams).
   Tato Studio starts `tatolabd` as its child and stops it with `SIGTERM`; `tatolabd` never
   detaches itself. [shutdown-ladder; local-transport-hardening — SHIPPED #2266; package-split-and-lend —
-  SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722; amended by
-  runtime-lives-with-tato-studio: Tato Studio as the runtime's parent]
+  SHIPPED #2693; runtime-hosting — SHIPPED #2704, #2721, #2722; runtime-lives-with-tato-studio —
+  SHIPPED #3192]
 
-## Distribution & versioning — IN-FLIGHT (→ runtime-lives-with-tato-studio, first-party-package-index; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
+## Distribution & versioning — IN-FLIGHT (→ first-party-package-index; unbuilt: the Rust crate's `tatolab-stream` name, Tato Studio creating and loading through the runtime with the uv its bundle carries)
 
 - **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
   PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
@@ -4107,11 +4141,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and the runtime unit ships inside the installer (the entry below). Beside the core modules
   the runtime unit carries, for the one platform it is built for, the third-party wheels they
   require and one CPython build, pinned by SHA-256, so a new project syncs with no network
-  (§Product, the create entry). Positioning is
+  (§Product, the create entry), and, built with CEF, the browser host in
+  `lib/tatolab/browser-host/` (§Packages). Positioning is
   "realtime engine, Python authoring" — the Rust engine is named as material; never marketed
   as "a Python library". Owner, 2026-10-08.
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
-  SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; offline-new-projects — SHIPPED #3505, #3508, #3512, #3532; amended by tatolab-names: the crate
+  SHIPPED #2697; runtime-hosting — SHIPPED #2721, #2722; offline-new-projects — SHIPPED #3505, #3508, #3512, #3532; browser-and-rive-source-modules — SHIPPED #3119, #3135; amended by tatolab-names: the crate
   is `tatolab-stream`; amended by first-party-package-index: the first-party modules publish to
   Tatolab's index, `tatolab-stream` alone to PyPI; `tatolab-stream` and the core modules ride
   the runtime unit as wheels, and every other module is released as a module project]
@@ -4246,8 +4281,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   with the CLI and the desktop app, never through pip (owner, 2026-09-30). Known: maturin ships a native
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
   custom module system is needed. [one-runtime-per-machine; package-split-and-lend — SHIPPED
-  #2673, #2697; runtime-hosting — SHIPPED #2721, #2722; amended by
-  runtime-lives-with-tato-studio: no installer-registered service]
+  #2673, #2697; runtime-hosting — SHIPPED #2721, #2722; runtime-lives-with-tato-studio —
+  SHIPPED #3192]
 - **DECIDED** — The installer. `install.sh` installs the runtime on a Linux machine without
   Tato Studio; the app runs the runtime unit it carries and never runs `install.sh`. Each
   release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz`, built in `manylinux_2_28`
@@ -4266,8 +4301,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   without the driver's manifest or the uv. The README shows a systemd user unit for a person
   who wants the runtime kept up as a service, as their own choice. Owner, 2026-10-11,
   2026-10-28, 2026-10-31 and 2026-11-06. [runtime-hosting — SHIPPED #2722;
-  optional-accelerators — SHIPPED #2761; create-project — SHIPPED #2982; amended by
-  runtime-lives-with-tato-studio: no service, no `--from-unit`, no macOS arm]
+  optional-accelerators — SHIPPED #2761; create-project — SHIPPED #2982; runtime-lives-with-tato-studio —
+  SHIPPED #3192]
 - **DECIDED** — Tato Studio, a tray app carrying the runtime, lives in the private
   repository `tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app
   private — and is an Electron app. On macOS it ships as a notarised `.dmg` on this
@@ -4305,11 +4340,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   logs, the app's stream actions and the rest of its GUI are the app step's. Owner,
   2026-10-02, 2026-10-11, 2026-10-24, 2026-10-28, 2026-10-31 and 2026-11-05.
   [runtime-hosting — SHIPPED #2721; machine-lock-without-administrator — SHIPPED #2929;
-  amended by runtime-lives-with-tato-studio: the app hosting the runtime as its child, no
-  install at launch, no "Run Tatolab" switch, Quit stopping the runtime, the name Tato Studio]
+  runtime-lives-with-tato-studio — SHIPPED #3192]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ runtime-description, control-api-contract, asset-media-facts-and-previews, playback-controls)
+## Control plane & observability — IN-FLIGHT (→ control-api-contract, playback-controls)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -4333,7 +4367,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `cancel_stream_action`, `stop_project`, `pause_project`, `resume_project`, `remove_project`,
   `list_streams` and `set_stream_clock_scale` (§Product); the viewer's `open_viewer` and
   `close_viewer` (§Networking, how a viewer reads a port); the project's asset, file and
-  dependency tools — `list_assets`, `import_asset`, `relocate_asset`, `delete_asset`,
+  dependency tools — `list_assets` and `describe_asset`, which answer each asset's
+  `media_facts`, `media_facts_state` and `preview` (`list_assets` from what is already read),
+  `read_asset_preview`, answering the picture in `read_project_file`'s shape, `import_asset`, `relocate_asset`, `delete_asset`,
   `set_asset_settings`, `replace_asset`, `create_stream`, `delete_stream`,
   `set_stream_display_name`, `list_project_files`, `read_project_file`, `write_project_file`,
   `create_node_file`, `add_dependency`, `update_dependency`, `list_dependencies`,
@@ -4374,8 +4410,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   agent-readable-processor-catalog — SHIPPED #2232; local-transport-hardening —
   SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
   SHIPPED #2689; runtime-hosting — SHIPPED #2704, #2711; moq-relays — SHIPPED #2871;
-  runtime-description; create-project — SHIPPED #2995, #3012; queued-stream-actions — SHIPPED
-  #2998, #3006, #3009; stream-clocks — SHIPPED #3166; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; self-contained-project-imports — SHIPPED #3402, #3405; project-action-contract — SHIPPED #3430, #3436, #3438; studio-view-nodes — SHIPPED #3446, #3449, #3461; live-graph-inputs — SHIPPED #3540; graph-groups-and-nested-fragments — SHIPPED #3329, #3359]
+  runtime-description — SHIPPED #2924; create-project — SHIPPED #2995, #3012; queued-stream-actions — SHIPPED
+  #2998, #3006, #3009; stream-clocks — SHIPPED #3166; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; self-contained-project-imports — SHIPPED #3402, #3405; project-action-contract — SHIPPED #3430, #3436, #3438; studio-view-nodes — SHIPPED #3446, #3449, #3461; live-graph-inputs — SHIPPED #3540; graph-groups-and-nested-fragments — SHIPPED #3329, #3359; asset-media-facts-and-previews — SHIPPED #3522, #3546]
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
   name". `graph` renders a node's UUID as `id` beside its `name`, and each link end as
@@ -4428,7 +4464,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667;
   tatolab-names; package-split-and-lend — SHIPPED #2693, #2697; runtime-hosting — SHIPPED
-  #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description;
+  #2711, #2721, #2722; moq-relays — SHIPPED #2871; runtime-description — SHIPPED #2924;
   stream-identity-and-persistence — SHIPPED #2962; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the surface-sharing socket, the
