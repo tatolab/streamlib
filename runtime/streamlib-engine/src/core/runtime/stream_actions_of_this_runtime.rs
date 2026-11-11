@@ -498,7 +498,7 @@ pub enum StreamReloadAtTheStart {
         stream_id: String,
     },
     /// The recorded stream, its project open and its playback stopped, loaded and held
-    /// stopped.
+    /// stopped; recorded failed when its node code did not describe a type its graph names.
     HeldStopped {
         /// The stream's id.
         stream_id: String,
@@ -648,11 +648,12 @@ impl Runner {
     /// — make its `.venv` unless its interpreter runs, then record, load and start each stream
     /// asset under the id its project and stream asset give it.
     ///
-    /// A load runs no project code and is never refused for what a document or the project's
-    /// environment holds: a document that does not read, or whose load is refused, records its
-    /// stream failed with the reason. A stream whose start is refused, whose project's `.venv`
-    /// cannot be made, or whose node code does not describe a type its graph names is recorded
-    /// failed and held stopped from its document. A record of the project whose stream asset no
+    /// A load runs no project code beyond describing its node types, and is never refused for
+    /// what a document or the project's environment holds: a document that does not read, or
+    /// whose load is refused, records its stream failed with the reason. A stream whose start
+    /// is refused, whose project's `.venv` cannot be made, or whose node code does not describe
+    /// a type its graph names is recorded failed and held stopped from its document. A record
+    /// of the project whose stream asset no
     /// document holds any more is unloaded and forgotten.
     ///
     /// A load of a stream already recorded replaces it under the same id, keeping its display
@@ -2064,9 +2065,19 @@ impl Runner {
                 StreamReloadAtTheStart::Reloaded { stream_id } => {
                     Some((stream_id.clone(), StreamListingState::Running))
                 }
-                StreamReloadAtTheStart::HeldStopped { stream_id } => {
-                    Some((stream_id.clone(), StreamListingState::Stopped))
-                }
+                StreamReloadAtTheStart::HeldStopped { stream_id } => Some((
+                    stream_id.clone(),
+                    if self
+                        .current_stream_record_of_the_id(stream_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|record| record.is_failed())
+                    {
+                        StreamListingState::Failed
+                    } else {
+                        StreamListingState::Stopped
+                    },
+                )),
                 StreamReloadAtTheStart::NotReloaded { stream_id, .. } => self
                     .current_stream_record_of_the_id(stream_id)
                     .ok()
@@ -4302,8 +4313,8 @@ mod tests {
         })
     }
 
-    /// The graph of a stream named `stream_name` whose one node is of a type no module
-    /// provides, which its load refuses.
+    /// The graph of a stream named `stream_name` holding a described source and a node of a
+    /// type no module provides.
     fn the_graph_of_a_stream_naming_a_type_not_described(stream_name: &str) -> serde_json::Value {
         let mut graph = the_graph_of_a_stream_named(stream_name);
         let source = graph["nodes"][0].clone();
@@ -4960,6 +4971,42 @@ mod tests {
                 .is_some_and(|why| why.contains("`absent`")),
             "{listed:?}"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn a_link_between_two_nodes_of_types_not_described_is_held_with_its_exposed_field() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let mut graph = the_graph_of_a_stream_naming_a_type_not_described("camera");
+        let mut second_absent = graph["nodes"][1].clone();
+        second_absent["name"] = serde_json::json!("second_absent");
+        second_absent["type"] = serde_json::json!("tatolab.absent:SecondAbsentNodeType");
+        second_absent["exposed_config_fields"] = serde_json::json!(["strength"]);
+        graph["nodes"].as_array_mut().unwrap().push(second_absent);
+        graph["links"] = serde_json::json!([
+            {
+                "source": { "node": "source", "port": "out1" },
+                "target": { "node": "absent", "port": "video" },
+            },
+            {
+                "source": { "node": "absent", "port": "result" },
+                "target": { "node": "second_absent", "port": "video" },
+            },
+        ]);
+        let project = ProjectWithGraphDocuments::holding(graph);
+        let camera = project.stream_id_of("camera");
+
+        a_project_opened_on(&runner, &project);
+
+        let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(held.is_held_stopped());
+        assert_eq!(held.node_count(), 3);
+        assert_eq!(
+            held.to_json().unwrap()["links"].as_array().unwrap().len(),
+            2
+        );
+        assert!(the_record_of(state_directory.path(), &camera).is_failed());
     }
 
     #[test]

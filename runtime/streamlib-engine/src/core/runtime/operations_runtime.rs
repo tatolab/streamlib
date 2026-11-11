@@ -180,11 +180,7 @@ pub(super) async fn add_processor_impl(
         if registry_miss {
             emit_will_add(&node_id);
             emit_did_add(&node_id);
-            if processor_interpreter_launch_record
-                .node_types_this_stream_resolves()
-                .placeholder_of_the_node_type_not_described(&ident_for_err)
-                .is_some()
-            {
+            if a_load_holds_its_type_as_a_placeholder {
                 return Ok(NodeInTheGraph {
                     processor_id: node_id,
                     name: assigned_display_name,

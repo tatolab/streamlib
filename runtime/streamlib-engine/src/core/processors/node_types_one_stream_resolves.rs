@@ -417,7 +417,10 @@ impl NodeTypesOneStreamResolves {
             family,
             pin_default: None,
         };
-        let mut placeholders = self.placeholder_of_each_node_type_not_described.write();
+        let mut placeholders: HashMap<
+            ProcessorClassImportPath,
+            PlaceholderOfANodeTypeNotDescribed,
+        > = HashMap::new();
         for node_type in not_described {
             let placeholder = placeholders.entry(node_type.clone()).or_insert_with(|| {
                 PlaceholderOfANodeTypeNotDescribed {
@@ -471,6 +474,9 @@ impl NodeTypesOneStreamResolves {
                 }
             }
         }
+        self.placeholder_of_each_node_type_not_described
+            .write()
+            .extend(placeholders);
     }
 
     /// How `node_type` runs, native first.
