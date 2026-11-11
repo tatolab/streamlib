@@ -1042,7 +1042,7 @@ async fn an_imported_image_lut_and_fmu_are_read_once_announced_and_described_wit
     let content_sha256 = cover_described["content_sha256"].as_str().unwrap();
     assert!(exists_under(
         &served.project_directory(),
-        &format!(".tatolab/asset-media/{content_sha256}/preview.png")
+        &format!(".tatolab/asset-media/{content_sha256}/png/preview.png")
     ));
 
     let grade_described = served

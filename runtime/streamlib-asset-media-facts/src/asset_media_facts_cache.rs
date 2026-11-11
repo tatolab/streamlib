@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The facts and preview picture read from an asset's bytes, kept in its project's
-//! `.tatolab/asset-media/<content_sha256>/` so the bytes are read once, and rebuilt whenever
-//! they are missing.
+//! `.tatolab/asset-media/<content_sha256>/<extension>/` so the bytes are read once by the reader
+//! their extension chooses, and rebuilt whenever they are missing.
 
 use std::path::{Path, PathBuf};
 
@@ -12,14 +12,24 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetMediaFactsOnTheWire, AssetPreviewOnTheWire,
 };
 
-use crate::{ASSET_PREVIEW_PICTURE_MEDIA_TYPE, read_the_media_facts_of_an_asset_file};
+use crate::{
+    ASSET_PREVIEW_PICTURE_MEDIA_TYPE, read_the_media_facts_of_an_asset_file,
+    the_lowercase_extension_of,
+};
 
 /// The folder of a project, relative to its directory, the facts read from each asset's bytes
-/// are kept in, one folder per SHA-256.
+/// are kept in, one folder per SHA-256 and one inside it per file extension.
 pub const ASSET_MEDIA_FACTS_CACHE_DIRECTORY: &str = ".tatolab/asset-media";
 
 const FACTS_FILE_NAME: &str = "facts.json";
 const PREVIEW_PICTURE_FILE_NAME: &str = "preview.png";
+
+/// The extension folder of a file with no extension; no real extension starts with `-`.
+const NO_EXTENSION_FOLDER_NAME: &str = "-none";
+
+/// The extension folder of a file whose extension is not a short run of ASCII letters and
+/// digits, which no reader takes.
+const UNUSUAL_EXTENSION_FOLDER_NAME: &str = "-unusual";
 
 /// The readers' format: a kept read of another format is read again, so a reader that learns a
 /// new family or fact reaches every asset.
@@ -72,24 +82,50 @@ impl AssetMediaFactsCacheOfAProject {
         }
     }
 
-    fn folder_of(&self, content_sha256: &str) -> Option<PathBuf> {
-        is_a_lowercase_hex_sha256(content_sha256).then(|| self.cache_directory.join(content_sha256))
+    fn folder_of(&self, content_sha256: &str, asset_file_path: &Path) -> Option<PathBuf> {
+        let extension = the_lowercase_extension_of(asset_file_path);
+        let extension_folder_name = if extension.is_empty() {
+            NO_EXTENSION_FOLDER_NAME
+        } else if extension.len() <= 16
+            && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        {
+            extension.as_str()
+        } else {
+            UNUSUAL_EXTENSION_FOLDER_NAME
+        };
+        is_a_lowercase_hex_sha256(content_sha256).then(|| {
+            self.cache_directory
+                .join(content_sha256)
+                .join(extension_folder_name)
+        })
     }
 
-    /// What is kept for the bytes whose SHA-256 is `content_sha256`, `None` when nothing of the
-    /// current reader format is.
-    pub fn cached(&self, content_sha256: &str) -> Option<AssetMediaFactsCachedInTheProject> {
-        let facts_file = self.folder_of(content_sha256)?.join(FACTS_FILE_NAME);
+    /// What is kept for the bytes whose SHA-256 is `content_sha256`, read by the reader the
+    /// extension of `asset_file_path` chooses; `None` when nothing of the current reader format
+    /// is.
+    pub fn cached(
+        &self,
+        content_sha256: &str,
+        asset_file_path: &Path,
+    ) -> Option<AssetMediaFactsCachedInTheProject> {
+        let facts_file = self
+            .folder_of(content_sha256, asset_file_path)?
+            .join(FACTS_FILE_NAME);
         let facts_json = std::fs::read(facts_file).ok()?;
         let kept: AssetMediaFactsFileInTheCache = serde_json::from_slice(&facts_json).ok()?;
         (kept.reader_format_version == ASSET_MEDIA_FACTS_READER_FORMAT_VERSION)
             .then_some(kept.cached)
     }
 
-    /// The preview picture kept for the bytes whose SHA-256 is `content_sha256`, PNG-encoded.
-    pub fn preview_png_bytes(&self, content_sha256: &str) -> Option<Vec<u8>> {
+    /// The preview picture kept for the bytes whose SHA-256 is `content_sha256`, made by the
+    /// reader the extension of `asset_file_path` chooses, PNG-encoded.
+    pub fn preview_png_bytes(
+        &self,
+        content_sha256: &str,
+        asset_file_path: &Path,
+    ) -> Option<Vec<u8>> {
         std::fs::read(
-            self.folder_of(content_sha256)?
+            self.folder_of(content_sha256, asset_file_path)?
                 .join(PREVIEW_PICTURE_FILE_NAME),
         )
         .ok()
@@ -128,7 +164,12 @@ impl AssetMediaFactsCacheOfAProject {
                     None,
                 ),
             };
-        if let Err(why) = self.keep(content_sha256, &cached, preview_png_bytes.as_deref()) {
+        if let Err(why) = self.keep(
+            content_sha256,
+            asset_file_path,
+            &cached,
+            preview_png_bytes.as_deref(),
+        ) {
             tracing::warn!(content_sha256, %why, "an asset's media facts were read and not kept; they are read again next time");
         }
         cached
@@ -137,10 +178,11 @@ impl AssetMediaFactsCacheOfAProject {
     fn keep(
         &self,
         content_sha256: &str,
+        asset_file_path: &Path,
         cached: &AssetMediaFactsCachedInTheProject,
         preview_png_bytes: Option<&[u8]>,
     ) -> std::io::Result<()> {
-        let Some(folder) = self.folder_of(content_sha256) else {
+        let Some(folder) = self.folder_of(content_sha256, asset_file_path) else {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("`{content_sha256}` is no SHA-256 in lowercase hex"),
@@ -183,10 +225,13 @@ mod tests {
             .save(&cover)
             .unwrap();
         let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(project.path());
-        assert_eq!(cache.cached(SHA256_OF_SOMETHING), None);
+        assert_eq!(cache.cached(SHA256_OF_SOMETHING, &cover), None);
         let read = cache.read_and_keep(SHA256_OF_SOMETHING, &cover);
         std::fs::remove_file(&cover).unwrap();
-        assert_eq!(cache.cached(SHA256_OF_SOMETHING), Some(read.clone()));
+        assert_eq!(
+            cache.cached(SHA256_OF_SOMETHING, &cover),
+            Some(read.clone())
+        );
         let AssetMediaFactsCachedInTheProject::Read { preview, .. } = read else {
             panic!("the image read: {read:?}");
         };
@@ -198,13 +243,16 @@ mod tests {
                 media_type: "image/png".to_owned()
             })
         );
-        let png_bytes = cache.preview_png_bytes(SHA256_OF_SOMETHING).unwrap();
+        let png_bytes = cache
+            .preview_png_bytes(SHA256_OF_SOMETHING, &cover)
+            .unwrap();
         assert!(png_bytes.starts_with(b"\x89PNG"));
         assert!(
             project
                 .path()
                 .join(ASSET_MEDIA_FACTS_CACHE_DIRECTORY)
                 .join(SHA256_OF_SOMETHING)
+                .join("png")
                 .join(FACTS_FILE_NAME)
                 .is_file()
         );
@@ -224,8 +272,8 @@ mod tests {
                     .to_owned()
             }
         );
-        assert_eq!(cache.cached(SHA256_OF_SOMETHING), Some(read));
-        assert_eq!(cache.preview_png_bytes(SHA256_OF_SOMETHING), None);
+        assert_eq!(cache.cached(SHA256_OF_SOMETHING, &model), Some(read));
+        assert_eq!(cache.preview_png_bytes(SHA256_OF_SOMETHING, &model), None);
     }
 
     #[test]
@@ -235,7 +283,7 @@ mod tests {
         let lut = project.path().join("film.cube");
         std::fs::write(&lut, "LUT_3D_SIZE 2\n").unwrap();
         cache.read_and_keep("../../escape", &lut);
-        assert_eq!(cache.cached("../../escape"), None);
+        assert_eq!(cache.cached("../../escape", &lut), None);
         assert!(
             !project
                 .path()
@@ -248,13 +296,40 @@ mod tests {
     fn a_kept_read_of_another_reader_format_is_read_again() {
         let project = tempfile::tempdir().unwrap();
         let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(project.path());
-        let folder = cache.folder_of(SHA256_OF_SOMETHING).unwrap();
+        let lut = project.path().join("film.cube");
+        let folder = cache.folder_of(SHA256_OF_SOMETHING, &lut).unwrap();
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(
             folder.join(FACTS_FILE_NAME),
             r#"{"reader_format_version":0,"media_facts_state":"unreadable","media_facts_unreadable_because":"old"}"#,
         )
         .unwrap();
-        assert_eq!(cache.cached(SHA256_OF_SOMETHING), None);
+        assert_eq!(cache.cached(SHA256_OF_SOMETHING, &lut), None);
+    }
+
+    #[test]
+    fn the_same_bytes_under_another_extension_are_read_again_by_its_reader() {
+        let project = tempfile::tempdir().unwrap();
+        let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(project.path());
+        let logo_as_data = project.path().join("logo.bin");
+        image::RgbImage::from_pixel(4, 4, image::Rgb([255, 0, 0]))
+            .save_with_format(&logo_as_data, image::ImageFormat::Png)
+            .unwrap();
+        let read_as_data = cache.read_and_keep(SHA256_OF_SOMETHING, &logo_as_data);
+        assert!(matches!(
+            read_as_data,
+            AssetMediaFactsCachedInTheProject::Unreadable { .. }
+        ));
+        let logo_as_image = project.path().join("logo.png");
+        std::fs::rename(&logo_as_data, &logo_as_image).unwrap();
+        assert_eq!(cache.cached(SHA256_OF_SOMETHING, &logo_as_image), None);
+        assert!(matches!(
+            cache.read_and_keep(SHA256_OF_SOMETHING, &logo_as_image),
+            AssetMediaFactsCachedInTheProject::Read { .. }
+        ));
+        assert_eq!(
+            cache.cached(SHA256_OF_SOMETHING, &logo_as_data),
+            Some(read_as_data)
+        );
     }
 }

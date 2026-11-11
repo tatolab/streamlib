@@ -6,6 +6,7 @@
 //! the project's change feed when it finishes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, OnceLock};
@@ -98,7 +99,7 @@ impl AssetMediaFactsReadsInThisRuntime {
             return AssetMediaFactsNow::NoFileAtItsPath;
         }
         if let Some(kept) = AssetMediaFactsCacheOfAProject::of_the_project_at(project_directory)
-            .cached(&asset.content_sha256)
+            .cached(&asset.content_sha256, &asset_file_path)
         {
             return AssetMediaFactsNow::Kept(kept);
         }
@@ -156,7 +157,7 @@ impl AssetMediaFactsReadsInThisRuntime {
     }
 
     fn queue_a_read(self: &Arc<Self>, read: AssetMediaFactsReadQueued) {
-        let read_key = (read.project_directory.clone(), read.content_sha256.clone());
+        let read_key = (read.asset_file_path.clone(), read.content_sha256.clone());
         if !self
             .reads_queued_or_under_way
             .lock()
@@ -188,15 +189,28 @@ impl AssetMediaFactsReadsInThisRuntime {
     }
 
     fn read_and_announce(&self, queued: AssetMediaFactsReadQueued) {
-        let kept = AssetMediaFactsCacheOfAProject::of_the_project_at(&queued.project_directory)
-            .read_and_keep(&queued.content_sha256, &queued.asset_file_path);
+        let cache = AssetMediaFactsCacheOfAProject::of_the_project_at(&queued.project_directory);
+        let kept = cache
+            .cached(&queued.content_sha256, &queued.asset_file_path)
+            .unwrap_or_else(|| {
+                std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    cache.read_and_keep(&queued.content_sha256, &queued.asset_file_path)
+                }))
+                .unwrap_or_else(|_| {
+                    tracing::warn!(path = %queued.asset_file_path.display(), "a media facts reader panicked on an asset file");
+                    AssetMediaFactsCachedInTheProject::Unreadable {
+                        media_facts_unreadable_because: "the runtime's reader failed on this file"
+                            .to_owned(),
+                    }
+                })
+            });
         let media_facts_state = match kept {
             AssetMediaFactsCachedInTheProject::Read { .. } => MEDIA_FACTS_STATE_READ,
             AssetMediaFactsCachedInTheProject::Unreadable { .. } => MEDIA_FACTS_STATE_UNREADABLE,
         };
         self.reads_queued_or_under_way
             .lock()
-            .remove(&(queued.project_directory, queued.content_sha256.clone()));
+            .remove(&(queued.asset_file_path, queued.content_sha256.clone()));
         {
             let mut finished_reads_oldest_first_by_project =
                 self.finished_reads_oldest_first_by_project.lock();

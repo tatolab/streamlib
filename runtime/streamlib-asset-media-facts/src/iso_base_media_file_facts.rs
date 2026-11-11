@@ -54,7 +54,11 @@ fn boxes_in(bytes: &[u8]) -> Vec<IsoBaseMediaBoxInMemory<'_>> {
             }
             size => (8, size as usize),
         };
-        if box_len < header_len || offset + box_len > bytes.len() {
+        if box_len < header_len
+            || offset
+                .checked_add(box_len)
+                .is_none_or(|box_end| box_end > bytes.len())
+        {
             break;
         }
         boxes.push(IsoBaseMediaBoxInMemory {
@@ -123,7 +127,11 @@ fn the_movie_box_of(file: &mut File) -> Result<Vec<u8>, AssetMediaFactsUnreadabl
             }
             size => (8, u64::from(size)),
         };
-        if box_len < header_len || offset + box_len > file_len {
+        if box_len < header_len
+            || offset
+                .checked_add(box_len)
+                .is_none_or(|box_end| box_end > file_len)
+        {
             break;
         }
         if &box_type == b"moov" {
@@ -400,6 +408,19 @@ mod tests {
     use super::iso_base_media_test_files::*;
     use super::*;
     use crate::read_the_media_facts_of_an_asset_file;
+
+    #[test]
+    fn a_box_whose_largesize_runs_past_the_end_of_memory_ends_the_scan() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&8u32.to_be_bytes());
+        bytes.extend_from_slice(b"free");
+        bytes.extend_from_slice(&1u32.to_be_bytes());
+        bytes.extend_from_slice(b"trak");
+        bytes.extend_from_slice(&u64::MAX.to_be_bytes());
+        let boxes = boxes_in(&bytes);
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(&boxes[0].box_type, b"free");
+    }
 
     #[test]
     fn an_mp4_reads_its_duration_and_each_tracks_facts_from_a_movie_box_after_its_media() {

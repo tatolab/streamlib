@@ -67,11 +67,7 @@ pub fn read_the_media_facts_of_an_asset_file(
             "no file is at the asset's path",
         ));
     }
-    let extension = asset_file_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+    let extension = the_lowercase_extension_of(asset_file_path);
     match extension.as_str() {
         "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "hdr" | "exr" => {
             image_file_media_facts::read_an_image_file(asset_file_path)
@@ -91,6 +87,16 @@ pub fn read_the_media_facts_of_an_asset_file(
             "the runtime has no reader for `.{other}` files"
         ))),
     }
+}
+
+/// The extension of `asset_file_path` in lowercase, the one that chooses its reader; empty for
+/// none.
+pub(crate) fn the_lowercase_extension_of(asset_file_path: &Path) -> String {
+    asset_file_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
 }
 
 /// Whole milliseconds in `ticks` of a clock running `ticks_per_second`.

@@ -399,12 +399,15 @@ impl LocalApiMcpServerHandler {
                             &previewed_asset,
                         ),
                         project_repository.project_directory().to_path_buf(),
+                        previewed_asset
+                            .path
+                            .on_disk_under(project_repository.project_directory()),
                         previewed_asset.content_sha256,
                     ))
                 },
             )
             .await?;
-        let (media_facts_now, project_directory, content_sha256) = previewed;
+        let (media_facts_now, project_directory, asset_file_path, content_sha256) = previewed;
         let preview = match media_facts_now {
             AssetMediaFactsNow::NotRead => {
                 return Err(format!(
@@ -443,7 +446,7 @@ impl LocalApiMcpServerHandler {
         };
         let png_bytes = tokio::task::spawn_blocking(move || {
             AssetMediaFactsCacheOfAProject::of_the_project_at(&project_directory)
-                .preview_png_bytes(&content_sha256)
+                .preview_png_bytes(&content_sha256, &asset_file_path)
         })
         .await
         .map_err(|join_failure| {

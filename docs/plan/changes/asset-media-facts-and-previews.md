@@ -83,7 +83,9 @@ preview, for a stream asset, and while the asset's bytes are still being read.
 
 ### Where it is kept
 
-`.tatolab/asset-media/<content_sha256>/facts.json` and `preview.png`. History never records
+`.tatolab/asset-media/<content_sha256>/<extension>/facts.json` and `preview.png`, so the same
+bytes under another extension are read again by the reader that extension chooses. A reader that
+fails on a file leaves the asset `unreadable`, never stops the reads. History never records
 them and an import copy skips them with the rest of `.tatolab/`. A duplicated or imported
 project rebuilds them on first read.
 
