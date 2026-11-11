@@ -43,7 +43,7 @@ streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contra
 # The projects the asset tools open, each with its one writer.
 streamlib-project-repository = { path = "../streamlib-project-repository", features = ["mcp-tool-json-schema"] }
 # What each asset's bytes hold and its preview picture, read once per content hash.
-streamlib-asset-media-facts = { path = "../streamlib-asset-media-facts", version = "0.68.60" }
+streamlib-asset-media-facts = { path = "../streamlib-asset-media-facts", version = "0.68.61" }
 uuid = "1.11"
 # `read_project_file` and `write_project_file` carry a file's bytes as base64.
 base64 = "0.22"
