@@ -230,6 +230,10 @@ your camera. `examples/test-pattern-halftone-lens` is a project of this shape gr
 its own: a Slang compute kernel that keeps the pixels on the GPU, and a meter that reads each frame
 back on the CPU.
 
+Every converted example ships in the runtime unit as a sample project at the runtime's own
+version. `tatolab new --sample test-pattern-halftone-lens` creates a project from one, and the
+local API's `list_samples` lists each by name, title and summary.
+
 To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes
 (`uv add tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`
 declares a track of it, and a `MoqTrackSend` writes a port's messages to that track. Another

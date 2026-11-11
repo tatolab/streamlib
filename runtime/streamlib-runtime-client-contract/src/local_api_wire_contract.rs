@@ -232,10 +232,28 @@ pub struct StartOrReloadProjectToolResult {
 pub struct CreateProjectToolResult {
     /// The queued action's id, which `describe_stream_action` and `logs` take.
     pub action: String,
-    /// The id the scaffold's `stream:main` loads as.
+    /// The id the new project's `streams/main.graph.json` loads as.
     pub stream: String,
     /// The project's directory, symlinks resolved.
     pub project_directory: PathBuf,
+}
+
+/// The `list_samples` tool's result: every sample project the runtime unit carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListSamplesToolResult {
+    /// Each sample, in name order.
+    pub samples: Vec<ListSamplesToolResultSample>,
+}
+
+/// One sample project the runtime unit carries, which `create_project` takes by `name`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListSamplesToolResultSample {
+    /// The name `create_project`'s `sample` takes.
+    pub name: String,
+    /// The sample's title.
+    pub title: String,
+    /// What the sample shows, in a sentence or two; empty when it says nothing.
+    pub summary: String,
 }
 
 /// The `import_project` tool's result: the project it unpacked from a `.zip` of one.
@@ -1416,6 +1434,16 @@ mod tests {
                 project_directory: PathBuf::from("/home/me/streams/brisk-otter"),
             }),
             r#"{"action":"Rabc-4","stream":"brisk-otter-main-0a1b2c","project_directory":"/home/me/streams/brisk-otter"}"#
+        );
+        assert_eq!(
+            wire_text(&ListSamplesToolResult {
+                samples: vec![ListSamplesToolResultSample {
+                    name: "camera-halftone".to_owned(),
+                    title: "Camera halftone".to_owned(),
+                    summary: "Your webcam printed as newsprint.".to_owned(),
+                }],
+            }),
+            r#"{"samples":[{"name":"camera-halftone","title":"Camera halftone","summary":"Your webcam printed as newsprint."}]}"#
         );
         assert_eq!(
             wire_text(&DescribeStreamActionToolResult {

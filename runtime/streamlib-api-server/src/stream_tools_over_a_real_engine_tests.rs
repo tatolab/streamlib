@@ -464,6 +464,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     ) -> Result<streamlib::sdk::runtime::ProjectCreationQueued> {
         self.engine.create_project(request)
     }
+    fn list_samples(
+        &self,
+    ) -> streamlib_runtime_client_contract::local_api_wire_contract::ListSamplesToolResult {
+        self.engine.list_samples()
+    }
     fn describe_stream_action(
         &self,
         action_id: &str,
@@ -1577,6 +1582,42 @@ async fn create_project_over_a_file_a_new_project_starts_with_fails_its_action_w
     assert_eq!(
         std::fs::read_to_string(project.path().join("streams/main.graph.json")).unwrap(),
         "# the user's own\n"
+    );
+}
+
+/// `create_project` naming a sample the runtime unit does not carry is refused at once, naming
+/// the samples it does, and `list_samples` lists none for a unit that carries none.
+#[tokio::test(flavor = "multi_thread")]
+async fn create_project_from_a_sample_the_unit_does_not_carry_is_refused_naming_what_it_carries() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_directory_for_create_project();
+
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "create_project",
+            json!({ "project_directory": project.path(), "sample": "camera-halftone" }),
+        )
+        .await,
+    )
+    .expect_err("a sample the unit does not carry is refused");
+
+    assert!(
+        refusal.contains("the runtime unit carries no sample `camera-halftone`; it carries none"),
+        "{refusal}"
+    );
+    assert!(!project.path().join("tatolab-project.json").exists());
+    assert_eq!(
+        tool_answer(
+            &tool_call_result(
+                engine.operations_on_the_loaded_streams(),
+                "list_samples",
+                json!({}),
+            )
+            .await,
+        )
+        .expect("the samples are listed"),
+        json!({ "samples": [] })
     );
 }
 

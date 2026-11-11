@@ -208,14 +208,19 @@ pub(crate) fn start_or_reload_project(
     ))
 }
 
-/// `tatolab new [DIRECTORY]`: create a project in `requested_project_directory` resolved against
-/// `caller_working_directory`, or with none in a folder the runtime draws under `~/streams`,
-/// print the action that writes and loads it and how to follow it, and return.
+/// `tatolab new [DIRECTORY] [--sample NAME]`: create a project in `requested_project_directory`
+/// resolved against `caller_working_directory`, or with none in a folder the runtime draws under
+/// `~/streams`, from the starter or the sample `requested_sample_name` names, print the action
+/// that writes and loads it and how to follow it, and return.
 pub(crate) fn create_project(
     caller_working_directory: &Path,
     requested_project_directory: Option<&Path>,
+    requested_sample_name: Option<&str>,
 ) -> Result<u8, TatolabCommandFailure> {
     let mut create_project_arguments = serde_json::Map::new();
+    if let Some(requested_sample_name) = requested_sample_name {
+        create_project_arguments.insert("sample".to_owned(), requested_sample_name.into());
+    }
     if let Some(requested_project_directory) = requested_project_directory {
         create_project_arguments.insert(
             "project_directory".to_owned(),

@@ -97,8 +97,9 @@ reshapes #3216.
   placeholder is version `0.0.x`, so a placeholder never satisfies one: resolution fails naming
   the module instead of syncing an environment without it. A placeholder's one release is yanked
   once uploaded, so a third party's looser requirement fails the same way.
-- **Samples in the runtime unit.** The unit carries sample projects at its own version: the Linux
-  tarball under `samples/<name>/`, the macOS helper bundle under `Contents/Resources/samples/<name>/`.
+- **Samples in the runtime unit.** The unit carries sample projects at its own version, beside
+  the lend as everything else it carries: the Linux tarball under `lib/tatolab/samples/<name>/`,
+  the macOS helper bundle under `Contents/Resources/samples/<name>/`.
   A sample is a project directory as a created project is, naming the index. The local API lists them (`list_samples`: name, title, summary per sample) and
   `create_project` takes an optional `sample` name, which copies that sample into the directory
   instead of rendering the starter, then makes the `.venv` and loads it as every create does.

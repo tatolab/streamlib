@@ -203,6 +203,17 @@ pub enum ProjectRepositoryRefusal {
         format_version: u32,
         newest_format_version: u32,
     },
+    #[error("the runtime unit carries no sample `{sample}`; it carries {carried}")]
+    NoSuchSampleProject { sample: String, carried: String },
+    #[error("the sample's {path} holds no stream asset UUID under `asset`")]
+    SampleProjectMainStreamHoldsNoAsset { path: PathBuf },
+    #[error(
+        "`{project_directory}` already has {already_present}, and the sample's files would overwrite it; create the project in an empty directory"
+    )]
+    SampleProjectCopyWouldOverwrite {
+        project_directory: PathBuf,
+        already_present: String,
+    },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[cfg(feature = "history")]

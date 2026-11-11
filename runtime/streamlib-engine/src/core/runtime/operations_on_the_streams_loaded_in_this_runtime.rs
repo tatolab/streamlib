@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DescribeRuntimeToolResult, ListSamplesToolResult,
+};
 
 use super::operations::RuntimeOperations;
 use super::{
@@ -91,6 +93,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// [`Runner::create_project`].
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued>;
+
+    /// [`Runner::list_samples`].
+    fn list_samples(&self) -> ListSamplesToolResult;
 
     /// [`Runner::describe_stream_action`].
     fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction>;
@@ -244,6 +249,9 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued> {
         Runner::create_project(self, request)
+    }
+    fn list_samples(&self) -> ListSamplesToolResult {
+        Runner::list_samples(self)
     }
 
     fn describe_stream_action(&self, action_id: &str) -> Result<StreamAction> {

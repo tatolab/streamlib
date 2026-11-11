@@ -180,6 +180,33 @@ fn new_with_no_directory_leaves_the_folder_to_the_runtime() {
 }
 
 #[test]
+fn new_with_a_sample_names_it_to_the_runtime() {
+    let working_directory = tempfile::tempdir().unwrap();
+    let drawn_project_directory = Path::new("/home/me/streams/brisk-otter");
+    let (isolated_machine_directories, stub_local_api_server) =
+        a_runtime_answering_create_project(StubToolAnswer::tool_result(
+            &create_project_tool_result_text("Rabc-5", drawn_project_directory),
+        ));
+
+    let finished = run_tatolab_in(
+        &isolated_machine_directories,
+        working_directory.path(),
+        &["new", "--sample", "camera-halftone"],
+    );
+
+    assert_eq!(
+        finished.status.code(),
+        Some(0),
+        "{}",
+        standard_error_text(&finished)
+    );
+    assert_eq!(
+        stub_local_api_server.recorded_arguments_of("create_project"),
+        [json!({ "sample": "camera-halftone" })]
+    );
+}
+
+#[test]
 fn a_refused_create_prints_the_runtimes_refusal_and_exits_one() {
     let working_directory = tempfile::tempdir().unwrap();
     let (isolated_machine_directories, _stub_local_api_server) =

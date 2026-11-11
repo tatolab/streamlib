@@ -12,10 +12,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
+use streamlib_consumer_rhi::runtime_unit_layout::sample_projects_directory_beside_the_lend;
 use streamlib_project_repository::{
     PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile, assets_a_node_config_references,
-    every_asset_uuid_the_project_holds,
+    every_asset_uuid_the_project_holds, every_sample_project_in,
     graph_document_with_each_stream_fragment_reference_resolved, project_stream_documents,
+    the_sample_project_named,
+};
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    ListSamplesToolResult, ListSamplesToolResultSample,
 };
 use uuid::Uuid;
 
@@ -87,6 +92,8 @@ pub struct CreateProjectRequest {
     /// Where the project is created, by absolute path; `None` draws an
     /// `<adjective>-<noun>` folder under `$HOME/streams`.
     pub project_directory: Option<PathBuf>,
+    /// The sample project the runtime unit carries to copy, by name; `None` renders the starter.
+    pub sample: Option<String>,
 }
 
 /// The load [`Runner::create_project`] queued of the project it created.
@@ -96,7 +103,7 @@ pub struct ProjectCreationQueued {
     pub action_id: String,
     /// The project's directory, symlinks resolved.
     pub project_directory: PathBuf,
-    /// The id of the stream the scaffold's `streams/main.graph.json` loads as.
+    /// The id of the stream the new project's `streams/main.graph.json` loads as.
     pub stream_id: String,
 }
 
@@ -2864,17 +2871,29 @@ impl Runner {
                 .any(|stream| is_paused(stream.status()))
     }
 
-    /// Create a project from the scaffold `tatolab new` writes and queue its
-    /// load, answering the action's id and the id its stream asset `main` loads as
-    /// at once. The directory is `request`'s, created when missing, or one
-    /// drawn under `$HOME/streams`. The action writes the scaffold — the project file, one
-    /// stream asset's graph document and its node modules — has the host commit it as the first
-    /// commit of the project's history, then runs [`Runner::start_project`]'s load, the stream
-    /// shown under the folder's name; a directory already holding a file the
-    /// scaffold writes fails the action with nothing written. Refused for a
-    /// relative directory, one that cannot be created, and a draw that finds
-    /// no free name.
+    /// Create a project from the starter `tatolab new` writes, or from the sample project
+    /// `request` names, and queue its load, answering the action's id and the id its stream
+    /// asset `main` loads as at once. The directory is `request`'s, created when missing, or one
+    /// drawn under `$HOME/streams`. The action writes the starter's files or copies the
+    /// sample's under a new project UUID, has the host commit them as the first commit of the
+    /// project's history, then runs [`Runner::start_project`]'s load, the stream asset `main`
+    /// shown under the folder's name; a directory already holding a file the create writes fails
+    /// the action with nothing written. Refused for a sample the runtime unit does not carry,
+    /// naming the ones it does, a relative directory, one that cannot be created, and a draw
+    /// that finds no free name.
     pub fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued> {
+        let sample = request
+            .sample
+            .as_deref()
+            .map(|sample_name| {
+                the_sample_project_named(
+                    self.sample_projects_directory_of_this_runtime_unit()
+                        .as_deref(),
+                    sample_name,
+                )
+                .map_err(|refusal| Error::Configuration(refusal.to_string()))
+            })
+            .transpose()?;
         let project_directory = match request.project_directory {
             Some(project_directory) => {
                 if !project_directory.is_absolute() {
@@ -2895,7 +2914,12 @@ impl Runner {
         };
         let project_directory =
             std::fs::canonicalize(&project_directory).unwrap_or(project_directory);
-        let scaffold = NewProjectScaffold::of_a_new_project_in(&project_directory);
+        let scaffold = match sample {
+            Some(sample) => {
+                NewProjectScaffold::of_a_new_project_from_a_sample_in(&project_directory, sample)
+            }
+            None => NewProjectScaffold::of_a_new_project_in(&project_directory),
+        };
         let stream_id = scaffold.stream_id_in(&project_directory);
         let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
         let action_id = queue_of_each_project.next_action_id(
@@ -2935,6 +2959,31 @@ impl Runner {
             project_directory: queued.project_directory,
             stream_id,
         })
+    }
+
+    /// Every sample project the runtime unit carries beside this runtime's lend, in name order;
+    /// none when it was handed no lend.
+    pub fn list_samples(&self) -> ListSamplesToolResult {
+        ListSamplesToolResult {
+            samples: self
+                .sample_projects_directory_of_this_runtime_unit()
+                .map(|samples_directory| every_sample_project_in(&samples_directory))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|sample| ListSamplesToolResultSample {
+                    name: sample.listed.name,
+                    title: sample.listed.title,
+                    summary: sample.listed.summary,
+                })
+                .collect(),
+        }
+    }
+
+    fn sample_projects_directory_of_this_runtime_unit(&self) -> Option<PathBuf> {
+        self.engine_resources_shared_by_every_stream
+            .processor_interpreter_lend_directory
+            .get()
+            .and_then(sample_projects_directory_beside_the_lend)
     }
 
     /// Forget the function node states this runtime carries for `stream_id`,
@@ -6545,6 +6594,7 @@ mod tests {
         let queued = runner
             .create_project(CreateProjectRequest {
                 project_directory: Some(project.path().to_path_buf()),
+                sample: None,
             })
             .expect("a create of a project is queued");
 
@@ -6609,6 +6659,7 @@ mod tests {
         let queued = runner
             .create_project(CreateProjectRequest {
                 project_directory: Some(project.path().to_path_buf()),
+                sample: None,
             })
             .expect("a create over a scaffold file is queued, and its action fails");
 
@@ -6637,11 +6688,192 @@ mod tests {
         let refusal = runner
             .create_project(CreateProjectRequest {
                 project_directory: Some(PathBuf::from("a-relative-project")),
+                sample: None,
             })
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("must be an absolute path"), "{refusal}");
         assert!(!Path::new("a-relative-project").exists());
+    }
+
+    /// The stream asset UUID of the sample `lens` a test runtime unit carries.
+    const SAMPLE_MAIN_STREAM_ASSET_FOR_TEST: &str = "0eaf9ee2-0f73-4154-a3f6-a99c261b850d";
+
+    /// A runner whose runtime unit, in the returned folder, carries the samples `lens` and
+    /// `chord` beside its lend, each a project whose `streams/main.graph.json` holds one node.
+    fn a_runner_whose_unit_carries_two_samples(
+        streams_directory: &Path,
+    ) -> (Arc<Runner>, tempfile::TempDir) {
+        ensure_test_mocks_registered();
+        let runtime_unit_root = tempfile::tempdir().unwrap();
+        let lend_directory = runtime_unit_root.path().join("lib/tatolab/lend");
+        std::fs::create_dir_all(&lend_directory).unwrap();
+        let samples_directory = sample_projects_directory_beside_the_lend(&lend_directory).unwrap();
+        for (sample_name, title) in [("lens", "Halftone lens"), ("chord", "A chord")] {
+            let sample_folder = samples_directory.join(sample_name);
+            std::fs::create_dir_all(sample_folder.join("streams")).unwrap();
+            std::fs::create_dir_all(sample_folder.join("nodes")).unwrap();
+            let mut project_file = TatolabProjectFile::of_a_new_project(title);
+            project_file.description = Some(format!("{title}, as a sample."));
+            std::fs::write(
+                sample_folder.join(PROJECT_FILE_NAME),
+                project_file.canonical_bytes().unwrap(),
+            )
+            .unwrap();
+            let mut main_graph = the_graph_of_a_stream_named("main");
+            main_graph["asset"] = serde_json::json!(SAMPLE_MAIN_STREAM_ASSET_FOR_TEST);
+            main_graph["nodes"][0]["id"] = serde_json::json!(Uuid::new_v4());
+            std::fs::write(
+                sample_folder.join("streams/main.graph.json"),
+                serde_json::to_vec_pretty(&main_graph).unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                sample_folder.join("pyproject.toml"),
+                format!("[project]\nname = \"{sample_name}\"\n"),
+            )
+            .unwrap();
+            std::fs::write(sample_folder.join("nodes/lens.py"), "LENS = 1\n").unwrap();
+        }
+        let runner = Runner::new().expect("the runner builds");
+        runner
+            .set_processor_interpreter_lend_directory(lend_directory)
+            .expect("the lend directory is handed over");
+        runner
+            .record_streams_in_the_state_directory(streams_directory)
+            .expect("the runner records its streams there");
+        (runner, runtime_unit_root)
+    }
+
+    #[test]
+    #[serial]
+    fn the_samples_the_runtime_unit_carries_are_listed_in_name_order() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let (runner, _runtime_unit_root) =
+            a_runner_whose_unit_carries_two_samples(state_directory.path());
+
+        assert_eq!(
+            runner.list_samples(),
+            ListSamplesToolResult {
+                samples: vec![
+                    ListSamplesToolResultSample {
+                        name: "chord".to_owned(),
+                        title: "A chord".to_owned(),
+                        summary: "A chord, as a sample.".to_owned(),
+                    },
+                    ListSamplesToolResultSample {
+                        name: "lens".to_owned(),
+                        title: "Halftone lens".to_owned(),
+                        summary: "Halftone lens, as a sample.".to_owned(),
+                    },
+                ],
+            }
+        );
+        assert!(
+            a_runner_recording_its_streams_in(None)
+                .list_samples()
+                .samples
+                .is_empty(),
+            "a lend with no samples beside it lists none"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_create_from_a_sample_copies_it_under_a_new_project_and_loads_its_main_stream() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let (runner, runtime_unit_root) =
+            a_runner_whose_unit_carries_two_samples(state_directory.path());
+        let first_commits = Arc::new(Mutex::new(Vec::new()));
+        let first_commits_made = Arc::clone(&first_commits);
+        runner
+            .set_created_project_first_commit(Arc::new(move |project_directory: &Path| {
+                first_commits_made
+                    .lock()
+                    .push(project_directory.to_path_buf());
+                Ok(())
+            }))
+            .unwrap();
+        let project = a_directory_holding_only_a_venv();
+        let project_directory = std::fs::canonicalize(project.path()).unwrap();
+        let folder_name = project_directory
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+
+        let queued = runner
+            .create_project(CreateProjectRequest {
+                project_directory: Some(project.path().to_path_buf()),
+                sample: Some("lens".to_owned()),
+            })
+            .expect("a create from a sample is queued");
+
+        let done = the_stream_action_once_finished(&runner, &queued.action_id);
+        assert_eq!(done.state, StreamActionState::Done, "{done:?}");
+        assert_eq!(
+            done.streams
+                .iter()
+                .map(|stream| (stream.stream_id.clone(), stream.display_name.clone()))
+                .collect::<Vec<_>>(),
+            [(queued.stream_id.clone(), folder_name.clone())]
+        );
+        assert_eq!(
+            std::fs::read_to_string(project_directory.join("nodes/lens.py")).unwrap(),
+            "LENS = 1\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(project_directory.join("pyproject.toml")).unwrap(),
+            "[project]\nname = \"lens\"\n",
+            "a sample's pyproject.toml is copied as the sample writes it"
+        );
+        let project_file = TatolabProjectFile::read_from_project_directory(&project_directory)
+            .expect("the project file reads");
+        let sample_project_file = TatolabProjectFile::read_from_project_directory(
+            &runtime_unit_root.path().join("lib/tatolab/samples/lens"),
+        )
+        .unwrap();
+        assert_ne!(project_file.project, sample_project_file.project);
+        assert_eq!(project_file.name, folder_name);
+        assert_eq!(
+            project_file.description.as_deref(),
+            Some("Halftone lens, as a sample.")
+        );
+        let record = the_record_of(state_directory.path(), &queued.stream_id);
+        assert_eq!(record.location.project, project_file.project);
+        assert_eq!(
+            record.location.stream_asset.to_string(),
+            SAMPLE_MAIN_STREAM_ASSET_FOR_TEST
+        );
+        assert_eq!(
+            the_display_name_of_the_stream_at(&record.location, &record.stream_id),
+            folder_name
+        );
+        assert_eq!(*first_commits.lock(), [project_directory]);
+    }
+
+    #[test]
+    #[serial]
+    fn a_create_from_a_sample_the_unit_does_not_carry_is_refused_naming_the_ones_it_does() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let (runner, _runtime_unit_root) =
+            a_runner_whose_unit_carries_two_samples(state_directory.path());
+        let project = a_directory_holding_only_a_venv();
+
+        let refusal = runner
+            .create_project(CreateProjectRequest {
+                project_directory: Some(project.path().to_path_buf()),
+                sample: Some("cube".to_owned()),
+            })
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            refusal.contains("the runtime unit carries no sample `cube`; it carries chord, lens"),
+            "{refusal}"
+        );
+        assert!(!project.path().join(PROJECT_FILE_NAME).exists());
+        assert!(runner.stream_actions_under_way().is_empty());
     }
 
     #[test]

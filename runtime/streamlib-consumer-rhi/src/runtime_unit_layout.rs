@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Where a runtime unit lays out what it carries: `bin/` beside the lend, the
-//! browser host beside the lend, and on macOS and Linux the bundled Vulkan
+//! browser host and the sample projects beside the lend, and on macOS and Linux the bundled Vulkan
 //! driver and the Slang shader compiler beside `_engine` in the lent
 //! `tatolab/runtime/`. Also where the macOS app bundle lays the same unit out:
 //! binaries in `Contents/MacOS`, the lend in `Contents/Resources/lend`, and the
@@ -158,6 +158,20 @@ pub const CARRIED_WHEELS_DIRECTORY_NAME: &str = "carried-wheels";
 /// `None` for a lend at the filesystem root.
 pub fn carried_wheels_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
     Some(lend_directory.parent()?.join(CARRIED_WHEELS_DIRECTORY_NAME))
+}
+
+/// The directory beside the lend that holds the sample projects the runtime unit
+/// carries, one project directory each, which a new project can be created from.
+pub const SAMPLE_PROJECTS_DIRECTORY_NAME: &str = "samples";
+
+/// The sample projects directory beside the lend at `lend_directory`, or `None`
+/// for a lend at the filesystem root.
+pub fn sample_projects_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(SAMPLE_PROJECTS_DIRECTORY_NAME),
+    )
 }
 
 /// The directory beside the lend that holds the CPython build the unit carries,

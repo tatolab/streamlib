@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "test-pattern-halftone-lens",
+  "description": "The test pattern through a Slang halftone kernel to a CPU brightness meter: pixels on the GPU and logic on the CPU, with no camera needed.",
+  "name": "Test pattern halftone lens",
   "project": "da61c3cd-3456-4fb6-9494-8d52f0064783"
 }

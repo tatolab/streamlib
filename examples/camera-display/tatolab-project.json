@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "camera-display",
+  "description": "The camera, seen in Tato Studio's viewer: the minimal camera stream.",
+  "name": "Camera display",
   "project": "f4a8359d-5977-4d49-9098-633bd0f89620"
 }
