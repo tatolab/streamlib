@@ -21,7 +21,7 @@
 //!
 //! The stream is the integration suite's own
 //! (`tests/stream-on-runtime/device_exchange_streams.py`), loaded with the
-//! runtime unit's `tatolab start` into the unit's `tatolabd`, which compiles
+//! runtime unit's `tatolab open --play` into the unit's `tatolabd`, which compiles
 //! it in the suite venv and starts its processor interpreters from that same
 //! venv. The unit (`$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else
 //! `target/tatolab-runtime`) is the integration suite's, built by `cargo xtask
@@ -110,7 +110,7 @@ fn runtime_unit_directory() -> PathBuf {
         .unwrap_or_else(|| repository_root().join("target/tatolab-runtime"))
 }
 
-/// The `tatolab start` that asks the runtime to load the handoff stream, and
+/// The `tatolab open --play` that asks the runtime to load the handoff stream, and
 /// the file its output drains into. It runs beside the accept below, so a load
 /// that answers late never holds the probe's connect back; `Drop` kills a run
 /// still waiting when the test ends early.
@@ -328,7 +328,7 @@ impl FinishedProbeHandoff {
         } = self;
         assert!(
             tatolab_run_exit.is_some_and(|exit| exit.success()),
-            "tatolab start must load the handoff stream and exit 0; it ended \
+            "tatolab open --play must load the handoff stream and exit 0; it ended \
              {tatolab_run_exit:?}:\n{tatolab_run_output}\n{tatolabd_diagnostic_tails}"
         );
     }
@@ -476,10 +476,11 @@ fn start_the_probe_stream_and_accept_its_handoff(
     }
 
     let tatolab_run_output_capture_path = run_state_directory.path().join("tatolab-run.log");
-    let tatolab_run_output_capture =
-        File::create(&tatolab_run_output_capture_path).expect("create the tatolab start capture");
+    let tatolab_run_output_capture = File::create(&tatolab_run_output_capture_path)
+        .expect("create the tatolab open --play capture");
     let tatolab_run_process = Command::new(&tatolab)
-        .arg("start")
+        .arg("open")
+        .arg("--play")
         .arg("--dir")
         .arg(stream_on_runtime_suite_directory())
         .arg("--name")
@@ -490,11 +491,11 @@ fn start_the_probe_stream_and_accept_its_handoff(
         .stdout(Stdio::from(
             tatolab_run_output_capture
                 .try_clone()
-                .expect("share the tatolab start capture"),
+                .expect("share the tatolab open --play capture"),
         ))
         .stderr(Stdio::from(tatolab_run_output_capture))
         .spawn()
-        .expect("spawn tatolab start to load the handoff stream");
+        .expect("spawn tatolab open --play to load the handoff stream");
     let mut loading_tatolab_run = TatolabRunLoadingTheHandoffStream {
         tatolab_run_process,
         output_capture_path: tatolab_run_output_capture_path,
@@ -513,7 +514,7 @@ fn start_the_probe_stream_and_accept_its_handoff(
                 }
                 if let Some(exit) = loading_tatolab_run.exited().filter(|exit| !exit.success()) {
                     panic!(
-                        "tatolab start exited {exit} before the probe connected:\n{}\n{}",
+                        "tatolab open --play exited {exit} before the probe connected:\n{}\n{}",
                         loading_tatolab_run.output(),
                         hosting_tatolabd.diagnostic_tails()
                     );

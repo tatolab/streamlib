@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The streams the machine's runtime holds, managed one call at a time: `new`, `start`, `reload`,
-//! `stop`, `pause`, `resume`, `rm`, `cancel`, `streams` and `clock`, each the local API
-//! tool of the same purpose, and the lines or table each prints. A verb naming one stream resolves
-//! its stream argument to an id through `list_streams` first. `start`, `reload` and `dev` share the
-//! project load request.
+//! The streams the machine's runtime holds, managed one call at a time: `new`, `open`, `reload`,
+//! `close`, `play`, `stop`, `pause`, `resume`, `rm`, `cancel`, `streams` and `clock`, each the
+//! local API tool of the same purpose, and the lines or table each prints. A verb naming one
+//! stream resolves its stream argument to an id through `list_streams` first. `open`, `reload` and
+//! `dev` share the project load request.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,9 +13,9 @@ use std::time::Duration;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CancelStreamActionToolResult, CreateProjectToolResult, ListStreamsToolResult,
-    ListStreamsToolResultStream, ListedStreamState, PauseProjectToolResult,
-    RemoveProjectToolResult, ResumeProjectToolResult, SetStreamClockScaleToolResult,
-    StartOrReloadProjectToolResult, StopProjectToolResult, StreamActionStateOnTheWire,
+    ListStreamsToolResultStream, ListedStreamState, PausePlaybackToolResult,
+    ProjectStreamActionQueuedToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
+    SetStreamClockScaleToolResult, StreamActionStateOnTheWire,
 };
 
 use crate::TatolabCommandFailure;
@@ -28,18 +28,22 @@ use crate::verb_standard_output::write_verb_standard_output;
 /// A local API tool that runs, stops or reads the streams the runtime holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StreamActionTool {
-    /// Queues the first load of every stream of a project that does not run.
-    StartProject,
-    /// Queues a re-load from disk of every stream of a project that runs, keeping it paused if it is.
+    /// Queues the open of a project, holding each of its streams loaded and stopped.
+    OpenProject,
+    /// Queues a soft re-load from disk of every stream of an open project, keeping its playback.
     ReloadProject,
+    /// Queues the close of an open project: its playback ended and every stream unloaded.
+    CloseProject,
+    /// Queues the playback of an open project's held streams.
+    StartPlayback,
     /// Creates a project and queues its load.
     CreateProject,
-    /// Unloads every stream of a project, recording each stopped.
-    StopProject,
-    /// Pauses every loaded stream of a project at once.
-    PauseProject,
-    /// Resumes every paused stream of a project at once.
-    ResumeProject,
+    /// Ends the playback of every stream of a project, holding its graph, recording each stopped.
+    StopPlayback,
+    /// Pauses the playback of every loaded stream of a project at once.
+    PausePlayback,
+    /// Resumes the paused playback of every stream of a project at once.
+    ResumePlayback,
     /// Unloads every stream of a project and forgets every record of it.
     RemoveProject,
     /// Drops a queued stream action, or stops a running one at its step.
@@ -54,12 +58,14 @@ impl StreamActionTool {
     /// The tool's name on the local API.
     pub(crate) fn tool_name(self) -> &'static str {
         match self {
-            StreamActionTool::StartProject => "start_project",
+            StreamActionTool::OpenProject => "open_project",
             StreamActionTool::ReloadProject => "reload_project",
+            StreamActionTool::CloseProject => "close_project",
+            StreamActionTool::StartPlayback => "start_playback",
             StreamActionTool::CreateProject => "create_project",
-            StreamActionTool::StopProject => "stop_project",
-            StreamActionTool::PauseProject => "pause_project",
-            StreamActionTool::ResumeProject => "resume_project",
+            StreamActionTool::StopPlayback => "stop_playback",
+            StreamActionTool::PausePlayback => "pause_playback",
+            StreamActionTool::ResumePlayback => "resume_playback",
             StreamActionTool::RemoveProject => "remove_project",
             StreamActionTool::CancelStreamAction => "cancel_stream_action",
             StreamActionTool::ListStreams => "list_streams",
@@ -91,7 +97,7 @@ const STREAM_ACTION_STILL_QUEUED_CELL: &str = "queued";
 /// wrote.
 const NO_LOCATION_CELL: &str = "-";
 
-/// What `start`, `reload` and `dev` ask the runtime to load: the project, every stream asset of its
+/// What `open`, `reload` and `dev` ask the runtime to load: the project, every stream asset of its
 /// `streams/` graph documents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectLoadRequest {
@@ -118,16 +124,14 @@ impl ProjectLoadRequest {
         })
     }
 
-    /// `start_project`'s and `reload_project`'s arguments for this request.
-    pub(crate) fn start_or_reload_project_tool_arguments(
-        &self,
-    ) -> serde_json::Map<String, serde_json::Value> {
-        let mut start_or_reload_project_arguments = serde_json::Map::new();
-        start_or_reload_project_arguments.insert(
+    /// The arguments of every tool that names this request's project and nothing else.
+    pub(crate) fn project_tool_arguments(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut project_arguments = serde_json::Map::new();
+        project_arguments.insert(
             "project_directory".to_owned(),
             self.project_directory.clone().into(),
         );
-        start_or_reload_project_arguments
+        project_arguments
     }
 }
 
@@ -184,12 +188,13 @@ pub(crate) fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
     )
 }
 
-/// `tatolab start [--dir DIR]` with [`StreamActionTool::StartProject`], `tatolab reload [--dir
-/// DIR]` with [`StreamActionTool::ReloadProject`]: queue the load, print the action it queued and
-/// how to follow it, and return; the load's outcome is in the project's log and in `tatolab
-/// streams`.
-pub(crate) fn start_or_reload_project(
-    start_or_reload_tool: StreamActionTool,
+/// `tatolab open`, `reload`, `close` or `play [--dir DIR]`, each queuing the action
+/// `project_action_tool` names on the project, of the kind `stream_action_kind` prints: print the
+/// action it queued and how to follow it, and return; the action's outcome is in the project's
+/// log and in `tatolab streams`.
+pub(crate) fn queue_a_project_stream_action(
+    project_action_tool: StreamActionTool,
+    stream_action_kind: &str,
     caller_working_directory: &Path,
     requested_project_directory: Option<&Path>,
 ) -> Result<u8, TatolabCommandFailure> {
@@ -197,13 +202,14 @@ pub(crate) fn start_or_reload_project(
         caller_working_directory,
         requested_project_directory,
     )?;
-    let start_or_reload_project_result: StartOrReloadProjectToolResult =
+    let project_stream_action_queued: ProjectStreamActionQueuedToolResult =
         call_one_stream_action_tool(
-            start_or_reload_tool,
-            project_load_request.start_or_reload_project_tool_arguments(),
+            project_action_tool,
+            project_load_request.project_tool_arguments(),
         )?;
-    write_verb_standard_output(&rendered_start_or_reload_project_lines(
-        &start_or_reload_project_result,
+    write_verb_standard_output(&rendered_project_stream_action_queued_lines(
+        &project_stream_action_queued,
+        stream_action_kind,
         caller_working_directory,
     ))
 }
@@ -249,15 +255,16 @@ fn rendered_create_project_lines(create_project_result: &CreateProjectToolResult
     )
 }
 
-/// `<action> queued: load of <project>`, then how to follow it from `caller_working_directory`:
-/// the project's log, named with `--dir` when the caller is elsewhere.
-fn rendered_start_or_reload_project_lines(
-    start_or_reload_project_result: &StartOrReloadProjectToolResult,
+/// `<action> queued: <kind> of <project>`, then how to follow it from
+/// `caller_working_directory`: the project's log, named with `--dir` when the caller is elsewhere.
+fn rendered_project_stream_action_queued_lines(
+    project_stream_action_queued: &ProjectStreamActionQueuedToolResult,
+    stream_action_kind: &str,
     caller_working_directory: &Path,
 ) -> String {
     let resolved_caller_working_directory = std::fs::canonicalize(caller_working_directory)
         .unwrap_or_else(|_| caller_working_directory.to_path_buf());
-    let project_directory = &start_or_reload_project_result.project_directory;
+    let project_directory = &project_stream_action_queued.project_directory;
     let mut follow_it = "  follow it: tatolab logs -f".to_owned();
     if *project_directory != resolved_caller_working_directory {
         follow_it.push_str(&format!(" --dir {}", project_directory.display()));
@@ -265,8 +272,8 @@ fn rendered_start_or_reload_project_lines(
     format!(
         "{}{follow_it}\n",
         rendered_queued_stream_action_line(
-            &start_or_reload_project_result.action,
-            "load",
+            &project_stream_action_queued.action,
+            stream_action_kind,
             &project_directory.display().to_string(),
         )
     )
@@ -279,61 +286,61 @@ fn stream_tool_arguments(stream: &str) -> serde_json::Map<String, serde_json::Va
     stream_arguments
 }
 
-/// `tatolab stop [--dir DIR]`: the stop of the whole project — `--dir` resolved against
-/// `caller_working_directory`, else the working directory itself.
-pub(crate) fn stop_project(
+/// `tatolab stop [--dir DIR]`: the stop of the whole project's playback — `--dir` resolved
+/// against `caller_working_directory`, else the working directory itself.
+pub(crate) fn stop_playback(
     caller_working_directory: &Path,
     requested_project_directory: Option<&Path>,
 ) -> Result<u8, TatolabCommandFailure> {
     let project_directory =
         the_project_directory_a_verb_names(caller_working_directory, requested_project_directory)?;
-    let mut stop_project_arguments = serde_json::Map::new();
-    stop_project_arguments.insert(
+    let mut stop_playback_arguments = serde_json::Map::new();
+    stop_playback_arguments.insert(
         "project_directory".to_owned(),
         project_directory.display().to_string().into(),
     );
-    let stop_project_result: StopProjectToolResult =
-        call_one_stream_action_tool(StreamActionTool::StopProject, stop_project_arguments)?;
+    let stop_playback_result: ProjectStreamActionQueuedToolResult =
+        call_one_stream_action_tool(StreamActionTool::StopPlayback, stop_playback_arguments)?;
     write_verb_standard_output(&rendered_queued_stream_action_line(
-        &stop_project_result.action,
+        &stop_playback_result.action,
         "stop",
-        &stop_project_result.project_directory.display().to_string(),
+        &stop_playback_result.project_directory.display().to_string(),
     ))
 }
 
-/// `tatolab pause [--dir DIR]`: the pause of the whole project — `--dir` resolved against
+/// `tatolab pause [--dir DIR]`: the pause of the whole project's playback — `--dir` resolved against
 /// `caller_working_directory`, else the working directory itself.
-pub(crate) fn pause_project(
+pub(crate) fn pause_playback(
     caller_working_directory: &Path,
     requested_project_directory: Option<&Path>,
 ) -> Result<u8, TatolabCommandFailure> {
-    let pause_project_result: PauseProjectToolResult = call_one_project_tool(
-        StreamActionTool::PauseProject,
+    let pause_playback_result: PausePlaybackToolResult = call_one_project_tool(
+        StreamActionTool::PausePlayback,
         caller_working_directory,
         requested_project_directory,
     )?;
     write_verb_standard_output(&rendered_paused_or_resumed_project_line(
         "paused",
-        &pause_project_result.project_directory,
-        &pause_project_result.streams,
+        &pause_playback_result.project_directory,
+        &pause_playback_result.streams,
     ))
 }
 
-/// `tatolab resume [--dir DIR]`: the resume of the whole project — `--dir` resolved against
+/// `tatolab resume [--dir DIR]`: the resume of the whole project's playback — `--dir` resolved against
 /// `caller_working_directory`, else the working directory itself.
-pub(crate) fn resume_project(
+pub(crate) fn resume_playback(
     caller_working_directory: &Path,
     requested_project_directory: Option<&Path>,
 ) -> Result<u8, TatolabCommandFailure> {
-    let resume_project_result: ResumeProjectToolResult = call_one_project_tool(
-        StreamActionTool::ResumeProject,
+    let resume_playback_result: ResumePlaybackToolResult = call_one_project_tool(
+        StreamActionTool::ResumePlayback,
         caller_working_directory,
         requested_project_directory,
     )?;
     write_verb_standard_output(&rendered_paused_or_resumed_project_line(
         "resumed",
-        &resume_project_result.project_directory,
-        &resume_project_result.streams,
+        &resume_playback_result.project_directory,
+        &resume_playback_result.streams,
     ))
 }
 
@@ -562,7 +569,7 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
         let waiting_line = match &listed_stream.location {
             Some(location) => format!(
                 "{stream_id} is waiting for {capture_devices} access, which nobody has asked for \
-                 yet: `tatolab stop --dir {project_directory}` then `tatolab start --dir \
+                 yet: `tatolab stop --dir {project_directory}` then `tatolab play --dir \
                  {project_directory}` asks for it.\n",
                 project_directory = location.project_directory.display()
             ),
@@ -615,7 +622,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn start_and_reload_ask_for_the_canonical_project_and_refuses_a_dir_that_is_not_one() {
+    fn open_and_reload_ask_for_the_canonical_project_and_refuses_a_dir_that_is_not_one() {
         let scratch_directory = tempfile::tempdir().unwrap();
         let project_directory = scratch_directory.path().join("project");
         std::fs::create_dir(&project_directory).unwrap();
@@ -626,9 +633,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            serde_json::Value::Object(
-                project_load_request.start_or_reload_project_tool_arguments()
-            ),
+            serde_json::Value::Object(project_load_request.project_tool_arguments()),
             json!({
                 "project_directory": project_directory.canonicalize().unwrap().to_str().unwrap()
             })
@@ -645,22 +650,24 @@ mod tests {
     }
 
     #[test]
-    fn the_start_and_reload_lines_name_the_queued_load_and_how_to_follow_it() {
-        let start_or_reload_project_result = StartOrReloadProjectToolResult {
+    fn the_queued_project_action_lines_name_the_action_and_how_to_follow_it() {
+        let project_stream_action_queued = ProjectStreamActionQueuedToolResult {
             action: "Rabc-1".to_owned(),
             project_directory: PathBuf::from("/srv/project"),
         };
 
         assert_eq!(
-            rendered_start_or_reload_project_lines(
-                &start_or_reload_project_result,
+            rendered_project_stream_action_queued_lines(
+                &project_stream_action_queued,
+                "open",
                 Path::new("/srv/project")
             ),
-            "Rabc-1 queued: load of /srv/project\n  follow it: tatolab logs -f\n"
+            "Rabc-1 queued: open of /srv/project\n  follow it: tatolab logs -f\n"
         );
         assert_eq!(
-            rendered_start_or_reload_project_lines(
-                &start_or_reload_project_result,
+            rendered_project_stream_action_queued_lines(
+                &project_stream_action_queued,
+                "load",
                 Path::new("/srv")
             ),
             "Rabc-1 queued: load of /srv/project\n  follow it: tatolab logs -f --dir /srv/project\n"
@@ -668,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn start_stop_and_rm_say_which_action_they_queued() {
+    fn stop_and_rm_say_which_action_they_queued() {
         assert_eq!(
             rendered_queued_stream_action_line("R-7", "stop", "camera"),
             "R-7 queued: stop of camera\n"
@@ -743,7 +750,7 @@ mod tests {
              desk-0a1b2c  desk  running  3      /srv/desk  e3c0d9b4-1d55-4b8e-8a8f-0b3a7c7f9a21\n\
              \n\
              desk-0a1b2c is waiting for camera and microphone access, which nobody has asked \
-             for yet: `tatolab stop --dir /srv/desk` then `tatolab start --dir /srv/desk` asks for it.\n"
+             for yet: `tatolab stop --dir /srv/desk` then `tatolab play --dir /srv/desk` asks for it.\n"
         );
     }
 
@@ -774,14 +781,14 @@ mod tests {
 
     #[test]
     fn an_answer_that_is_not_the_tools_result_is_refused_naming_the_tool() {
-        let refusal = tool_result_from::<StopProjectToolResult>(
-            StreamActionTool::StopProject.tool_name(),
+        let refusal = tool_result_from::<ProjectStreamActionQueuedToolResult>(
+            StreamActionTool::StopPlayback.tool_name(),
             "{}",
         )
         .unwrap_err();
 
         assert!(
-            refusal.starts_with("stop_project answered something other than its result ("),
+            refusal.starts_with("stop_playback answered something other than its result ("),
             "{refusal}"
         );
     }

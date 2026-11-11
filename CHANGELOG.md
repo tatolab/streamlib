@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.64](https://github.com/tatolab/streamlib/compare/v0.68.63...v0.68.64) (2026-11-11)
+
+
+### Bug Fixes
+
+* **runtime:** a refused add_node leaves no node, and an exposed config field's link loads again ([7dbdc71](https://github.com/tatolab/streamlib/commit/7dbdc71fe2e61cd94c90c58ffd82e4f6da00f1dc))
+
 ## [0.68.63](https://github.com/tatolab/streamlib/compare/v0.68.62...v0.68.63) (2026-11-11)
 
 

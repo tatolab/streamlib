@@ -25,17 +25,26 @@ pub const FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT: usize = 64;
 /// What a stream action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamActionKind {
-    /// Loads every graph document of a project.
+    /// Opens a project: reads its graph documents, makes its venv, and holds each stream
+    /// loaded and stopped.
+    Open,
+    /// Re-loads graph documents of an open project, keeping its playback as it is.
     Load,
-    /// Unloads every stream of a project and records each stopped.
+    /// Starts the playback of an open project's held streams, reading no document.
+    StartPlayback,
+    /// Ends the playback of every stream of a project, holding each with its graph, and
+    /// records each stopped.
     Stop,
+    /// Closes a project: ends its playback, unloads every stream of it and records each
+    /// closed, deleting nothing.
+    Close,
     /// Unloads every stream of a project and forgets every record of it.
     Remove,
     /// Unloads and forgets every stream of a project as `Remove` does, then moves its folder
     /// to the Trash.
     Delete,
-    /// Re-loads, at the runtime's start, a project's streams neither stopped
-    /// nor failed.
+    /// Re-loads, at the runtime's start, a project's streams neither closed nor failed,
+    /// holding each stopped one stopped.
     ReloadAtStart,
 }
 
@@ -43,8 +52,11 @@ impl StreamActionKind {
     /// The kind as the local API spells it.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Open => "open",
             Self::Load => "load",
+            Self::StartPlayback => "start_playback",
             Self::Stop => "stop",
+            Self::Close => "close",
             Self::Remove => "remove",
             Self::Delete => "delete",
             Self::ReloadAtStart => "reload_at_start",
@@ -54,7 +66,7 @@ impl StreamActionKind {
     /// Whether the action unloads the streams it works on, so a listing shows
     /// them stopping rather than preparing.
     pub fn unloads_its_streams(self) -> bool {
-        matches!(self, Self::Stop | Self::Remove | Self::Delete)
+        matches!(self, Self::Stop | Self::Close | Self::Remove | Self::Delete)
     }
 }
 

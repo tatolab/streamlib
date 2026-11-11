@@ -397,6 +397,7 @@ pub fn a_stream_record(
         location,
         interpreter: interpreter.to_path_buf(),
         stopped,
+        closed: false,
         failed_because: None,
         runtime_crashes_in_a_row_implicating_it: 0,
         pending_stream_actions: Vec::new(),

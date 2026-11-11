@@ -376,7 +376,7 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
 ):
     """A stop during a load never leaves the load succeeding on a stopped runtime.
 
-    The describe of the stream's one node parks the load `tatolab start` asked
+    The describe of the stream's one node parks the load `tatolab open --play` asked
     for. A Ctrl-C to `tatolabd` then ends it cleanly — the load given up, not
     reported as loaded; no engine started; the stream never listed past
     `preparing`; and no processor interpreter left behind, the describing one
