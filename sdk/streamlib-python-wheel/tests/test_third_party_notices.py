@@ -41,6 +41,10 @@ import pytest
 # Zstandard and zlib LLVM links on Linux. Mesa's tree carries xxHash, Berkeley
 # SoftFloat and Fuchsia's radix sort under terms of their own, and LLVM's
 # carries OpenBSD's regex and strlcpy and two Unicode-licensed pieces.
+#
+# The runtime unit carries the CPython build, pip inside it, and the NumPy, numba,
+# llvmlite and Pillow wheels a new project installs offline; their licence files
+# are checked in under `vendor/runtime-unit-carried-package-notices/`.
 NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "Slang",
     "DirectX Shader Compiler API header",
@@ -71,6 +75,12 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "Unicode Character Database",
     "Zstandard",
     "zlib",
+    "CPython",
+    "pip",
+    "NumPy",
+    "numba",
+    "llvmlite",
+    "Pillow",
 )
 
 # A thin sample of the Rust closure, one per link shape: the same-host IPC
