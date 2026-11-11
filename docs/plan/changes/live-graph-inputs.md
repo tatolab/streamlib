@@ -73,25 +73,21 @@
 - REMOVED: An interface node runs nothing.
 - REMOVED: so no panel writes its outputs
 
-## [NEEDS DECISION]
+## Assumed
 
-1. **A reader linked or restarted after a write.** A channel keeps no history, so a reader wired
-   after the last write, a restarted helper, or a reader whose link is redrawn sees nothing until
-   the next write. Options: (a) the node holds its current value and resends it to a reader the
-   last write missed, using `has_a_reader_the_last_write_missed`, checked when the stream wires a
-   link to it; (b) leave it, as view nodes do today. **Recommend (a)**, built into the shared seam
-   so view nodes gain it too; a Perform control that a restart silently empties is a mid-show
-   failure.
-2. **How Studio reads the current value back.** Options: (a) a viewer on the node's `value`
-   output, through the existing `open_viewer` (needs 1a, so a late viewer gets the last value);
-   (b) `graph` renders the last written value on the node. **Recommend (a)**: it follows every
-   write live across windows, with no new surface.
-3. **A `default` inside a fragment.** A fragment's `GraphInput` runs nothing, so a `default` there
-   would mean "the reader's value when the placing graph leaves the Input unlinked". **Recommend:
-   refuse `default` on a fragment's `GraphInput`** for now, naming the node; it is a separate
-   change if wanted.
-4. **What tells Perform slider, toggle or colour.** Family alone cannot. **Recommend: out of
-   scope here.** Studio renders by family until a control hint is agreed, filed at tatolab-app.
+The owner approved the proposal with these four open; each is the session's recommendation,
+built as stated until the owner says otherwise (session, 2026-11-11).
+
+1. **A reader linked or restarted after a write gets the current value.** The node holds its
+   current value and resends it to a reader the last write missed
+   (`has_a_reader_the_last_write_missed`), so a restart never silently empties a control. It lives
+   in the shared seam, so view nodes gain it too.
+2. **Studio reads the current value through a viewer on `value`,** the existing `open_viewer`,
+   which 1 makes see the last value; `graph` carries no written value.
+3. **A `default` on a fragment's `GraphInput` is refused,** naming the node: a fragment's Input
+   runs nothing, so a default there would be a separate change.
+4. **No control-kind hint here.** Studio renders a control by family until slider, toggle and
+   colour hints are agreed.
 
 ## Consumers
 
