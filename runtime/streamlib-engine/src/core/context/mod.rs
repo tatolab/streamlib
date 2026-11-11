@@ -21,6 +21,7 @@ mod refusing_null_video_device_backend;
 mod runtime_context;
 pub(crate) mod shared_pool_entry_freeing;
 pub(crate) mod silent_null_audio_device_backend;
+mod store_scoped_to_this_node;
 mod stream_clock;
 pub(crate) mod surface_backing_resolution;
 pub(crate) mod surface_check_out_lease_registry;
@@ -84,6 +85,7 @@ pub use processor_output_pixel_buffer_pool_of_one_native_node::{
 };
 pub(crate) use runtime_context::LoadedStreamARuntimeContextBelongsTo;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+pub use store_scoped_to_this_node::{ProjectStoresOpenInThisRuntime, StoreScopedToThisNode};
 // Exported rather than crate-private so a test about deviceless pacing can open
 // the arm it means. The chain's probe takes the first arm that opens, so a test
 // that went through it would exercise whatever audio server the machine running

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, NotRequired, Required, TypedDict
+from typing import Any, ClassVar, Literal, NotRequired, Required, TypedDict
 
 from ._built_in_node import BuiltInNode
 from ._port_family_declaration import PortFamily
@@ -53,13 +53,17 @@ class GraphInputConfig(TypedDict):
     range: NotRequired[tuple[float, float]]
     """`(lowest, highest)`, the span a control moves the Input's number in: a stream's
     top-level Array or Channels Input only."""
+    lifetime: NotRequired[Literal["kept", "reset"]]
+    """How long a value a client writes lasts: `kept`, the default, keeps it in the project's
+    store through Stop, Play and a restart; `reset` returns to `default` at Stop. A stream's
+    top-level Array, Channels or Records Input only."""
 
 
 class GraphInput(BuiltInNode[GraphInputConfig]):
     """Declares one Input of the graph: every port `value` is linked to reads what enters it.
     A stream's top-level Array, Channels or Records Input runs, and carries what a client
-    writes with `write_graph_input`, else its `default`; a fragment's Input carries what the
-    graph that adds the fragment wires into it.
+    writes with `write_graph_input`, kept as its `lifetime` says, else its `default`; a
+    fragment's Input carries what the graph that adds the fragment wires into it.
 
     Outputs:
         `value`: What enters the graph, of the declared family.

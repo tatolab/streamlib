@@ -130,7 +130,7 @@ impl LoadedStreamInThisRuntime {
                         ))
                     })?;
                 node_whose_outputs_a_client_writes
-                    .publish_a_value_written_onto_an_output(&port_name, &value)?;
+                    .take_a_value_a_client_wrote(&port_name, &value)?;
                 Ok(found_beside_the_node)
             }),
         )
