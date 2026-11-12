@@ -41,6 +41,7 @@ pub const CONTROL_CLIENT_NAME_HEADER_NAME: &str = "tatolab-control-client-name";
 /// The `logs` tool's result: one project's log records after the cursor asked for, read from
 /// the project's log on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct LogsToolResult {
     /// The project whose log these are.
     pub project_directory: PathBuf,
@@ -69,6 +70,7 @@ pub struct StreamLocationOnTheWire {
 
 /// The `pause_playback` tool's result: the project's playback paused, at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct PausePlaybackToolResult {
     /// The project paused, symlinks resolved.
     pub project_directory: PathBuf,
@@ -78,6 +80,7 @@ pub struct PausePlaybackToolResult {
 
 /// The `resume_playback` tool's result: the project's playback resumed, at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ResumePlaybackToolResult {
     /// The project resumed, symlinks resolved.
     pub project_directory: PathBuf,
@@ -87,6 +90,7 @@ pub struct ResumePlaybackToolResult {
 
 /// The `remove_project` tool's result: the removal of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct RemoveProjectToolResult {
     /// The queued removal, as `describe_stream_action` takes it.
     pub action: String,
@@ -96,6 +100,7 @@ pub struct RemoveProjectToolResult {
 
 /// The `delete_project` tool's result: the deletion of the whole project queued on its queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DeleteProjectToolResult {
     /// The queued deletion, as `describe_stream_action` takes it.
     pub action: String,
@@ -106,6 +111,7 @@ pub struct DeleteProjectToolResult {
 
 /// The `duplicate_project` tool's result: the duplicate, a project of its own.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DuplicateProjectToolResult {
     /// The duplicate's folder.
     pub project_directory: PathBuf,
@@ -120,6 +126,7 @@ pub struct DuplicateProjectToolResult {
 /// The result of `rename_project`, `set_project_description` and `set_project_cover`: how
 /// people see the project after the transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectSettingsTransactionToolResult {
     /// The project's UUID, which no settings change touches.
     pub project: String,
@@ -238,6 +245,7 @@ impl std::fmt::Display for ListedStreamState {
 /// The result of `open_project`, `reload_project`, `start_playback`, `stop_playback` and
 /// `close_project`: the stream action each queued on the project's queue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectStreamActionQueuedToolResult {
     /// The queued action's id, which `describe_stream_action` and `logs` take.
     pub action: String,
@@ -247,6 +255,7 @@ pub struct ProjectStreamActionQueuedToolResult {
 
 /// The `create_project` tool's result: the load it queued of the project it created.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct CreateProjectToolResult {
     /// The queued action's id, which `describe_stream_action` and `logs` take.
     pub action: String,
@@ -258,6 +267,7 @@ pub struct CreateProjectToolResult {
 
 /// The `list_samples` tool's result: every sample project the runtime unit carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListSamplesToolResult {
     /// Each sample, in name order.
     pub samples: Vec<ListSamplesToolResultSample>,
@@ -265,6 +275,7 @@ pub struct ListSamplesToolResult {
 
 /// One sample project the runtime unit carries, which `create_project` takes by `name`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListSamplesToolResultSample {
     /// The name `create_project`'s `sample` takes.
     pub name: String,
@@ -276,6 +287,7 @@ pub struct ListSamplesToolResultSample {
 
 /// The `import_project` tool's result: the project it unpacked from a `.zip` of one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ImportProjectToolResult {
     /// The new project's directory, symlinks resolved.
     pub project_directory: PathBuf,
@@ -289,6 +301,7 @@ pub struct ImportProjectToolResult {
 
 /// What a stream action does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum StreamActionKindOnTheWire {
     /// Opens a project, holding each of its streams loaded and stopped.
@@ -312,6 +325,7 @@ pub enum StreamActionKindOnTheWire {
 
 /// Where a stream action is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum StreamActionStateOnTheWire {
     /// Waiting behind its project's earlier actions.
@@ -369,6 +383,7 @@ impl StreamActionStepOnTheWire {
 
 /// The `describe_stream_action` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DescribeStreamActionToolResult {
     /// The action's id.
     pub action: String,
@@ -393,6 +408,7 @@ pub struct DescribeStreamActionToolResult {
 /// names a sync's downloads, builds and installs one package at a time and no byte of a
 /// download, so a sync is followed by package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectVenvSyncOnTheWire {
     /// The phase uv's last line put it in.
     pub phase: ProjectVenvSyncPhaseOnTheWire,
@@ -414,6 +430,7 @@ pub struct ProjectVenvSyncOnTheWire {
 
 /// The phase a project's `uv sync` is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectVenvSyncPhaseOnTheWire {
     /// Finding a Python and resolving the project's requirements.
@@ -430,6 +447,7 @@ pub enum ProjectVenvSyncPhaseOnTheWire {
 
 /// One package a `uv sync` named.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectVenvSyncPackageOnTheWire {
     /// The distribution's name, or the Python build's, as uv writes it.
     pub name: String,
@@ -446,6 +464,7 @@ pub struct ProjectVenvSyncPackageOnTheWire {
 
 /// What a package a `uv sync` names is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectVenvSyncPackageKindOnTheWire {
     /// A Python distribution the venv installs.
@@ -456,6 +475,7 @@ pub enum ProjectVenvSyncPackageKindOnTheWire {
 
 /// Where one package a `uv sync` names stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectVenvSyncPackageStateOnTheWire {
     /// Its download has started.
@@ -474,6 +494,7 @@ pub enum ProjectVenvSyncPackageStateOnTheWire {
 
 /// The resource `streamlib://stream-actions`: every stream action queued or under way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct StreamActionsUnderWayResourceContents {
     /// Each action queued or running, the earliest queued first, as `describe_stream_action`
     /// answers it.
@@ -482,6 +503,7 @@ pub struct StreamActionsUnderWayResourceContents {
 
 /// The `cancel_stream_action` tool's result: the action's state once the cancel was taken.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct CancelStreamActionToolResult {
     /// The action's id.
     pub action: String,
@@ -492,6 +514,7 @@ pub struct CancelStreamActionToolResult {
 
 /// One stream of a [`DescribeStreamActionToolResult`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DescribeStreamActionToolResultStream {
     /// The stream's id.
     pub stream: String,
@@ -504,6 +527,7 @@ pub struct DescribeStreamActionToolResultStream {
 /// The `open_viewer` tool's result: what a viewer subscribes to, from its own process, to read
 /// the latest message an output port's node wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct OpenViewerToolResult {
     /// The viewer's id, which `close_viewer` takes: `<stream>/<node_id>/<port>`.
     pub viewer: String,
@@ -528,6 +552,7 @@ pub struct OpenViewerToolResult {
 
 /// The `close_viewer` tool's result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct CloseViewerToolResult {
     /// The viewer closed.
     pub viewer: String,
@@ -536,6 +561,7 @@ pub struct CloseViewerToolResult {
 /// The `write_studio_view_output` tool's result: the output of the view node the value was handed
 /// to, which published it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct WriteStudioViewOutputToolResult {
     /// The stream id.
     pub stream: String,
@@ -548,6 +574,7 @@ pub struct WriteStudioViewOutputToolResult {
 /// The `write_graph_input` tool's result: the Input of the stream's top-level `GraphInput` the
 /// value was handed to, which published it to every reader.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct WriteGraphInputToolResult {
     /// The stream id.
     pub stream: String,
@@ -559,6 +586,7 @@ pub struct WriteGraphInputToolResult {
 
 /// The `set_stream_clock_scale` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct SetStreamClockScaleToolResult {
     /// The stream's id.
     pub stream: String,
@@ -592,6 +620,7 @@ pub const MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH: &str = "/machine-runtime-lock-
 /// `GET` [`MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH`]'s answer: the serving process's pid, which a
 /// prober names through the kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct MachineRuntimeLockHolderPidAnswer {
     /// The pid of the process serving the loopback HTTP listener.
     pub pid: i32,
@@ -599,6 +628,7 @@ pub struct MachineRuntimeLockHolderPidAnswer {
 
 /// One asset of a project as the asset tools report it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectAssetOnTheWire {
     /// The asset's UUID, which the runtime made at import and which a rename or move keeps.
     pub asset: String,
@@ -617,6 +647,7 @@ pub struct ProjectAssetOnTheWire {
 /// What the runtime read from a media, scene or data asset's bytes; a fact it could not read is
 /// `null`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetMediaFactsOnTheWire {
     /// How long the media plays, in whole milliseconds.
     pub duration_ms: Option<u64>,
@@ -634,6 +665,7 @@ pub struct AssetMediaFactsOnTheWire {
 
 /// A video track's facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetVideoFactsOnTheWire {
     /// The coded picture's width in pixels.
     pub pixel_width: Option<u32>,
@@ -647,6 +679,7 @@ pub struct AssetVideoFactsOnTheWire {
 
 /// An audio track's facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetAudioFactsOnTheWire {
     /// Samples per second of each channel.
     pub sample_rate_hz: Option<u32>,
@@ -658,6 +691,7 @@ pub struct AssetAudioFactsOnTheWire {
 
 /// A still image's facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetImageFactsOnTheWire {
     /// Its width in pixels.
     pub pixel_width: u32,
@@ -667,6 +701,7 @@ pub struct AssetImageFactsOnTheWire {
 
 /// A colour lookup table's facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetLutFactsOnTheWire {
     /// Entries per channel of a 1D table, `null` for a 3D one.
     pub lut_1d_size: Option<u32>,
@@ -680,6 +715,7 @@ pub struct AssetLutFactsOnTheWire {
 
 /// A 3D scene's facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetSceneFactsOnTheWire {
     /// How many prims the scene defines.
     pub prim_count: Option<u64>,
@@ -687,6 +723,7 @@ pub struct AssetSceneFactsOnTheWire {
 
 /// An asset's preview picture, which `read_asset_preview` answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetPreviewOnTheWire {
     /// The picture's width in pixels.
     pub pixel_width: u32,
@@ -699,6 +736,7 @@ pub struct AssetPreviewOnTheWire {
 /// One asset with what the runtime has read from its bytes, as `list_assets` and
 /// `describe_asset` answer it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectAssetWithItsMediaFactsOnTheWire {
     /// The asset.
     #[serde(flatten)]
@@ -715,6 +753,7 @@ pub struct ProjectAssetWithItsMediaFactsOnTheWire {
 
 /// The `read_asset_preview` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ReadAssetPreviewToolResult {
     /// The asset's UUID.
     pub asset: String,
@@ -732,6 +771,7 @@ pub struct ReadAssetPreviewToolResult {
 
 /// The `list_assets` tool's result: the project's assets, ordered by path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListAssetsToolResult {
     /// The project directory, symlinks resolved.
     pub project_directory: PathBuf,
@@ -798,6 +838,7 @@ pub struct ProjectTransactionOnTheWire {
 
 /// An action on a project the runtime refused, as its change feed holds it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct RefusedProjectActionOnTheWire {
     /// `person`, `agent` or `runtime`.
     pub author_kind: String,
@@ -818,6 +859,7 @@ pub struct RefusedProjectActionOnTheWire {
 
 /// One entry of a project's change feed, tagged by its `status`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ProjectChangeFeedEntryOnTheWire {
     /// A transaction the project's history records.
@@ -831,6 +873,7 @@ pub enum ProjectChangeFeedEntryOnTheWire {
 
 /// An asset whose media facts the runtime finished reading, as a project's change feed holds it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetMediaFactsReadOnTheWire {
     /// The asset's UUID.
     pub asset: String,
@@ -989,6 +1032,7 @@ pub struct GraphTransactionToolResult {
 /// What a project's transactions resource holds: its newest transactions and the actions refused
 /// since the runtime started, newest first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectTransactionsResourceContents {
     /// The project's UUID.
     pub project: String,
@@ -1000,6 +1044,7 @@ pub struct ProjectTransactionsResourceContents {
 
 /// The `describe_asset` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DescribeAssetToolResult {
     /// The asset, with what the runtime has read from its bytes.
     pub asset: ProjectAssetWithItsMediaFactsOnTheWire,
@@ -1009,6 +1054,7 @@ pub struct DescribeAssetToolResult {
 
 /// The result of an asset tool that changed one asset and committed the change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct AssetTransactionToolResult {
     /// The asset as the transaction left it; a deleted asset as it was.
     pub asset: ProjectAssetOnTheWire,
@@ -1024,6 +1070,7 @@ pub struct AssetTransactionToolResult {
 
 /// One file of a project as `list_project_files` answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectFileOnTheWire {
     /// Where the file sits in the project, `/`-separated.
     pub path: String,
@@ -1033,6 +1080,7 @@ pub struct ProjectFileOnTheWire {
 
 /// The `list_project_files` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListProjectFilesToolResult {
     /// Each file listed, sorted by path.
     pub files: Vec<ProjectFileOnTheWire>,
@@ -1040,6 +1088,7 @@ pub struct ListProjectFilesToolResult {
 
 /// The `read_project_file` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ReadProjectFileToolResult {
     /// The file read, as the call named it.
     pub path: String,
@@ -1054,6 +1103,7 @@ pub struct ReadProjectFileToolResult {
 
 /// The `write_project_file` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectFileTransactionToolResult {
     /// The file written.
     pub path: String,
@@ -1068,6 +1118,7 @@ pub struct ProjectFileTransactionToolResult {
 
 /// The `create_node_file` tool's result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct CreateNodeFileToolResult {
     /// The file created.
     pub path: String,
@@ -1081,6 +1132,7 @@ pub struct CreateNodeFileToolResult {
 
 /// A project this one imports, as a dependency tool answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectDependencyOnTheWire {
     /// The imported project's UUID.
     pub project: String,
@@ -1094,6 +1146,7 @@ pub struct ProjectDependencyOnTheWire {
 
 /// The result of `add_dependency` and `remove_dependency`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct DependencyTransactionToolResult {
     /// The import as the transaction left it; a removed one as it was.
     pub dependency: ProjectDependencyOnTheWire,
@@ -1106,6 +1159,7 @@ pub struct DependencyTransactionToolResult {
 /// The result of `update_dependency`: the copy it committed, or, when the import's folder was
 /// edited since its copy and the overwrite was not confirmed, each edited file and no change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct UpdateDependencyToolResult {
     /// The import as the update left it.
     pub dependency: ProjectDependencyOnTheWire,
@@ -1124,6 +1178,7 @@ pub struct UpdateDependencyToolResult {
 
 /// One import as `list_dependencies` answers it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListedProjectDependencyOnTheWire {
     /// The import as `tatolab-project.json` records it.
     pub dependency: ProjectDependencyOnTheWire,
@@ -1143,6 +1198,7 @@ pub struct ListedProjectDependencyOnTheWire {
 
 /// The result of `list_dependencies`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListDependenciesToolResult {
     /// Each import of the project, in the order `tatolab-project.json` lists them.
     pub dependencies: Vec<ListedProjectDependencyOnTheWire>,
@@ -1151,6 +1207,7 @@ pub struct ListDependenciesToolResult {
 /// The `list_project_views` tool's result: every Tato Studio view a project and its imports
 /// bring, read from each `views/<folder>/tatolab_view.json` without running anything.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListProjectViewsToolResult {
     /// The project directory, symlinks resolved.
     pub project_directory: PathBuf,
@@ -1165,6 +1222,7 @@ pub struct ListProjectViewsToolResult {
 
 /// One folder of a `views/`: the view type it declares, and whether it opens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectViewListed {
     /// The view type's id, `<project name>:<view folder>`, the node type a node of the view is.
     pub view_type: String,
@@ -1201,6 +1259,7 @@ pub struct ProjectViewListed {
 
 /// An input or output a view declares, as a node declares a port.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectViewDeclaredPort {
     /// The port's name.
     pub name: String,
@@ -1215,6 +1274,7 @@ pub struct ProjectViewDeclaredPort {
 /// The `list_project_node_types` tool's result: what a project and each source it draws node
 /// code from declares, read from source without running it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ListProjectNodeTypesToolResult {
     /// The project directory, symlinks resolved.
     pub project_directory: PathBuf,
@@ -1228,6 +1288,7 @@ pub struct ListProjectNodeTypesToolResult {
 
 /// Where a listed node type's code comes from, under `source`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum NodeTypeSourceOrigin {
     /// The project's own node code, outside `imports/`.
@@ -1252,6 +1313,7 @@ pub enum NodeTypeSourceOrigin {
 
 /// One source's node types, graph generators, and the modules of it that could not be read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeTypeSourceReadWithoutRunningIt {
     /// Where the code comes from.
     #[serde(flatten)]
@@ -1266,6 +1328,7 @@ pub struct NodeTypeSourceReadWithoutRunningIt {
 
 /// One node type as its declaration states it in source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeTypeReadFromSource {
     /// The type `add_node` takes: the import path `<module>:<qualname>`.
     #[serde(rename = "type")]
@@ -1288,6 +1351,7 @@ pub struct NodeTypeReadFromSource {
 
 /// One port as its declaration states it in source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeTypePortReadFromSource {
     /// The port's name, cast as every exposed name is.
     pub name: String,
@@ -1311,6 +1375,7 @@ pub struct NodeTypePortReadFromSource {
 
 /// One `@graph_generator` as its declaration states it in source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphGeneratorReadFromSource {
     /// The import path `import_graph_generator` takes: `<module>:<function>`.
     pub generator: String,
@@ -1326,6 +1391,7 @@ pub struct GraphGeneratorReadFromSource {
 
 /// One setting a graph generator promotes, as its parameter states it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphGeneratorPromotedSettingReadFromSource {
     /// The parameter's name.
     pub name: String,
@@ -1345,6 +1411,7 @@ pub struct GraphGeneratorPromotedSettingReadFromSource {
 
 /// A module of a source that could not be read, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeModuleNotReadable {
     /// The module's import name.
     pub module: String,

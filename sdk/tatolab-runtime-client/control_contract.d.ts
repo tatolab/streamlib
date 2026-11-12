@@ -919,28 +919,2620 @@ export interface OneLinkGraphEditRequest {
 }
 
 /**
- * `project_changed`'s params.
+ * `import_graph_generator`'s params.
  */
-export interface ProjectChangedNotificationParams {
+export interface ImportGraphGeneratorRequest {
   /**
-   * The project, by UUID.
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
    */
-  project: string;
+  stream: string;
   /**
-   * What changed; `missed` when the connection fell behind, and the client reads the project's
-   * change feed again.
+   * The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`.
    */
-  change: ProjectChangeKindOnTheWire;
+  generator: string;
   /**
-   * The transaction that applied, when `change` is `applied`; its `undo_state` is absent.
+   * The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import.
    */
-  transaction?: ProjectTransactionOnTheWire | null;
+  name?: string | null;
+  /**
+   * The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults.
+   */
+  config?: { [key: string]: unknown } | null;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
 }
 
 /**
- * What changed on a project's change feed.
+ * `remove_node`'s params.
  */
-export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "missed";
+export interface OneNodeGraphEditRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_node_config`'s params.
+ */
+export interface SetNodeConfigRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * The node's new config, as the keys its type's schema declares; it replaces the old one whole.
+   */
+  config: { [key: string]: unknown };
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_pin_value`'s params.
+ */
+export interface SetPinValueRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * The input's name, as `graph` lists it under the node's `ports.inputs`.
+   */
+  input: string;
+  /**
+   * The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off.
+   */
+  value?: unknown;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `rename_node`'s params.
+ */
+export interface RenameNodeRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * The node's new name: cast to lowercase URL-safe, refused when another node has it. The node keeps its UUID.
+   */
+  name: string;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_studio_fields`'s params.
+ */
+export interface SetStudioFieldsRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name.
+   */
+  studio: { [key: string]: unknown };
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_exposed_config_fields`'s params.
+ */
+export interface SetExposedConfigFieldsRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.
+   */
+  exposed_config_fields: Array<string>;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `add_group`'s params.
+ */
+export interface AddGroupRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The group's title, which Tato Studio draws on its frame.
+   */
+  title: string;
+  /**
+   * What the group's nodes do, for the next person who reads the graph.
+   */
+  description?: string | null;
+  /**
+   * The colour Tato Studio draws the group's frame with, e.g. `#3b82f6`.
+   */
+  colour?: string | null;
+  /**
+   * The nodes that join it, each by the UUID `graph` lists as its `id`; a node of another group is refused.
+   */
+  nodes: Array<string>;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_group_fields`'s params.
+ */
+export interface SetGroupFieldsRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers.
+   */
+  group: string;
+  /**
+   * The group's new title; kept when omitted.
+   */
+  title?: string | null;
+  /**
+   * What the group's nodes do; kept when omitted, cleared by `""`.
+   */
+  description?: string | null;
+  /**
+   * The group's new colour; kept when omitted, cleared by `""`.
+   */
+  colour?: string | null;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `collapse_selection_into_subgraph`'s params.
+ */
+export interface CollapseSelectionIntoSubgraphRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The nodes collapsed, each by its UUID, all of the level `level` names and none of that level's own `GraphInput` or `GraphOutput` nodes.
+   */
+  nodes: Array<string>;
+  /**
+   * The subgraph node's name, cast to lowercase URL-safe and refused when a node outside the selection has it.
+   */
+  name: string;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `unlock_generator_fragment`'s params.
+ */
+export interface UnlockGeneratorFragmentRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's.
+   */
+  fragment: string;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `add_note`'s params.
+ */
+export interface AddNoteRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * What the note says, for the next person who reads the graph.
+   */
+  text: string;
+  /**
+   * Where the note's top-left corner sits on the canvas, an `[x, y]` pair of numbers.
+   */
+  position: [number, number];
+  /**
+   * The note's width and height on the canvas, a `[width, height]` pair of numbers.
+   */
+  size: [number, number];
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_note_fields`'s params.
+ */
+export interface SetNoteFieldsRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The canvas note, by the UUID `graph` lists under `notes` and `add_note` answers.
+   */
+  note: string;
+  /**
+   * What the note says; kept when omitted.
+   */
+  text?: string | null;
+  /**
+   * Where the note's top-left corner sits, `[x, y]`; kept when omitted.
+   */
+  position?: [number, number] | null;
+  /**
+   * The note's `[width, height]`; kept when omitted.
+   */
+  size?: [number, number] | null;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `remove_note`'s params.
+ */
+export interface RemoveNoteRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The canvas note, by the UUID `graph` lists under `notes` and `add_note` answers.
+   */
+  note: string;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `remove_group`'s params.
+ */
+export interface RemoveGroupRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   */
+  level?: Array<string> | null;
+  /**
+   * The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers.
+   */
+  group: string;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The params of an operation on one project, named by its directory.
+ */
+export interface OneProjectByItsDirectoryRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+}
+
+/**
+ * The result of `open_project`, `reload_project`, `start_playback`, `stop_playback` and
+ * `close_project`: the stream action each queued on the project's queue.
+ */
+export interface ProjectStreamActionQueuedToolResult {
+  /**
+   * The queued action's id, which `describe_stream_action` and `logs` take.
+   */
+  action: string;
+  /**
+   * The project whose queue holds it, symlinks resolved.
+   */
+  project_directory: string;
+}
+
+/**
+ * The `remove_project` tool's result: the removal of the whole project queued on its queue.
+ */
+export interface RemoveProjectToolResult {
+  /**
+   * The queued removal, as `describe_stream_action` takes it.
+   */
+  action: string;
+  /**
+   * The project whose streams it unloads and forgets, symlinks resolved.
+   */
+  project_directory: string;
+}
+
+/**
+ * The `pause_playback` tool's result: the project's playback paused, at once.
+ */
+export interface PausePlaybackToolResult {
+  /**
+   * The project paused, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The id of each loaded stream of the project this call paused.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * The `resume_playback` tool's result: the project's playback resumed, at once.
+ */
+export interface ResumePlaybackToolResult {
+  /**
+   * The project resumed, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The id of each paused stream of the project this call resumed.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * The params of an operation on one stream action, named by its id.
+ */
+export interface OneStreamActionRequest {
+  /**
+   * The stream action, by the action id a tool that queues one answered.
+   */
+  action: string;
+}
+
+/**
+ * The `describe_stream_action` tool's result.
+ */
+export interface DescribeStreamActionToolResult {
+  /**
+   * The action's id.
+   */
+  action: string;
+  /**
+   * The project it works on.
+   */
+  project_directory: string;
+  /**
+   * What it does.
+   */
+  kind: StreamActionKindOnTheWire;
+  /**
+   * Where it is in its life.
+   */
+  state: StreamActionStateOnTheWire;
+  /**
+   * The step it is on while `in_progress`; `null` otherwise.
+   */
+  step?: StreamActionStepOnTheWire | null;
+  /**
+   * What its latest `uv sync` of the project's `.venv` has done, from the moment uv starts,
+   * kept once the sync and the action end; `null` for an action that has not synced.
+   */
+  venv_sync?: ProjectVenvSyncOnTheWire | null;
+  /**
+   * The streams it works on, once its project's graph documents named them.
+   */
+  streams: Array<DescribeStreamActionToolResultStream>;
+  /**
+   * Why it failed; `null` unless it did.
+   */
+  failed_because?: string | null;
+}
+
+/**
+ * What a stream action does.
+ */
+export type StreamActionKindOnTheWire = "open" | "load" | "start_playback" | "stop" | "close" | "remove" | "delete" | "reload_at_start";
+
+/**
+ * Where a stream action is in its life.
+ */
+export type StreamActionStateOnTheWire = "queued" | "in_progress" | "done" | "failed" | "cancelled";
+
+/**
+ * What one `uv sync` of a project's `.venv` has done so far, read from uv's own lines: uv
+ * names a sync's downloads, builds and installs one package at a time and no byte of a
+ * download, so a sync is followed by package.
+ */
+export interface ProjectVenvSyncOnTheWire {
+  /**
+   * The phase uv's last line put it in.
+   */
+  phase: ProjectVenvSyncPhaseOnTheWire;
+  /**
+   * How many packages its resolution named, the project's own among them; `null` until it
+   * resolved.
+   */
+  packages_resolved?: number | null;
+  /**
+   * How many packages it downloaded or built before installing; `null` until uv prepared them.
+   */
+  packages_prepared?: number | null;
+  /**
+   * How many packages it installed; `null` until uv installed them.
+   */
+  packages_installed?: number | null;
+  /**
+   * How many of the downloads uv named have started; uv names only a download over its own
+   * size threshold, about a MiB, so a small one shows only in `packages_prepared`.
+   */
+  downloads_started: number;
+  /**
+   * How many of the downloads uv named have ended.
+   */
+  downloads_done: number;
+  /**
+   * Each package uv named by its download, build, install or removal, first named first.
+   */
+  packages: Array<ProjectVenvSyncPackageOnTheWire>;
+}
+
+/**
+ * The phase a project's `uv sync` is in.
+ */
+export type ProjectVenvSyncPhaseOnTheWire = "resolving" | "downloading" | "building" | "installing" | "installed";
+
+/**
+ * One package a `uv sync` named.
+ */
+export interface ProjectVenvSyncPackageOnTheWire {
+  /**
+   * The distribution's name, or the Python build's, as uv writes it.
+   */
+  name: string;
+  /**
+   * The version installed or removed; `null` until uv names it.
+   */
+  version?: string | null;
+  /**
+   * A `distribution` or the `python_interpreter` the venv is made with.
+   */
+  kind: ProjectVenvSyncPackageKindOnTheWire;
+  /**
+   * Where it stands.
+   */
+  state: ProjectVenvSyncPackageStateOnTheWire;
+  /**
+   * The download's size as uv states it, to its one decimal of KiB, MiB or GiB; `null` for a
+   * package uv downloads without naming it or does not download.
+   */
+  download_size_bytes?: number | null;
+}
+
+/**
+ * What a package a `uv sync` names is.
+ */
+export type ProjectVenvSyncPackageKindOnTheWire = "distribution" | "python_interpreter";
+
+/**
+ * Where one package a `uv sync` names stands.
+ */
+export type ProjectVenvSyncPackageStateOnTheWire = "downloading" | "downloaded" | "building" | "built" | "installed" | "uninstalled";
+
+/**
+ * One stream of a [`DescribeStreamActionToolResult`].
+ */
+export interface DescribeStreamActionToolResultStream {
+  /**
+   * The stream's id.
+   */
+  stream: string;
+  /**
+   * The label the stream is shown under.
+   */
+  display_name: string;
+  /**
+   * `running` or `failed` once the action took it in; `null` before.
+   */
+  state?: ListedStreamState | null;
+}
+
+/**
+ * The `cancel_stream_action` tool's result: the action's state once the cancel was taken.
+ */
+export interface CancelStreamActionToolResult {
+  /**
+   * The action's id.
+   */
+  action: string;
+  /**
+   * `cancelled` for an action dropped from its queue; `in_progress` for a running one, which
+   * ends `cancelled` once it stops at the step it is on.
+   */
+  state: StreamActionStateOnTheWire;
+}
+
+/**
+ * `rename_project`'s params.
+ */
+export interface RenameProjectRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+  /**
+   * The project's new name; never blank.
+   */
+  name: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The result of `rename_project`, `set_project_description` and `set_project_cover`: how
+ * people see the project after the transaction.
+ */
+export interface ProjectSettingsTransactionToolResult {
+  /**
+   * The project's UUID, which no settings change touches.
+   */
+  project: string;
+  /**
+   * The project's name.
+   */
+  project_name: string;
+  /**
+   * What the project is, `null` for no description.
+   */
+  project_description?: string | null;
+  /**
+   * The image asset the project is shown by, by its UUID, `null` for no cover.
+   */
+  project_cover?: string | null;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
+
+/**
+ * `set_project_description`'s params.
+ */
+export interface SetProjectDescriptionRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+  /**
+   * What the project is; `null` or blank clears it.
+   */
+  description?: string | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_project_cover`'s params.
+ */
+export interface SetProjectCoverRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+  /**
+   * The media asset the project is shown by, by the UUID `import_asset` or `list_assets` answered; `null` clears it.
+   */
+  cover?: string | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `duplicate_project`'s params.
+ */
+export interface DuplicateProjectRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+  /**
+   * Where the duplicate goes, by absolute path: a folder that does not exist yet, outside the project.
+   */
+  into: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+}
+
+/**
+ * The `duplicate_project` tool's result: the duplicate, a project of its own.
+ */
+export interface DuplicateProjectToolResult {
+  /**
+   * The duplicate's folder.
+   */
+  project_directory: string;
+  /**
+   * The duplicate's UUID, new to it.
+   */
+  project: string;
+  /**
+   * The duplicate's name.
+   */
+  project_name: string;
+  /**
+   * The commit on the duplicate's history that records it was duplicated.
+   */
+  commit: string;
+}
+
+/**
+ * The `delete_project` tool's result: the deletion of the whole project queued on its queue.
+ */
+export interface DeleteProjectToolResult {
+  /**
+   * The queued deletion, as `describe_stream_action` takes it.
+   */
+  action: string;
+  /**
+   * The project whose streams it forgets and whose folder it moves to the Trash, symlinks
+   * resolved.
+   */
+  project_directory: string;
+}
+
+/**
+ * `list_assets`'s params.
+ */
+export interface ListAssetsRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * Only the assets of this kind. Omit it for every asset.
+   */
+  kind?: ProjectAssetKindArgument | null;
+}
+
+/**
+ * What an asset is, as a caller names it.
+ */
+export type ProjectAssetKindArgument = "media" | "scene" | "data" | "stream";
+
+/**
+ * The `list_assets` tool's result: the project's assets, ordered by path.
+ */
+export interface ListAssetsToolResult {
+  /**
+   * The project directory, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The project's UUID, from its `tatolab-project.json`.
+   */
+  project: string;
+  /**
+   * The project's name.
+   */
+  project_name: string;
+  /**
+   * What the project is, `null` when nobody has described it.
+   */
+  project_description?: string | null;
+  /**
+   * The image asset the project is shown by, by its UUID, `null` when it has no cover.
+   */
+  project_cover?: string | null;
+  /**
+   * When the project's history last changed, in whole seconds since the Unix epoch, for
+   * display only; `null` before its first commit.
+   */
+  project_last_edited_at?: number | null;
+  /**
+   * The assets, narrowed to one kind when the call named one, each with the media facts
+   * already read and no file read for the listing.
+   */
+  assets: Array<ProjectAssetWithItsMediaFactsOnTheWire>;
+  /**
+   * The project's change feed: the resource a client reads for its newest transactions and
+   * names in `subscriptions/listen` to be told of each new one.
+   */
+  transactions_resource_uri: string;
+}
+
+/**
+ * One asset with what the runtime has read from its bytes, as `list_assets` and
+ * `describe_asset` answer it.
+ */
+export interface ProjectAssetWithItsMediaFactsOnTheWire {
+  /**
+   * The asset's UUID, which the runtime made at import and which a rename or move keeps.
+   */
+  asset: string;
+  /**
+   * `stream`, `media`, `scene` or `data`.
+   */
+  kind: string;
+  /**
+   * Its path in the project, `/`-separated, relative to the project directory.
+   */
+  path: string;
+  /**
+   * The SHA-256 of its bytes as its sidecar records them, in lowercase hex.
+   */
+  content_sha256: string;
+  /**
+   * The size of its bytes.
+   */
+  content_byte_len: number;
+  /**
+   * The settings its import took.
+   */
+  import_settings: { [key: string]: unknown };
+  /**
+   * `read`, `reading` or `unreadable`; `null` for a stream asset, whose graph `graph` serves.
+   */
+  media_facts_state?: string | null;
+  /**
+   * Why the runtime could not read the asset's bytes, in its own words, while `unreadable`.
+   */
+  media_facts_unreadable_because?: string | null;
+  /**
+   * What the runtime read, while `read`.
+   */
+  media_facts?: AssetMediaFactsOnTheWire | null;
+  /**
+   * The asset's preview picture, `null` for an asset with none or not yet read.
+   */
+  preview?: AssetPreviewOnTheWire | null;
+}
+
+/**
+ * What the runtime read from a media, scene or data asset's bytes; a fact it could not read is
+ * `null`.
+ */
+export interface AssetMediaFactsOnTheWire {
+  /**
+   * How long the media plays, in whole milliseconds.
+   */
+  duration_ms?: number | null;
+  /**
+   * The first video track's facts, `null` for a file with no video.
+   */
+  video?: AssetVideoFactsOnTheWire | null;
+  /**
+   * The first audio track's facts, `null` for a file with no audio.
+   */
+  audio?: AssetAudioFactsOnTheWire | null;
+  /**
+   * A still image's facts, `null` for anything else.
+   */
+  image?: AssetImageFactsOnTheWire | null;
+  /**
+   * A colour lookup table's facts, `null` for anything else.
+   */
+  lut?: AssetLutFactsOnTheWire | null;
+  /**
+   * A 3D scene's facts, `null` for anything else.
+   */
+  scene?: AssetSceneFactsOnTheWire | null;
+}
+
+/**
+ * A video track's facts.
+ */
+export interface AssetVideoFactsOnTheWire {
+  /**
+   * The coded picture's width in pixels.
+   */
+  pixel_width?: number | null;
+  /**
+   * The coded picture's height in pixels.
+   */
+  pixel_height?: number | null;
+  /**
+   * The average frame rate, in frames per second.
+   */
+  frames_per_second?: number | null;
+  /**
+   * The codec, such as `h264`, `h265`, `av1`, `vp9` or `prores`.
+   */
+  codec?: string | null;
+}
+
+/**
+ * An audio track's facts.
+ */
+export interface AssetAudioFactsOnTheWire {
+  /**
+   * Samples per second of each channel.
+   */
+  sample_rate_hz?: number | null;
+  /**
+   * How many channels it carries.
+   */
+  channel_count?: number | null;
+  /**
+   * The codec, such as `aac`, `mp3`, `opus`, `flac` or `pcm`.
+   */
+  codec?: string | null;
+}
+
+/**
+ * A still image's facts.
+ */
+export interface AssetImageFactsOnTheWire {
+  /**
+   * Its width in pixels.
+   */
+  pixel_width: number;
+  /**
+   * Its height in pixels.
+   */
+  pixel_height: number;
+}
+
+/**
+ * A colour lookup table's facts.
+ */
+export interface AssetLutFactsOnTheWire {
+  /**
+   * Entries per channel of a 1D table, `null` for a 3D one.
+   */
+  lut_1d_size?: number | null;
+  /**
+   * Entries along each edge of a 3D table's cube, `null` for a 1D one.
+   */
+  lut_3d_size?: number | null;
+  /**
+   * The input value each channel's first entry maps, `[0, 0, 0]` when the file states none.
+   */
+  domain_min: [number, number, number];
+  /**
+   * The input value each channel's last entry maps, `[1, 1, 1]` when the file states none.
+   */
+  domain_max: [number, number, number];
+}
+
+/**
+ * A 3D scene's facts.
+ */
+export interface AssetSceneFactsOnTheWire {
+  /**
+   * How many prims the scene defines.
+   */
+  prim_count?: number | null;
+}
+
+/**
+ * An asset's preview picture, which `read_asset_preview` answers.
+ */
+export interface AssetPreviewOnTheWire {
+  /**
+   * The picture's width in pixels.
+   */
+  pixel_width: number;
+  /**
+   * The picture's height in pixels.
+   */
+  pixel_height: number;
+  /**
+   * The picture's media type, `image/png`.
+   */
+  media_type: string;
+}
+
+/**
+ * `describe_asset`'s params.
+ */
+export interface DescribeAssetRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The asset, by the UUID `import_asset` or `list_assets` answered.
+   */
+  asset: string;
+}
+
+/**
+ * The `describe_asset` tool's result.
+ */
+export interface DescribeAssetToolResult {
+  /**
+   * The asset, with what the runtime has read from its bytes.
+   */
+  asset: ProjectAssetWithItsMediaFactsOnTheWire;
+  /**
+   * Whether a file is at the asset's path.
+   */
+  file_at_its_path: boolean;
+}
+
+/**
+ * `read_asset_preview`'s params.
+ */
+export interface ReadAssetPreviewRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The asset, by the UUID `import_asset` or `list_assets` answered.
+   */
+  asset: string;
+}
+
+/**
+ * The `read_asset_preview` tool's result.
+ */
+export interface ReadAssetPreviewToolResult {
+  /**
+   * The asset's UUID.
+   */
+  asset: string;
+  /**
+   * The picture's width in pixels.
+   */
+  pixel_width: number;
+  /**
+   * The picture's height in pixels.
+   */
+  pixel_height: number;
+  /**
+   * The picture's media type, `image/png`.
+   */
+  media_type: string;
+  /**
+   * The picture's length in bytes.
+   */
+  byte_len: number;
+  /**
+   * The picture's bytes, standard base64 with padding.
+   */
+  content_base64: string;
+}
+
+/**
+ * `import_asset`'s params.
+ */
+export interface ImportAssetRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * Where the bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of an upload in the project's `.tatolab/uploads/`.
+   */
+  source: string;
+  /**
+   * Where the asset sits in the project, `/`-separated and relative to the project directory, such as `media/intro.mp4`. Omit it to place the file in its kind's folder — `media/`, `scenes/` or `data/` — under `file_name`, numbered `<name>-2.<extension>`, `-3`, … past a name already taken there.
+   */
+  asset_path?: string | null;
+  /**
+   * The asset's file name in its kind's folder when `asset_path` is omitted, such as `intro.mp4`. Omit it for the source file's own name; an upload, which carries no name, needs it.
+   */
+  file_name?: string | null;
+  /**
+   * `media`, `scene` or `data`. Omit it for the kind the file's extension implies, `data` when it implies none.
+   */
+  kind?: ProjectAssetKindArgument | null;
+  /**
+   * The settings the import takes, kept in the asset's sidecar.
+   */
+  import_settings?: { [key: string]: unknown } | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The result of an asset tool that changed one asset and committed the change.
+ */
+export interface AssetTransactionToolResult {
+  /**
+   * The asset as the transaction left it; a deleted asset as it was.
+   */
+  asset: ProjectAssetOnTheWire;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+  /**
+   * The stream action loading the stream a created stream asset holds, while its project
+   * runs; absent otherwise.
+   */
+  action?: string | null;
+}
+
+/**
+ * One asset of a project as the asset tools report it.
+ */
+export interface ProjectAssetOnTheWire {
+  /**
+   * The asset's UUID, which the runtime made at import and which a rename or move keeps.
+   */
+  asset: string;
+  /**
+   * `stream`, `media`, `scene` or `data`.
+   */
+  kind: string;
+  /**
+   * Its path in the project, `/`-separated, relative to the project directory.
+   */
+  path: string;
+  /**
+   * The SHA-256 of its bytes as its sidecar records them, in lowercase hex.
+   */
+  content_sha256: string;
+  /**
+   * The size of its bytes.
+   */
+  content_byte_len: number;
+  /**
+   * The settings its import took.
+   */
+  import_settings: { [key: string]: unknown };
+}
+
+/**
+ * `relocate_asset`'s params.
+ */
+export interface RelocateAssetRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The asset, by the UUID `import_asset` or `list_assets` answered.
+   */
+  asset: string;
+  /**
+   * The asset's new path in the project, `/`-separated and relative to the project directory, such as `archive/opening.mp4`; its folders are made when missing.
+   */
+  to_path: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `delete_asset`'s params.
+ */
+export interface DeleteAssetRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The asset, by the UUID `import_asset` or `list_assets` answered.
+   */
+  asset: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_asset_settings`'s params.
+ */
+export interface SetAssetSettingsRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The asset, by the UUID `import_asset` or `list_assets` answered.
+   */
+  asset: string;
+  /**
+   * The settings that replace the asset's import settings whole.
+   */
+  import_settings: { [key: string]: unknown };
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `replace_asset`'s params.
+ */
+export interface ReplaceAssetRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The asset, by the UUID `import_asset` or `list_assets` answered.
+   */
+  asset: string;
+  /**
+   * Where the new bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of an upload in the project's `.tatolab/uploads/`.
+   */
+  source: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `create_stream`'s params.
+ */
+export interface CreateStreamRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * Where the stream's graph document sits in the project, `/`-separated and relative to the project directory and ending `.graph.json`, such as `streams/preview.graph.json`.
+   */
+  path: string;
+  /**
+   * The name the stream is shown under, written in its graph document; refused when blank.
+   */
+  display_name: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `delete_stream`'s params.
+ */
+export interface DeleteStreamRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The stream asset, by the UUID `create_stream` answered as `asset` or `list_streams` reports as its location's `stream_asset`.
+   */
+  stream_asset: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_stream_display_name`'s params.
+ */
+export interface SetStreamDisplayNameRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The stream asset, by the UUID `create_stream` answered as `asset` or `list_streams` reports as its location's `stream_asset`.
+   */
+  stream_asset: string;
+  /**
+   * The name the stream is shown under, written in its graph document; refused when blank.
+   */
+  display_name: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `add_dependency`'s params.
+ */
+export interface AddDependencyRequest {
+  /**
+   * The project that imports, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * Where the project is copied from, on this machine, by absolute path: its project folder, or a `.zip` of one, such as a GitHub archive downloaded first. It must hold a `tatolab-project.json` with a project UUID, at its root or in its one top folder.
+   */
+  source: string;
+  /**
+   * The folder under `imports/` its copy takes; the imported project's name, lowercase with each run of other characters made `-`, when omitted.
+   */
+  folder?: string | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The result of `add_dependency` and `remove_dependency`.
+ */
+export interface DependencyTransactionToolResult {
+  /**
+   * The import as the transaction left it; a removed one as it was.
+   */
+  dependency: ProjectDependencyOnTheWire;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
+
+/**
+ * A project this one imports, as a dependency tool answers it.
+ */
+export interface ProjectDependencyOnTheWire {
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * The folder under `imports/` that holds its copy.
+   */
+  folder: string;
+  /**
+   * Where it was copied from, as `add_dependency` or `update_dependency` was given it.
+   */
+  source: string;
+  /**
+   * The SHA-256 naming the version its copy carried.
+   */
+  version: string;
+}
+
+/**
+ * `update_dependency`'s params.
+ */
+export interface UpdateDependencyRequest {
+  /**
+   * The project that imports, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`.
+   */
+  project: string;
+  /**
+   * Where to copy it from this time, as `add_dependency` takes it; the `source` it was last copied from when omitted.
+   */
+  source?: string | null;
+  /**
+   * Overwrite the files of its folder edited since its copy, which an update without it lists under `edited_files` and leaves as they are.
+   */
+  overwrite_edited_files?: boolean | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The result of `update_dependency`: the copy it committed, or, when the import's folder was
+ * edited since its copy and the overwrite was not confirmed, each edited file and no change.
+ */
+export interface UpdateDependencyToolResult {
+  /**
+   * The import as the update left it.
+   */
+  dependency: ProjectDependencyOnTheWire;
+  /**
+   * Each file of the import's folder edited since its copy, by its path inside the folder.
+   */
+  edited_files?: Array<string>;
+  /**
+   * Whether the update waits on `overwrite_edited_files` to overwrite `edited_files`.
+   */
+  overwrite_confirmation_needed: boolean;
+  /**
+   * The transaction's UUID, when the update committed.
+   */
+  transaction?: string | null;
+  /**
+   * The commit on the project history's `main` that records it, when the update committed.
+   */
+  commit?: string | null;
+}
+
+/**
+ * `list_dependencies`'s params.
+ */
+export interface ListDependenciesRequest {
+  /**
+   * The project that imports, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * Read each import's `source` and answer the version it holds now beside the copy's.
+   */
+  check_for_newer?: boolean | null;
+}
+
+/**
+ * The result of `list_dependencies`.
+ */
+export interface ListDependenciesToolResult {
+  /**
+   * Each import of the project, in the order `tatolab-project.json` lists them.
+   */
+  dependencies: Array<ListedProjectDependencyOnTheWire>;
+}
+
+/**
+ * One import as `list_dependencies` answers it.
+ */
+export interface ListedProjectDependencyOnTheWire {
+  /**
+   * The import as `tatolab-project.json` records it.
+   */
+  dependency: ProjectDependencyOnTheWire;
+  /**
+   * Each file of its folder edited since its copy, by its path inside the folder.
+   */
+  edited_files?: Array<string>;
+  /**
+   * With `check_for_newer`, the version its source holds now.
+   */
+  version_on_the_source?: string | null;
+  /**
+   * With `check_for_newer`, whether `version_on_the_source` is not the copy's `version`.
+   */
+  newer_version_exists?: boolean | null;
+  /**
+   * Why the source could not be read, or the folder's files listed, in the runtime's words.
+   */
+  check_refused_because?: string | null;
+}
+
+/**
+ * `remove_dependency`'s params.
+ */
+export interface RemoveDependencyRequest {
+  /**
+   * The project that imports, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`.
+   */
+  project: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `use_dependency_stream`'s params.
+ */
+export interface UseDependencyStreamRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists under `dependencies`.
+   */
+  project: string;
+  /**
+   * The imported project's stream, by its stream asset's UUID, the `asset` its graph document under `imports/<folder>/` holds.
+   */
+  dependency_stream: string;
+  /**
+   * The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. Any node of that name already in the graph refuses the placement.
+   */
+  name?: string | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `list_project_files`'s params.
+ */
+export interface ListProjectFilesRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * A folder of the project, `/`-separated and relative to the project directory, to list alone; the whole project when omitted.
+   */
+  under?: string | null;
+}
+
+/**
+ * The `list_project_files` tool's result.
+ */
+export interface ListProjectFilesToolResult {
+  /**
+   * Each file listed, sorted by path.
+   */
+  files: Array<ProjectFileOnTheWire>;
+}
+
+/**
+ * One file of a project as `list_project_files` answers it.
+ */
+export interface ProjectFileOnTheWire {
+  /**
+   * Where the file sits in the project, `/`-separated.
+   */
+  path: string;
+  /**
+   * The file's length in bytes.
+   */
+  byte_len: number;
+}
+
+/**
+ * `read_project_file`'s params.
+ */
+export interface ReadProjectFileRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The file, `/`-separated and relative to the project directory, such as `nodes/camera.py`; refused outside the project, inside `.tatolab/`, or through a symbolic link.
+   */
+  path: string;
+}
+
+/**
+ * The `read_project_file` tool's result.
+ */
+export interface ReadProjectFileToolResult {
+  /**
+   * The file read, as the call named it.
+   */
+  path: string;
+  /**
+   * The file's length in bytes.
+   */
+  byte_len: number;
+  /**
+   * The file's bytes, standard base64 with padding.
+   */
+  content_base64: string;
+  /**
+   * The SHA-256 of the file's bytes, lowercase hex, which a `write_project_file` sends back
+   * as `expected_sha256`.
+   */
+  content_sha256: string;
+}
+
+/**
+ * `create_node_file`'s params.
+ */
+export interface CreateNodeFileRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The new Python file, `/`-separated and relative to the project directory, such as `nodes/edge_glow.py`: each folder and the file's name a Python identifier, the class named after the file (`EdgeGlow`). Refused where a file already is, outside the project, inside `.tatolab/` or `imports/`, or through a symbolic link.
+   */
+  path: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The `create_node_file` tool's result.
+ */
+export interface CreateNodeFileToolResult {
+  /**
+   * The file created.
+   */
+  path: string;
+  /**
+   * The node type the file declares, `<module>:<class>`, as `add_node` takes it.
+   */
+  node_type: string;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
+
+/**
+ * `write_project_file`'s params.
+ */
+export interface WriteProjectFileRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The file, `/`-separated and relative to the project directory, such as `nodes/camera.py`; refused outside the project, inside `.tatolab/`, or through a symbolic link.
+   */
+  path: string;
+  /**
+   * The file's whole new content as UTF-8 text. Send this or `content_base64`, never both.
+   */
+  content?: string | null;
+  /**
+   * The file's whole new content as standard base64 with padding, for bytes that are not text. Send this or `content`, never both.
+   */
+  content_base64?: string | null;
+  /**
+   * The `content_sha256` `read_project_file` or the last `write_project_file` answered for the file: the write is refused, and the file left as it is, when the file no longer holds those bytes. Omitted, the write goes over whatever the file holds.
+   */
+  expected_sha256?: string | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The `write_project_file` tool's result.
+ */
+export interface ProjectFileTransactionToolResult {
+  /**
+   * The file written.
+   */
+  path: string;
+  /**
+   * The SHA-256 of the bytes written, lowercase hex, which the next `write_project_file`
+   * sends back as `expected_sha256`.
+   */
+  content_sha256: string;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+}
+
+/**
+ * `list_project_node_types`'s params.
+ */
+export interface ListProjectNodeTypesRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+}
+
+/**
+ * The `list_project_node_types` tool's result: what a project and each source it draws node
+ * code from declares, read from source without running it.
+ */
+export interface ListProjectNodeTypesToolResult {
+  /**
+   * The project directory, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The project's UUID, from its `tatolab-project.json`.
+   */
+  project: string;
+  /**
+   * The project's name.
+   */
+  project_name: string;
+  /**
+   * The project first, then each import, then each installed distribution.
+   */
+  sources: Array<NodeTypeSourceReadWithoutRunningIt>;
+}
+
+/**
+ * One source's node types, graph generators, and the modules of it that could not be read.
+ */
+export type NodeTypeSourceReadWithoutRunningIt = {
+  /**
+   * Each node type declared, by type.
+   */
+  node_types: Array<NodeTypeReadFromSource>;
+  /**
+   * Each `@graph_generator` declared, by import path.
+   */
+  graph_generators: Array<GraphGeneratorReadFromSource>;
+  /**
+   * Each module that does not parse, with why and where; the rest of the source still lists.
+   */
+  unreadable_modules: Array<NodeModuleNotReadable>;
+} & ({
+  source: "project";
+} | {
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * Its folder under `imports/`.
+   */
+  folder: string;
+  /**
+   * The version its copy carried.
+   */
+  version: string;
+  source: "dependency";
+} | {
+  /**
+   * The distribution's name.
+   */
+  distribution: string;
+  /**
+   * The distribution's version.
+   */
+  distribution_version: string;
+  source: "installed_distribution";
+});
+
+/**
+ * One node type as its declaration states it in source.
+ */
+export interface NodeTypeReadFromSource {
+  /**
+   * The type `add_node` takes: the import path `<module>:<qualname>`.
+   */
+  type: string;
+  /**
+   * `process`, `function` or `shader`; `None` for an entry point whose declaration source does not show.
+   */
+  kind?: string | null;
+  /**
+   * The declared description, or the docstring.
+   */
+  description: string;
+  /**
+   * The palette category, the declaring module when none is declared.
+   */
+  category: string;
+  /**
+   * The input ports, `None` where only the node's native half states them.
+   */
+  inputs?: Array<NodeTypePortReadFromSource> | null;
+  /**
+   * The output ports, `None` where only the node's native half states them.
+   */
+  outputs?: Array<NodeTypePortReadFromSource> | null;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path?: string | null;
+  /**
+   * The line of its `class`, `def` or assignment.
+   */
+  line?: number | null;
+}
+
+/**
+ * One port as its declaration states it in source.
+ */
+export interface NodeTypePortReadFromSource {
+  /**
+   * The port's name, cast as every exposed name is.
+   */
+  name: string;
+  /**
+   * The port family's wire name, `None` where source alone does not say.
+   */
+  family?: string | null;
+  /**
+   * The port's declared description.
+   */
+  description: string;
+  /**
+   * A function or shader port's annotation as written; `None` for a process node's port.
+   */
+  annotation?: string | null;
+  /**
+   * A function input's default pin value, where it is a literal.
+   */
+  pin_default?: unknown;
+  /**
+   * A function input's default as written, where it is not a literal.
+   */
+  pin_default_as_written?: string | null;
+}
+
+/**
+ * One `@graph_generator` as its declaration states it in source.
+ */
+export interface GraphGeneratorReadFromSource {
+  /**
+   * The import path `import_graph_generator` takes: `<module>:<function>`.
+   */
+  generator: string;
+  /**
+   * Its docstring.
+   */
+  description: string;
+  /**
+   * Each parameter after the builder: a setting the fragment promotes.
+   */
+  promoted_config: Array<GraphGeneratorPromotedSettingReadFromSource>;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line of its `def`.
+   */
+  line: number;
+}
+
+/**
+ * One setting a graph generator promotes, as its parameter states it.
+ */
+export interface GraphGeneratorPromotedSettingReadFromSource {
+  /**
+   * The parameter's name.
+   */
+  name: string;
+  /**
+   * Its annotation as written.
+   */
+  annotation?: string | null;
+  /**
+   * Its default, where it is a literal.
+   */
+  default?: unknown;
+  /**
+   * Its default as written, where it is not a literal.
+   */
+  default_as_written?: string | null;
+}
+
+/**
+ * A module of a source that could not be read, and why.
+ */
+export interface NodeModuleNotReadable {
+  /**
+   * The module's import name.
+   */
+  module: string;
+  /**
+   * Its file, relative to its source's root.
+   */
+  path: string;
+  /**
+   * The line the parser stopped at.
+   */
+  line?: number | null;
+  /**
+   * The column the parser stopped at.
+   */
+  column?: number | null;
+  /**
+   * Why it was not read, in the parser's words.
+   */
+  why: string;
+}
+
+/**
+ * `list_project_views`'s params.
+ */
+export interface ListProjectViewsRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+}
+
+/**
+ * The `list_project_views` tool's result: every Tato Studio view a project and its imports
+ * bring, read from each `views/<folder>/tatolab_view.json` without running anything.
+ */
+export interface ListProjectViewsToolResult {
+  /**
+   * The project directory, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The project's UUID, from its `tatolab-project.json`.
+   */
+  project: string;
+  /**
+   * The project's name.
+   */
+  project_name: string;
+  /**
+   * The project's own views by folder, then each import's in the order its project file
+   * records them.
+   */
+  views: Array<ProjectViewListed>;
+}
+
+/**
+ * One folder of a `views/`: the view type it declares, and whether it opens.
+ */
+export interface ProjectViewListed {
+  /**
+   * The view type's id, `<project name>:<view folder>`, the node type a node of the view is.
+   */
+  view_type: string;
+  /**
+   * The UUID of the project whose `views/` holds it.
+   */
+  project: string;
+  /**
+   * That project's name.
+   */
+  project_name: string;
+  /**
+   * That project's folder under `imports/`; `None` for the listed project's own view.
+   */
+  import_folder?: string | null;
+  /**
+   * The view's folder relative to the listed project, as `views/deck` or
+   * `imports/levels/views/meter`: the path a project file read names its files under.
+   */
+  view_folder_in_the_project: string;
+  /**
+   * Whether its manifest reads against the view contract this runtime reads.
+   */
+  opens: boolean;
+  /**
+   * Why it does not open, in the runtime's own words; `None` when it opens.
+   */
+  not_opened_because?: string | null;
+  /**
+   * The name the view-type menu lists; `None` when it does not open.
+   */
+  title?: string | null;
+  /**
+   * What the view is for.
+   */
+  description?: string | null;
+  /**
+   * Its icon, a path inside its folder.
+   */
+  icon?: string | null;
+  /**
+   * Its preview picture, a path inside its folder.
+   */
+  preview?: string | null;
+  /**
+   * `area` or `node`; `None` when it does not open.
+   */
+  placement?: string | null;
+  /**
+   * The inputs a `node` view declares.
+   */
+  inputs: Array<ProjectViewDeclaredPort>;
+  /**
+   * The outputs a `node` view declares.
+   */
+  outputs: Array<ProjectViewDeclaredPort>;
+  /**
+   * Its `tatolab_view.json` as written, when it is JSON.
+   */
+  manifest?: unknown;
+}
+
+/**
+ * An input or output a view declares, as a node declares a port.
+ */
+export interface ProjectViewDeclaredPort {
+  /**
+   * The port's name.
+   */
+  name: string;
+  /**
+   * The port family's wire name.
+   */
+  family: string;
+  /**
+   * What the port carries.
+   */
+  description?: string | null;
+  /**
+   * The lowest and highest value an Array port carries.
+   */
+  range?: [number, number] | null;
+}
+
+/**
+ * `write_studio_view_output`'s params.
+ */
+export interface WriteStudioViewOutputRequest {
+  /**
+   * The stream id of the stream holding the view node.
+   */
+  stream: string;
+  /**
+   * The view node's UUID, as `graph` lists it under `id`.
+   */
+  node: string;
+  /**
+   * The view node's output port the value is published on.
+   */
+  port: string;
+  /**
+   * The value, as the port's family carries it: a Records port takes a JSON object; an Array port a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels port a number, as one control value, or `{"samples": [[...], ...], "sample_rate"}`, float32 channel by channel.
+   */
+  value: unknown;
+}
+
+/**
+ * The `write_studio_view_output` tool's result: the output of the view node the value was handed
+ * to, which published it.
+ */
+export interface WriteStudioViewOutputToolResult {
+  /**
+   * The stream id.
+   */
+  stream: string;
+  /**
+   * The view node's UUID, as `graph` lists it under `id`.
+   */
+  node: string;
+  /**
+   * The output port the value was published on.
+   */
+  port: string;
+}
+
+/**
+ * `write_graph_input`'s params.
+ */
+export interface WriteGraphInputRequest {
+  /**
+   * The stream id of a loaded stream.
+   */
+  stream: string;
+  /**
+   * The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as every exposed name is.
+   */
+  input: string;
+  /**
+   * The value, as the Input's family carries it: a Records Input takes a JSON object; an Array Input a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels Input a number or a bool, as one control value, or `{"samples": [[...], ...], "sample_rate"}`, float32 channel by channel.
+   */
+  value: unknown;
+}
+
+/**
+ * The `write_graph_input` tool's result: the Input of the stream's top-level `GraphInput` the
+ * value was handed to, which published it to every reader.
+ */
+export interface WriteGraphInputToolResult {
+  /**
+   * The stream id.
+   */
+  stream: string;
+  /**
+   * The Input's name, as the `GraphInput`'s config declares it under `port`.
+   */
+  input: string;
+  /**
+   * The Input's family, as its wire name: `array`, `channels` or `records`.
+   */
+  family: string;
+}
+
+/**
+ * `import_project`'s params.
+ */
+export interface ImportProjectRequest {
+  /**
+   * The `.zip` of a project on this machine, by absolute path, such as a GitHub archive downloaded first. It must hold a `tatolab-project.json` with a project UUID, at its root or in its one top folder.
+   */
+  source: string;
+  /**
+   * Where the new project is made, by absolute path: a folder that does not exist yet, its parent made when missing.
+   */
+  project_directory: string;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+}
+
+/**
+ * The `import_project` tool's result: the project it unpacked from a `.zip` of one.
+ */
+export interface ImportProjectToolResult {
+  /**
+   * The new project's directory, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The new project's UUID, its own and never the zipped project's.
+   */
+  project: string;
+  /**
+   * The project's name, as the zip's `tatolab-project.json` named it.
+   */
+  name: string;
+  /**
+   * The first commit of the new project's history, which records every file it unpacked.
+   */
+  commit: string;
+}
+
+/**
+ * `logs`'s params.
+ */
+export interface LogsRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+  /**
+   * Only the records of this stream, by its stream id. Omit it for every record of the project, its loads' among them.
+   */
+  stream?: string | null;
+  /**
+   * Only the records of this stream action, by its action id.
+   */
+  action?: string | null;
+  /**
+   * Return the records after this opaque cursor, the previous result's `next_after`. Omit it for the oldest the project's log holds.
+   */
+  after?: string | null;
+  /**
+   * The most records to return. Defaults to 256; a larger value than 4096 is clamped to it.
+   */
+  count?: number | null;
+}
+
+/**
+ * The `logs` tool's result: one project's log records after the cursor asked for, read from
+ * the project's log on disk.
+ */
+export interface LogsToolResult {
+  /**
+   * The project whose log these are.
+   */
+  project_directory: string;
+  /**
+   * The records after `after` that match the call's `stream` and `action`, oldest first, each
+   * as the project's JSONL log holds it.
+   */
+  records: Array<unknown>;
+  /**
+   * The opaque cursor the next call passes as `after` to read on from this page.
+   */
+  next_after: string;
+  /**
+   * Whether retention deleted the segment `after` named, so the page resumes at the oldest
+   * record held.
+   */
+  records_no_longer_held: boolean;
+}
+
+/**
+ * `open_viewer`'s params.
+ */
+export interface OpenViewerRequest {
+  /**
+   * The loaded stream this call is about, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The node's id, as `graph` lists it under `id`; its name is a label, not its identity.
+   */
+  node_id: string;
+  /**
+   * The node's output port, as `graph` lists it under `ports.outputs`.
+   */
+  port: string;
+  /**
+   * The process id of the viewer that imports the port's Image frames. On macOS the surface-sharing service admits only that process, a running process of the runtime's user, to new connections while the viewer stays open, and without it the answer names no `surface_share_address`; Linux admits whoever may open its socket.
+   */
+  viewer_process_id?: number | null;
+}
+
+/**
+ * The `open_viewer` tool's result: what a viewer subscribes to, from its own process, to read
+ * the latest message an output port's node wrote.
+ */
+export interface OpenViewerToolResult {
+  /**
+   * The viewer's id, which `close_viewer` takes: `<stream>/<node_id>/<port>`.
+   */
+  viewer: string;
+  /**
+   * The stream's id.
+   */
+  stream: string;
+  /**
+   * The node's id, as `graph` lists it.
+   */
+  node_id: string;
+  /**
+   * The node's name: its label, not its identity.
+   */
+  node_name: string;
+  /**
+   * The output port's name.
+   */
+  port: string;
+  /**
+   * The root of the iceoryx2 domain the port's channel lives in.
+   */
+  iceoryx2_domain_root: string;
+  /**
+   * The port's channel: the iceoryx2 service whose reserved subscriber slot the viewer takes.
+   */
+  channel: string;
+  /**
+   * Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
+   * Linux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open
+   * named no `viewer_process_id`, since the service admits only a named process.
+   */
+  surface_share_address?: string | null;
+}
+
+/**
+ * `close_viewer`'s params.
+ */
+export interface CloseViewerRequest {
+  /**
+   * The viewer, by the id `open_viewer` answered.
+   */
+  viewer: string;
+}
+
+/**
+ * The `close_viewer` tool's result.
+ */
+export interface CloseViewerToolResult {
+  /**
+   * The viewer closed.
+   */
+  viewer: string;
+}
+
+/**
+ * `set_stream_clock_scale`'s params.
+ */
+export interface SetStreamClockScaleRequest {
+  /**
+   * The stream, by the stream id `list_streams` reports: loaded, or recorded and not loaded.
+   */
+  stream: string;
+  /**
+   * Stream seconds per machine second from now on: 0.5 runs the stream at half speed, 1 at real time. A finite number greater than zero, at most 1.
+   */
+  scale: number;
+}
+
+/**
+ * The `set_stream_clock_scale` tool's result.
+ */
+export interface SetStreamClockScaleToolResult {
+  /**
+   * The stream's id.
+   */
+  stream: string;
+  /**
+   * Stream seconds per machine second from now on.
+   */
+  scale: number;
+}
+
+/**
+ * `create_project`'s params.
+ */
+export interface CreateProjectRequest {
+  /**
+   * Where to create the project, by absolute path: created when missing, and holding none of the files a new project starts with. Omit it to create the project in a folder named `<adjective>-<noun>`, drawn at random, under `~/streams`.
+   */
+  project_directory?: string | null;
+  /**
+   * The `name` of a sample project `list_samples` lists, to copy into the new project instead of the starter. Omit it for the starter.
+   */
+  sample?: string | null;
+}
+
+/**
+ * The `create_project` tool's result: the load it queued of the project it created.
+ */
+export interface CreateProjectToolResult {
+  /**
+   * The queued action's id, which `describe_stream_action` and `logs` take.
+   */
+  action: string;
+  /**
+   * The id the new project's `streams/main.graph.json` loads as.
+   */
+  stream: string;
+  /**
+   * The project's directory, symlinks resolved.
+   */
+  project_directory: string;
+}
+
+/**
+ * `list_samples`'s params: none.
+ */
+export type ListSamplesRequest = Record<string, never>;
+
+/**
+ * The `list_samples` tool's result: every sample project the runtime unit carries.
+ */
+export interface ListSamplesToolResult {
+  /**
+   * Each sample, in name order.
+   */
+  samples: Array<ListSamplesToolResultSample>;
+}
+
+/**
+ * One sample project the runtime unit carries, which `create_project` takes by `name`.
+ */
+export interface ListSamplesToolResultSample {
+  /**
+   * The name `create_project`'s `sample` takes.
+   */
+  name: string;
+  /**
+   * The sample's title.
+   */
+  title: string;
+  /**
+   * What the sample shows, in a sentence or two; empty when it says nothing.
+   */
+  summary: string;
+}
+
+/**
+ * `refresh_fragments`'s params.
+ */
+export interface RefreshFragmentsRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * The project's Python files that changed, each by its path relative to the project directory or absolute inside it, e.g. `generators/looks.py`; each names the module it is imported as.
+   */
+  changed_files: Array<string>;
+  /**
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * The params of `undo` and `redo`.
+ */
+export interface UndoOrRedoRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json`.
+   */
+  project_directory: string;
+  /**
+   * Whose edits: an undo or a redo reverses only its own author's. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
 
 /**
  * One transaction a project's change feed holds.
@@ -1006,6 +3598,30 @@ export interface ProjectTransactionOnTheWire {
    */
   applied_at: string;
 }
+
+/**
+ * `project_changed`'s params.
+ */
+export interface ProjectChangedNotificationParams {
+  /**
+   * The project, by UUID.
+   */
+  project: string;
+  /**
+   * What changed; `missed` when the connection fell behind, and the client reads the project's
+   * change feed again.
+   */
+  change: ProjectChangeKindOnTheWire;
+  /**
+   * The transaction that applied, when `change` is `applied`; its `undo_state` is absent.
+   */
+  transaction?: ProjectTransactionOnTheWire | null;
+}
+
+/**
+ * What changed on a project's change feed.
+ */
+export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "missed";
 
 /** Every operation the runtime serves, by method name: the params it takes and the result it answers. */
 export interface ControlOperations {
@@ -1096,6 +3712,719 @@ export interface ControlOperations {
   connect: {
     params: OneLinkGraphEditRequest;
     result: GraphTransactionToolResult;
+  };
+  /**
+   * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
+   *
+   * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction: its generator as `type`, its promoted settings as `config`, and the nodes and links it built stored under `fragment`, each node with a UUID of its own. Run again under the name of a fragment the graph holds, it refreshes that fragment with the fresh run: each node it builds keeps the UUID of the node of the same name it built before, so links into the fragment and the graph's history hold. A generator that raises, refuses, or is not found is refused with its traceback, nothing changed. Answers as `transact` does, a new fragment node under `added_nodes`; undo restores the fragment as it was.
+   *
+   * Since contract version 1, stable.
+   */
+  import_graph_generator: {
+    params: ImportGraphGeneratorRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it.
+   *
+   * Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it; its links go with it, and undo brings both back.
+   *
+   * Since contract version 1, stable.
+   */
+  remove_node: {
+    params: OneNodeGraphEditRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.
+   *
+   * Since contract version 1, stable.
+   */
+  disconnect: {
+    params: OneLinkGraphEditRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
+   *
+   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{"asset": "<uuid>"}` references an asset of the project, which then cannot be deleted while the reference stands.
+   *
+   * Since contract version 1, stable.
+   */
+  set_node_config: {
+    params: SetNodeConfigRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Set the value one of a node's inputs holds while no link feeds it, as one transaction.
+   *
+   * Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is.
+   *
+   * Since contract version 1, stable.
+   */
+  set_pin_value: {
+    params: SetPinValueRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Give a node another name, a label, as one transaction.
+   *
+   * Give a node another name, a label, as one transaction; the node keeps its UUID, which every address names it by. Refused while another node's config names it by its name.
+   *
+   * Since contract version 1, stable.
+   */
+  rename_node: {
+    params: RenameNodeRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.
+   *
+   * Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole. The fields are held to the studio contract: a key of the wrong shape, or any key outside it, is refused by name. It changes nothing that runs.
+   *
+   * Since contract version 1, stable.
+   */
+  set_studio_fields: {
+    params: SetStudioFieldsRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Replace the config fields a node takes as inputs, as one transaction.
+   *
+   * Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off.
+   *
+   * Since contract version 1, stable.
+   */
+  set_exposed_config_fields: {
+    params: SetExposedConfigFieldsRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+   *
+   * Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`.
+   *
+   * Since contract version 1, stable.
+   */
+  add_group: {
+    params: AddGroupRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Set a labelled group's title, description or colour, as one transaction.
+   *
+   * Set a labelled group's title, description or colour, as one transaction; a field omitted is kept. Its nodes stay as they are.
+   *
+   * Since contract version 1, stable.
+   */
+  set_group_fields: {
+    params: SetGroupFieldsRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.
+   *
+   * Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document.
+   *
+   * Since contract version 1, stable.
+   */
+  collapse_selection_into_subgraph: {
+    params: CollapseSelectionIntoSubgraphRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+   *
+   * Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document.
+   *
+   * Since contract version 1, stable.
+   */
+  unlock_generator_fragment: {
+    params: UnlockGeneratorFragmentRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Place a canvas note on a loaded stream's graph, as one transaction.
+   *
+   * Place a canvas note on a loaded stream's graph, as one transaction: text at a position and size Tato Studio draws it at, beside the nodes rather than on one. It changes nothing that runs. Answers as `transact` does, the new note's UUID under `added_notes`.
+   *
+   * Since contract version 1, stable.
+   */
+  add_note: {
+    params: AddNoteRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Set a canvas note's text, position or size, as one transaction.
+   *
+   * Set a canvas note's text, position or size, as one transaction; a field omitted is kept.
+   *
+   * Since contract version 1, stable.
+   */
+  set_note_fields: {
+    params: SetNoteFieldsRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Take a canvas note off a loaded stream's graph, as one transaction.
+   *
+   * Take a canvas note off a loaded stream's graph, as one transaction. Undo puts it back as it was.
+   *
+   * Since contract version 1, stable.
+   */
+  remove_note: {
+    params: RemoveNoteRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Take out a labelled group, as one transaction.
+   *
+   * Take out a labelled group, as one transaction: its nodes stay, ungrouped. Undo brings the group back with every node that belonged to it.
+   *
+   * Since contract version 1, stable.
+   */
+  remove_group: {
+    params: RemoveGroupRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Queue the open of a project: its streams are loaded and held with their playback stopped.
+   *
+   * Open the project in `project_directory`: queue its open on its own stream action queue and answer at once with the action's id as `action`. The open reads its `tatolab-project.json` and each stream asset's graph document, makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — then loads each stream under its stream id, `<project>-<stream>-<hash>`, the hash over the project's UUID and the stream asset's UUID, and holds it with its playback stopped, recording each stream stopped or failed: a graph document that does not load, or a load that is refused, with its reason, and a `.venv` uv cannot make — uv's own words — failing every stream of the project. It starts no node. Once it is done, `graph`, every graph edit and the node catalog answer for each stream, and `start_playback` plays the project. The project stays open, held stopped or playing, across the runtime's restarts until `close_project`. It opens a project that was never opened, one `close_project` closed, and one whose every stream failed, retrying them. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or holds no `tatolab-project.json` fails the action, never the call. Refused, with nothing queued: a `project_directory` that is not absolute, and a project open once its queued actions run, which `reload_project` refreshes.
+   *
+   * Since contract version 1, stable.
+   */
+  open_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue a soft reload of an open project from disk, keeping its playback.
+   *
+   * Softly reload the open project in `project_directory` from disk: queue the load on its stream action queue and answer at once with the action's id as `action`. It re-reads every stream asset's graph document. While the project's node code — its `.py` files, `pyproject.toml`, `uv.lock` and views' `tatolab_view.json` — is as it was at a stream's load, the stream stays loaded and its graph is brought to its document in place, each node matched by its UUID, so only the nodes and links that changed change; otherwise the stream is loaded again under its same id, keeping its display name. A stream whose graph document is gone is unloaded and forgotten, a failed stream is loaded again, and the project's `.venv` is synced only when its dependency files changed or its `.venv/bin/python` does not run. The project keeps its playback: a playing project's streams start playing, a paused one's start paused, and a stopped one's are held stopped. `tatolab dev` asks for it on each save. A hard reload is `close_project` then `open_project`. Follow it as `open_project`'s open. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open, which `open_project` opens.
+   *
+   * Since contract version 1, stable.
+   */
+  reload_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue the close of an open project: its streams are unloaded and stay closed until it is opened.
+   *
+   * Close the open project in `project_directory`: queue the close on its stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, it ends the playback of every stream of the project, unloads each, forgets its function-node state, and records each closed, so the runtime leaves the project unloaded across its restarts until `open_project` opens it again. It deletes nothing: the project's files, its `.venv` and what uv synced into it stay. Its streams are `stopping` in `list_streams` until it ends, then `closed`; follow it with `describe_stream_action`. Each recorded stream carries the close on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open once its queued actions run.
+   *
+   * Since contract version 1, stable.
+   */
+  close_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue the removal of a project from the runtime: its streams are stopped and their records forgotten.
+   *
+   * Queue the removal of the whole project in `project_directory` on its stream action queue and answer at once with the action's id as `action`: once the project's earlier actions have run, it unloads every loaded stream of the project and forgets every record of it, so the runtime no longer re-loads any of them, and deletes no file. `delete_asset` on a stream asset unloads and forgets that one stream. The project's streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute, and a project the runtime holds no stream of.
+   *
+   * Since contract version 1, stable.
+   */
+  remove_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: RemoveProjectToolResult;
+  };
+  /**
+   * Queue the start of an open project's playback.
+   *
+   * Start the playback of the open project in `project_directory`: queue it on the project's stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, each stream the project holds stopped starts fresh from the graph it holds, edits made while stopped included, reading no graph document and making no `.venv`: every node instance is made anew, so only the state a node persists itself carries over from an earlier playback. Each stream is recorded running, so the runtime plays the project again across its restarts until `stop_playback`. A project plays or stops as a whole: no tool plays or stops one of its streams. Follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute; a project that is not open, which `open_project` opens; a paused project, which `resume_playback` resumes; and a project that plays once its queued actions run, which `stop_playback` stops.
+   *
+   * Since contract version 1, stable.
+   */
+  start_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue the stop of a project's playback, its streams staying loaded.
+   *
+   * Stop the playback of the whole project in `project_directory`: queue the stop on its stream action queue and answer at once with the action's id as `action` beside the `project_directory`. Once the project's earlier actions have run, it ends the playback of every loaded stream of the project — every processor instance, device claim, function-node state and the clock torn down — keeps each stream's graph loaded, so `graph`, every graph edit and the node catalog still answer for it, and records each stopped, so the runtime holds the project open and stopped across its restarts until `start_playback` plays it again from the graph it holds. Its streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Each recorded stream carries the stop on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, a project whose removal is queued, and a project none of whose streams plays once the actions queued before it run.
+   *
+   * Since contract version 1, stable.
+   */
+  stop_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Pause a playing project's playback at once.
+   *
+   * Pause the playback of the whole project in `project_directory` at once, never waiting behind an action on its queue, and answer the `project_directory` and, as `streams`, the id of each loaded stream this call paused. Every processor of each loaded stream holds its state and processes nothing, and a scaled or stepped stream clock holds where it stands, opening no step, while a real-time clock is the machine's own and runs on; the streams stay loaded and are `paused` in `list_streams`, and a graph edit made meanwhile is applied and compiles on `resume_playback`. The project stays paused until `resume_playback`, `stop_playback`, `close_project` or `remove_project`: a stream a `reload_project` loads meanwhile, the one `tatolab dev` asks for on a save among them, starts paused. Pause is recorded, so a runtime restart re-loads the project paused. Pausing a paused project pauses nothing more. Refused: a `project_directory` that is not absolute, and a project none of whose streams plays — none loaded, or each held stopped, which `start_playback` plays — and whose last action queued is not a `start_playback`.
+   *
+   * Since contract version 1, stable.
+   */
+  pause_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: PausePlaybackToolResult;
+  };
+  /**
+   * Resume a paused project's playback at once.
+   *
+   * Resume the paused playback of the project in `project_directory` at once and answer the `project_directory` and, as `streams`, the id of each stream this call resumed: every processor carries on from the state it held, each held stream clock carries on from the stream time it was held at, and each stream compiles the graph edits made while it was paused, a compile that fails logged in the project's `logs` as a live edit's is. Refused: a `project_directory` that is not absolute, and a project that is not paused.
+   *
+   * Since contract version 1, stable.
+   */
+  resume_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ResumePlaybackToolResult;
+  };
+  /**
+   * Describe one stream action by its id: its state, its step and each stream it reached.
+   *
+   * Describe the stream action `action`: its project, `kind` (`open`, `load`, `start_playback`, `stop`, `close`, `remove`, `delete` or `reload_at_start`), `state` — `queued` behind the project's earlier actions, `in_progress` on its `step` (`reading_the_graph_documents`, `making_the_venv`, `starting`), `done`, `failed` with `failed_because`, or `cancelled` by `cancel_stream_action` — its `venv_sync`, what its latest uv sync of the project's `.venv` has done, read from uv's own lines from the moment uv starts and kept once it ends, `null` for an action that has not synced: its `phase` (`resolving`, `downloading`, `building`, `installing`, `installed`), `packages_resolved`, `packages_prepared` and `packages_installed` as uv counts them, `downloads_started` and `downloads_done` of the downloads uv names — only those over about a MiB — and under `packages` each package uv named, first named first, by `name`, `version` once uv names it, `kind` (`distribution` or `python_interpreter`), `state` (`downloading`, `downloaded`, `building`, `built`, `installed`, `uninstalled`) and `download_size_bytes` as uv states it; uv names no byte of a download as it arrives — and `streams`, each stream its project's graph documents named by `stream` id and `display_name`, with its `state` `running`, `stopped` or `failed` once the action took it in. Followed live as the resource `streamlib://stream-action/<action>`, which a `subscriptions/listen` naming it is sent `notifications/resources/updated` for each time the action changes. The runtime holds every queued and running action and the last 64 finished ones of each project; an older one is refused, its records still in the project's `logs`.
+   *
+   * Since contract version 1, stable.
+   */
+  describe_stream_action: {
+    params: OneStreamActionRequest;
+    result: DescribeStreamActionToolResult;
+  };
+  /**
+   * Cancel one stream action that is still queued or under way.
+   *
+   * Cancel the stream action `action`, the only way an action ends early; nothing replaces or edits a queued one. A queued action is dropped from its project's queue, its pending mark taken off each stream's record so the record stays as it was, and answers `cancelled`. A running `open`, `load` or `reload_at_start` answers `in_progress` and stops at the step it is on — a running uv sync is killed and a half-made `.venv` removed — then ends `cancelled`: a stream it was loading is recorded failed, and the streams it had not reached stay as recorded. Refused for a running `stop`, `close` or `remove`, whose unload has begun and cannot be cut short, which ends `done`; for an action already finished; and for one the runtime does not hold.
+   *
+   * Since contract version 1, stable.
+   */
+  cancel_stream_action: {
+    params: OneStreamActionRequest;
+    result: CancelStreamActionToolResult;
+  };
+  /**
+   * Rename a project, as one transaction on its history.
+   *
+   * Rename a project, as one transaction by `author` on its history that undoes like any edit: its `name` in `tatolab-project.json` changes, and its UUID, its folder and its streams' ids stay as they are. Answers how people see the project now, with the `transaction` and `commit`. Refused for a blank name.
+   *
+   * Since contract version 1, stable.
+   */
+  rename_project: {
+    params: RenameProjectRequest;
+    result: ProjectSettingsTransactionToolResult;
+  };
+  /**
+   * Describe a project, or clear its description, as one transaction on its history.
+   *
+   * Describe a project, or clear its description, as one transaction by `author` on its history that undoes like any edit: its `description` in `tatolab-project.json`, served by `list_assets` as `project_description`. Answers how people see the project now, with the `transaction` and `commit`.
+   *
+   * Since contract version 1, stable.
+   */
+  set_project_description: {
+    params: SetProjectDescriptionRequest;
+    result: ProjectSettingsTransactionToolResult;
+  };
+  /**
+   * Give a project a cover, or take it away, as one transaction on its history.
+   *
+   * Give a project a cover, or take it away, as one transaction by `author` on its history that undoes like any edit: its `cover` in `tatolab-project.json` names a media asset the project holds by its UUID, served by `list_assets` as `project_cover`. An image a person picks, or a frame a viewer showed, is first imported with `import_asset` and then named here; the asset cannot be deleted while it is the cover. Answers how people see the project now, with the `transaction` and `commit`. Refused for an asset the project does not hold, or one that is not a media asset.
+   *
+   * Since contract version 1, stable.
+   */
+  set_project_cover: {
+    params: SetProjectCoverRequest;
+    result: ProjectSettingsTransactionToolResult;
+  };
+  /**
+   * Duplicate a project into a folder that does not exist yet, as a project of its own.
+   *
+   * Duplicate a project into `into`, a folder that does not exist yet, as a project of its own: every file a copy of it carries, its `imports/` included, and its whole history, so its edits can still be undone in the copy, under a new project UUID and the name `<name> copy`, the duplicate recorded as a commit on its history by `author`. Its `.venv` and the rest of its `.tatolab/` stay behind, and the duplicate is not opened: `open_project` opens it. Answers the duplicate's `project_directory`, `project`, `project_name` and `commit`. Refused, nothing left at `into`, for a relative `into`, one that exists, and one inside the project.
+   *
+   * Since contract version 1, stable.
+   */
+  duplicate_project: {
+    params: DuplicateProjectRequest;
+    result: DuplicateProjectToolResult;
+  };
+  /**
+   * Queue the deletion of a whole project.
+   *
+   * Delete the whole project in `project_directory`: queue its deletion on its stream action queue and answer at once with the action's id as `action` beside the `project_directory`. Once the project's earlier actions have run, it unloads every loaded stream of the project and forgets every record of it, as `remove_project` does, then moves the project's folder to this machine's Trash, from which its owner can put it back. Its streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`, which answers `failed` with why when the folder could not be moved. Refused, with nothing queued: a `project_directory` that is not absolute, and a folder holding no `tatolab-project.json`.
+   *
+   * Since contract version 1, stable.
+   */
+  delete_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: DeleteProjectToolResult;
+  };
+  /**
+   * List a project's assets, ordered by path.
+   *
+   * List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (`stream`, `media`, `scene` or `data`), its `path` in the project, the SHA-256 and size of its bytes, its `import_settings`, and what the runtime has read from its bytes — `media_facts_state` (`read`, `reading`, `unreadable` with `media_facts_unreadable_because`, or `null` for a stream), `media_facts` and `preview`, as `describe_asset` answers them, each from what is already read, an asset not yet read queued for a read — with the project's UUID, `project_name`, `project_description`, `project_cover` — the UUID of the image asset it is shown by — and `project_last_edited_at`, when its history last changed in seconds since the Unix epoch, each `null` when it has none, and `transactions_resource_uri`, its change feed. `kind` narrows to one kind. Refused for a folder with no `tatolab-project.json`.
+   *
+   * Since contract version 1, stable.
+   */
+  list_assets: {
+    params: ListAssetsRequest;
+    result: ListAssetsToolResult;
+  };
+  /**
+   * Describe one asset of a project.
+   *
+   * Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of its bytes, its import settings, `file_at_its_path`, whether a file is at its path, and what the runtime has read from its bytes, which it reads once per SHA-256 after an import or a replace and keeps in the project's `.tatolab/`. `media_facts_state` is `read`, `reading` — a read queued or under way, after which the project's change feed carries a `media_facts_read` entry — `unreadable`, with why in `media_facts_unreadable_because`, or `null` for a stream asset. `media_facts` carries `duration_ms`; `video` with `pixel_width`, `pixel_height`, `frames_per_second` and `codec`; `audio` with `sample_rate_hz`, `channel_count` and `codec`; `image` with `pixel_width` and `pixel_height`; `lut` with `lut_1d_size` or `lut_3d_size`, `domain_min` and `domain_max`; and `scene` — each `null` when the file does not hold or state it. `preview` is the size and `media_type` of the picture `read_asset_preview` answers, `null` when the asset has none.
+   *
+   * Since contract version 1, stable.
+   */
+  describe_asset: {
+    params: DescribeAssetRequest;
+    result: DescribeAssetToolResult;
+  };
+  /**
+   * Read an asset's preview picture.
+   *
+   * Read an asset's preview picture, which the runtime makes from its bytes and keeps in the project's `.tatolab/`: a PNG at most 512 pixels on its longest edge, answered as `content_base64`, standard base64 with padding, with its `media_type`, `pixel_width`, `pixel_height` and `byte_len`. An image has one; video, audio, a LUT, a scene and other data have none yet, as `describe_asset`'s `preview` being `null` says. Refused while the runtime is still reading the asset's bytes — `describe_asset`'s `media_facts_state` reads `reading`, and the project's change feed carries a `media_facts_read` entry once it is done — for an asset with no preview, and for a stream asset.
+   *
+   * Since contract version 1, stable.
+   */
+  read_asset_preview: {
+    params: ReadAssetPreviewRequest;
+    result: ReadAssetPreviewToolResult;
+  };
+  /**
+   * Import a file as a new asset of a project, as one transaction.
+   *
+   * Import a file as a new asset of the project at `asset_path`, or, with no `asset_path`, in its kind's folder of the project's standard layout — `media/` for video, audio and images, `scenes/` for USD, glTF and other 3D scenes, `data/` for everything else — under `file_name` or the source file's own name, numbered `<name>-2.<extension>`, `-3`, … past a name an asset or another file already takes there. Answers the `asset`, with the UUID the runtime made for it, which every later relocation keeps, and the `path` it landed at, and the `transaction` and `commit` that record it. The bytes are copied once, to `asset_path`, and only the asset's sidecar, `<asset_path>.asset.json`, enters history. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there; a file already at `asset_path` is imported in place. Undoing the import removes the file at `asset_path`, one imported in place included, and nothing keeps its bytes. Refused whole, with nothing written, for a path another asset or another file holds, a path outside the project, and a stream, which is never imported.
+   *
+   * Since contract version 1, stable.
+   */
+  import_asset: {
+    params: ImportAssetRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Move or rename an asset inside its project, as one transaction.
+   *
+   * Put an asset at another path of the project, renaming it, moving it to another folder or both, its sidecar going with it, as one transaction; the asset keeps its UUID. Answers the asset as it now is, with the `transaction` and `commit`.
+   *
+   * Since contract version 1, stable.
+   */
+  relocate_asset: {
+    params: RelocateAssetRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Delete an asset from a project, as one transaction.
+   *
+   * Stop tracking an asset as one transaction: its file and sidecar leave the project, and nothing keeps its bytes, so undoing the transaction brings back its sidecar and the asset reads missing until its file is at its path again. A stream asset's graph document leaves the project, recorded in the transaction so an undo writes it back, and its stream is unloaded and forgotten. Refused while a stream's graph document references the asset, the refusal naming each document. Answers the asset as it was, with the `transaction` and `commit`.
+   *
+   * Since contract version 1, stable.
+   */
+  delete_asset: {
+    params: DeleteAssetRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Replace an asset's import settings, as one transaction.
+   *
+   * Replace an asset's import settings whole, as one transaction. Answers the asset as it now is, with the `transaction` and `commit`.
+   *
+   * Since contract version 1, stable.
+   */
+  set_asset_settings: {
+    params: SetAssetSettingsRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Replace an asset's bytes, as one transaction.
+   *
+   * Put new bytes at an asset's path as one transaction: the asset keeps its UUID, path, kind and settings, so every node referencing it reads the new bytes at its next load, and its sidecar records their SHA-256 and size. `source` is a file on this machine by absolute path, copied there, or an upload in the project's `.tatolab/uploads/` by its SHA-256, moved there. The bytes replaced are kept as an upload under their SHA-256, so an undo puts them back with the earlier sidecar; history records the sidecar alone. A file replaced outside the runtime is not supported. Answers the asset as it now is, with the `transaction` and `commit`; bytes the sidecar already records apply nothing and are refused as an empty transaction. Refused for a stream asset, whose graph document graph edits change.
+   *
+   * Since contract version 1, stable.
+   */
+  replace_asset: {
+    params: ReplaceAssetRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Create a stream in a project, as one transaction.
+   *
+   * Create a stream in the project as one transaction: a new stream asset, its graph document written at `path` holding no nodes, its UUID, which the runtime makes, and its `display_name`. While the project runs, the new stream is loaded on the project's queue and the answer carries that load's `action`, which `describe_stream_action` follows. Answers the stream asset as `asset`, with the `transaction` and `commit`; an undo takes the document out and unloads the stream. Refused for a path another file holds or outside the project, and a blank `display_name`.
+   *
+   * Since contract version 1, stable.
+   */
+  create_stream: {
+    params: CreateStreamRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Delete a stream from a project, as one transaction.
+   *
+   * Delete a stream from the project as one transaction: its graph document leaves the project, recorded in the transaction so an undo writes it back and loads the stream again while the project runs, and its stream is unloaded and forgotten. Answers the stream asset as it was, with the `transaction` and `commit`. Refused for a UUID the project holds no stream asset under.
+   *
+   * Since contract version 1, stable.
+   */
+  delete_stream: {
+    params: DeleteStreamRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Set the name a stream is shown under, as one transaction.
+   *
+   * Show a stream under another display name as one transaction, written in its graph document so every machine the project is on shows it and an undo writes the earlier one. A loaded stream is shown under it at once and keeps its stream id. Answers the stream asset as it now is, with the `transaction` and `commit`. Refused for a blank `display_name`.
+   *
+   * Since contract version 1, stable.
+   */
+  set_stream_display_name: {
+    params: SetStreamDisplayNameRequest;
+    result: AssetTransactionToolResult;
+  };
+  /**
+   * Import another project into a project, as one transaction.
+   *
+   * Import another project, as one transaction by `author`: the project `source` holds, a folder or a `.zip` of one on this machine, is copied whole into `imports/<folder>/` and recorded in `tatolab-project.json` under `dependencies` with the `version` its copy carries, the SHA-256 over its files. Nothing reaches the network. The copy is this project's own from then on: its assets are referenced as `{"asset": "<uuid>", "from": "<project uuid>"}` and read from its folder, its streams are placed with `use_dependency_stream`, and to edit it, open `imports/<folder>/` as a project of its own. Answers the `dependency`. Refused, nothing copied, for a source holding no `tatolab-project.json` or no project UUID in it, naming what is missing, for this project itself, a project already imported, or a folder already held.
+   *
+   * Since contract version 1, stable.
+   */
+  add_dependency: {
+    params: AddDependencyRequest;
+    result: DependencyTransactionToolResult;
+  };
+  /**
+   * Bring an imported project up to date with its source, as one transaction.
+   *
+   * Copy an import again, whole, as one transaction by `author`, from `source` or from the source it was last copied from, replacing its folder under `imports/` and its `version`. Every loaded stream holding one of its streams as a fragment follows the new copy. When files of its folder were edited since its copy, nothing changes: it answers them under `edited_files` with `overwrite_confirmation_needed`, and is sent again with `overwrite_edited_files` to overwrite them. Undo puts the folder back as it was. Refused, nothing changed, for a project not imported, or a source holding another project.
+   *
+   * Since contract version 1, stable.
+   */
+  update_dependency: {
+    params: UpdateDependencyRequest;
+    result: UpdateDependencyToolResult;
+  };
+  /**
+   * List the projects a project imports.
+   *
+   * List the projects this one imports, each with its `folder`, `source` and `version` as `tatolab-project.json` holds them, and the files of its folder edited since its copy under `edited_files`; changes nothing. With `check_for_newer`, each source is read again and each import also answers `version_on_the_source` and `newer_version_exists`, or, for a source that could not be read, `check_refused_because`; nothing is copied until `update_dependency` copies it.
+   *
+   * Since contract version 1, stable.
+   */
+  list_dependencies: {
+    params: ListDependenciesRequest;
+    result: ListDependenciesToolResult;
+  };
+  /**
+   * Take an imported project out of a project, as one transaction.
+   *
+   * Stop importing a project, as one transaction by `author`: its folder leaves `imports/` and its entry `tatolab-project.json`; undo puts both back as they were. Answers the `dependency` as it was. Refused, nothing changed, while a node of any of this project's streams — a fragment holding one of its streams, or a config holding `{"asset", "from"}` naming it, at any depth — still references it, naming each such node. Refused for a project not imported.
+   *
+   * Since contract version 1, stable.
+   */
+  remove_dependency: {
+    params: RemoveDependencyRequest;
+    result: DependencyTransactionToolResult;
+  };
+  /**
+   * Place an imported project's stream in a loaded stream's graph as a fragment node, as one transaction.
+   *
+   * Place a stream of an imported project in a loaded stream's graph, as one committed transaction: a fragment node of type `tatolab.project:StreamFragment` whose config `{"stream": {"asset", "from"}}` references the stream. The graph document stores the reference alone; each load, and each change to the stream or its import, places the stream's nodes and links as its graph document under `imports/<folder>/` is on disk, each node under the UUID UUIDv5(fragment node's UUID, its own). Its Graph Input and Output nodes are the fragment's ports. Answers as `transact` does. Refused for a name a node of the graph already holds, and for a stream that holds the stream it is placed in, naming each stream of the cycle.
+   *
+   * Since contract version 1, stable.
+   */
+  use_dependency_stream: {
+    params: UseDependencyStreamRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * List the files of a project that are not assets.
+   *
+   * List the project's files, or those under `under`, each by its path and length in bytes, sorted by path. Hidden folders such as `.tatolab/`, Python virtual environments, `node_modules/`, `__pycache__/` and symbolic links are not listed.
+   *
+   * Since contract version 1, stable.
+   */
+  list_project_files: {
+    params: ListProjectFilesRequest;
+    result: ListProjectFilesToolResult;
+  };
+  /**
+   * Read one file of a project.
+   *
+   * Read one of the project's files whole, answering its bytes as `content_base64`, standard base64 with padding, its `byte_len`, and its `content_sha256`, which a `write_project_file` sends back as `expected_sha256`. Refused for a path that is not a file of the project.
+   *
+   * Since contract version 1, stable.
+   */
+  read_project_file: {
+    params: ReadProjectFileRequest;
+    result: ReadProjectFileToolResult;
+  };
+  /**
+   * Create a node file in a project from the template, as one transaction.
+   *
+   * Create a new node file of the project from the runtime's node template, as one transaction an undo reverses: a `@node.process` class in the current `tatolab.stream` idiom, named after the file, with one Image input `video_in` whose frames it hands on unchanged to one Image output `video_out`, each with its description. It loads as a node type of the project with no edits and `list_project_node_types` lists it at once. Answers the `path`, the `node_type` it declares — `<module>:<class>`, what `add_node` takes — and the `transaction` and `commit`. Refused for a path that already holds a file, that is not a `.py` file importable as a Python module, or whose class name the template cannot declare, and for every path `write_project_file` refuses.
+   *
+   * Since contract version 1, stable.
+   */
+  create_node_file: {
+    params: CreateNodeFileRequest;
+    result: CreateNodeFileToolResult;
+  };
+  /**
+   * Write one file of a project, as one transaction.
+   *
+   * Write one of the project's files whole, as one transaction: a new file is created with its folders, an existing one overwritten. An undo puts back what the file held, or takes a new file out. Answers the `path`, the `content_sha256` of the bytes written, and the `transaction` and `commit`. With `expected_sha256`, refused when the file changed or was taken out since it was read, so a save never overwrites another change. Content the file already holds is refused, as it changes nothing. Refused for what another tool changes — a stream's graph document, an asset's sidecar or bytes (`replace_asset`), `tatolab-project.json`, a file under `imports/` — and for a file inside a hidden folder or a Python virtual environment, which history does not record.
+   *
+   * Since contract version 1, stable.
+   */
+  write_project_file: {
+    params: WriteProjectFileRequest;
+    result: ProjectFileTransactionToolResult;
+  };
+  /**
+   * List the node types a project offers, from its own node files and the packages it installs.
+   *
+   * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category`, and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
+   *
+   * Since contract version 1, stable.
+   */
+  list_project_node_types: {
+    params: ListProjectNodeTypesRequest;
+    result: ListProjectNodeTypesToolResult;
+  };
+  /**
+   * List the Tato Studio views a project brings.
+   *
+   * List every Tato Studio view a project brings — each folder of its own `views/`, then of each import's `imports/<folder>/views/` — read from the folder's `tatolab_view.json` without running anything in it. Each view under `views` has its `view_type`, `<project name>:<view folder>`, which is a node type of each stream the project runs when the view opens and its `placement` is `node`; the `project`, `project_name` and `import_folder` (null for the project's own) of the project bringing it; its `view_folder_in_the_project`, the folder relative to the project, as `views/<folder>` or `imports/<import>/views/<folder>`, which names its files to a project file read; its `title`, `description`, `icon`, `preview` and `placement` (`area` or `node`); its declared `inputs` and `outputs`, each a `name`, a `family`, a `description` and an Array port's `range`; and its `manifest` as written. A folder whose manifest is missing, is not JSON, or does not read against view contract 1.0 is listed with `opens` false and why in `not_opened_because`; the rest still lists.
+   *
+   * Since contract version 1, stable.
+   */
+  list_project_views: {
+    params: ListProjectViewsRequest;
+    result: ListProjectViewsToolResult;
+  };
+  /**
+   * Write a value a Tato Studio view produced onto its node's output port.
+   *
+   * Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. A write is live data: the last value written is what a reader keeps, many panels may write one node and the last write wins, and nothing is recorded in the graph document or the project's history. Array, Channels and Records outputs are written; an Image or Packets output is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; and a value its port's family does not take. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   *
+   * Since contract version 1, stable.
+   */
+  write_studio_view_output: {
+    params: WriteStudioViewOutputRequest;
+    result: WriteStudioViewOutputToolResult;
+  };
+  /**
+   * Write a value onto one of a loaded stream's graph inputs.
+   *
+   * Hand a value to the Input `input` of the stream `stream`: the stream's top-level `GraphInput` declaring it publishes the value on its `value` output to every node it is linked to, stamped with stream time now, and each reads it on its next process. A write is live data: many clients may write one Input and the last write wins, and nothing is recorded in the graph document or the project's history. An Input whose config's `lifetime` is `kept`, the default, keeps the last value in the project's store, so it carries it again after a Stop, a reload and a restart of the runtime; a `reset` Input returns to its `default` at Stop. While the project is stopped, a `kept` Input takes the value into the store and carries it at the next Play, and `graph` shows it; a `reset` Input is refused as `playback_stopped`. Until a write, the Input carries its config's `default`, if it declares one. `graph` renders the value an Input carries now, or carries at the next Play while stopped, under its node's `graph_interface` component, as `current_value`. Array, Channels and Records Inputs are written; an Image or Packets Input runs nothing and is refused. Refused for an Input no top-level `GraphInput` declares, and a value its family does not take. A refusal because the Input's node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   *
+   * Since contract version 1, stable.
+   */
+  write_graph_input: {
+    params: WriteGraphInputRequest;
+    result: WriteGraphInputToolResult;
+  };
+  /**
+   * Import a project from an archive into a folder that does not exist yet.
+   *
+   * Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: follow it with `run_project`. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.
+   *
+   * Since contract version 1, stable.
+   */
+  import_project: {
+    params: ImportProjectRequest;
+    result: ImportProjectToolResult;
+  };
+  /**
+   * Read a project's log records after a cursor, oldest first.
+   *
+   * Read a project's log records after the cursor `after`, oldest first, each as the project's JSONL log on disk holds it: every stream of the project and every load of it writes that one log, each record stamped with its `stream` — none for a load's own lines, uv's among them — across the runtime's runs, whether the stream is still recorded or not. `stream` narrows to one stream's records, and `action` to the records of one stream action — every record its load wrote, uv's among them, and the records of the streams it started. Pass the result's `next_after` back as `after` to read on; `records_no_longer_held` is true when retention deleted the segment `after` named, so the page resumes at the oldest record held. A project that has logged nothing answers no records.
+   *
+   * Since contract version 1, stable.
+   */
+  logs: {
+    params: LogsRequest;
+    result: LogsToolResult;
+  };
+  /**
+   * Open a viewer of a node's output port, held open for the connection that opened it.
+   *
+   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   *
+   * Since contract version 1, stable.
+   */
+  open_viewer: {
+    params: OpenViewerRequest;
+    result: OpenViewerToolResult;
+  };
+  /**
+   * Close a viewer this connection opened.
+   *
+   * Close a viewer this connection opened, letting go of its port's channel.
+   *
+   * Since contract version 1, stable.
+   */
+  close_viewer: {
+    params: CloseViewerRequest;
+    result: CloseViewerToolResult;
+  };
+  /**
+   * Run a started stream's scaled clock at another scale from now on.
+   *
+   * Run a started stream's scaled clock at `scale` from now on: its stream time carries on from where it stands, never jumping or running backwards, and every node's `ctx.time`, write stamps and continuous pace follow the new scale. Above 1 the clock runs in steps of its `step_ns`, paced at the scale, behind the step barrier every node runs on; back at or under 1 it runs free again. Refused for a stream on the real or a stepped clock, and for a scale above 1 while the stream holds a node that paces itself (execution = manual) and is not paced by real time. Live only: the stream's next start runs the clock its graph document names.
+   *
+   * Since contract version 1, stable.
+   */
+  set_stream_clock_scale: {
+    params: SetStreamClockScaleRequest;
+    result: SetStreamClockScaleToolResult;
+  };
+  /**
+   * Queue the creation of a project from the starter or a sample.
+   *
+   * Create a project — the one `tatolab new` creates: the starter, its `tatolab-project.json`, one stream asset `streams/main.graph.json` holding the test pattern's one source, `pyproject.toml`, `.python-version` and `.gitignore`, or, given a `sample` that `list_samples` lists, a copy of that sample project under a new project UUID — committed as the first commit of the project's history, in `project_directory`, or with none in a folder `<adjective>-<noun>` drawn under `~/streams`, and queue its open, answering at once with the action's id as `action`, the stream id its `main` runs under as `stream`, and the resolved `project_directory`. The action writes the project's files, then opens it as `open_project` does — reads its graph documents, makes its `.venv`, however long uv takes, and holds its stream stopped until `start_playback` — the project named after its folder and its `main` stream shown under the folder's name. A directory already holding a file the create writes fails the action with nothing written. Follow it with `describe_stream_action` and `logs`; the project is recorded and re-loaded whenever the runtime starts, so a later session finds it in `list_streams`. Refused only for a `sample` the runtime unit does not carry, naming the ones it does, a relative `project_directory`, one that cannot be created, or, with none, a `HOME` that is unset or not absolute or a draw that finds no free folder.
+   *
+   * Since contract version 1, stable.
+   */
+  create_project: {
+    params: CreateProjectRequest;
+    result: CreateProjectToolResult;
+  };
+  /**
+   * List the sample projects a new project can be created from.
+   *
+   * List the sample projects the runtime unit carries at its own version, each by the `name` `create_project`'s `sample` takes, its `title` and a `summary` of what it shows, in name order: none for a runtime run outside a runtime unit.
+   *
+   * Since contract version 1, stable.
+   */
+  list_samples: {
+    params: ListSamplesRequest;
+    result: ListSamplesToolResult;
+  };
+  /**
+   * Refresh, as one transaction, every fragment whose graph generator a changed module defines.
+   *
+   * Refresh, as one transaction, every fragment of the project's loaded streams whose graph generator, or a generator nested in it, is defined in a module one of `changed_files` holds: each is run again with the promoted settings its fragment keeps, as `import_graph_generator` refreshes it, each node keeping its UUID by name. Answers as `transact` does; with no such fragment, it answers no operation and records no transaction. A generator that raises refuses the whole refresh with its traceback, nothing changed.
+   *
+   * Since contract version 1, stable.
+   */
+  refresh_fragments: {
+    params: RefreshFragmentsRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Undo an author's latest transaction in a project that is not undone yet, as a new transaction.
+   *
+   * Undo the latest transaction by `author` in the project that is not undone yet, applying its inverse as a new transaction: its graph edits to the running streams and their graph documents, its asset changes and file writes to the project. Only the author's own transactions are undone, so two authors' interleaved edits are each undone by their own author. An edit to a stream not loaded is applied to its graph document alone, and the stream of a stream document the undo takes out is unloaded and forgotten. Refused when the author has nothing left to undo, or when what it would undo no longer applies — a node another author removed since, or a stream document it would take out that was edited after it was written. Answers the transaction applied, with `undoes` naming the one it reversed.
+   *
+   * Since contract version 1, stable.
+   */
+  undo: {
+    params: UndoOrRedoRequest;
+    result: ProjectTransactionOnTheWire;
+  };
+  /**
+   * Redo what an author's latest undo in a project reversed, as a new transaction.
+   *
+   * Redo what `author`'s latest undo in the project reversed, as a new transaction; a new edit by the author after the undo leaves nothing to redo. Answers the transaction applied, with `redoes` naming the one it reapplied.
+   *
+   * Since contract version 1, stable.
+   */
+  redo: {
+    params: UndoOrRedoRequest;
+    result: ProjectTransactionOnTheWire;
   };
 }
 
