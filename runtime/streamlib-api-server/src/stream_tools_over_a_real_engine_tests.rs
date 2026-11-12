@@ -3434,6 +3434,131 @@ async fn a_collapsed_selection_runs_the_same_nodes_and_its_undo_restores_the_exa
     );
 }
 
+/// A node added, wired and renamed inside a collapsed subgraph, named by its `level`, runs
+/// inside it in the live graph; each edit undoes to the exact earlier document.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edit_inside_a_collapsed_subgraph_reaches_the_running_stream_and_undoes() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    let sink_type = StreamToolsTestSink::processor_class_import_path()
+        .as_str()
+        .to_owned();
+    let added = call(
+        "transact",
+        json!({ "operations": [
+            { "operation": "add_node", "stream": stream_asset, "as": "sink", "name": "pass-sink",
+              "type": sink_type },
+            { "operation": "connect", "stream": stream_asset,
+              "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+              "target": { "node": "sink", "port": "video" } },
+        ], "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the sink is placed and linked");
+    let sink = added["added_nodes"][0]["node"].as_str().unwrap().to_owned();
+    let collapsed = call(
+        "collapse_selection_into_subgraph",
+        json!({ "stream": stream_asset, "nodes": [sink], "name": "sub",
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the selection collapses");
+    let subgraph = collapsed["added_nodes"][0]["node"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let graph_input = the_node_named(
+        &the_node_named(&project.the_graph_document_of("main"), "sub")["fragment"],
+        "pass-sink-video",
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let before_the_edits = project.the_graph_document_of("main");
+
+    let added_inside = call(
+        "transact",
+        json!({ "operations": [
+            { "operation": "add_node", "stream": stream_asset, "level": [subgraph],
+              "as": "second", "type": sink_type },
+            { "operation": "connect", "stream": stream_asset, "level": [subgraph],
+              "source": { "node": graph_input, "port": "value" },
+              "target": { "node": "second", "port": "video" } },
+        ], "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("a node is added and wired inside the subgraph");
+    let second = added_inside["added_nodes"][0]["node"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        added_inside["added_nodes"][0]["name"], "streamtoolstestsink",
+        "{added_inside}"
+    );
+    call(
+        "rename_node",
+        json!({ "stream": stream_asset, "level": [subgraph], "node": second,
+                "name": "second-sink", "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the node inside the subgraph is renamed");
+
+    let document = project.the_graph_document_of("main");
+    assert_eq!(sorted_node_names_in(&document), ["source", "sub"]);
+    assert_eq!(
+        the_node_names_a_fragment_places(&the_node_named(&document, "sub")),
+        ["pass-sink", "pass-sink-video", "second-sink"]
+    );
+    let live = engine.the_live_graph_of(&stream_id);
+    let live_subgraph = the_node_named(&live, "sub");
+    assert_eq!(
+        the_node_names_a_fragment_places(&live_subgraph),
+        ["pass-sink", "pass-sink-video", "second-sink"],
+        "{live_subgraph}"
+    );
+    assert_eq!(
+        links_by_node_name_in(&live_subgraph["fragment"]),
+        [
+            "pass-sink-video/value -> pass-sink/video",
+            "pass-sink-video/value -> second-sink/video"
+        ],
+        "{live_subgraph}"
+    );
+    assert!(
+        live_subgraph["fragment"]["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|link| link["id"].as_str().is_some_and(|id| !id.is_empty())),
+        "each link drawn inside the subgraph renders the running link it stands for: \
+         {live_subgraph}"
+    );
+
+    for _ in 0..2 {
+        call(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the undo applies");
+    }
+    assert_eq!(project.the_graph_document_of("main"), before_the_edits);
+    assert_eq!(
+        the_node_names_a_fragment_places(&the_node_named(
+            &engine.the_live_graph_of(&stream_id),
+            "sub"
+        )),
+        ["pass-sink", "pass-sink-video"]
+    );
+}
+
 impl ProjectWithGraphDocuments {
     /// Add a [`StreamToolsTestSink`] named `name` to this project's stream `main` as one
     /// committed transaction, answering the commit that records it.

@@ -2260,7 +2260,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `collapse_selection_into_subgraph` makes from a selection of nodes, carrying each link that
   crossed it through a `GraphInput` or `GraphOutput` inside; `unlock_generator_fragment` turns a
   generator's fragment back into plain nodes of its graph, which no refresh then reaches, each a
-  graph action with an inverse. A fragment's extra parameters are promoted config; its Input and
+  graph action with an inverse. Every graph edit but `import_graph_generator`,
+  `use_dependency_stream` and the canvas-note edits takes an optional `level`, the path of fragment node UUIDs from the
+  stream's own level inward, and applies inside the authored fragment it names, an Input or Output
+  added or removed there adding or removing the fragment node's port; a name is unique within its
+  level. Inside a generator's output it is refused until `unlock_generator_fragment`, and inside a
+  placed stream, which is edited as its own stream. A link of the enclosing level onto a port an
+  edit inside renames follows it to the new name, and one onto a port an edit inside removes goes
+  with it, the edit's inverse putting each back. Owner, 2026-11-11: the level named as a path of
+  UUIDs; the port links, session, 2026-11-11. [#3519] A fragment's extra parameters are promoted config; its Input and
   Output nodes are its ports, the only ones reachable from the graph that places it; and it
   flattens at compile, its nodes named under the reference's name (`overlay/comp`). The same
   generator may instead fill a stream whole. Inside a fragment, and for every `GraphOutput`, an
