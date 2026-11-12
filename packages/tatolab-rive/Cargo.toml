@@ -21,8 +21,8 @@ pyo3 = { version = "0.29.2", features = ["abi3-py312"] }
 tatolab-module-sdk = { path = "../../sdk/tatolab-module-sdk", version = "1.11.0", features = ["pyo3"] }
 # The external-renderer device rive-runtime draws on, and the surface-share
 # checkout each output texture crosses to it by.
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.68.80" }
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.68.80" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.68.81" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.68.81" }
 rmpv = "1.3.1"
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a
