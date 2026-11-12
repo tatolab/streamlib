@@ -98,20 +98,31 @@ impl std::fmt::Debug for ProjectStoresOpenInThisRuntime {
 
 impl Drop for ProjectStoresOpenInThisRuntime {
     fn drop(&mut self) {
-        let mut project_store_open_in_this_process_by_resolved_directory =
-            PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY.lock();
-        for (resolved_project_directory, held_by_this_runtime) in
-            self.project_store_by_resolved_directory.get_mut().drain()
-        {
-            drop(held_by_this_runtime);
-            let no_one_else_holds_it = project_store_open_in_this_process_by_resolved_directory
-                .get(&resolved_project_directory)
-                .is_some_and(|open| Arc::strong_count(open) == 1);
-            if no_one_else_holds_it {
-                project_store_open_in_this_process_by_resolved_directory
-                    .remove(&resolved_project_directory);
-            }
+        let held_by_this_runtime: Vec<(PathBuf, Arc<ProjectStore>)> = self
+            .project_store_by_resolved_directory
+            .get_mut()
+            .drain()
+            .collect();
+        for (resolved_project_directory, project_store) in held_by_this_runtime {
+            let_go_of_a_project_store(&resolved_project_directory, project_store);
         }
+    }
+}
+
+/// Drop this runtime's hold on the store of the project at `resolved_project_directory`, closing
+/// it under the process-wide lock when no other runtime in this process holds it.
+fn let_go_of_a_project_store(
+    resolved_project_directory: &Path,
+    held_by_this_runtime: Arc<ProjectStore>,
+) {
+    let mut project_store_open_in_this_process_by_resolved_directory =
+        PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY.lock();
+    drop(held_by_this_runtime);
+    let no_one_else_holds_it = project_store_open_in_this_process_by_resolved_directory
+        .get(resolved_project_directory)
+        .is_some_and(|open| Arc::strong_count(open) == 1);
+    if no_one_else_holds_it {
+        project_store_open_in_this_process_by_resolved_directory.remove(resolved_project_directory);
     }
 }
 
@@ -149,6 +160,27 @@ impl ProjectStoresOpenInThisRuntime {
             Arc::clone(&open_in_this_process),
         );
         Ok(open_in_this_process)
+    }
+
+    /// Commit what the store of the project at `project_directory` holds waiting and let it go,
+    /// closing it unless another runtime in this process still holds it, as its project closes.
+    pub(crate) fn close_the_store_of_the_project_at(&self, project_directory: &Path) {
+        let resolved_project_directory = std::fs::canonicalize(project_directory)
+            .unwrap_or_else(|_| project_directory.to_path_buf());
+        let Some(held_by_this_runtime) = self
+            .project_store_by_resolved_directory
+            .lock()
+            .remove(&resolved_project_directory)
+        else {
+            return;
+        };
+        if let Err(not_committed) = held_by_this_runtime.commit_every_waiting_write_now() {
+            tracing::error!(
+                project_directory = %resolved_project_directory.display(),
+                "the project closed and its store did not commit what waited: {not_committed}"
+            );
+        }
+        let_go_of_a_project_store(&resolved_project_directory, held_by_this_runtime);
     }
 
     /// Commit every write each open store holds waiting, as the runtime shuts down.

@@ -47,6 +47,22 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     pub(crate) project_stores: Arc<super::ProjectStoresOpenInThisRuntime>,
 }
 
+impl LoadedStreamARuntimeContextBelongsTo {
+    /// The keys the node `node_uuid` keeps in this stream's project's store.
+    pub(crate) fn the_store_of_the_node(
+        &self,
+        node_uuid: uuid::Uuid,
+    ) -> crate::core::error::Result<super::StoreScopedToThisNode> {
+        let project_store = self
+            .project_stores
+            .the_store_of_the_project_at(&self.project_directory)?;
+        Ok(super::StoreScopedToThisNode::of_the_node(
+            project_store,
+            node_uuid,
+        ))
+    }
+}
+
 #[derive(Clone)]
 pub struct RuntimeContext {
     /// Base GPU context. Crate-private so processor code can only reach GPU
@@ -405,14 +421,7 @@ impl RuntimeContext {
                 "a context of no node has no store; only a node's own context does".to_string(),
             )
         })?;
-        let project_store = self
-            .loaded_stream
-            .project_stores
-            .the_store_of_the_project_at(&self.loaded_stream.project_directory)?;
-        Ok(super::StoreScopedToThisNode::of_the_node(
-            project_store,
-            node_uuid,
-        ))
+        self.loaded_stream.the_store_of_the_node(node_uuid)
     }
 
     /// Check if this processor is paused.

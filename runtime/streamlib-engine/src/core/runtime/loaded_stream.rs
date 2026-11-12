@@ -360,6 +360,12 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// The directory the stream's project lives in.
+    pub(crate) fn the_handles_a_runtime_context_of_this_stream_belongs_to(
+        &self,
+    ) -> Arc<LoadedStreamARuntimeContextBelongsTo> {
+        Arc::clone(&self.this_streams_identity_and_handles)
+    }
+
     pub fn project_directory(&self) -> &Path {
         &self.this_streams_identity_and_handles.project_directory
     }
@@ -1410,7 +1416,10 @@ impl LoadedStreamInThisRuntime {
                 (
                     graph.to_graph_response(machine_name),
                     stateful_function_nodes_by_node_uuid,
-                    the_current_value_of_each_running_graph_input(graph),
+                    the_current_value_of_each_graph_input(graph, &|node_uuid| {
+                        self.this_streams_identity_and_handles
+                            .the_store_of_the_node(node_uuid)
+                    }),
                 )
             });
         graph_response.references = self.reference_edges_the_configs_of(&graph_response.nodes);
@@ -1887,10 +1896,16 @@ pub(crate) fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &
 }
 
 /// The value each running top-level `GraphInput` carries now, by its node's UUID.
-fn the_current_value_of_each_running_graph_input(
+/// The value each top-level `GraphInput` of `graph` carries, by node UUID: a running one's
+/// current value, and a stopped one's value at its next Play.
+pub(super) fn the_current_value_of_each_graph_input(
     graph: &crate::core::graph::Graph,
+    the_store_of_the_node: &dyn Fn(
+        uuid::Uuid,
+    ) -> Result<crate::core::context::StoreScopedToThisNode>,
 ) -> HashMap<String, serde_json::Value> {
     use crate::core::graph::GraphNodeWithComponents;
+    use crate::core::processors::NodeWhoseOutputsAClientWritesProcessor;
     graph
         .traversal()
         .v(())
@@ -1900,16 +1915,32 @@ fn the_current_value_of_each_running_graph_input(
                 == crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
         })
         .filter_map(|node| {
-            let processor_instance =
-                node.get::<crate::core::graph::ProcessorInstanceComponent>()?;
-            let mut processor_instance = processor_instance.0.lock();
-            let current_value = processor_instance
-                .as_any_mut()
-                .downcast_mut::<crate::core::processors::NodeWhoseOutputsAClientWritesProcessor>()?
-                .current_value_of_the_output(
-                    crate::core::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME,
-                )?
-                .clone();
+            let current_value = match node.get::<crate::core::graph::ProcessorInstanceComponent>() {
+                Some(processor_instance) => processor_instance
+                    .0
+                    .lock()
+                    .as_any_mut()
+                    .downcast_mut::<NodeWhoseOutputsAClientWritesProcessor>()?
+                    .current_value_of_the_output(
+                        crate::core::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME,
+                    )?
+                    .clone(),
+                None => {
+                    let store = the_store_of_the_node(node.node_uuid)
+                        .inspect_err(|not_opened| {
+                            tracing::warn!(
+                                "`GraphInput` node `{}` does not run and its project's store \
+                                 did not open, so `graph` shows its default: {not_opened}",
+                                node.display_name
+                            )
+                        })
+                        .ok();
+                    NodeWhoseOutputsAClientWritesProcessor::the_value_a_stopped_top_level_graph_input_carries(
+                        node, store,
+                    )
+                    .ok()??
+                }
+            };
             Some((node.node_uuid.to_string(), current_value))
         })
         .collect()

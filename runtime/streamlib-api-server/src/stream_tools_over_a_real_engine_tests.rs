@@ -3967,8 +3967,13 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
     );
     assert_eq!(
         cue["components"]["graph_interface"],
-        json!({ "direction": "input", "port": "cue", "family": "records" }),
-        "a node not running carries no current value yet: {cue}"
+        json!({
+            "direction": "input",
+            "port": "cue",
+            "family": "records",
+            "current_value": { "track": "intro" }
+        }),
+        "a node not running shows the value it carries at its next Play, its default: {cue}"
     );
     assert_eq!(cue["ports"]["outputs"][0]["name"], "value", "{cue}");
     let links_out_of_the_input: Vec<&Value> = live_graph["links"]

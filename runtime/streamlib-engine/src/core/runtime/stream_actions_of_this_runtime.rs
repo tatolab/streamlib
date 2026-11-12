@@ -3250,6 +3250,7 @@ impl Runner {
             .map(|stream| stream.stream_id.clone())
             .collect();
         self.forget_that_the_project_is_paused(&project_directory);
+        let project_directory_closing = project_directory.clone();
         let action = StreamAction {
             action_id: action_id.clone(),
             project_directory,
@@ -3266,17 +3267,26 @@ impl Runner {
             .queue_the_stream_action(
                 action,
                 Box::new(move |runner: &Runner| {
-                    runner.close_the_project_for_its_stream_action(&action_id, &stream_ids);
+                    runner.close_the_project_for_its_stream_action(
+                        &action_id,
+                        &project_directory_closing,
+                        &stream_ids,
+                    );
                 }),
                 &self.tokio_handle(),
             ))
     }
 
-    /// Run the close the stream action `action_id` queued of the streams `stream_ids` of one
-    /// project: unload each loaded one, its playback ended, forget its function-node states,
-    /// record each closed, and finish the action done, or failed naming each stream whose
-    /// record was not written closed.
-    fn close_the_project_for_its_stream_action(&self, action_id: &str, stream_ids: &[String]) {
+    /// Run the close the stream action `action_id` queued of the streams `stream_ids` of the
+    /// project in `project_directory`: unload each loaded one, its playback ended, forget its
+    /// function-node states, record each closed, close the project's store, and finish the
+    /// action done, or failed naming each stream whose record was not written closed.
+    fn close_the_project_for_its_stream_action(
+        &self,
+        action_id: &str,
+        project_directory: &Path,
+        stream_ids: &[String],
+    ) {
         let progress = self.progress_of_the_stream_action(action_id);
         progress.is_on(StreamActionStep::Stopping);
         let mut states = Vec::with_capacity(stream_ids.len());
@@ -3306,6 +3316,9 @@ impl Runner {
                 )),
             }
         }
+        self.engine_resources_shared_by_every_stream
+            .project_stores_open_in_this_runtime
+            .close_the_store_of_the_project_at(project_directory);
         progress.finish(if not_closed.is_empty() {
             Ok(states)
         } else {

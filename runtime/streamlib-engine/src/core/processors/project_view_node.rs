@@ -192,6 +192,47 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         Ok(processor)
     }
 
+    /// The value the stopped top-level `GraphInput` `node` would carry at its next Play: the
+    /// value it keeps in `store` when its lifetime is kept and its family takes it, else its
+    /// config's `default`.
+    pub(crate) fn the_value_a_stopped_top_level_graph_input_carries(
+        node: &ProcessorNode,
+        store: Option<StoreScopedToThisNode>,
+    ) -> Result<Option<JsonValue>> {
+        let mut processor = Self::for_a_top_level_graph_input(node)?;
+        if let Some(store) = store {
+            processor.keep_the_graph_input_value_in(store);
+        }
+        Ok(processor
+            .current_value_of_the_output(GRAPH_INTERFACE_VALUE_PORT_NAME)
+            .cloned())
+    }
+
+    /// Keep `value`, written to the stopped top-level `GraphInput` `node` whose lifetime is kept,
+    /// in `store` for its next Play. Refused for a value its family does not take.
+    pub(crate) fn keep_a_value_written_to_a_stopped_top_level_graph_input(
+        node: &ProcessorNode,
+        store: StoreScopedToThisNode,
+        value: &JsonValue,
+    ) -> Result<()> {
+        let processor = Self::for_a_top_level_graph_input(node)?;
+        if processor.graph_input_value_lifetime != Some(GraphInputValueLifetime::Kept) {
+            return Err(Error::Configuration(format!(
+                "`GraphInput` node `{}` returns to its default at Stop and keeps nothing",
+                node.display_name
+            )));
+        }
+        let family = processor.family_of_each_output[GRAPH_INTERFACE_VALUE_PORT_NAME];
+        the_message_a_value_written_onto_an_output_is(family, value, 0).map_err(|why| {
+            Error::PortError(format!(
+                "output `{GRAPH_INTERFACE_VALUE_PORT_NAME}` of node `{}` carries {}, and {why}",
+                node.display_name,
+                family.declaration_name()
+            ))
+        })?;
+        store.write(GRAPH_INPUT_KEPT_VALUE_STORE_KEY, value)
+    }
+
     /// The value output `port` carries now: the last written, else its default.
     pub(crate) fn current_value_of_the_output(&self, port: &str) -> Option<&JsonValue> {
         self.current_value_of_each_output.get(port)
