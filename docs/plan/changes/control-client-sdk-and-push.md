@@ -148,15 +148,18 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
     only forwards to it. No second channel.
   - A full queue drops an event in `PUBSUB` (`bus.rs:116`). The adapter then sends
     `stream_graph_changed` with `change: "missed"`, and the client reads the graph again, as
-    `project_changed` does for a lagged feed. `PUBSUB` counts a drop per subscription but tells
-    the listener nothing, so how the adapter learns of one is [NEEDS DECISION] 4.
-  - A stream loaded again gets a new stream tag and so a new topic
-    (`runtime.rs:3830`). How a subscription follows it is [NEEDS DECISION] 5.
+    `project_changed` does for a lagged feed. `PUBSUB` hands a listener the count of events it
+    lost at its next delivery, an extension of the one event system (it counts each drop per
+    subscription today and tells the listener nothing).
+  - A subscription names stream ids. A stream loaded again gets a new stream tag and so a new
+    topic (`runtime.rs:3830`); the adapter moves the subscription to the new topic and sends
+    `change: "missed"`, so the client reads the graph again.
 - **Push for stream actions.** The contract gains `subscribe_stream_action_changes` and
   `stream_action_changed` (`{ action }`), read from the stream-action queue's broadcast
   (`project_stream_action_queue.rs:232`), so a client follows an action without the MCP
-  resource. That broadcast reports a lag but not which ids it skipped; how a client recovers is
-  [NEEDS DECISION] 6.
+  resource. That broadcast reports a lag but not which ids it skipped, so on a lag
+  `stream_action_changed` carries `missed` and the client calls `describe_stream_action` for
+  each action it follows.
 
 ## MODIFIED
 
@@ -189,7 +192,7 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
 - REMOVED: /ws/events
 
 The last two remove the unscoped `PUBSUB` firehose. Every push goes through the contract, so it
-is versioned and validated. [NEEDS DECISION] below.
+is versioned and validated.
 
 ## Consumers
 
@@ -229,24 +232,13 @@ sits under step 6, "One control API contract", as its next step.
 - Server-to-client requests. JSON-RPC over the WebSocket allows the runtime to call the client,
   and nothing here needs it.
 
-## [NEEDS DECISION]
+## Decided (owner, 2026-11-12)
 
-1. **`/ws/events`.** (a) Remove it, recommended: nothing calls it, it bypasses the contract, and
-   the contract's notifications replace it. (b) Keep it as a debugging firehose on the socket
-   only.
-2. **zod in the package.** (a) zod 4, recommended: it is what you asked for, and Studio ships
-   it. (b) Validators generated as plain functions, with no dependency: more generator code
-   and no ecosystem.
-3. **Studio's transport.** (a) WebSocket on the socket for everything, recommended, as you
-   asked. (b) `POST /control` for calls and WebSocket only for push.
-4. **How the adapter learns of a `PUBSUB` drop.** (a) `PUBSUB` hands a listener the count of
-   events it lost at its next delivery, an extension of the one event system, recommended.
-   (b) No drop signal; Studio re-reads the graph on reconnect only, and a dropped event leaves
-   it stale until the next one.
-5. **A subscription across a reload.** (a) A subscription names stream ids; when one is loaded
-   again, the adapter moves to the new topic and sends `change: "missed"` so the client reads
-   the graph again, recommended. (b) A reload ends the subscription with a notification, and
-   the client subscribes again.
-6. **A missed stream action.** (a) On a lag, `stream_action_changed` carries `missed` and the
-   client calls `describe_stream_action` for each action it follows, recommended. (b) The
-   notification carries no recovery; a client polls the actions it follows after a lag.
+The owner chose every recommended option, in the project thread.
+
+1. `/ws/events` is removed; the contract's notifications replace it.
+2. The package validates with zod 4.
+3. Studio uses the WebSocket on the socket for every call, viewer and subscription.
+4. `PUBSUB` tells a listener how many events it lost.
+5. A graph subscription follows its stream across a reload.
+6. A missed stream action is recovered by `describe_stream_action`.
