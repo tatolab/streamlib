@@ -60,6 +60,9 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_a_run
     let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(
         machine_root.tatolabd_command_with_no_vulkan_driver(&runtime_unit.tatolabd),
     );
+    let reloads_queued = the_reloads_queued_at_the_start(&runtime.standard_error());
+    assert_eq!(reloads_queued.len(), 1, "one re-load for the one project");
+    the_stream_action_once_ended(&machine_root.local_api_socket_path(), &reloads_queued[0]);
     let listed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "list_streams",
