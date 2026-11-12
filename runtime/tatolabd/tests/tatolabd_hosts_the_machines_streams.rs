@@ -189,11 +189,11 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
     );
     for each_streams_last_reload_line in [
         format!(
-            "the stream `{}` was not re-loaded, and is re-loaded at the runtime's next start",
+            "the stream `{}` is held stopped, its start refused, and is started again at the runtime's next start",
             front.stream_id
         ),
         format!(
-            "the stream `{}` did not re-load, and is failed",
+            "the stream `{}` re-loaded held stopped from its document, and is failed",
             orphan.stream_id
         ),
     ] {
@@ -214,7 +214,7 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
     );
     assert!(
         standard_error.contains(&format!(
-            "the stream `{}` was not re-loaded, and is re-loaded at the runtime's next start",
+            "the stream `{}` is held stopped, its start refused, and is started again at the runtime's next start",
             front.stream_id
         )),
         "{standard_error}"
@@ -232,7 +232,7 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
     );
     assert!(
         standard_error.contains(&format!(
-            "the stream `{}` did not re-load, and is failed",
+            "the stream `{}` re-loaded held stopped from its document, and is failed",
             orphan.stream_id
         )),
         "{standard_error}"
@@ -257,7 +257,16 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
     );
 
     let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
-    assert_eq!(graph["streams"], serde_json::json!([]), "{graph}");
+    let mut streams_in_the_graph: Vec<&str> = graph["streams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|each_stream| each_stream["stream"].as_str().unwrap())
+        .collect();
+    streams_in_the_graph.sort_unstable();
+    let mut streams_held = vec![front.stream_id.as_str(), orphan.stream_id.as_str()];
+    streams_held.sort_unstable();
+    assert_eq!(streams_in_the_graph, streams_held, "{graph}");
     let listed = call_a_tool_over_the_local_api(
         &machine_root.local_api_socket_path(),
         "list_streams",
@@ -281,7 +290,7 @@ fn every_recorded_stream_not_closed_is_re_loaded_at_the_start_and_one_that_canno
     assert_eq!(listed_streams.len(), 4, "{listed}");
     assert_eq!(
         listing_of(&front.stream_id),
-        serde_json::json!({"stream": front.stream_id, "display_name": "front", "location": location_of("front"), "state": "running", "node_count": null, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
+        serde_json::json!({"stream": front.stream_id, "display_name": "front", "location": location_of("front"), "state": "stopped", "node_count": 1, "capture_devices_whose_access_was_never_asked_for": [], "failed_because": null, "action": null, "step": null})
     );
     assert_eq!(
         listing_of(&parked.stream_id),
