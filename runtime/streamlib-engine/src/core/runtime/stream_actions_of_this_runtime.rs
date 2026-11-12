@@ -5891,7 +5891,10 @@ mod tests {
             .map(|stream| stream.stream_id.as_str())
             .collect();
         assert_eq!(streams_the_rerun_loaded, [main.as_str()]);
-        assert_eq!(runner.ids_of_the_loaded_streams(), [main.clone()]);
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            std::slice::from_ref(&main)
+        );
         assert_eq!(
             the_current_record_in(state_directory.path(), &project.stream_id_of("look")),
             None,
