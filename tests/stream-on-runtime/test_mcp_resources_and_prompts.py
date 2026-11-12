@@ -34,7 +34,7 @@ from mcp_types import UNSUPPORTED_PROTOCOL_VERSION
 from mcp_types.version import LATEST_PROTOCOL_VERSION
 
 from conftest import TatolabdUnderTest
-from local_api_client import LocalApiClient, mcp_error_raised_in
+from local_api_client import LocalApiClient, call_operation_tool_call, mcp_error_raised_in
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from test_cli_launch import NODE_READY_TIMEOUT_SECONDS
@@ -210,7 +210,9 @@ class ScriptedMcpClient:
         return message.content.text
 
     def call_tool(self, tool_name: str, arguments: "dict[str, Any]") -> Any:
-        result = self.answer(lambda client: client.call_tool(tool_name, arguments))
+        result = self.answer(
+            lambda client: client.call_tool(*call_operation_tool_call(tool_name, arguments))
+        )
         assert result.is_error is False, f"`{tool_name}` failed: {result.content}"
         stated = result.content[0]
         assert isinstance(stated, TextContent), result.content
@@ -271,7 +273,15 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         client.answer(lambda connected: connected.list_tools(), mode="legacy")
     handshake_refusal = mcp_error_raised_in(raised_by_the_handshake.value)
     assert handshake_refusal.code == UNSUPPORTED_PROTOCOL_VERSION, handshake_refusal
-    served_tool_names = {tool.name for tool in client.answer(lambda connected: connected.list_tools()).tools}
+    operation_groups = client.answer(
+        lambda connected: connected.call_tool("list_operation_groups", {})
+    ).content[0]
+    assert isinstance(operation_groups, TextContent), operation_groups
+    served_operation_names = {
+        operation["name"]
+        for group in json.loads(operation_groups.text)["groups"]
+        for operation in group["operations"]
+    }
 
     resource_uris_by_name = {
         resource.name: resource.uri
@@ -317,7 +327,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     )
     steps = numbered_steps(recipe_text)
     assert steps, f"the recipe lists no steps:\n{recipe_text}"
-    assert {tool_name for tool_name, _ in steps} <= served_tool_names, recipe_text
+    assert {tool_name for tool_name, _ in steps} <= served_operation_names, recipe_text
     # The new links go up before the replaced one comes down, so nothing the
     # sink was being fed stops. Only a target port that takes a single inbound
     # link buys the disconnect-first order, and this sink declares no window

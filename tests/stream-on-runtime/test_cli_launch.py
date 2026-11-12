@@ -46,6 +46,7 @@ from conftest import (
     TatolabRunOrDevOnTheRuntime,
     a_tcp_port_free_on_loopback,
 )
+from local_api_client import call_operation_tool_call
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY, RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import (
@@ -620,8 +621,10 @@ def frames_written_on_a_port_while_a_viewer_holds_it(
             [viewed_node] = [node for node in graph["nodes"] if node["name"] == node_name]
             tool_answer(
                 await client.call_tool(
-                    "open_viewer",
-                    {"stream": stream_id, "node_id": viewed_node["id"], "port": port},
+                    *call_operation_tool_call(
+                        "open_viewer",
+                        {"stream": stream_id, "node_id": viewed_node["id"], "port": port},
+                    )
                 )
             )
             await asyncio.sleep(seconds_held)

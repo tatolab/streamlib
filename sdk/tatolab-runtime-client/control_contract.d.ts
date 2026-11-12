@@ -3623,6 +3623,148 @@ export interface ProjectChangedNotificationParams {
  */
 export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "missed";
 
+/**
+ * `list_operation_groups`' params: none.
+ */
+export type ListOperationGroupsRequest = Record<string, never>;
+
+/**
+ * `list_operation_groups`' result.
+ */
+export interface ListOperationGroupsResult {
+  /**
+   * Every group holding an operation the agent surface serves.
+   */
+  groups: Array<AgentOperationGroup>;
+}
+
+/**
+ * One group of the operations the agent surface serves.
+ */
+export interface AgentOperationGroup {
+  /**
+   * The group.
+   */
+  group: ControlOperationGroup;
+  /**
+   * The group's operations, in the order the contract lists them.
+   */
+  operations: Array<AgentOperationInItsGroup>;
+}
+
+/**
+ * The reference docs' group an operation is listed under.
+ */
+export type ControlOperationGroup = "project" | "stream" | "graph" | "asset" | "file" | "dependency" | "node_type" | "view" | "observe";
+
+/**
+ * One operation as its group lists it.
+ */
+export interface AgentOperationInItsGroup {
+  /**
+   * The operation's name, as `call_operation` and `describe_operations` take it.
+   */
+  name: string;
+  /**
+   * One sentence saying what it does.
+   */
+  summary: string;
+  /**
+   * Whether it is also a tool of its own, callable without `call_operation`.
+   */
+  listed_as_a_tool: boolean;
+}
+
+/**
+ * `describe_operations`' params.
+ */
+export interface DescribeOperationsRequest {
+  /**
+   * The operations to describe, by the names `list_operation_groups` lists. Send this or `group`.
+   */
+  operations?: Array<string> | null;
+  /**
+   * Describe every operation of this group. Send this or `operations`.
+   */
+  group?: ControlOperationGroup | null;
+}
+
+/**
+ * `describe_operations`' result.
+ */
+export interface DescribeOperationsResult {
+  /**
+   * Each operation asked for, in the order the contract lists them.
+   */
+  operations: Array<AgentOperationDescribed>;
+}
+
+/**
+ * One operation described for an agent about to call it.
+ */
+export interface AgentOperationDescribed {
+  /**
+   * The operation's name.
+   */
+  name: string;
+  /**
+   * One sentence saying what it does.
+   */
+  summary: string;
+  /**
+   * What it reads, what it changes and what it answers.
+   */
+  usage: string;
+  /**
+   * Its group.
+   */
+  group: ControlOperationGroup;
+  /**
+   * The contract version it first appeared in.
+   */
+  since_contract_version: number;
+  /**
+   * Whether its shape is settled.
+   */
+  stability: ControlOperationStability;
+  /**
+   * What it does to what the runtime holds.
+   */
+  effect: ControlOperationEffect;
+  /**
+   * The JSON Schema of the `params` `call_operation` takes for it.
+   */
+  params_schema: unknown;
+  /**
+   * The JSON Schema of what it answers.
+   */
+  result_schema: unknown;
+}
+
+/**
+ * Whether an operation's shape is settled.
+ */
+export type ControlOperationStability = "stable" | "experimental";
+
+/**
+ * What an operation does to what the runtime holds.
+ */
+export type ControlOperationEffect = "reads_only" | "changes" | "destroys";
+
+/**
+ * `call_operation`'s params.
+ */
+export interface CallOperationRequest {
+  /**
+   * The operation to call, by the name `list_operation_groups` lists.
+   */
+  operation: string;
+  /**
+   * The operation's params, as the `params_schema` `describe_operations` answers for it states them. Omit for an operation that takes none.
+   */
+  params?: { [key: string]: unknown } | null;
+}
+
 /** Every operation the runtime serves, by method name: the params it takes and the result it answers. */
 export interface ControlOperations {
   /**
@@ -4319,7 +4461,7 @@ export interface ControlOperations {
   /**
    * Import a project from an archive into a folder that does not exist yet.
    *
-   * Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: follow it with `run_project`. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.
+   * Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: open it with `open_project`, and `start_playback` plays it. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.
    *
    * Since contract version 1, stable.
    */
@@ -4341,7 +4483,7 @@ export interface ControlOperations {
   /**
    * Open a viewer of a node's output port, held open for the connection that opened it.
    *
-   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/stream`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
    *
    * Since contract version 1, stable.
    */

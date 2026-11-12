@@ -43,6 +43,9 @@ pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str = "/nonexistent-tatolab-te
 /// The local API tool that pages a project's log records by cursor.
 const LOGS_TOOL_NAME: &str = "logs";
 
+/// The local API tool that runs any operation by name.
+const CALL_OPERATION_TOOL_NAME: &str = "call_operation";
+
 /// The local API tools that queue a load of a project.
 const OPEN_OR_RELOAD_PROJECT_TOOL_NAMES: [&str; 2] = ["open_project", "reload_project"];
 
@@ -250,6 +253,7 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        let request = the_operation_a_tool_call_runs(request);
         self.stub_state
             .recorded_tool_calls
             .lock()
@@ -291,6 +295,25 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
         }
         .into())
     }
+}
+
+/// The call a `tools/call` runs: the operation and params a `call_operation` carries, as the
+/// runtime unwraps it, and any other tool call as sent.
+fn the_operation_a_tool_call_runs(request: CallToolRequestParams) -> CallToolRequestParams {
+    if request.name != CALL_OPERATION_TOOL_NAME {
+        return request;
+    }
+    let mut arguments = request.arguments.unwrap_or_default();
+    let operation = match arguments.remove("operation") {
+        Some(serde_json::Value::String(operation)) => operation,
+        operation => panic!("`call_operation` names its operation, and was sent {operation:?}"),
+    };
+    let params = match arguments.remove("params") {
+        Some(serde_json::Value::Object(params)) => params,
+        None => serde_json::Map::new(),
+        params => panic!("`call_operation`'s params are an object, and it was sent {params:?}"),
+    };
+    CallToolRequestParams::new(operation).with_arguments(params)
 }
 
 impl StubLocalApiState {

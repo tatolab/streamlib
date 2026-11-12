@@ -11,6 +11,7 @@ pub mod build_runtime;
 pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
+pub mod check_control_contract_compatibility;
 pub mod check_device_wait_idle;
 pub mod check_graph_document_node_types;
 pub mod check_iceoryx2_construction;
@@ -720,6 +721,16 @@ enum Commands {
         check: bool,
     },
 
+    /// CI gate on a change to the control contract file: fails when it breaks a client built
+    /// against an earlier contract file — a removed operation or field, a newly required
+    /// param, a narrowed type — and still states that file's contract version. See
+    /// [`check_control_contract_compatibility`].
+    CheckControlContractCompatibility {
+        /// The contract file the change is compared with: `main`'s.
+        #[arg(long)]
+        earlier_contract_file: std::path::PathBuf,
+    },
+
     /// Regenerate the generated files of `sdk/tatolab-runtime-client`, the TypeScript client
     /// of the control API, from the committed contract file. `--check` is the CI gate: it
     /// fails when a checked-in generated file differs from a regeneration. See
@@ -841,6 +852,9 @@ fn main() -> Result<()> {
         Commands::GenerateControlContract { check } => {
             generate_control_contract::run(&workspace_root()?, check)?
         }
+        Commands::CheckControlContractCompatibility {
+            earlier_contract_file,
+        } => check_control_contract_compatibility::run(&workspace_root()?, &earlier_contract_file)?,
         Commands::GenerateRuntimeClient { check } => {
             generate_runtime_client::run(&workspace_root()?, check)?
         }

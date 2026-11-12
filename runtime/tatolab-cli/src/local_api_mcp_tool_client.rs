@@ -24,6 +24,10 @@ use crate::local_api_unix_socket_http_client::{
     UpgradedLocalApiMcpStdioStream, upgrade_local_api_connection_to_mcp_stdio,
 };
 
+/// The runtime's tool that runs any operation it serves, by name: it takes the operation as
+/// `operation` and the operation's arguments as `params`.
+const CALL_OPERATION_TOOL_NAME: &str = "call_operation";
+
 /// The authority of the URI the client addresses; it fills `Host`, and the socket path is the
 /// address.
 const LOCAL_API_MCP_URI_AUTHORITY: &str = "localhost";
@@ -201,7 +205,8 @@ impl LocalApiMcpToolClient {
         })
     }
 
-    /// Call `tool_name` with `tool_arguments`, answering the first text block of its result.
+    /// Run the operation `tool_name` with `tool_arguments` through the runtime's
+    /// `call_operation` tool, answering the first text block of its result.
     pub(crate) async fn call_tool(
         &self,
         tool_name: &str,
@@ -219,8 +224,18 @@ impl LocalApiMcpToolClient {
         tool_arguments: serde_json::Map<String, serde_json::Value>,
         call_timeout: Duration,
     ) -> Result<String, LocalApiMcpToolClientFailure> {
-        let request =
-            CallToolRequestParams::new(tool_name.to_owned()).with_arguments(tool_arguments);
+        let request = CallToolRequestParams::new(CALL_OPERATION_TOOL_NAME).with_arguments(
+            serde_json::Map::from_iter([
+                (
+                    "operation".to_owned(),
+                    serde_json::Value::String(tool_name.to_owned()),
+                ),
+                (
+                    "params".to_owned(),
+                    serde_json::Value::Object(tool_arguments),
+                ),
+            ]),
+        );
         match tokio::time::timeout(call_timeout, self.connected_mcp_client.call_tool(request)).await
         {
             Ok(Ok(tool_result)) => first_text_block_of_tool_result(tool_name, tool_result),

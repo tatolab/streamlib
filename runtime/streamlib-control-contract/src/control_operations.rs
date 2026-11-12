@@ -21,7 +21,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::control_operation::{
-    ControlOperation, ControlOperationDeclaration, ControlOperationExposure, ControlOperationGroup,
+    ControlOperation, ControlOperationAgentToolListing, ControlOperationDeclaration,
+    ControlOperationEffect, ControlOperationExposure, ControlOperationGroup,
     ControlOperationStability,
 };
 use crate::control_operation_requests::{
@@ -72,6 +73,9 @@ impl ControlOperation for Discover {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `subscribe_project_changes`: the connection is sent each change on some projects' feeds.
@@ -87,6 +91,9 @@ impl ControlOperation for SubscribeProjectChanges {
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `describe_runtime`: this runtime's version, build and uptime.
@@ -102,6 +109,9 @@ impl ControlOperation for DescribeRuntime {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `list_streams`: every stream the runtime holds, with its state.
@@ -118,6 +128,9 @@ impl ControlOperation for ListStreams {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Stream;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `graph`: a loaded stream's live graph, or every loaded stream's.
@@ -133,6 +146,9 @@ impl ControlOperation for Graph {
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `transact`: several graph operations of one project as one transaction.
@@ -149,6 +165,9 @@ impl ControlOperation for Transact {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `add_node`: one node added to a loaded stream's graph.
@@ -165,6 +184,9 @@ impl ControlOperation for AddNode {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `connect`: one link between an output port and an input port.
@@ -181,6 +203,9 @@ impl ControlOperation for Connect {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `import_graph_generator`: run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
@@ -196,6 +221,9 @@ impl ControlOperation for ImportGraphGenerator {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `remove_node`: remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it.
@@ -212,6 +240,9 @@ impl ControlOperation for RemoveNode {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `disconnect`: take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.
@@ -227,6 +258,9 @@ impl ControlOperation for Disconnect {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_node_config`: replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
@@ -242,6 +276,9 @@ impl ControlOperation for SetNodeConfig {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_pin_value`: set the value one of a node's inputs holds while no link feeds it, as one transaction.
@@ -258,6 +295,9 @@ impl ControlOperation for SetPinValue {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `rename_node`: give a node another name, a label, as one transaction.
@@ -273,6 +313,9 @@ impl ControlOperation for RenameNode {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_studio_fields`: replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.
@@ -288,6 +331,9 @@ impl ControlOperation for SetStudioFields {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_exposed_config_fields`: replace the config fields a node takes as inputs, as one transaction.
@@ -304,6 +350,9 @@ impl ControlOperation for SetExposedConfigFields {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `add_group`: make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
@@ -319,6 +368,9 @@ impl ControlOperation for AddGroup {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_group_fields`: set a labelled group's title, description or colour, as one transaction.
@@ -335,6 +387,9 @@ impl ControlOperation for SetGroupFields {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `collapse_selection_into_subgraph`: collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.
@@ -350,6 +405,9 @@ impl ControlOperation for CollapseSelectionIntoSubgraph {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `unlock_generator_fragment`: unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
@@ -365,6 +423,9 @@ impl ControlOperation for UnlockGeneratorFragment {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `add_note`: place a canvas note on a loaded stream's graph, as one transaction.
@@ -381,6 +442,9 @@ impl ControlOperation for AddNote {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_note_fields`: set a canvas note's text, position or size, as one transaction.
@@ -398,6 +462,9 @@ impl ControlOperation for SetNoteFields {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `remove_note`: take a canvas note off a loaded stream's graph, as one transaction.
@@ -414,6 +481,9 @@ impl ControlOperation for RemoveNote {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `remove_group`: take out a labelled group, as one transaction.
@@ -429,6 +499,9 @@ impl ControlOperation for RemoveGroup {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `open_project`: queue the open of a project: its streams are loaded and held with their playback stopped.
@@ -445,6 +518,9 @@ impl ControlOperation for OpenProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `reload_project`: queue a soft reload of an open project from disk, keeping its playback.
@@ -461,6 +537,9 @@ impl ControlOperation for ReloadProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `close_project`: queue the close of an open project: its streams are unloaded and stay closed until it is opened.
@@ -476,6 +555,9 @@ impl ControlOperation for CloseProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `remove_project`: queue the removal of a project from the runtime: its streams are stopped and their records forgotten.
@@ -491,6 +573,9 @@ impl ControlOperation for RemoveProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `start_playback`: queue the start of an open project's playback.
@@ -506,6 +591,9 @@ impl ControlOperation for StartPlayback {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `stop_playback`: queue the stop of a project's playback, its streams staying loaded.
@@ -522,6 +610,9 @@ impl ControlOperation for StopPlayback {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `pause_playback`: pause a playing project's playback at once.
@@ -537,6 +628,9 @@ impl ControlOperation for PausePlayback {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `resume_playback`: resume a paused project's playback at once.
@@ -552,6 +646,9 @@ impl ControlOperation for ResumePlayback {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `describe_stream_action`: describe one stream action by its id: its state, its step and each stream it reached.
@@ -568,6 +665,9 @@ impl ControlOperation for DescribeStreamAction {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Stream;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `cancel_stream_action`: cancel one stream action that is still queued or under way.
@@ -584,6 +684,9 @@ impl ControlOperation for CancelStreamAction {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Stream;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `rename_project`: rename a project, as one transaction on its history.
@@ -599,6 +702,9 @@ impl ControlOperation for RenameProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_project_description`: describe a project, or clear its description, as one transaction on its history.
@@ -615,6 +721,9 @@ impl ControlOperation for SetProjectDescription {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_project_cover`: give a project a cover, or take it away, as one transaction on its history.
@@ -631,6 +740,9 @@ impl ControlOperation for SetProjectCover {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `duplicate_project`: duplicate a project into a folder that does not exist yet, as a project of its own.
@@ -647,6 +759,9 @@ impl ControlOperation for DuplicateProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `delete_project`: queue the deletion of a whole project.
@@ -662,6 +777,9 @@ impl ControlOperation for DeleteProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `list_assets`: list a project's assets, ordered by path.
@@ -677,6 +795,9 @@ impl ControlOperation for ListAssets {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `describe_asset`: describe one asset of a project.
@@ -692,6 +813,9 @@ impl ControlOperation for DescribeAsset {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `read_asset_preview`: read an asset's preview picture.
@@ -707,6 +831,9 @@ impl ControlOperation for ReadAssetPreview {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `import_asset`: import a file as a new asset of a project, as one transaction.
@@ -723,6 +850,9 @@ impl ControlOperation for ImportAsset {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `relocate_asset`: move or rename an asset inside its project, as one transaction.
@@ -739,6 +869,9 @@ impl ControlOperation for RelocateAsset {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `delete_asset`: delete an asset from a project, as one transaction.
@@ -754,6 +887,9 @@ impl ControlOperation for DeleteAsset {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_asset_settings`: replace an asset's import settings, as one transaction.
@@ -769,6 +905,9 @@ impl ControlOperation for SetAssetSettings {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `replace_asset`: replace an asset's bytes, as one transaction.
@@ -784,6 +923,9 @@ impl ControlOperation for ReplaceAsset {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `create_stream`: create a stream in a project, as one transaction.
@@ -799,6 +941,9 @@ impl ControlOperation for CreateStream {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `delete_stream`: delete a stream from a project, as one transaction.
@@ -814,6 +959,9 @@ impl ControlOperation for DeleteStream {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_stream_display_name`: set the name a stream is shown under, as one transaction.
@@ -829,6 +977,9 @@ impl ControlOperation for SetStreamDisplayName {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Asset;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `add_dependency`: import another project into a project, as one transaction.
@@ -844,6 +995,9 @@ impl ControlOperation for AddDependency {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Dependency;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `update_dependency`: bring an imported project up to date with its source, as one transaction.
@@ -860,6 +1014,9 @@ impl ControlOperation for UpdateDependency {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Dependency;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `list_dependencies`: list the projects a project imports.
@@ -875,6 +1032,9 @@ impl ControlOperation for ListDependencies {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Dependency;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `remove_dependency`: take an imported project out of a project, as one transaction.
@@ -891,6 +1051,9 @@ impl ControlOperation for RemoveDependency {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Dependency;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `use_dependency_stream`: place an imported project's stream in a loaded stream's graph as a
@@ -907,6 +1070,9 @@ impl ControlOperation for UseDependencyStream {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Dependency;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `list_project_files`: list the files of a project that are not assets.
@@ -922,6 +1088,9 @@ impl ControlOperation for ListProjectFiles {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::File;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `read_project_file`: read one file of a project.
@@ -937,6 +1106,9 @@ impl ControlOperation for ReadProjectFile {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::File;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `create_node_file`: create a node file in a project from the template, as one transaction.
@@ -953,6 +1125,9 @@ impl ControlOperation for CreateNodeFile {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::File;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `write_project_file`: write one file of a project, as one transaction.
@@ -968,6 +1143,9 @@ impl ControlOperation for WriteProjectFile {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::File;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `list_project_node_types`: list the node types a project offers, from its own node files and the
@@ -984,6 +1162,9 @@ impl ControlOperation for ListProjectNodeTypes {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::NodeType;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `list_project_views`: list the Tato Studio views a project brings.
@@ -999,6 +1180,9 @@ impl ControlOperation for ListProjectViews {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::View;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `write_studio_view_output`: write a value a Tato Studio view produced onto its node's output
@@ -1016,6 +1200,9 @@ impl ControlOperation for WriteStudioViewOutput {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::View;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `write_graph_input`: write a value onto one of a loaded stream's graph inputs.
@@ -1031,6 +1218,9 @@ impl ControlOperation for WriteGraphInput {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::View;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `import_project`: import a project from an archive into a folder that does not exist yet.
@@ -1042,11 +1232,14 @@ impl ControlOperation for ImportProject {
     const METHOD_NAME: &'static str = "import_project";
     const ONE_LINE_DOC: &'static str =
         "Import a project from an archive into a folder that does not exist yet.";
-    const AGENT_USAGE_NOTE: &'static str = "Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: follow it with `run_project`. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.";
+    const AGENT_USAGE_NOTE: &'static str = "Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: open it with `open_project`, and `start_playback` plays it. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `logs`: read a project's log records after a cursor, oldest first.
@@ -1062,6 +1255,9 @@ impl ControlOperation for Logs {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `open_viewer`: open a viewer of a node's output port, held open for the connection that opened
@@ -1074,11 +1270,14 @@ impl ControlOperation for OpenViewer {
     const METHOD_NAME: &'static str = "open_viewer";
     const ONE_LINE_DOC: &'static str =
         "Open a viewer of a node's output port, held open for the connection that opened it.";
-    const AGENT_USAGE_NOTE: &'static str = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.";
+    const AGENT_USAGE_NOTE: &'static str = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/stream`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `close_viewer`: close a viewer this connection opened.
@@ -1095,6 +1294,9 @@ impl ControlOperation for CloseViewer {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `set_stream_clock_scale`: run a started stream's scaled clock at another scale from now on.
@@ -1111,6 +1313,9 @@ impl ControlOperation for SetStreamClockScale {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Stream;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `create_project`: queue the creation of a project from the starter or a sample.
@@ -1127,6 +1332,9 @@ impl ControlOperation for CreateProject {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `list_samples`: list the sample projects a new project can be created from.
@@ -1143,6 +1351,9 @@ impl ControlOperation for ListSamples {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `refresh_fragments`: refresh, as one transaction, every fragment whose graph generator a changed
@@ -1159,6 +1370,9 @@ impl ControlOperation for RefreshFragments {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// `undo`: undo an author's latest transaction in a project that is not undone yet, as a new
@@ -1175,6 +1389,9 @@ impl ControlOperation for Undo {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ListedAsATool;
 }
 
 /// `redo`: redo what an author's latest undo in a project reversed, as a new transaction.
@@ -1191,6 +1408,9 @@ impl ControlOperation for Redo {
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Destroys;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
 /// Every operation the registry holds, in the order the contract file lists them.

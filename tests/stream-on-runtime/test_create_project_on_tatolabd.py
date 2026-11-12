@@ -33,6 +33,7 @@ from mcp.client.stdio import StdioServerParameters
 from mcp.types import TextContent
 
 from conftest import PrivateMachineDirectories, TatolabdUnderTest
+from local_api_client import call_operation_tool_call
 from runtime_unit_under_test import REPOSITORY_ROOT, RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import (
     PROJECT_FILE_NAME,
@@ -84,7 +85,7 @@ def create_project_through_tatolab_mcp(
 
     async def create_through_the_verb() -> "dict[str, Any]":
         async with Client(verb) as client:
-            result = await client.call_tool("create_project", arguments)
+            result = await client.call_tool(*call_operation_tool_call("create_project", arguments))
             assert result.is_error is False, result.content
             stated = result.content[0]
             assert isinstance(stated, TextContent), result.content
@@ -324,7 +325,9 @@ def test_create_project_with_no_directory_draws_an_adjective_noun_folder_under_t
         )
     local_api = tatolabd.local_api_client()
     local_api.answer_over_mcp(
-        lambda client: client.call_tool("cancel_stream_action", {"action": created["action"]})
+        lambda client: client.call_tool(
+            *call_operation_tool_call("cancel_stream_action", {"action": created["action"]})
+        )
     )
     create_once_ended = local_api.stream_action_once_ended(created["action"])
     assert create_once_ended["state"] in ("cancelled", "done"), create_once_ended

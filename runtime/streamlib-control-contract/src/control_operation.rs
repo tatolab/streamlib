@@ -5,8 +5,8 @@
 //! becomes.
 
 use schemars::{JsonSchema, SchemaGenerator};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// One operation of the control plane: the request it takes, the result it answers, and what the
 /// contract file says about it.
@@ -30,10 +30,36 @@ pub trait ControlOperation {
     const GROUP: ControlOperationGroup;
     /// Which surfaces serve it.
     const EXPOSURES: &'static [ControlOperationExposure];
+    /// What it does to what the runtime holds.
+    const EFFECT: ControlOperationEffect;
+    /// How the agent surface offers it.
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing;
+}
+
+/// What an operation does to what the runtime holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlOperationEffect {
+    /// It changes nothing a project or a stream holds.
+    ReadsOnly,
+    /// It adds to or changes what a project or a stream holds.
+    Changes,
+    /// It can take away or overwrite what a project or a stream holds.
+    Destroys,
+}
+
+/// How the agent surface offers an operation it serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlOperationAgentToolListing {
+    /// It is a tool of its own in the agent surface's tool list.
+    ListedAsATool,
+    /// It is reached through the agent surface's `call_operation` tool.
+    ReachedThroughCallOperation,
 }
 
 /// Whether an operation's shape is settled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlOperationStability {
     /// Changing it breaks the contract and bumps its version.
@@ -43,7 +69,9 @@ pub enum ControlOperationStability {
 }
 
 /// The reference docs' group an operation is listed under.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlOperationGroup {
     /// A project as a whole.
@@ -96,6 +124,10 @@ pub struct ControlOperationDeclaration {
     pub group: ControlOperationGroup,
     /// The surfaces serving it.
     pub exposures: &'static [ControlOperationExposure],
+    /// What it does to what the runtime holds.
+    pub effect: ControlOperationEffect,
+    /// How the agent surface offers it.
+    pub agent_tool_listing: ControlOperationAgentToolListing,
     /// The schema of its request, its named types added to the generator's definitions.
     pub request_json_schema: fn(&mut SchemaGenerator) -> schemars::Schema,
     /// The schema of its result, its named types added to the generator's definitions.
@@ -103,6 +135,17 @@ pub struct ControlOperationDeclaration {
 }
 
 impl ControlOperationDeclaration {
+    /// Whether the agent surface serves it.
+    pub fn is_served_to_agents(&self) -> bool {
+        self.exposures.contains(&ControlOperationExposure::Agent)
+    }
+
+    /// Whether it is a tool of its own in the agent surface's tool list.
+    pub fn is_listed_as_an_agent_tool(&self) -> bool {
+        self.is_served_to_agents()
+            && self.agent_tool_listing == ControlOperationAgentToolListing::ListedAsATool
+    }
+
     /// The table row of `Operation`.
     pub const fn of<Operation: ControlOperation>() -> Self {
         Self {
@@ -113,6 +156,8 @@ impl ControlOperationDeclaration {
             stability: Operation::STABILITY,
             group: Operation::GROUP,
             exposures: Operation::EXPOSURES,
+            effect: Operation::EFFECT,
+            agent_tool_listing: Operation::AGENT_TOOL_LISTING,
             request_json_schema: the_json_schema_of::<Operation::Request>,
             result_json_schema: the_json_schema_of::<Operation::Result>,
         }

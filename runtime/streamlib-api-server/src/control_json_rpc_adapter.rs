@@ -507,7 +507,7 @@ pub(crate) mod tests {
     use std::time::Duration;
 
     use rmcp::RoleClient;
-    use rmcp::model::{CallToolRequestParams, ProtocolVersion};
+    use rmcp::model::ProtocolVersion;
     use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService};
     use serde_json::{Value, json};
     use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
@@ -551,8 +551,7 @@ pub(crate) mod tests {
 
         /// One MCP tool call's result as it crossed the wire.
         pub(crate) async fn mcp_tool_result(&self, tool_name: &str, arguments: Value) -> Value {
-            let request = CallToolRequestParams::new(tool_name.to_owned())
-                .with_arguments(arguments.as_object().cloned().unwrap_or_default());
+            let request = crate::mcp::tests::the_tool_call_that_reaches(tool_name, &arguments);
             serde_json::to_value(self.mcp_client.call_tool(request).await.unwrap()).unwrap()
         }
 

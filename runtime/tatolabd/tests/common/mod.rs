@@ -739,11 +739,11 @@ pub fn call_a_tool_over_the_local_api(
             )
             .await
             .expect("the runtime answers `server/discover`");
-        let request = CallToolRequestParams::new(tool_name.to_owned()).with_arguments(
-            tool_arguments
+        let request = CallToolRequestParams::new("call_operation").with_arguments(
+            serde_json::json!({ "operation": tool_name, "params": tool_arguments })
                 .as_object()
                 .cloned()
-                .expect("the tool's arguments are an object"),
+                .expect("an object"),
         );
         let tool_result = client
             .call_tool(request)

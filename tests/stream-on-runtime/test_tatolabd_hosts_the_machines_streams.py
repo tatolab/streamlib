@@ -47,7 +47,11 @@ from conftest import (
     TatolabdUnderTest,
     TatolabRunOrDevOnTheRuntime,
 )
-from local_api_client import LocalApiClient, LocalApiRefusedTheRequest
+from local_api_client import (
+    LocalApiClient,
+    LocalApiRefusedTheRequest,
+    call_operation_tool_call,
+)
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE
 from runtime_unit_under_test import MachineDirectoriesUnderATestRoot, RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import (
@@ -415,8 +419,14 @@ class McpJsonRpcClientOverTheVerb:
             return message["result"]
 
     def call_tool(self, tool_name: str, arguments: "dict[str, Any] | None" = None) -> Any:
-        """`tools/call`, its text content parsed as JSON; a tool error raises `McpToolCallRefused`."""
-        result = self._request("tools/call", {"name": tool_name, "arguments": arguments or {}})
+        """The operation `tool_name` run through `call_operation`, its text content parsed as JSON.
+
+        A tool error raises `McpToolCallRefused`.
+        """
+        call_operation, call_operation_arguments = call_operation_tool_call(tool_name, arguments)
+        result = self._request(
+            "tools/call", {"name": call_operation, "arguments": call_operation_arguments}
+        )
         text = "\n".join(
             content["text"] for content in result["content"] if content.get("type") == "text"
         )
