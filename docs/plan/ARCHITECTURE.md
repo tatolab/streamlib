@@ -374,7 +374,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   location, stream id, display name, record and failure; the project runs and stops as a whole
   (`start_project`, `stop_project`). A stream another stream of the project places is not loaded
   as its own stream: it runs only where it is placed, as an import's stream does (owner,
-  2026-11-11). A stream whose document will not load is recorded `failed`
+  2026-11-11). The rule holds after every committed edit too: a stream running as its own that
+  an edit places is unloaded as its own and runs only inside the stream placing it, and a stream
+  whose last placement an edit removes loads as its own stream, following the project's playback
+  (session, 2026-11-12). A stream whose document will not load is recorded `failed`
   (the entry below). A re-load of the project replaces each of its streams in place, and a
   stream whose document is gone is unloaded and forgotten, as deleting an asset in an editor
   removes it. `dev` follows the project's log, re-loads a stream when its document changes on
@@ -384,8 +387,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `describe_stream_action` lists every stream a load touched. Owner, 2026-10-28, 2026-10-30
   and 2026-11-08. [create-project — SHIPPED #2995; queued-stream-actions — SHIPPED #2998,
   #3004, #3009; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384;
-  amended by subgraphs-as-placed-streams: a placed stream loaded only where it is placed, and
-  re-placed when its document changes on disk]
+  subgraphs-as-placed-streams — SHIPPED #3604, #3609, #3610]
 - **DECIDED** — A load is never refused. Every load — `start`, `reload`, `dev`, `start_project`, `reload_project`,
   `create_project`, Tato Studio's Add, and the runtime's re-load at start — is a
   queued stream action (the entry below) that takes the project in. A load runs no project
@@ -2278,7 +2280,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `collapse_selection_into_subgraph` saves a selection of nodes as a new stream of the project,
   named for the subgraph, and places it where they were, carrying each link that crossed the
   selection through a `GraphInput` or `GraphOutput` of the new stream, as After Effects'
-  Pre-compose makes a composition of layers. Any stream of the project may be placed in another;
+  Pre-compose makes a composition of layers. Its undo removes the new stream again, and is refused,
+  naming why, while another stream of the project places it or after it was edited (owner,
+  2026-11-12). Any stream of the project may be placed in another;
   one that holds itself, directly or through another stream, is refused naming each. Editing
   inside a placed stream edits that stream's own document, and every stream placing it takes the
   change; a placed stream runs only where it is placed (§Product, loading a project).
@@ -2293,10 +2297,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `unlock_subgraph`. A link onto a port an edit inside renames follows it to the new name in every
   stream placing it, and one onto a port an edit inside removes goes with it, the edit's inverse
   putting each back. Owner, 2026-11-11.
+  Only a graph generator's frozen output is held inline: a graph document holding an inline
+  `fragment` under any other node type the runtime defines (the `tatolab.` namespace), at any
+  level, is refused at load, naming the node.
   Rejected: an authored subgraph held inline in the stream that places it — a subgraph is one
   stream placed by reference, the same everywhere it is placed (owner, 2026-11-11).
-  [#3519; amended by subgraphs-as-placed-streams: collapse saves a stream and places it, an edit
-  at a level made on the placed stream, `unlock_subgraph`] A fragment's extra parameters are promoted config; its Input and
+  [#3519; subgraphs-as-placed-streams — SHIPPED #3604, #3609, #3610] A fragment's extra parameters are promoted config; its Input and
   Output nodes are its ports, the only ones reachable from the graph that places it; and it
   flattens at compile, its nodes named under the reference's name (`overlay/comp`). The same
   generator may instead fill a stream whole. Inside a fragment, and for every `GraphOutput`, an
