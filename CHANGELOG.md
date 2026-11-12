@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.79](https://github.com/tatolab/streamlib/compare/v0.68.78...v0.68.79) (2026-11-12)
+
+
+### Features
+
+* **control:** the loopback listener serves /control/ws, always on with no gate ([31aefa7](https://github.com/tatolab/streamlib/commit/31aefa70f5ceab376b50160f4f2ce4a7764a1fc7))
+* **control:** the loopback listener serves /control/ws, always on with no gate ([fce24c8](https://github.com/tatolab/streamlib/commit/fce24c8b1b65ad83aada6b0c8140a8667ff4b9c5))
+
 ## [0.68.78](https://github.com/tatolab/streamlib/compare/v0.68.77...v0.68.78) (2026-11-12)
 
 
