@@ -83,6 +83,8 @@ streamlib = { path = "../../sdk/streamlib-sdk", features = ["test-support"] }
 rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"
 serial_test = "3.2"
+# The control WebSocket tests open `/control/ws` over the socket as a client would.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 # The handshake test reads `[workspace.package] version` from the workspace manifest.
 toml.workspace = true
 # The request-trace level test drives a request under a real `EnvFilter` and

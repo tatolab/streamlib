@@ -2394,7 +2394,7 @@ async fn a_control_stream_subscriber_is_sent_a_transact_another_client_made_and_
     )
     .await;
 
-    let mut subscriber = served.control_stream("").await;
+    let mut subscriber = served.control_websocket().await;
     subscriber
         .send(
             json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_project_changes",

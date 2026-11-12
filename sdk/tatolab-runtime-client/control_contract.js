@@ -83,9 +83,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
 
 export const CONTROL_JSON_RPC_ROUTE_PATH = "/control";
 
-export const CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET = "/control/stream";
-
-export const CONTROL_JSON_RPC_STREAM_UPGRADE_PROTOCOL_TOKEN = "control-jsonrpc";
+export const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET = "/control/ws";
 
 export const CONTROL_CONTRACT_VERSION_HEADER_NAME = "tatolab-control-contract-version";
 

@@ -4483,7 +4483,7 @@ export interface ControlOperations {
   /**
    * Open a viewer of a node's output port, held open for the connection that opened it.
    *
-   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/stream`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
    *
    * Since contract version 1, stable.
    */
@@ -4595,11 +4595,8 @@ export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMe
 /** The route one JSON-RPC request is POSTed to. */
 export declare const CONTROL_JSON_RPC_ROUTE_PATH: "/control";
 
-/** The route a connection is upgraded at to carry newline-delimited JSON-RPC both ways. */
-export declare const CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET: "/control/stream";
-
-/** The `Upgrade` token the stream route takes. */
-export declare const CONTROL_JSON_RPC_STREAM_UPGRADE_PROTOCOL_TOKEN: "control-jsonrpc";
+/** The route a WebSocket is opened at to carry one JSON-RPC message per text frame both ways. */
+export declare const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET: "/control/ws";
 
 /** The header naming the contract version a client was built against. */
 export declare const CONTROL_CONTRACT_VERSION_HEADER_NAME: "tatolab-control-contract-version";

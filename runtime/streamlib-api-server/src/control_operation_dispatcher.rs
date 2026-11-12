@@ -32,7 +32,7 @@ use streamlib_project_repository::{
     ProjectTransactionAuthor, ProjectTransactionAuthorKind, StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AssetTransactionToolResult, CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET,
+    AssetTransactionToolResult, CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
     CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
     CreateNodeFileToolResult, CreateProjectToolResult, DeleteProjectToolResult,
     DependencyTransactionToolResult, DescribeAssetToolResult, DescribeRuntimeToolResult,
@@ -1295,7 +1295,7 @@ fn subscribe_to_project_changes(
     let Some(project_change_subscriptions) = &request_origin.project_change_subscriptions else {
         return Err(ControlOperationRefusal::Failed(format!(
             "subscribe_project_changes failed: it is served only on a connection that stays open \
-             to be sent notifications, `{CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET}`"
+             to be sent notifications, `{CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET}`"
         )));
     };
     if projects.is_empty() {

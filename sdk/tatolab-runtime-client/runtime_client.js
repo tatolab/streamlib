@@ -3,7 +3,7 @@
 
 import { CONTROL_CONTRACT_VERSION } from "./control_contract.js";
 import { controlAnswerResult, controlNotificationParams, controlRequestMessage } from "./control_messages.js";
-import { ControlStreamTransport } from "./control_transports.js";
+import { ControlWebSocketTransport } from "./control_transports.js";
 
 const A_TRANSPORT_THAT_NEVER_CLOSES = new Promise(() => {});
 
@@ -15,7 +15,7 @@ export class TatolabRuntimeClientCallsOverATransport {
   #listeningToTheTransportsNotifications = false;
 
   static async connect({ socketPath, clientName, signal }) {
-    const transport = await ControlStreamTransport.open({ socketPath, clientName, signal });
+    const transport = await ControlWebSocketTransport.open({ socketPath, clientName, signal });
     const client = new this(transport);
     try {
       client.discovered = await client.call("discover", { contract_version: CONTROL_CONTRACT_VERSION }, { signal });

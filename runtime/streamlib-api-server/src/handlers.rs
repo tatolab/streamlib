@@ -1,19 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! HTTP + WebSocket handlers, wired into the router by [`build_router`].
+//! HTTP handlers, wired into the router by [`build_router`].
 
 use axum::{
     Json, Router,
     extract::Query,
     extract::State,
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
 };
-use futures_util::{SinkExt, StreamExt};
-use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -25,7 +22,6 @@ use streamlib::sdk::json_schema::{
     PortFamilyDescriptorOutput, ProcessorDescriptorOutput, RegistryResponse,
 };
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
@@ -34,7 +30,7 @@ use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CONTROL_JSON_RPC_ROUTE_PATH, CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET,
+    CONTROL_JSON_RPC_ROUTE_PATH, CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
     MCP_STDIO_UPGRADE_REQUEST_TARGET, MCP_STREAMABLE_HTTP_ROUTE_PATH,
 };
 
@@ -111,14 +107,13 @@ pub(crate) fn build_router(
             ),
         )
         .route(
-            CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET,
-            crate::control_json_rpc_adapter::control_json_rpc_stream_upgrade_route(
+            CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
+            crate::control_json_rpc_adapter::control_json_rpc_websocket_route(
                 control_operation_dispatcher,
                 Arc::clone(&local_api_mcp_server_handler.project_repositories_open_in_this_runtime),
                 local_api_stopping_token.clone(),
             ),
         )
-        .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
         .route_service(MCP_STREAMABLE_HTTP_ROUTE_PATH, local_api_mcp_service)
         .route(
@@ -359,78 +354,6 @@ pub(crate) async fn get_openapi_spec(
     State(state): State<AppState>,
 ) -> Json<utoipa::openapi::OpenApi> {
     Json(state.openapi)
-}
-
-// ============================================================================
-// WebSocket Event Streaming
-// ============================================================================
-
-pub(crate) async fn websocket_handler(ws: WebSocketUpgrade) -> impl IntoResponse {
-    ws.on_upgrade(handle_websocket)
-}
-
-async fn handle_websocket(socket: WebSocket) {
-    let (mut sender, mut receiver) = socket.split();
-
-    // Channel to bridge sync EventListener -> async WebSocket
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
-
-    let listener: Arc<Mutex<dyn EventListener>> =
-        Arc::new(Mutex::new(WebSocketEventForwarder { tx }));
-    // Closing beats serving a client that would receive nothing forever.
-    if let Err(subscribe_error) = PUBSUB.subscribe(topics::ALL, Arc::clone(&listener)) {
-        tracing::warn!("WebSocket client not subscribed, closing: {subscribe_error}");
-        return;
-    }
-
-    tracing::info!("WebSocket client connected, subscribed to all events");
-
-    // Task: forward channel events to WebSocket
-    let send_task = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            match serde_json::to_string(&event) {
-                Ok(json) => {
-                    if sender.send(Message::Text(json.into())).await.is_err() {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to serialize event: {}", e);
-                }
-            }
-        }
-    });
-
-    // Receive loop (keep-alive, handle close)
-    while let Some(msg) = receiver.next().await {
-        match msg {
-            Ok(Message::Close(_)) => {
-                tracing::info!("WebSocket client closed connection");
-                break;
-            }
-            Err(e) => {
-                tracing::warn!("WebSocket error: {}", e);
-                break;
-            }
-            _ => {} // axum handles ping/pong automatically
-        }
-    }
-
-    // The bus removes the subscription at its next publish or subscribe.
-    drop(listener);
-    send_task.abort();
-    tracing::info!("WebSocket client disconnected");
-}
-
-struct WebSocketEventForwarder {
-    tx: tokio::sync::mpsc::UnboundedSender<Event>,
-}
-
-impl EventListener for WebSocketEventForwarder {
-    fn on_event(&mut self, event: &Event) -> Result<()> {
-        let _ = self.tx.send(event.clone());
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -883,7 +806,7 @@ pub(crate) mod router_surface_tests {
                 )
             });
         let routes_outside_the_spec = [
-            "/ws/events",
+            CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
             "/api/openapi.json",
             MCP_STDIO_UPGRADE_REQUEST_TARGET,
         ]
