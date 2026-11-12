@@ -42,7 +42,9 @@ pub enum ProjectChangeOnTheFeed {
 }
 
 /// A hold on the watch of one open project's folder; the folder is watched while any hold lives.
-pub struct ProjectFilesWatchedWhileHeld(Arc<ProjectFilesChangedOutsideTheRuntimeWatch>);
+pub struct ProjectFilesWatchedWhileHeld {
+    _watch_kept_alive: Arc<ProjectFilesChangedOutsideTheRuntimeWatch>,
+}
 
 impl std::fmt::Debug for ProjectFilesWatchedWhileHeld {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -59,7 +61,8 @@ pub type ProjectRepositoryOneWriterAtATime = Arc<Mutex<ProjectRepository>>;
 pub struct ProjectRepositoriesOpenInThisRuntime {
     project_repository_by_resolved_directory:
         Mutex<BTreeMap<PathBuf, ProjectRepositoryOneWriterAtATime>>,
-    project_files_watch_by_project: Mutex<BTreeMap<Uuid, Weak<ProjectFilesChangedOutsideTheRuntimeWatch>>>,
+    project_files_watch_by_project:
+        Mutex<BTreeMap<Uuid, Weak<ProjectFilesChangedOutsideTheRuntimeWatch>>>,
     project_change_feed: broadcast::Sender<ProjectChangeFeedAnnouncement>,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
 }
@@ -210,7 +213,9 @@ impl ProjectRepositoriesOpenInThisRuntime {
             .get(&project)
             .and_then(Weak::upgrade)
         {
-            return Some(ProjectFilesWatchedWhileHeld(watch));
+            return Some(ProjectFilesWatchedWhileHeld {
+                _watch_kept_alive: watch,
+            });
         }
         let resolved_project_directory = self
             .the_open_project_repository_of(project)?
@@ -232,7 +237,9 @@ impl ProjectRepositoriesOpenInThisRuntime {
                 let watch = Arc::new(watch);
                 project_files_watch_by_project.retain(|_, held| held.strong_count() > 0);
                 project_files_watch_by_project.insert(project, Arc::downgrade(&watch));
-                Some(ProjectFilesWatchedWhileHeld(watch))
+                Some(ProjectFilesWatchedWhileHeld {
+                    _watch_kept_alive: watch,
+                })
             }
             Err(not_watched) => {
                 tracing::warn!(
@@ -377,8 +384,12 @@ mod tests {
         let project_repository = open.the_project_repository_at(&project_directory).unwrap();
         let project = project_repository.lock().project_file().project;
         let mut change_feed = open.subscribe_to_the_change_feed();
-        let first_hold = open.watch_the_files_of(project).expect("the open project is watched");
-        let second_hold = open.watch_the_files_of(project).expect("the watch is shared");
+        let first_hold = open
+            .watch_the_files_of(project)
+            .expect("the open project is watched");
+        let second_hold = open
+            .watch_the_files_of(project)
+            .expect("the watch is shared");
 
         std::fs::write(project_directory.join("blur.py"), b"x = 1").unwrap();
         let announced = tokio::runtime::Builder::new_current_thread()
