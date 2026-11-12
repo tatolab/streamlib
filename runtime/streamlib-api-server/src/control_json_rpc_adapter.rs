@@ -474,6 +474,12 @@ fn the_result_of_an_answer(answered: ControlOperationAnswer) -> Value {
         ControlOperationAnswer::ListStreams(result) => serde_json::to_value(result),
         ControlOperationAnswer::Graph(graph) => Ok(graph),
         ControlOperationAnswer::GraphTransaction(result) => serde_json::to_value(result),
+        ControlOperationAnswer::ProjectStreamActionQueued(result) => serde_json::to_value(result),
+        ControlOperationAnswer::RemoveProject(result) => serde_json::to_value(result),
+        ControlOperationAnswer::PausePlayback(result) => serde_json::to_value(result),
+        ControlOperationAnswer::ResumePlayback(result) => serde_json::to_value(result),
+        ControlOperationAnswer::DescribeStreamAction(result) => serde_json::to_value(result),
+        ControlOperationAnswer::CancelStreamAction(result) => serde_json::to_value(result),
     };
     rendered.unwrap_or_else(|_| unreachable!("a result type always serializes to JSON"))
 }
@@ -727,6 +733,18 @@ pub(crate) mod tests {
                 json!({ "stream": stream_asset, "mode": "live",
                         "source": { "node": "nowhere", "port": "video" },
                         "target": { "node": "nobody", "port": "video" } }),
+            ),
+            (
+                "open_project",
+                json!({ "project_directory": "relative/rig" }),
+            ),
+            (
+                "pause_playback",
+                json!({ "project_directory": "relative/rig" }),
+            ),
+            (
+                "describe_stream_action",
+                json!({ "action": "an action nobody queued" }),
             ),
         ];
         for (method, params) in calls {

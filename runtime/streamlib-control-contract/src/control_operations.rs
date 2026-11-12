@@ -6,7 +6,9 @@
 
 use serde_json::Value;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    DescribeRuntimeToolResult, GraphTransactionToolResult, ListStreamsToolResult,
+    CancelStreamActionToolResult, DescribeRuntimeToolResult, DescribeStreamActionToolResult,
+    GraphTransactionToolResult, ListStreamsToolResult, PausePlaybackToolResult,
+    ProjectStreamActionQueuedToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
 };
 
 use crate::control_operation::{
@@ -15,7 +17,8 @@ use crate::control_operation::{
 };
 use crate::control_operation_requests::{
     AddNodeRequest, DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListStreamsRequest,
-    OneLinkGraphEditRequest, SubscribeProjectChangesRequest, TransactRequest,
+    OneLinkGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
+    SubscribeProjectChangesRequest, TransactRequest,
 };
 use crate::control_operation_results::{DiscoverResult, SubscribeProjectChangesResult};
 
@@ -157,6 +160,161 @@ impl ControlOperation for Connect {
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
 }
 
+/// `open_project`: queue the open of a project: its streams are loaded and held with their playback stopped.
+pub struct OpenProject;
+
+impl ControlOperation for OpenProject {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = ProjectStreamActionQueuedToolResult;
+    const METHOD_NAME: &'static str = "open_project";
+    const ONE_LINE_DOC: &'static str =
+        "Queue the open of a project: its streams are loaded and held with their playback stopped.";
+    const AGENT_USAGE_NOTE: &'static str = "Open the project in `project_directory`: queue its open on its own stream action queue and answer at once with the action's id as `action`. The open reads its `tatolab-project.json` and each stream asset's graph document, makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — then loads each stream under its stream id, `<project>-<stream>-<hash>`, the hash over the project's UUID and the stream asset's UUID, and holds it with its playback stopped, recording each stream stopped or failed: a graph document that does not load, or a load that is refused, with its reason, and a `.venv` uv cannot make — uv's own words — failing every stream of the project. It starts no node. Once it is done, `graph`, every graph edit and the node catalog answer for each stream, and `start_playback` plays the project. The project stays open, held stopped or playing, across the runtime's restarts until `close_project`. It opens a project that was never opened, one `close_project` closed, and one whose every stream failed, retrying them. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or holds no `tatolab-project.json` fails the action, never the call. Refused, with nothing queued: a `project_directory` that is not absolute, and a project open once its queued actions run, which `reload_project` refreshes.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `reload_project`: queue a soft reload of an open project from disk, keeping its playback.
+pub struct ReloadProject;
+
+impl ControlOperation for ReloadProject {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = ProjectStreamActionQueuedToolResult;
+    const METHOD_NAME: &'static str = "reload_project";
+    const ONE_LINE_DOC: &'static str =
+        "Queue a soft reload of an open project from disk, keeping its playback.";
+    const AGENT_USAGE_NOTE: &'static str = "Softly reload the open project in `project_directory` from disk: queue the load on its stream action queue and answer at once with the action's id as `action`. It re-reads every stream asset's graph document. While the project's node code — its `.py` files, `pyproject.toml`, `uv.lock` and views' `tatolab_view.json` — is as it was at a stream's load, the stream stays loaded and its graph is brought to its document in place, each node matched by its UUID, so only the nodes and links that changed change; otherwise the stream is loaded again under its same id, keeping its display name. A stream whose graph document is gone is unloaded and forgotten, a failed stream is loaded again, and the project's `.venv` is synced only when its dependency files changed or its `.venv/bin/python` does not run. The project keeps its playback: a playing project's streams start playing, a paused one's start paused, and a stopped one's are held stopped. `tatolab dev` asks for it on each save. A hard reload is `close_project` then `open_project`. Follow it as `open_project`'s open. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open, which `open_project` opens.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `close_project`: queue the close of an open project: its streams are unloaded and stay closed until it is opened.
+pub struct CloseProject;
+
+impl ControlOperation for CloseProject {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = ProjectStreamActionQueuedToolResult;
+    const METHOD_NAME: &'static str = "close_project";
+    const ONE_LINE_DOC: &'static str = "Queue the close of an open project: its streams are unloaded and stay closed until it is opened.";
+    const AGENT_USAGE_NOTE: &'static str = "Close the open project in `project_directory`: queue the close on its stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, it ends the playback of every stream of the project, unloads each, forgets its function-node state, and records each closed, so the runtime leaves the project unloaded across its restarts until `open_project` opens it again. It deletes nothing: the project's files, its `.venv` and what uv synced into it stay. Its streams are `stopping` in `list_streams` until it ends, then `closed`; follow it with `describe_stream_action`. Each recorded stream carries the close on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open once its queued actions run.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `remove_project`: queue the removal of a project from the runtime: its streams are stopped and their records forgotten.
+pub struct RemoveProject;
+
+impl ControlOperation for RemoveProject {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = RemoveProjectToolResult;
+    const METHOD_NAME: &'static str = "remove_project";
+    const ONE_LINE_DOC: &'static str = "Queue the removal of a project from the runtime: its streams are stopped and their records forgotten.";
+    const AGENT_USAGE_NOTE: &'static str = "Queue the removal of the whole project in `project_directory` on its stream action queue and answer at once with the action's id as `action`: once the project's earlier actions have run, it unloads every loaded stream of the project and forgets every record of it, so the runtime no longer re-loads any of them, and deletes no file. `delete_asset` on a stream asset unloads and forgets that one stream. The project's streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute, and a project the runtime holds no stream of.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `start_playback`: queue the start of an open project's playback.
+pub struct StartPlayback;
+
+impl ControlOperation for StartPlayback {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = ProjectStreamActionQueuedToolResult;
+    const METHOD_NAME: &'static str = "start_playback";
+    const ONE_LINE_DOC: &'static str = "Queue the start of an open project's playback.";
+    const AGENT_USAGE_NOTE: &'static str = "Start the playback of the open project in `project_directory`: queue it on the project's stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, each stream the project holds stopped starts fresh from the graph it holds, edits made while stopped included, reading no graph document and making no `.venv`: every node instance is made anew, so only the state a node persists itself carries over from an earlier playback. Each stream is recorded running, so the runtime plays the project again across its restarts until `stop_playback`. A project plays or stops as a whole: no tool plays or stops one of its streams. Follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute; a project that is not open, which `open_project` opens; a paused project, which `resume_playback` resumes; and a project that plays once its queued actions run, which `stop_playback` stops.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `stop_playback`: queue the stop of a project's playback, its streams staying loaded.
+pub struct StopPlayback;
+
+impl ControlOperation for StopPlayback {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = ProjectStreamActionQueuedToolResult;
+    const METHOD_NAME: &'static str = "stop_playback";
+    const ONE_LINE_DOC: &'static str =
+        "Queue the stop of a project's playback, its streams staying loaded.";
+    const AGENT_USAGE_NOTE: &'static str = "Stop the playback of the whole project in `project_directory`: queue the stop on its stream action queue and answer at once with the action's id as `action` beside the `project_directory`. Once the project's earlier actions have run, it ends the playback of every loaded stream of the project — every processor instance, device claim, function-node state and the clock torn down — keeps each stream's graph loaded, so `graph`, every graph edit and the node catalog still answer for it, and records each stopped, so the runtime holds the project open and stopped across its restarts until `start_playback` plays it again from the graph it holds. Its streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Each recorded stream carries the stop on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, a project whose removal is queued, and a project none of whose streams plays once the actions queued before it run.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `pause_playback`: pause a playing project's playback at once.
+pub struct PausePlayback;
+
+impl ControlOperation for PausePlayback {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = PausePlaybackToolResult;
+    const METHOD_NAME: &'static str = "pause_playback";
+    const ONE_LINE_DOC: &'static str = "Pause a playing project's playback at once.";
+    const AGENT_USAGE_NOTE: &'static str = "Pause the playback of the whole project in `project_directory` at once, never waiting behind an action on its queue, and answer the `project_directory` and, as `streams`, the id of each loaded stream this call paused. Every processor of each loaded stream holds its state and processes nothing, and a scaled or stepped stream clock holds where it stands, opening no step, while a real-time clock is the machine's own and runs on; the streams stay loaded and are `paused` in `list_streams`, and a graph edit made meanwhile is applied and compiles on `resume_playback`. The project stays paused until `resume_playback`, `stop_playback`, `close_project` or `remove_project`: a stream a `reload_project` loads meanwhile, the one `tatolab dev` asks for on a save among them, starts paused. Pause is recorded, so a runtime restart re-loads the project paused. Pausing a paused project pauses nothing more. Refused: a `project_directory` that is not absolute, and a project none of whose streams plays — none loaded, or each held stopped, which `start_playback` plays — and whose last action queued is not a `start_playback`.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `resume_playback`: resume a paused project's playback at once.
+pub struct ResumePlayback;
+
+impl ControlOperation for ResumePlayback {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = ResumePlaybackToolResult;
+    const METHOD_NAME: &'static str = "resume_playback";
+    const ONE_LINE_DOC: &'static str = "Resume a paused project's playback at once.";
+    const AGENT_USAGE_NOTE: &'static str = "Resume the paused playback of the project in `project_directory` at once and answer the `project_directory` and, as `streams`, the id of each stream this call resumed: every processor carries on from the state it held, each held stream clock carries on from the stream time it was held at, and each stream compiles the graph edits made while it was paused, a compile that fails logged in the project's `logs` as a live edit's is. Refused: a `project_directory` that is not absolute, and a project that is not paused.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `describe_stream_action`: describe one stream action by its id: its state, its step and each stream it reached.
+pub struct DescribeStreamAction;
+
+impl ControlOperation for DescribeStreamAction {
+    type Request = OneStreamActionRequest;
+    type Result = DescribeStreamActionToolResult;
+    const METHOD_NAME: &'static str = "describe_stream_action";
+    const ONE_LINE_DOC: &'static str =
+        "Describe one stream action by its id: its state, its step and each stream it reached.";
+    const AGENT_USAGE_NOTE: &'static str = "Describe the stream action `action`: its project, `kind` (`open`, `load`, `start_playback`, `stop`, `close`, `remove`, `delete` or `reload_at_start`), `state` — `queued` behind the project's earlier actions, `in_progress` on its `step` (`reading_the_graph_documents`, `making_the_venv`, `starting`), `done`, `failed` with `failed_because`, or `cancelled` by `cancel_stream_action` — its `venv_sync`, what its latest uv sync of the project's `.venv` has done, read from uv's own lines from the moment uv starts and kept once it ends, `null` for an action that has not synced: its `phase` (`resolving`, `downloading`, `building`, `installing`, `installed`), `packages_resolved`, `packages_prepared` and `packages_installed` as uv counts them, `downloads_started` and `downloads_done` of the downloads uv names — only those over about a MiB — and under `packages` each package uv named, first named first, by `name`, `version` once uv names it, `kind` (`distribution` or `python_interpreter`), `state` (`downloading`, `downloaded`, `building`, `built`, `installed`, `uninstalled`) and `download_size_bytes` as uv states it; uv names no byte of a download as it arrives — and `streams`, each stream its project's graph documents named by `stream` id and `display_name`, with its `state` `running`, `stopped` or `failed` once the action took it in. Followed live as the resource `streamlib://stream-action/<action>`, which a `subscriptions/listen` naming it is sent `notifications/resources/updated` for each time the action changes. The runtime holds every queued and running action and the last 64 finished ones of each project; an older one is refused, its records still in the project's `logs`.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Stream;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `cancel_stream_action`: cancel one stream action that is still queued or under way.
+pub struct CancelStreamAction;
+
+impl ControlOperation for CancelStreamAction {
+    type Request = OneStreamActionRequest;
+    type Result = CancelStreamActionToolResult;
+    const METHOD_NAME: &'static str = "cancel_stream_action";
+    const ONE_LINE_DOC: &'static str =
+        "Cancel one stream action that is still queued or under way.";
+    const AGENT_USAGE_NOTE: &'static str = "Cancel the stream action `action`, the only way an action ends early; nothing replaces or edits a queued one. A queued action is dropped from its project's queue, its pending mark taken off each stream's record so the record stays as it was, and answers `cancelled`. A running `open`, `load` or `reload_at_start` answers `in_progress` and stops at the step it is on — a running uv sync is killed and a half-made `.venv` removed — then ends `cancelled`: a stream it was loading is recorded failed, and the streams it had not reached stay as recorded. Refused for a running `stop`, `close` or `remove`, whose unload has begun and cannot be cut short, which ends `done`; for an action already finished; and for one the runtime does not hold.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Stream;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
 /// Every operation the registry holds, in the order the contract file lists them.
 pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<Discover>(),
@@ -167,6 +325,16 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<Transact>(),
     ControlOperationDeclaration::of::<AddNode>(),
     ControlOperationDeclaration::of::<Connect>(),
+    ControlOperationDeclaration::of::<OpenProject>(),
+    ControlOperationDeclaration::of::<ReloadProject>(),
+    ControlOperationDeclaration::of::<CloseProject>(),
+    ControlOperationDeclaration::of::<RemoveProject>(),
+    ControlOperationDeclaration::of::<StartPlayback>(),
+    ControlOperationDeclaration::of::<StopPlayback>(),
+    ControlOperationDeclaration::of::<PausePlayback>(),
+    ControlOperationDeclaration::of::<ResumePlayback>(),
+    ControlOperationDeclaration::of::<DescribeStreamAction>(),
+    ControlOperationDeclaration::of::<CancelStreamAction>(),
 ];
 
 /// One call of a registered operation with its parsed params; a dispatcher matches on it
@@ -189,6 +357,26 @@ pub enum ControlOperationCall {
     AddNode(AddNodeRequest),
     /// A `connect` call.
     Connect(OneLinkGraphEditRequest),
+    /// An `open_project` call.
+    OpenProject(OneProjectByItsDirectoryRequest),
+    /// A `reload_project` call.
+    ReloadProject(OneProjectByItsDirectoryRequest),
+    /// A `close_project` call.
+    CloseProject(OneProjectByItsDirectoryRequest),
+    /// A `remove_project` call.
+    RemoveProject(OneProjectByItsDirectoryRequest),
+    /// A `start_playback` call.
+    StartPlayback(OneProjectByItsDirectoryRequest),
+    /// A `stop_playback` call.
+    StopPlayback(OneProjectByItsDirectoryRequest),
+    /// A `pause_playback` call.
+    PausePlayback(OneProjectByItsDirectoryRequest),
+    /// A `resume_playback` call.
+    ResumePlayback(OneProjectByItsDirectoryRequest),
+    /// A `describe_stream_action` call.
+    DescribeStreamAction(OneStreamActionRequest),
+    /// A `cancel_stream_action` call.
+    CancelStreamAction(OneStreamActionRequest),
 }
 
 /// Why a method and its params do not make a call.
@@ -249,6 +437,36 @@ impl ControlOperationCall {
             Transact::METHOD_NAME => the_request_of::<Transact>(params).map(Self::Transact),
             AddNode::METHOD_NAME => the_request_of::<AddNode>(params).map(Self::AddNode),
             Connect::METHOD_NAME => the_request_of::<Connect>(params).map(Self::Connect),
+            OpenProject::METHOD_NAME => {
+                the_request_of::<OpenProject>(params).map(Self::OpenProject)
+            }
+            ReloadProject::METHOD_NAME => {
+                the_request_of::<ReloadProject>(params).map(Self::ReloadProject)
+            }
+            CloseProject::METHOD_NAME => {
+                the_request_of::<CloseProject>(params).map(Self::CloseProject)
+            }
+            RemoveProject::METHOD_NAME => {
+                the_request_of::<RemoveProject>(params).map(Self::RemoveProject)
+            }
+            StartPlayback::METHOD_NAME => {
+                the_request_of::<StartPlayback>(params).map(Self::StartPlayback)
+            }
+            StopPlayback::METHOD_NAME => {
+                the_request_of::<StopPlayback>(params).map(Self::StopPlayback)
+            }
+            PausePlayback::METHOD_NAME => {
+                the_request_of::<PausePlayback>(params).map(Self::PausePlayback)
+            }
+            ResumePlayback::METHOD_NAME => {
+                the_request_of::<ResumePlayback>(params).map(Self::ResumePlayback)
+            }
+            DescribeStreamAction::METHOD_NAME => {
+                the_request_of::<DescribeStreamAction>(params).map(Self::DescribeStreamAction)
+            }
+            CancelStreamAction::METHOD_NAME => {
+                the_request_of::<CancelStreamAction>(params).map(Self::CancelStreamAction)
+            }
             unknown => Err(ControlOperationCallParseRefusal::NoSuchMethod {
                 method_name: unknown.to_owned(),
             }),
@@ -266,6 +484,16 @@ impl ControlOperationCall {
             Self::Transact(_) => Transact::METHOD_NAME,
             Self::AddNode(_) => AddNode::METHOD_NAME,
             Self::Connect(_) => Connect::METHOD_NAME,
+            Self::OpenProject(_) => OpenProject::METHOD_NAME,
+            Self::ReloadProject(_) => ReloadProject::METHOD_NAME,
+            Self::CloseProject(_) => CloseProject::METHOD_NAME,
+            Self::RemoveProject(_) => RemoveProject::METHOD_NAME,
+            Self::StartPlayback(_) => StartPlayback::METHOD_NAME,
+            Self::StopPlayback(_) => StopPlayback::METHOD_NAME,
+            Self::PausePlayback(_) => PausePlayback::METHOD_NAME,
+            Self::ResumePlayback(_) => ResumePlayback::METHOD_NAME,
+            Self::DescribeStreamAction(_) => DescribeStreamAction::METHOD_NAME,
+            Self::CancelStreamAction(_) => CancelStreamAction::METHOD_NAME,
         }
     }
 }
@@ -353,6 +581,46 @@ mod tests {
                     "source": { "node": "a", "port": "video" },
                     "target": { "node": "b", "port": "video" }
                 }),
+            ),
+            (
+                "open_project",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "reload_project",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "close_project",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "remove_project",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "start_playback",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "stop_playback",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "pause_playback",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "resume_playback",
+                serde_json::json!({ "project_directory": "/projects/rig" }),
+            ),
+            (
+                "describe_stream_action",
+                serde_json::json!({ "action": "A1" }),
+            ),
+            (
+                "cancel_stream_action",
+                serde_json::json!({ "action": "A1" }),
             ),
         ];
         let registered: BTreeSet<&str> = CONTROL_OPERATIONS

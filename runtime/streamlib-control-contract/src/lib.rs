@@ -29,14 +29,17 @@ pub use control_operation_requests::{
     AUTHOR_ARGUMENT_DESCRIPTION, AddNodeRequest, DescribeRuntimeRequest, DiscoverRequest,
     GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION, GRAPH_STREAM_ARGUMENT_DESCRIPTION, GraphEditMode,
     GraphRequest, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, ListStreamsRequest,
-    OneLinkGraphEditRequest, ProjectTransactionAuthorArgument,
-    ProjectTransactionAuthorKindArgument, SubscribeProjectChangesRequest, TransactRequest,
+    OneLinkGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
+    PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, ProjectTransactionAuthorArgument,
+    ProjectTransactionAuthorKindArgument, STREAM_ACTION_ARGUMENT_DESCRIPTION,
+    SubscribeProjectChangesRequest, TransactRequest,
 };
 pub use control_operation_results::{
     ControlContractVersionMismatch, DiscoverResult, SubscribeProjectChangesResult,
 };
 pub use control_operations::{
-    AddNode, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, Connect, ControlOperationCall,
-    ControlOperationCallParseRefusal, DescribeRuntime, Discover, Graph, ListStreams,
-    SubscribeProjectChanges, Transact,
+    AddNode, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, CancelStreamAction, CloseProject,
+    Connect, ControlOperationCall, ControlOperationCallParseRefusal, DescribeRuntime,
+    DescribeStreamAction, Discover, Graph, ListStreams, OpenProject, PausePlayback, ReloadProject,
+    RemoveProject, ResumePlayback, StartPlayback, StopPlayback, SubscribeProjectChanges, Transact,
 };

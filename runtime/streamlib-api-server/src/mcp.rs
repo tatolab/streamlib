@@ -53,23 +53,24 @@ use serde_json::Value;
 use streamlib::sdk::error::{Error, Result as StreamlibResult};
 use streamlib::sdk::runtime::{
     CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, OutputPortViewerHeldOpen,
-    ProjectOpenOrReloadRequest, ProjectVenvSyncPackage, ProjectVenvSyncPackageKind,
-    ProjectVenvSyncPackageState, ProjectVenvSyncPhase, ProjectVenvSyncProgress, RuntimeOperations,
-    StreamAction, StreamActionKind, StreamActionState,
+    ProjectVenvSyncPackage, ProjectVenvSyncPackageKind, ProjectVenvSyncPackageState,
+    ProjectVenvSyncPhase, ProjectVenvSyncProgress, RuntimeOperations, StreamAction,
+    StreamActionKind, StreamActionState,
 };
 use streamlib_control_contract::{
-    ControlOperation, ControlOperationCall, DescribeRuntime, DescribeRuntimeRequest, Graph,
-    GraphRequest, ListStreams, ListStreamsRequest,
+    CancelStreamAction, CloseProject, ControlOperation, ControlOperationCall, DescribeRuntime,
+    DescribeRuntimeRequest, DescribeStreamAction, Graph, GraphRequest, ListStreams,
+    ListStreamsRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest, OpenProject,
+    PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, PausePlayback, ReloadProject, RemoveProject,
+    ResumePlayback, StartPlayback, StopPlayback,
 };
 use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CancelStreamActionToolResult, CloseViewerToolResult, CreateProjectToolResult,
-    DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, LogsToolResult,
-    OpenViewerToolResult, PausePlaybackToolResult, ProjectStreamActionQueuedToolResult,
+    CloseViewerToolResult, CreateProjectToolResult, DescribeStreamActionToolResult,
+    DescribeStreamActionToolResultStream, LogsToolResult, OpenViewerToolResult,
     ProjectVenvSyncOnTheWire, ProjectVenvSyncPackageKindOnTheWire, ProjectVenvSyncPackageOnTheWire,
-    ProjectVenvSyncPackageStateOnTheWire, ProjectVenvSyncPhaseOnTheWire, RemoveProjectToolResult,
-    ResumePlaybackToolResult, SetStreamClockScaleToolResult, StreamActionKindOnTheWire,
-    StreamActionStateOnTheWire,
+    ProjectVenvSyncPackageStateOnTheWire, ProjectVenvSyncPhaseOnTheWire,
+    SetStreamClockScaleToolResult, StreamActionKindOnTheWire, StreamActionStateOnTheWire,
 };
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
@@ -112,9 +113,6 @@ const MAX_LOGS_RECORD_COUNT: u32 = 4096;
 
 /// What every required `stream` argument says.
 const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
-
-/// What every `project_directory` argument naming one project says.
-const PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str = "The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.";
 
 /// What `graph`'s optional `stream` argument says.
 /// What a stream action's `stream` argument says.
@@ -297,6 +295,24 @@ impl LocalApiMcpServerHandler {
             Ok(ControlOperationAnswer::GraphTransaction(result)) => {
                 serialized_tool_result(tool_name, &result)
             }
+            Ok(ControlOperationAnswer::ProjectStreamActionQueued(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::RemoveProject(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::PausePlayback(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::ResumePlayback(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::DescribeStreamAction(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::CancelStreamAction(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
             Err(ControlOperationRefusal::RefusedAction(refusal)) => Ok(
                 crate::mcp_stream_graph_tools::a_tool_result_of_the_refusal(*refusal),
             ),
@@ -388,30 +404,6 @@ struct LogsToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct OpenProjectToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct StartPlaybackToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct ReloadProjectToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
 struct CreateProjectToolArguments {
     #[schemars(
         description = "Where to create the project, by absolute path: created when missing, and holding none of the files a new project starts with. Omit it to create the project in a folder named `<adjective>-<noun>`, drawn at random, under `~/streams`."
@@ -423,66 +415,6 @@ struct CreateProjectToolArguments {
     )]
     #[serde(default)]
     sample: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct RemoveProjectToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct DescribeStreamActionToolArguments {
-    #[schemars(
-        description = "The stream action, by the action id a tool that queues one answered."
-    )]
-    action: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct CancelStreamActionToolArguments {
-    #[schemars(
-        description = "The stream action, by the action id a tool that queues one answered."
-    )]
-    action: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct StopPlaybackToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct CloseProjectToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct PausePlaybackToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct ResumePlaybackToolArguments {
-    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
-    project_directory: PathBuf,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -596,78 +528,43 @@ impl LocalApiMcpServerHandler {
         )
     }
 
-    #[tool(
-        description = "Open the project in `project_directory`: queue its open on its own stream action queue and answer at once with the action's id as `action`. The open reads its `tatolab-project.json` and each stream asset's graph document, makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — then loads each stream under its stream id, `<project>-<stream>-<hash>`, the hash over the project's UUID and the stream asset's UUID, and holds it with its playback stopped, recording each stream stopped or failed: a graph document that does not load, or a load that is refused, with its reason, and a `.venv` uv cannot make — uv's own words — failing every stream of the project. It starts no node. Once it is done, `graph`, every graph edit and the node catalog answer for each stream, and `start_playback` plays the project. The project stays open, held stopped or playing, across the runtime's restarts until `close_project`. It opens a project that was never opened, one `close_project` closed, and one whose every stream failed, retrying them. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or holds no `tatolab-project.json` fails the action, never the call. Refused, with nothing queued: a `project_directory` that is not absolute, and a project open once its queued actions run, which `reload_project` refreshes."
-    )]
+    #[tool(description = OpenProject::AGENT_USAGE_NOTE)]
     async fn open_project(
         &self,
-        Parameters(OpenProjectToolArguments { project_directory }): Parameters<
-            OpenProjectToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let queued = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams
-                    .open_project(ProjectOpenOrReloadRequest { project_directory })
-            })
-            .await?;
-        serialized_tool_result(
-            "open_project",
-            &ProjectStreamActionQueuedToolResult {
-                action: queued.action_id,
-                project_directory: queued.project_directory,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::OpenProject(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Start the playback of the open project in `project_directory`: queue it on the project's stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, each stream the project holds stopped starts fresh from the graph it holds, edits made while stopped included, reading no graph document and making no `.venv`: every node instance is made anew, so only the state a node persists itself carries over from an earlier playback. Each stream is recorded running, so the runtime plays the project again across its restarts until `stop_playback`. A project plays or stops as a whole: no tool plays or stops one of its streams. Follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute; a project that is not open, which `open_project` opens; a paused project, which `resume_playback` resumes; and a project that plays once its queued actions run, which `stop_playback` stops."
-    )]
+    #[tool(description = StartPlayback::AGENT_USAGE_NOTE)]
     async fn start_playback(
         &self,
-        Parameters(StartPlaybackToolArguments { project_directory }): Parameters<
-            StartPlaybackToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let queued = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.start_playback(&project_directory)
-            })
-            .await?;
-        serialized_tool_result(
-            "start_playback",
-            &ProjectStreamActionQueuedToolResult {
-                action: queued.action_id,
-                project_directory: queued.project_directory,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::StartPlayback(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Softly reload the open project in `project_directory` from disk: queue the load on its stream action queue and answer at once with the action's id as `action`. It re-reads every stream asset's graph document. While the project's node code — its `.py` files, `pyproject.toml`, `uv.lock` and views' `tatolab_view.json` — is as it was at a stream's load, the stream stays loaded and its graph is brought to its document in place, each node matched by its UUID, so only the nodes and links that changed change; otherwise the stream is loaded again under its same id, keeping its display name. A stream whose graph document is gone is unloaded and forgotten, a failed stream is loaded again, and the project's `.venv` is synced only when its dependency files changed or its `.venv/bin/python` does not run. The project keeps its playback: a playing project's streams start playing, a paused one's start paused, and a stopped one's are held stopped. `tatolab dev` asks for it on each save. A hard reload is `close_project` then `open_project`. Follow it as `open_project`'s open. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open, which `open_project` opens."
-    )]
+    #[tool(description = ReloadProject::AGENT_USAGE_NOTE)]
     async fn reload_project(
         &self,
-        Parameters(ReloadProjectToolArguments { project_directory }): Parameters<
-            ReloadProjectToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let queued = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams
-                    .reload_project(ProjectOpenOrReloadRequest { project_directory })
-            })
-            .await?;
-        serialized_tool_result(
-            "reload_project",
-            &ProjectStreamActionQueuedToolResult {
-                action: queued.action_id,
-                project_directory: queued.project_directory,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::ReloadProject(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
     #[tool(
@@ -714,167 +611,95 @@ impl LocalApiMcpServerHandler {
         )
     }
 
-    #[tool(
-        description = "Describe the stream action `action`: its project, `kind` (`open`, `load`, `start_playback`, `stop`, `close`, `remove`, `delete` or `reload_at_start`), `state` — `queued` behind the project's earlier actions, `in_progress` on its `step` (`reading_the_graph_documents`, `making_the_venv`, `starting`), `done`, `failed` with `failed_because`, or `cancelled` by `cancel_stream_action` — its `venv_sync`, what its latest uv sync of the project's `.venv` has done, read from uv's own lines from the moment uv starts and kept once it ends, `null` for an action that has not synced: its `phase` (`resolving`, `downloading`, `building`, `installing`, `installed`), `packages_resolved`, `packages_prepared` and `packages_installed` as uv counts them, `downloads_started` and `downloads_done` of the downloads uv names — only those over about a MiB — and under `packages` each package uv named, first named first, by `name`, `version` once uv names it, `kind` (`distribution` or `python_interpreter`), `state` (`downloading`, `downloaded`, `building`, `built`, `installed`, `uninstalled`) and `download_size_bytes` as uv states it; uv names no byte of a download as it arrives — and `streams`, each stream its project's graph documents named by `stream` id and `display_name`, with its `state` `running`, `stopped` or `failed` once the action took it in. Followed live as the resource `streamlib://stream-action/<action>`, which a `subscriptions/listen` naming it is sent `notifications/resources/updated` for each time the action changes. The runtime holds every queued and running action and the last 64 finished ones of each project; an older one is refused, its records still in the project's `logs`."
-    )]
+    #[tool(description = DescribeStreamAction::AGENT_USAGE_NOTE)]
     async fn describe_stream_action(
         &self,
-        Parameters(DescribeStreamActionToolArguments { action }): Parameters<
-            DescribeStreamActionToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneStreamActionRequest>,
     ) -> ToolCallAnswer {
-        let stream_action = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.describe_stream_action(&action)
-            })
-            .await?;
-        serialized_tool_result(
-            "describe_stream_action",
-            &describe_stream_action_tool_result_of(stream_action),
+        self.a_dispatched_control_operation(
+            ControlOperationCall::DescribeStreamAction(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Cancel the stream action `action`, the only way an action ends early; nothing replaces or edits a queued one. A queued action is dropped from its project's queue, its pending mark taken off each stream's record so the record stays as it was, and answers `cancelled`. A running `open`, `load` or `reload_at_start` answers `in_progress` and stops at the step it is on — a running uv sync is killed and a half-made `.venv` removed — then ends `cancelled`: a stream it was loading is recorded failed, and the streams it had not reached stay as recorded. Refused for a running `stop`, `close` or `remove`, whose unload has begun and cannot be cut short, which ends `done`; for an action already finished; and for one the runtime does not hold."
-    )]
+    #[tool(description = CancelStreamAction::AGENT_USAGE_NOTE)]
     async fn cancel_stream_action(
         &self,
-        Parameters(CancelStreamActionToolArguments { action }): Parameters<
-            CancelStreamActionToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneStreamActionRequest>,
     ) -> ToolCallAnswer {
-        let stream_action = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.cancel_stream_action(&action)
-            })
-            .await?;
-        serialized_tool_result(
-            "cancel_stream_action",
-            &CancelStreamActionToolResult {
-                action: stream_action.action_id,
-                state: stream_action_state_on_the_wire(stream_action.state),
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::CancelStreamAction(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Stop the playback of the whole project in `project_directory`: queue the stop on its stream action queue and answer at once with the action's id as `action` beside the `project_directory`. Once the project's earlier actions have run, it ends the playback of every loaded stream of the project — every processor instance, device claim, function-node state and the clock torn down — keeps each stream's graph loaded, so `graph`, every graph edit and the node catalog still answer for it, and records each stopped, so the runtime holds the project open and stopped across its restarts until `start_playback` plays it again from the graph it holds. Its streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Each recorded stream carries the stop on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, a project whose removal is queued, and a project none of whose streams plays once the actions queued before it run."
-    )]
+    #[tool(description = StopPlayback::AGENT_USAGE_NOTE)]
     async fn stop_playback(
         &self,
-        Parameters(StopPlaybackToolArguments { project_directory }): Parameters<
-            StopPlaybackToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let queued = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.stop_playback(&project_directory)
-            })
-            .await?;
-        serialized_tool_result(
-            "stop_playback",
-            &ProjectStreamActionQueuedToolResult {
-                action: queued.action_id,
-                project_directory: queued.project_directory,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::StopPlayback(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Close the open project in `project_directory`: queue the close on its stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, it ends the playback of every stream of the project, unloads each, forgets its function-node state, and records each closed, so the runtime leaves the project unloaded across its restarts until `open_project` opens it again. It deletes nothing: the project's files, its `.venv` and what uv synced into it stay. Its streams are `stopping` in `list_streams` until it ends, then `closed`; follow it with `describe_stream_action`. Each recorded stream carries the close on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open once its queued actions run."
-    )]
+    #[tool(description = CloseProject::AGENT_USAGE_NOTE)]
     async fn close_project(
         &self,
-        Parameters(CloseProjectToolArguments { project_directory }): Parameters<
-            CloseProjectToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let queued = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.close_project(&project_directory)
-            })
-            .await?;
-        serialized_tool_result(
-            "close_project",
-            &ProjectStreamActionQueuedToolResult {
-                action: queued.action_id,
-                project_directory: queued.project_directory,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::CloseProject(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Pause the playback of the whole project in `project_directory` at once, never waiting behind an action on its queue, and answer the `project_directory` and, as `streams`, the id of each loaded stream this call paused. Every processor of each loaded stream holds its state and processes nothing, and a scaled or stepped stream clock holds where it stands, opening no step, while a real-time clock is the machine's own and runs on; the streams stay loaded and are `paused` in `list_streams`, and a graph edit made meanwhile is applied and compiles on `resume_playback`. The project stays paused until `resume_playback`, `stop_playback`, `close_project` or `remove_project`: a stream a `reload_project` loads meanwhile, the one `tatolab dev` asks for on a save among them, starts paused. Pause is recorded, so a runtime restart re-loads the project paused. Pausing a paused project pauses nothing more. Refused: a `project_directory` that is not absolute, and a project none of whose streams plays — none loaded, or each held stopped, which `start_playback` plays — and whose last action queued is not a `start_playback`."
-    )]
+    #[tool(description = PausePlayback::AGENT_USAGE_NOTE)]
     async fn pause_playback(
         &self,
-        Parameters(PausePlaybackToolArguments { project_directory }): Parameters<
-            PausePlaybackToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let paused = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.pause_playback(&project_directory)
-            })
-            .await?;
-        serialized_tool_result(
-            "pause_playback",
-            &PausePlaybackToolResult {
-                project_directory: paused.project_directory,
-                streams: paused.stream_ids,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::PausePlayback(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Resume the paused playback of the project in `project_directory` at once and answer the `project_directory` and, as `streams`, the id of each stream this call resumed: every processor carries on from the state it held, each held stream clock carries on from the stream time it was held at, and each stream compiles the graph edits made while it was paused, a compile that fails logged in the project's `logs` as a live edit's is. Refused: a `project_directory` that is not absolute, and a project that is not paused."
-    )]
+    #[tool(description = ResumePlayback::AGENT_USAGE_NOTE)]
     async fn resume_playback(
         &self,
-        Parameters(ResumePlaybackToolArguments { project_directory }): Parameters<
-            ResumePlaybackToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let resumed = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.resume_playback(&project_directory)
-            })
-            .await?;
-        serialized_tool_result(
-            "resume_playback",
-            &ResumePlaybackToolResult {
-                project_directory: resumed.project_directory,
-                streams: resumed.stream_ids,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::ResumePlayback(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
-    #[tool(
-        description = "Queue the removal of the whole project in `project_directory` on its stream action queue and answer at once with the action's id as `action`: once the project's earlier actions have run, it unloads every loaded stream of the project and forgets every record of it, so the runtime no longer re-loads any of them, and deletes no file. `delete_asset` on a stream asset unloads and forgets that one stream. The project's streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute, and a project the runtime holds no stream of."
-    )]
+    #[tool(description = RemoveProject::AGENT_USAGE_NOTE)]
     async fn remove_project(
         &self,
-        Parameters(RemoveProjectToolArguments { project_directory }): Parameters<
-            RemoveProjectToolArguments,
-        >,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
     ) -> ToolCallAnswer {
-        refuse_a_relative_project_directory(&project_directory)?;
-        let queued = self
-            .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.remove_project(&project_directory)
-            })
-            .await?;
-        serialized_tool_result(
-            "remove_project",
-            &RemoveProjectToolResult {
-                action: queued.action_id,
-                project_directory: queued.project_directory,
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::RemoveProject(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
     #[tool(description = ListStreams::AGENT_USAGE_NOTE)]
@@ -1028,7 +853,9 @@ impl LocalApiMcpServerHandler {
 }
 
 /// A stream action's state as the local API spells it.
-fn stream_action_state_on_the_wire(state: StreamActionState) -> StreamActionStateOnTheWire {
+pub(crate) fn stream_action_state_on_the_wire(
+    state: StreamActionState,
+) -> StreamActionStateOnTheWire {
     match state {
         StreamActionState::Queued => StreamActionStateOnTheWire::Queued,
         StreamActionState::InProgress => StreamActionStateOnTheWire::InProgress,
@@ -1131,7 +958,9 @@ pub(crate) fn describe_stream_action_tool_result_of(
 
 /// Refuses a `project_directory` that is not absolute, since the runtime cannot see the caller's
 /// working directory.
-fn refuse_a_relative_project_directory(project_directory: &std::path::Path) -> Result<(), String> {
+pub(crate) fn refuse_a_relative_project_directory(
+    project_directory: &std::path::Path,
+) -> Result<(), String> {
     if project_directory.is_absolute() {
         return Ok(());
     }

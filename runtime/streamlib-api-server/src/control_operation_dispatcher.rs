@@ -5,32 +5,40 @@
 //! and answers its result or its refusal, holding no adapter's wire shape.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::Value;
 use streamlib::sdk::error::PrivacyGatedCaptureDevice;
 use streamlib::sdk::runtime::{
-    OperationsOnTheStreamsLoadedInThisRuntime, StreamActionStep, StreamListingState, StreamLocation,
+    OperationsOnTheStreamsLoadedInThisRuntime, ProjectOpenOrReloadRequest, StreamActionQueued,
+    StreamActionStep, StreamListingState, StreamLocation,
 };
 use streamlib_control_contract::{
     AddNodeRequest, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, ControlContractVersionMismatch,
     ControlOperationCall, DescribeRuntimeRequest, DiscoverRequest, DiscoverResult, GraphEditMode,
-    GraphRequest, ListStreamsRequest, OneLinkGraphEditRequest, ProjectTransactionAuthorArgument,
-    ProjectTransactionAuthorKindArgument, SubscribeProjectChangesRequest,
-    SubscribeProjectChangesResult, TransactRequest,
+    GraphRequest, ListStreamsRequest, OneLinkGraphEditRequest, OneProjectByItsDirectoryRequest,
+    OneStreamActionRequest, ProjectTransactionAuthorArgument, ProjectTransactionAuthorKindArgument,
+    SubscribeProjectChangesRequest, SubscribeProjectChangesResult, TransactRequest,
 };
 use streamlib_project_repository::{
     ProjectRepositoriesOpenInThisRuntime, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
     StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET, CaptureDeviceOnTheWire,
-    DescribeRuntimeToolResult, GraphTransactionToolResult, ListStreamsToolResult,
-    ListStreamsToolResultStream, ListedStreamState, ProjectActionRefusalOnTheWire,
+    CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET, CancelStreamActionToolResult,
+    CaptureDeviceOnTheWire, DescribeRuntimeToolResult, DescribeStreamActionToolResult,
+    GraphTransactionToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
+    ListedStreamState, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
+    ProjectStreamActionQueuedToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
     StreamActionStepOnTheWire, StreamLocationOnTheWire,
 };
 use uuid::Uuid;
 
+use crate::mcp::{
+    describe_stream_action_tool_result_of, refuse_a_relative_project_directory,
+    stream_action_state_on_the_wire,
+};
 use crate::mcp_project_asset_tools::the_idempotency_key_a_caller_sent;
 use crate::mcp_project_change_feed::{
     ProjectActionTheRuntimeRefused, ProjectActionsRefusedSinceTheRuntimeStarted,
@@ -91,6 +99,18 @@ pub(crate) enum ControlOperationAnswer {
     Graph(Value),
     /// A graph edit's: the transaction it applied.
     GraphTransaction(GraphTransactionToolResult),
+    /// A queued project stream action's: its id and its project.
+    ProjectStreamActionQueued(ProjectStreamActionQueuedToolResult),
+    /// `remove_project`'s.
+    RemoveProject(RemoveProjectToolResult),
+    /// `pause_playback`'s.
+    PausePlayback(PausePlaybackToolResult),
+    /// `resume_playback`'s.
+    ResumePlayback(ResumePlaybackToolResult),
+    /// `describe_stream_action`'s.
+    DescribeStreamAction(DescribeStreamActionToolResult),
+    /// `cancel_stream_action`'s.
+    CancelStreamAction(CancelStreamActionToolResult),
 }
 
 /// Why a registered operation answered no result.
@@ -213,7 +233,213 @@ impl ControlOperationDispatcher {
                 )
                 .await
                 .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::OpenProject(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => self
+                .a_project_stream_action_queued_by(
+                    project_directory,
+                    |operations_on_the_loaded_streams, project_directory| {
+                        operations_on_the_loaded_streams
+                            .open_project(ProjectOpenOrReloadRequest { project_directory })
+                    },
+                )
+                .await
+                .map(|queued| {
+                    ControlOperationAnswer::ProjectStreamActionQueued(
+                        ProjectStreamActionQueuedToolResult {
+                            action: queued.action_id,
+                            project_directory: queued.project_directory,
+                        },
+                    )
+                }),
+            ControlOperationCall::ReloadProject(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => self
+                .a_project_stream_action_queued_by(
+                    project_directory,
+                    |operations_on_the_loaded_streams, project_directory| {
+                        operations_on_the_loaded_streams
+                            .reload_project(ProjectOpenOrReloadRequest { project_directory })
+                    },
+                )
+                .await
+                .map(|queued| {
+                    ControlOperationAnswer::ProjectStreamActionQueued(
+                        ProjectStreamActionQueuedToolResult {
+                            action: queued.action_id,
+                            project_directory: queued.project_directory,
+                        },
+                    )
+                }),
+            ControlOperationCall::CloseProject(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => self
+                .a_project_stream_action_queued_by(
+                    project_directory,
+                    |operations_on_the_loaded_streams, project_directory| {
+                        operations_on_the_loaded_streams.close_project(&project_directory)
+                    },
+                )
+                .await
+                .map(|queued| {
+                    ControlOperationAnswer::ProjectStreamActionQueued(
+                        ProjectStreamActionQueuedToolResult {
+                            action: queued.action_id,
+                            project_directory: queued.project_directory,
+                        },
+                    )
+                }),
+            ControlOperationCall::StartPlayback(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => self
+                .a_project_stream_action_queued_by(
+                    project_directory,
+                    |operations_on_the_loaded_streams, project_directory| {
+                        operations_on_the_loaded_streams.start_playback(&project_directory)
+                    },
+                )
+                .await
+                .map(|queued| {
+                    ControlOperationAnswer::ProjectStreamActionQueued(
+                        ProjectStreamActionQueuedToolResult {
+                            action: queued.action_id,
+                            project_directory: queued.project_directory,
+                        },
+                    )
+                }),
+            ControlOperationCall::StopPlayback(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => self
+                .a_project_stream_action_queued_by(
+                    project_directory,
+                    |operations_on_the_loaded_streams, project_directory| {
+                        operations_on_the_loaded_streams.stop_playback(&project_directory)
+                    },
+                )
+                .await
+                .map(|queued| {
+                    ControlOperationAnswer::ProjectStreamActionQueued(
+                        ProjectStreamActionQueuedToolResult {
+                            action: queued.action_id,
+                            project_directory: queued.project_directory,
+                        },
+                    )
+                }),
+            ControlOperationCall::RemoveProject(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => self
+                .a_project_stream_action_queued_by(
+                    project_directory,
+                    |operations_on_the_loaded_streams, project_directory| {
+                        operations_on_the_loaded_streams.remove_project(&project_directory)
+                    },
+                )
+                .await
+                .map(|queued| {
+                    ControlOperationAnswer::RemoveProject(RemoveProjectToolResult {
+                        action: queued.action_id,
+                        project_directory: queued.project_directory,
+                    })
+                }),
+            ControlOperationCall::PausePlayback(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => {
+                refuse_a_relative_project_directory(&project_directory)
+                    .map_err(ControlOperationRefusal::Failed)?;
+                self.a_stream_action_off_the_async_runtime(
+                    move |operations_on_the_loaded_streams| {
+                        operations_on_the_loaded_streams.pause_playback(&project_directory)
+                    },
+                )
+                .await
+                .map(|paused| {
+                    ControlOperationAnswer::PausePlayback(PausePlaybackToolResult {
+                        project_directory: paused.project_directory,
+                        streams: paused.stream_ids,
+                    })
+                })
+            }
+            ControlOperationCall::ResumePlayback(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => {
+                refuse_a_relative_project_directory(&project_directory)
+                    .map_err(ControlOperationRefusal::Failed)?;
+                self.a_stream_action_off_the_async_runtime(
+                    move |operations_on_the_loaded_streams| {
+                        operations_on_the_loaded_streams.resume_playback(&project_directory)
+                    },
+                )
+                .await
+                .map(|resumed| {
+                    ControlOperationAnswer::ResumePlayback(ResumePlaybackToolResult {
+                        project_directory: resumed.project_directory,
+                        streams: resumed.stream_ids,
+                    })
+                })
+            }
+            ControlOperationCall::DescribeStreamAction(OneStreamActionRequest { action }) => self
+                .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+                    operations_on_the_loaded_streams.describe_stream_action(&action)
+                })
+                .await
+                .map(|stream_action| {
+                    ControlOperationAnswer::DescribeStreamAction(
+                        describe_stream_action_tool_result_of(stream_action),
+                    )
+                }),
+            ControlOperationCall::CancelStreamAction(OneStreamActionRequest { action }) => self
+                .a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+                    operations_on_the_loaded_streams.cancel_stream_action(&action)
+                })
+                .await
+                .map(|stream_action| {
+                    ControlOperationAnswer::CancelStreamAction(CancelStreamActionToolResult {
+                        action: stream_action.action_id,
+                        state: stream_action_state_on_the_wire(stream_action.state),
+                    })
+                }),
         }
+    }
+
+    /// Run the blocking stream action `action` over the runtime's streams on a blocking task; a
+    /// refusal is the engine's own words.
+    pub(crate) async fn a_stream_action_off_the_async_runtime<
+        StreamActionOutcome: Send + 'static,
+    >(
+        &self,
+        action: impl FnOnce(
+            &dyn OperationsOnTheStreamsLoadedInThisRuntime,
+        ) -> streamlib::sdk::error::Result<StreamActionOutcome>
+        + Send
+        + 'static,
+    ) -> Result<StreamActionOutcome, ControlOperationRefusal> {
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        tokio::task::spawn_blocking(move || action(operations_on_the_loaded_streams.as_ref()))
+            .await
+            .map_err(|join_failure| {
+                ControlOperationRefusal::Failed(format!(
+                    "the stream action did not finish: {join_failure}"
+                ))
+            })?
+            .map_err(|refusal| ControlOperationRefusal::Failed(refusal.to_string()))
+    }
+
+    async fn a_project_stream_action_queued_by(
+        &self,
+        project_directory: PathBuf,
+        queue_the_action: impl FnOnce(
+            &dyn OperationsOnTheStreamsLoadedInThisRuntime,
+            PathBuf,
+        ) -> streamlib::sdk::error::Result<StreamActionQueued>
+        + Send
+        + 'static,
+    ) -> Result<StreamActionQueued, ControlOperationRefusal> {
+        refuse_a_relative_project_directory(&project_directory)
+            .map_err(ControlOperationRefusal::Failed)?;
+        self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+            queue_the_action(operations_on_the_loaded_streams, project_directory)
+        })
+        .await
     }
 
     fn discover(

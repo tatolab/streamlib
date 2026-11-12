@@ -919,6 +919,245 @@ export interface OneLinkGraphEditRequest {
 }
 
 /**
+ * The params of an operation on one project, named by its directory.
+ */
+export interface OneProjectByItsDirectoryRequest {
+  /**
+   * The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.
+   */
+  project_directory: string;
+}
+
+/**
+ * The result of `open_project`, `reload_project`, `start_playback`, `stop_playback` and
+ * `close_project`: the stream action each queued on the project's queue.
+ */
+export interface ProjectStreamActionQueuedToolResult {
+  /**
+   * The queued action's id, which `describe_stream_action` and `logs` take.
+   */
+  action: string;
+  /**
+   * The project whose queue holds it, symlinks resolved.
+   */
+  project_directory: string;
+}
+
+/**
+ * The `remove_project` tool's result: the removal of the whole project queued on its queue.
+ */
+export interface RemoveProjectToolResult {
+  /**
+   * The queued removal, as `describe_stream_action` takes it.
+   */
+  action: string;
+  /**
+   * The project whose streams it unloads and forgets, symlinks resolved.
+   */
+  project_directory: string;
+}
+
+/**
+ * The `pause_playback` tool's result: the project's playback paused, at once.
+ */
+export interface PausePlaybackToolResult {
+  /**
+   * The project paused, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The id of each loaded stream of the project this call paused.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * The `resume_playback` tool's result: the project's playback resumed, at once.
+ */
+export interface ResumePlaybackToolResult {
+  /**
+   * The project resumed, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * The id of each paused stream of the project this call resumed.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * The params of an operation on one stream action, named by its id.
+ */
+export interface OneStreamActionRequest {
+  /**
+   * The stream action, by the action id a tool that queues one answered.
+   */
+  action: string;
+}
+
+/**
+ * The `describe_stream_action` tool's result.
+ */
+export interface DescribeStreamActionToolResult {
+  /**
+   * The action's id.
+   */
+  action: string;
+  /**
+   * The project it works on.
+   */
+  project_directory: string;
+  /**
+   * What it does.
+   */
+  kind: StreamActionKindOnTheWire;
+  /**
+   * Where it is in its life.
+   */
+  state: StreamActionStateOnTheWire;
+  /**
+   * The step it is on while `in_progress`; `null` otherwise.
+   */
+  step?: StreamActionStepOnTheWire | null;
+  /**
+   * What its latest `uv sync` of the project's `.venv` has done, from the moment uv starts,
+   * kept once the sync and the action end; `null` for an action that has not synced.
+   */
+  venv_sync?: ProjectVenvSyncOnTheWire | null;
+  /**
+   * The streams it works on, once its project's graph documents named them.
+   */
+  streams: Array<DescribeStreamActionToolResultStream>;
+  /**
+   * Why it failed; `null` unless it did.
+   */
+  failed_because?: string | null;
+}
+
+/**
+ * What a stream action does.
+ */
+export type StreamActionKindOnTheWire = "open" | "load" | "start_playback" | "stop" | "close" | "remove" | "delete" | "reload_at_start";
+
+/**
+ * Where a stream action is in its life.
+ */
+export type StreamActionStateOnTheWire = "queued" | "in_progress" | "done" | "failed" | "cancelled";
+
+/**
+ * What one `uv sync` of a project's `.venv` has done so far, read from uv's own lines: uv
+ * names a sync's downloads, builds and installs one package at a time and no byte of a
+ * download, so a sync is followed by package.
+ */
+export interface ProjectVenvSyncOnTheWire {
+  /**
+   * The phase uv's last line put it in.
+   */
+  phase: ProjectVenvSyncPhaseOnTheWire;
+  /**
+   * How many packages its resolution named, the project's own among them; `null` until it
+   * resolved.
+   */
+  packages_resolved?: number | null;
+  /**
+   * How many packages it downloaded or built before installing; `null` until uv prepared them.
+   */
+  packages_prepared?: number | null;
+  /**
+   * How many packages it installed; `null` until uv installed them.
+   */
+  packages_installed?: number | null;
+  /**
+   * How many of the downloads uv named have started; uv names only a download over its own
+   * size threshold, about a MiB, so a small one shows only in `packages_prepared`.
+   */
+  downloads_started: number;
+  /**
+   * How many of the downloads uv named have ended.
+   */
+  downloads_done: number;
+  /**
+   * Each package uv named by its download, build, install or removal, first named first.
+   */
+  packages: Array<ProjectVenvSyncPackageOnTheWire>;
+}
+
+/**
+ * The phase a project's `uv sync` is in.
+ */
+export type ProjectVenvSyncPhaseOnTheWire = "resolving" | "downloading" | "building" | "installing" | "installed";
+
+/**
+ * One package a `uv sync` named.
+ */
+export interface ProjectVenvSyncPackageOnTheWire {
+  /**
+   * The distribution's name, or the Python build's, as uv writes it.
+   */
+  name: string;
+  /**
+   * The version installed or removed; `null` until uv names it.
+   */
+  version?: string | null;
+  /**
+   * A `distribution` or the `python_interpreter` the venv is made with.
+   */
+  kind: ProjectVenvSyncPackageKindOnTheWire;
+  /**
+   * Where it stands.
+   */
+  state: ProjectVenvSyncPackageStateOnTheWire;
+  /**
+   * The download's size as uv states it, to its one decimal of KiB, MiB or GiB; `null` for a
+   * package uv downloads without naming it or does not download.
+   */
+  download_size_bytes?: number | null;
+}
+
+/**
+ * What a package a `uv sync` names is.
+ */
+export type ProjectVenvSyncPackageKindOnTheWire = "distribution" | "python_interpreter";
+
+/**
+ * Where one package a `uv sync` names stands.
+ */
+export type ProjectVenvSyncPackageStateOnTheWire = "downloading" | "downloaded" | "building" | "built" | "installed" | "uninstalled";
+
+/**
+ * One stream of a [`DescribeStreamActionToolResult`].
+ */
+export interface DescribeStreamActionToolResultStream {
+  /**
+   * The stream's id.
+   */
+  stream: string;
+  /**
+   * The label the stream is shown under.
+   */
+  display_name: string;
+  /**
+   * `running` or `failed` once the action took it in; `null` before.
+   */
+  state?: ListedStreamState | null;
+}
+
+/**
+ * The `cancel_stream_action` tool's result: the action's state once the cancel was taken.
+ */
+export interface CancelStreamActionToolResult {
+  /**
+   * The action's id.
+   */
+  action: string;
+  /**
+   * `cancelled` for an action dropped from its queue; `in_progress` for a running one, which
+   * ends `cancelled` once it stops at the step it is on.
+   */
+  state: StreamActionStateOnTheWire;
+}
+
+/**
  * `project_changed`'s params.
  */
 export interface ProjectChangedNotificationParams {
@@ -1096,6 +1335,116 @@ export interface ControlOperations {
   connect: {
     params: OneLinkGraphEditRequest;
     result: GraphTransactionToolResult;
+  };
+  /**
+   * Queue the open of a project: its streams are loaded and held with their playback stopped.
+   *
+   * Open the project in `project_directory`: queue its open on its own stream action queue and answer at once with the action's id as `action`. The open reads its `tatolab-project.json` and each stream asset's graph document, makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — then loads each stream under its stream id, `<project>-<stream>-<hash>`, the hash over the project's UUID and the stream asset's UUID, and holds it with its playback stopped, recording each stream stopped or failed: a graph document that does not load, or a load that is refused, with its reason, and a `.venv` uv cannot make — uv's own words — failing every stream of the project. It starts no node. Once it is done, `graph`, every graph edit and the node catalog answer for each stream, and `start_playback` plays the project. The project stays open, held stopped or playing, across the runtime's restarts until `close_project`. It opens a project that was never opened, one `close_project` closed, and one whose every stream failed, retrying them. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or holds no `tatolab-project.json` fails the action, never the call. Refused, with nothing queued: a `project_directory` that is not absolute, and a project open once its queued actions run, which `reload_project` refreshes.
+   *
+   * Since contract version 1, stable.
+   */
+  open_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue a soft reload of an open project from disk, keeping its playback.
+   *
+   * Softly reload the open project in `project_directory` from disk: queue the load on its stream action queue and answer at once with the action's id as `action`. It re-reads every stream asset's graph document. While the project's node code — its `.py` files, `pyproject.toml`, `uv.lock` and views' `tatolab_view.json` — is as it was at a stream's load, the stream stays loaded and its graph is brought to its document in place, each node matched by its UUID, so only the nodes and links that changed change; otherwise the stream is loaded again under its same id, keeping its display name. A stream whose graph document is gone is unloaded and forgotten, a failed stream is loaded again, and the project's `.venv` is synced only when its dependency files changed or its `.venv/bin/python` does not run. The project keeps its playback: a playing project's streams start playing, a paused one's start paused, and a stopped one's are held stopped. `tatolab dev` asks for it on each save. A hard reload is `close_project` then `open_project`. Follow it as `open_project`'s open. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open, which `open_project` opens.
+   *
+   * Since contract version 1, stable.
+   */
+  reload_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue the close of an open project: its streams are unloaded and stay closed until it is opened.
+   *
+   * Close the open project in `project_directory`: queue the close on its stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, it ends the playback of every stream of the project, unloads each, forgets its function-node state, and records each closed, so the runtime leaves the project unloaded across its restarts until `open_project` opens it again. It deletes nothing: the project's files, its `.venv` and what uv synced into it stay. Its streams are `stopping` in `list_streams` until it ends, then `closed`; follow it with `describe_stream_action`. Each recorded stream carries the close on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, and a project that is not open once its queued actions run.
+   *
+   * Since contract version 1, stable.
+   */
+  close_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue the removal of a project from the runtime: its streams are stopped and their records forgotten.
+   *
+   * Queue the removal of the whole project in `project_directory` on its stream action queue and answer at once with the action's id as `action`: once the project's earlier actions have run, it unloads every loaded stream of the project and forgets every record of it, so the runtime no longer re-loads any of them, and deletes no file. `delete_asset` on a stream asset unloads and forgets that one stream. The project's streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute, and a project the runtime holds no stream of.
+   *
+   * Since contract version 1, stable.
+   */
+  remove_project: {
+    params: OneProjectByItsDirectoryRequest;
+    result: RemoveProjectToolResult;
+  };
+  /**
+   * Queue the start of an open project's playback.
+   *
+   * Start the playback of the open project in `project_directory`: queue it on the project's stream action queue and answer at once with the action's id as `action`. Once the project's earlier actions have run, each stream the project holds stopped starts fresh from the graph it holds, edits made while stopped included, reading no graph document and making no `.venv`: every node instance is made anew, so only the state a node persists itself carries over from an earlier playback. Each stream is recorded running, so the runtime plays the project again across its restarts until `stop_playback`. A project plays or stops as a whole: no tool plays or stops one of its streams. Follow it with `describe_stream_action`. Refused, with nothing queued: a `project_directory` that is not absolute; a project that is not open, which `open_project` opens; a paused project, which `resume_playback` resumes; and a project that plays once its queued actions run, which `stop_playback` stops.
+   *
+   * Since contract version 1, stable.
+   */
+  start_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Queue the stop of a project's playback, its streams staying loaded.
+   *
+   * Stop the playback of the whole project in `project_directory`: queue the stop on its stream action queue and answer at once with the action's id as `action` beside the `project_directory`. Once the project's earlier actions have run, it ends the playback of every loaded stream of the project — every processor instance, device claim, function-node state and the clock torn down — keeps each stream's graph loaded, so `graph`, every graph edit and the node catalog still answer for it, and records each stopped, so the runtime holds the project open and stopped across its restarts until `start_playback` plays it again from the graph it holds. Its streams are `stopping` in `list_streams` until it ends; follow it with `describe_stream_action`. Each recorded stream carries the stop on its record until it has run, so a runtime crash finishes it at the next start. Refused, with nothing queued: a `project_directory` that is not absolute, a project whose removal is queued, and a project none of whose streams plays once the actions queued before it run.
+   *
+   * Since contract version 1, stable.
+   */
+  stop_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectStreamActionQueuedToolResult;
+  };
+  /**
+   * Pause a playing project's playback at once.
+   *
+   * Pause the playback of the whole project in `project_directory` at once, never waiting behind an action on its queue, and answer the `project_directory` and, as `streams`, the id of each loaded stream this call paused. Every processor of each loaded stream holds its state and processes nothing, and a scaled or stepped stream clock holds where it stands, opening no step, while a real-time clock is the machine's own and runs on; the streams stay loaded and are `paused` in `list_streams`, and a graph edit made meanwhile is applied and compiles on `resume_playback`. The project stays paused until `resume_playback`, `stop_playback`, `close_project` or `remove_project`: a stream a `reload_project` loads meanwhile, the one `tatolab dev` asks for on a save among them, starts paused. Pause is recorded, so a runtime restart re-loads the project paused. Pausing a paused project pauses nothing more. Refused: a `project_directory` that is not absolute, and a project none of whose streams plays — none loaded, or each held stopped, which `start_playback` plays — and whose last action queued is not a `start_playback`.
+   *
+   * Since contract version 1, stable.
+   */
+  pause_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: PausePlaybackToolResult;
+  };
+  /**
+   * Resume a paused project's playback at once.
+   *
+   * Resume the paused playback of the project in `project_directory` at once and answer the `project_directory` and, as `streams`, the id of each stream this call resumed: every processor carries on from the state it held, each held stream clock carries on from the stream time it was held at, and each stream compiles the graph edits made while it was paused, a compile that fails logged in the project's `logs` as a live edit's is. Refused: a `project_directory` that is not absolute, and a project that is not paused.
+   *
+   * Since contract version 1, stable.
+   */
+  resume_playback: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ResumePlaybackToolResult;
+  };
+  /**
+   * Describe one stream action by its id: its state, its step and each stream it reached.
+   *
+   * Describe the stream action `action`: its project, `kind` (`open`, `load`, `start_playback`, `stop`, `close`, `remove`, `delete` or `reload_at_start`), `state` — `queued` behind the project's earlier actions, `in_progress` on its `step` (`reading_the_graph_documents`, `making_the_venv`, `starting`), `done`, `failed` with `failed_because`, or `cancelled` by `cancel_stream_action` — its `venv_sync`, what its latest uv sync of the project's `.venv` has done, read from uv's own lines from the moment uv starts and kept once it ends, `null` for an action that has not synced: its `phase` (`resolving`, `downloading`, `building`, `installing`, `installed`), `packages_resolved`, `packages_prepared` and `packages_installed` as uv counts them, `downloads_started` and `downloads_done` of the downloads uv names — only those over about a MiB — and under `packages` each package uv named, first named first, by `name`, `version` once uv names it, `kind` (`distribution` or `python_interpreter`), `state` (`downloading`, `downloaded`, `building`, `built`, `installed`, `uninstalled`) and `download_size_bytes` as uv states it; uv names no byte of a download as it arrives — and `streams`, each stream its project's graph documents named by `stream` id and `display_name`, with its `state` `running`, `stopped` or `failed` once the action took it in. Followed live as the resource `streamlib://stream-action/<action>`, which a `subscriptions/listen` naming it is sent `notifications/resources/updated` for each time the action changes. The runtime holds every queued and running action and the last 64 finished ones of each project; an older one is refused, its records still in the project's `logs`.
+   *
+   * Since contract version 1, stable.
+   */
+  describe_stream_action: {
+    params: OneStreamActionRequest;
+    result: DescribeStreamActionToolResult;
+  };
+  /**
+   * Cancel one stream action that is still queued or under way.
+   *
+   * Cancel the stream action `action`, the only way an action ends early; nothing replaces or edits a queued one. A queued action is dropped from its project's queue, its pending mark taken off each stream's record so the record stays as it was, and answers `cancelled`. A running `open`, `load` or `reload_at_start` answers `in_progress` and stops at the step it is on — a running uv sync is killed and a half-made `.venv` removed — then ends `cancelled`: a stream it was loading is recorded failed, and the streams it had not reached stay as recorded. Refused for a running `stop`, `close` or `remove`, whose unload has begun and cannot be cut short, which ends `done`; for an action already finished; and for one the runtime does not hold.
+   *
+   * Since contract version 1, stable.
+   */
+  cancel_stream_action: {
+    params: OneStreamActionRequest;
+    result: CancelStreamActionToolResult;
   };
 }
 

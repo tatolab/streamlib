@@ -14,6 +14,16 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "transact",
   "add_node",
   "connect",
+  "open_project",
+  "reload_project",
+  "close_project",
+  "remove_project",
+  "start_playback",
+  "stop_playback",
+  "pause_playback",
+  "resume_playback",
+  "describe_stream_action",
+  "cancel_stream_action",
 ]);
 
 export const CONTROL_JSON_RPC_ROUTE_PATH = "/control";

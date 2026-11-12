@@ -3,6 +3,8 @@
 
 //! The params each registered operation takes, and the argument types several share.
 
+use std::path::PathBuf;
+
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -24,6 +26,13 @@ pub const IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION: &str = "A key the caller mints o
 
 /// What `graph`'s `stream` argument says.
 pub const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose graph to export, by the stream id `list_streams` reports. Omit it for every loaded stream's graph under the machine's name.";
+
+/// What `project_directory` says where it names the project an operation acts on.
+pub const PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str = "The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.";
+
+/// What `action` says where it names a stream action.
+pub const STREAM_ACTION_ARGUMENT_DESCRIPTION: &str =
+    "The stream action, by the action id a tool that queues one answered.";
 
 /// Whether a graph edit is kept.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -201,4 +210,22 @@ pub struct DiscoverRequest {
 pub struct SubscribeProjectChangesRequest {
     /// The projects, by UUID, whose changes the connection is sent; refused when empty.
     pub projects: Vec<Uuid>,
+}
+
+/// The params of an operation on one project, named by its directory.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OneProjectByItsDirectoryRequest {
+    /// The project's directory.
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+}
+
+/// The params of an operation on one stream action, named by its id.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OneStreamActionRequest {
+    /// The stream action's id.
+    #[schemars(description = STREAM_ACTION_ARGUMENT_DESCRIPTION)]
+    pub action: String,
 }
