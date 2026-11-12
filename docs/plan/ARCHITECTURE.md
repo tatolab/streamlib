@@ -1372,7 +1372,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   refuses an unknown key and a TypedDict does not; `Annotated[T, Description("text")]` is a
   description, and neither a bare string nor an attribute docstring is one;
   `Annotated[T, NumberRange(minimum=…, maximum=…)]` on an `int` or `float` key, `Optional` or
-  not, is its inclusive `minimum` / `maximum`, and one on a key holding no number is refused; a class exposing `model_json_schema()` contributes that document minus
+  not, is its inclusive `minimum` / `maximum`, and one on a key holding no number is refused;
+  `Annotated[str, ProjectAssetUuid(media=(…))]` marks a key holding a project asset's UUID with
+  `x-tatolab-project-asset`, `{"media": [...]}` naming the `media_facts` members (`image`,
+  `video`, `audio`, `lut`, `scene`) of which the asset carries one, `{}` taking any asset, so a
+  client offers the project's assets to pick from, and one on a key holding no string is
+  refused (session, 2026-11-11); a class exposing `model_json_schema()` contributes that document minus
   `$schema` and `title`, recognised by the method rather than by importing pydantic; an
   annotation the deriver does not know renders `{}`, a config class of a kind it cannot
   read is accepted with an open schema, and a self-referential class stops at an open

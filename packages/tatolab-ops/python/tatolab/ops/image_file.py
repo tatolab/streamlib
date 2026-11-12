@@ -6,9 +6,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
-from tatolab.stream import ColorInfo, Image, ImageFrameToWrite, NodeOutputTextureRing, Output, node
+from tatolab.stream import (
+    ColorInfo,
+    Image,
+    ImageFrameToWrite,
+    NodeOutputTextureRing,
+    Output,
+    ProjectAssetUuid,
+    node,
+)
 
 #: The texture format an `ImageFile` publishes: 8-bit RGBA, the decode of a PNG or a JPEG.
 IMAGE_FILE_TEXTURE_FORMAT = "rgba8_unorm"
@@ -27,7 +35,7 @@ DECODED_IMAGE_FILE_COLOUR = ColorInfo(
 class ImageFileConfig:
     """Which project image asset an `ImageFile` publishes, by its UUID."""
 
-    asset: str = ""
+    asset: Annotated[str, ProjectAssetUuid(media=("image",))] = ""
 
 
 def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
