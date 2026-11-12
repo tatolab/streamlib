@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.68.74](https://github.com/tatolab/streamlib/compare/v0.68.73...v0.68.74) (2026-11-12)
+
+
+### Features
+
+* **control-contract:** generate the MCP surface from the registry and gate breaking contract changes ([152cd78](https://github.com/tatolab/streamlib/commit/152cd783aa386d61594f9109ff947646e4c5d05f))
+* **control-contract:** generate the MCP surface from the registry and gate breaking contract changes ([dcf8ef1](https://github.com/tatolab/streamlib/commit/dcf8ef16d3baec8fafd0ebbb32fb7147d6948b88))
+* **control-contract:** register every control operation and serve it from the dispatcher ([5524c4d](https://github.com/tatolab/streamlib/commit/5524c4d3b73956b3c58b8e664d9589be5642673b))
+* **runtime:** collapse saves a placed stream, and an edit inside reaches every placement ([c00bf48](https://github.com/tatolab/streamlib/commit/c00bf48f97b4df093025cc98c7966ff2a04cb064))
+
+
+### Bug Fixes
+
+* **test:** the crashing-stream test follows the start's re-load before it lists the stream ([929ac93](https://github.com/tatolab/streamlib/commit/929ac934b57f5883e8104f7f0678a7ddfd1277a3))
+
 ## [0.68.73](https://github.com/tatolab/streamlib/compare/v0.68.72...v0.68.73) (2026-11-12)
 
 
