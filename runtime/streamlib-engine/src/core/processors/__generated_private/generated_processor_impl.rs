@@ -207,21 +207,29 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         state_fields: Vec<String>,
         state_lifetime: NodeValueLifetime,
     ) {
-        if state_fields.is_empty()
-            || self
+        let noted_now = StatefulFunctionNodeItsFarSideCalls {
+            breadcrumb_number,
+            function_node_uuid,
+            state_fields,
+            state_lifetime,
+        };
+        let noted_before = self
+            .stateful_function_nodes_its_far_side_calls
+            .iter()
+            .position(|noted| noted.breadcrumb_number == breadcrumb_number);
+        match (noted_before, noted_now.state_fields.is_empty()) {
+            (Some(index), false) => {
+                self.stateful_function_nodes_its_far_side_calls[index] = noted_now
+            }
+            (Some(index), true) => {
+                self.stateful_function_nodes_its_far_side_calls
+                    .remove(index);
+            }
+            (None, false) => self
                 .stateful_function_nodes_its_far_side_calls
-                .iter()
-                .any(|noted| noted.breadcrumb_number == breadcrumb_number)
-        {
-            return;
+                .push(noted_now),
+            (None, true) => {}
         }
-        self.stateful_function_nodes_its_far_side_calls
-            .push(StatefulFunctionNodeItsFarSideCalls {
-                breadcrumb_number,
-                function_node_uuid,
-                state_fields,
-                state_lifetime,
-            });
     }
 
     fn as_setup_command_ports(&self) -> JsonValue {
@@ -1593,6 +1601,44 @@ mod tests {
             state_fields: vec!["phase".to_string()],
             state_values: vec![phase],
         }
+    }
+
+    #[test]
+    fn an_island_recorded_again_notes_each_stateful_node_as_the_live_edit_left_it() {
+        let envelope = an_envelope_whose_island_calls_a_stateful_lfo();
+        envelope
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+                serde_json::json!({
+                    "link_id": "L-island",
+                    "nodes": [
+                        {"node": "P-remap", "name": "remap"},
+                        {
+                            "node": "P-lfo",
+                            "name": "lfo",
+                            "node_uuid": the_lfo_uuid(),
+                            "state_fields": ["phase", "depth"],
+                            "state_lifetime": "kept",
+                        },
+                    ],
+                }),
+            )
+            .expect("a far side not yet set up takes its islands");
+
+        let recorded = envelope
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        let [lfo] = recorded
+            .stateful_function_nodes_its_far_side_calls
+            .as_slice()
+        else {
+            panic!("the lfo is noted once");
+        };
+        assert_eq!(lfo.function_node_uuid, the_lfo_uuid());
+        assert_eq!(
+            lfo.state_fields,
+            vec!["phase".to_string(), "depth".to_string()]
+        );
+        assert_eq!(lfo.state_lifetime, NodeValueLifetime::Kept);
     }
 
     /// Each spawn's board carries an entry for the stateful node alone, and a

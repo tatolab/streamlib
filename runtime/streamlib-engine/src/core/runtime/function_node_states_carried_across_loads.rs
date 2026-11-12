@@ -25,8 +25,6 @@ use crate::core::descriptors::NodeValueLifetime;
 use crate::core::error::Result;
 use crate::iceoryx2::HelperPlacedProcessorLossCounts;
 
-/// The key a stateful function node keeps its state under in its own keys of the project's
-/// store.
 const FUNCTION_NODE_STATE_STORE_KEY: &str = "function_node_state";
 
 /// One stateful function node's state: its state record's fields, and a value
@@ -510,14 +508,35 @@ mod tests {
         stream.keep_in_the_store(lfo, &the_lfo_at(0.5));
         stream.note_a_helper_writing(lfo, NodeValueLifetime::Reset);
         stream.states.keep_every_state_in_the_store();
+        stream
+            .project_stores
+            .commit_every_waiting_write_of_every_store_now();
+        let StatesOfAStreamOfAProjectOnDisk {
+            _project_directory: project_directory,
+            project_stores,
+            states,
+            the_store_of_each_node,
+        } = stream;
+        drop((states, the_store_of_each_node, project_stores));
 
+        let project_stores_of_the_restarted_runtime =
+            Arc::new(ProjectStoresOpenInThisRuntime::default());
         let loaded_again = FunctionNodeStatesCarriedForOneStream::default();
-        loaded_again.keep_each_state_in(Arc::clone(&stream.the_store_of_each_node));
+        loaded_again.keep_each_state_in({
+            let project_stores = Arc::clone(&project_stores_of_the_restarted_runtime);
+            let project_directory = project_directory.path().to_path_buf();
+            Arc::new(move |node_uuid| {
+                Ok(StoreScopedToThisNode::of_the_node(
+                    project_stores.the_store_of_the_project_at(&project_directory)?,
+                    node_uuid,
+                ))
+            })
+        });
         assert_eq!(
             loaded_again.the_current_state_of(lfo),
-            Some(the_lfo_at(0.5))
+            Some(the_lfo_at(0.5)),
+            "a restarted runtime reads the state back off the project's database"
         );
-        drop(stream.project_stores);
     }
 
     #[test]
