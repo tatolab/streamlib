@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "tatolab-speaker"
-version = "0.68.71"
+version = "0.68.72"
 dependencies = [
  "pyo3",
  "tatolab-module-sdk",
