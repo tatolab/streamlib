@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.71](https://github.com/tatolab/streamlib/compare/v0.68.70...v0.68.71) (2026-11-12)
+
+
+### Features
+
+* **control-contract:** one operation registry, its contract file and one dispatcher ([2c4b293](https://github.com/tatolab/streamlib/commit/2c4b29350b889edc2bc73ce1516fdcb8a5f114d4))
+
 ## [0.68.70](https://github.com/tatolab/streamlib/compare/v0.68.69...v0.68.70) (2026-11-12)
 
 
