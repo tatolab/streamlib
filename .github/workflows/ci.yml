@@ -194,6 +194,9 @@ jobs:
       - name: Type-check the TypeScript runtime client against its fixtures
         run: npx --yes --package typescript@6.0.2 tsc -p sdk/tatolab-runtime-client/type_check_fixtures
 
+      - name: The TypeScript runtime client's own tests
+        run: node --test 'sdk/tatolab-runtime-client/client_tests/*.test.mjs'
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 

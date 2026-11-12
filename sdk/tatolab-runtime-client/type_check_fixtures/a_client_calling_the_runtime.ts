@@ -6,6 +6,7 @@ import {
   ControlOperationError,
   TatolabRuntimeControlClient,
   callOneControlOperation,
+  type ControlOperationAbortSignal,
   type ControlOperationMethodName,
   type DescribeRuntimeToolResult,
   type DiscoverResult,
@@ -15,7 +16,11 @@ import {
   type SubscribeProjectChangesResult,
 } from "../index.js";
 
-export async function aClientCallingEveryOperation(socketPath: string, project: string): Promise<void> {
+export async function aClientCallingEveryOperation(
+  socketPath: string,
+  project: string,
+  callAbortSignal: ControlOperationAbortSignal,
+): Promise<void> {
   const client = await TatolabRuntimeControlClient.connect({ socketPath, clientName: "type check" });
   const discovered: DiscoverResult = await client.call("discover", { contract_version: 2 });
   const subscribed: SubscribeProjectChangesResult = await client.call("subscribe_project_changes", {
@@ -43,7 +48,11 @@ export async function aClientCallingEveryOperation(socketPath: string, project: 
     { socketPath, clientName: "type check" },
     "describe_runtime",
     {},
+    { signal: callAbortSignal },
   );
+  const describedUntilAborted: DescribeRuntimeToolResult = await client.call("describe_runtime", {}, { signal: callAbortSignal });
+  const connectedUntilAborted = await TatolabRuntimeControlClient.connect({ socketPath, clientName: "type check", signal: callAbortSignal });
+  await connectedUntilAborted.close();
   const stopHearing = client.onNotification("project_changed", (params: ProjectChangedNotificationParams) => {
     void params.change;
   });
@@ -69,7 +78,7 @@ export async function aClientCallingEveryOperation(socketPath: string, project: 
     }
   }
   const everyMethodName: readonly ControlOperationMethodName[] = CONTROL_OPERATION_METHOD_NAMES;
-  void [discovered, subscribed, described, exportedGraph, transacted, added, connected, describedOverAPost];
+  void [discovered, subscribed, described, exportedGraph, transacted, added, connected, describedOverAPost, describedUntilAborted];
   void everyMethodName;
   await client.close();
 }
