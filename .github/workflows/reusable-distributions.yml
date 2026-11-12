@@ -554,6 +554,13 @@ jobs:
             "releases/$TARBALL_VERSION/$TARBALL_NAME" application/gzip "public, max-age=31536000, immutable"
           put_object "linux-runtime-tarball/$TARBALL_NAME.sha256" \
             "releases/$TARBALL_VERSION/$TARBALL_NAME.sha256" "text/plain; charset=utf-8" "public, max-age=31536000, immutable"
+          # Publishing an older release again keeps the newer `latest` and its install.sh.
+          published_latest_version="$(aws s3 cp --endpoint-url "$r2_endpoint" --only-show-errors "s3://$GET_TATOLAB_COM_BUCKET/latest" - 2>/dev/null | tr -d '[:space:]' || true)"
+          if [ -n "$published_latest_version" ] && [ "$published_latest_version" != "$TARBALL_VERSION" ] \
+            && [ "$(printf '%s\n%s\n' "$published_latest_version" "$TARBALL_VERSION" | sort -V | tail -1)" = "$published_latest_version" ]; then
+            echo "get.tatolab.com names $published_latest_version as latest, newer than $TARBALL_VERSION: latest and install.sh stay"
+            exit 0
+          fi
           put_object installer/install.sh install.sh "text/plain; charset=utf-8" "public, max-age=300"
           printf '%s\n' "$TARBALL_VERSION" > latest
           put_object latest latest "text/plain; charset=utf-8" "public, max-age=300"
