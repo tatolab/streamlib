@@ -16,8 +16,7 @@ use super::operations_runtime::{
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
-    PendingDeletionComponent, ProcessorInstanceComponent, ProcessorUniqueId,
-    cast_exposed_name_to_url_safe,
+    PendingDeletionComponent, ProcessorUniqueId, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
@@ -141,8 +140,6 @@ impl LoadedStreamInThisRuntime {
                 disconnect_impl(self.live_graph_change(), link_id).await?;
             }
         }
-
-        self.take_out_now_each_node_and_link_pending_deletion_no_commit_has_built();
 
         let node_names_the_graph_only_nodes_hold =
             resolution.graph_only_nodes_as_drawn.node_names_cast();
@@ -363,41 +360,6 @@ impl LoadedStreamInThisRuntime {
             document_node_index_by_uuid,
             document_links,
         })
-    }
-
-    /// On a stream no commit has built, take each node and link pending deletion out of the
-    /// graph now, with every operation logged for it, so the UUID and name it held are free for
-    /// the document's nodes: a stream not started would otherwise keep it until its start.
-    fn take_out_now_each_node_and_link_pending_deletion_no_commit_has_built(&self) {
-        if self.runtime_context.lock().is_some() {
-            return;
-        }
-        self.compiler.scope(|this_streams_graph, tx| {
-            let links_pending_deletion: HashSet<LinkUniqueId> = this_streams_graph
-                .traversal()
-                .e(())
-                .iter()
-                .filter(|link| link.has::<PendingDeletionComponent>())
-                .map(|link| link.id.clone())
-                .collect();
-            let nodes_pending_deletion: HashSet<ProcessorUniqueId> = this_streams_graph
-                .traversal()
-                .v(())
-                .iter()
-                .filter(|node| {
-                    node.has::<PendingDeletionComponent>()
-                        && !node.has::<ProcessorInstanceComponent>()
-                })
-                .map(|node| node.id.clone())
-                .collect();
-            tx.retract_every_operation_naming(&nodes_pending_deletion, &links_pending_deletion);
-            for link_id in &links_pending_deletion {
-                this_streams_graph.traversal_mut().e(link_id).drop();
-            }
-            for processor_id in &nodes_pending_deletion {
-                this_streams_graph.traversal_mut().v(processor_id).drop();
-            }
-        });
     }
 
     pub(super) fn the_live_nodes(&self) -> Vec<LiveNodeAsTheGraphHoldsIt> {

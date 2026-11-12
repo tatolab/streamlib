@@ -9169,6 +9169,81 @@ mod tests {
 
     #[test]
     #[serial]
+    fn a_link_and_a_node_removed_from_a_stopped_stream_leave_its_loaded_graph_at_once() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(
+            the_graph_of_a_stream_of_a_source_linked_into_a_sink("camera"),
+        );
+        let camera = project.stream_id_of("camera");
+        runner
+            .load_the_project_off_its_queue(project.run_request())
+            .unwrap();
+        let stop = runner.stop_playback(project.path()).unwrap();
+        the_stream_action_once_finished(&runner, &stop.action_id);
+        let held = runner.loaded_stream_of_the_id(&camera).unwrap();
+        assert!(held.is_held_stopped() && held.runtime_context.lock().is_none());
+        let graph_as_held =
+            streamlib_project_repository::StreamGraphDocument::from_value(held.to_json().unwrap())
+                .unwrap();
+        let link = graph_as_held.links().remove(0);
+        let sink = graph_as_held.node_named("sink").unwrap();
+        let tokio_runtime_of_the_test = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let apply = |graph_operation| {
+            tokio_runtime_of_the_test.block_on(
+                <LoadedStreamInThisRuntime as crate::core::runtime::operations::RuntimeOperations>::apply_a_stream_graph_operation_live(
+                    &held,
+                    graph_operation,
+                ),
+            )
+        };
+
+        apply(streamlib_project_repository::StreamGraphOperation::Disconnect { link })
+            .expect("a stopped stream takes a disconnect");
+        assert!(held.the_live_links_by_node_uuid().is_empty());
+        apply(
+            streamlib_project_repository::StreamGraphOperation::RemoveNode {
+                node: sink.clone(),
+                links: Vec::new(),
+            },
+        )
+        .expect("a stopped stream takes a removal");
+
+        assert_eq!(held.node_count(), 1);
+        let graph_after =
+            streamlib_project_repository::StreamGraphDocument::from_value(held.to_json().unwrap())
+                .unwrap();
+        assert!(graph_after.node_named("sink").is_none(), "{graph_after:?}");
+        assert!(graph_after.links().is_empty());
+        let listing = runner
+            .list_streams()
+            .into_iter()
+            .find(|listed| listed.stream_id == camera)
+            .unwrap();
+        assert_eq!(listing.node_count, Some(1));
+        let removed_again = apply(
+            streamlib_project_repository::StreamGraphOperation::RemoveNode {
+                node: sink,
+                links: Vec::new(),
+            },
+        );
+        assert!(
+            removed_again.is_err(),
+            "the node is gone from the loaded graph"
+        );
+
+        let play = runner.start_playback(project.path()).unwrap();
+        let played = the_stream_action_once_finished(&runner, &play.action_id);
+        assert_eq!(played.state, StreamActionState::Done, "{played:?}");
+        assert_eq!(held.status(), RuntimeStatus::Started);
+        assert_eq!(held.node_count(), 1);
+    }
+
+    #[test]
+    #[serial]
     fn a_stop_after_a_play_tears_every_instance_down_again_and_keeps_the_graph() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
