@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-camera"
-version = "0.68.68"
+version = "0.68.69"
 description = "A camera node as an extension wheel: V4L2 or AVFoundation capture handed to the engine as DMA-BUFs or IOSurfaces and converted on the GPU, with no CPU copy."
 readme = "README.md"
 requires-python = ">=3.12"
