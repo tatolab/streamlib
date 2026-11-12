@@ -813,6 +813,7 @@ pub(crate) fn serve_the_control_plane_router_at(
                     operations_on_the_loaded_streams,
                     local_api_stopping_token,
                 )
+                .local_api_socket_router
             },
             &::tokio::runtime::Handle::current(),
         )

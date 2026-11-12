@@ -156,11 +156,13 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     let mut loopback_http_listener = None;
     let run_outcome = engine
         .run_owning_the_machine_shutdown_signals(|| {
-            local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
+            let local_api_served = serve_the_local_api_for_an_engine(&engine)?;
             loopback_http_listener = serve_the_loopback_http_listener_of_this_runtime(
                 &engine,
+                &local_api_served,
                 loopback_http_listener_bound_by_the_machine_runtime_lock,
             );
+            local_api_served_for_the_engine = Some(local_api_served);
             log_the_reloads_queued_at_the_start(
                 &engine.queue_the_reload_of_every_project_at_the_start(),
             );

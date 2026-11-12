@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use streamlib::sdk::runtime::Runner;
 use streamlib_api_server::{
-    LoopbackHttpListenerServedForAnEngine, serve_the_loopback_http_listener,
+    LocalApiServedForAnEngine, LoopbackHttpListenerServedForAnEngine,
+    serve_the_loopback_http_listener,
 };
 #[cfg(not(feature = "machine-directories-under-a-test-root"))]
 use streamlib_runtime_client_contract::local_api_wire_contract::LOOPBACK_HTTP_LISTENER_DEFAULT_PORT;
@@ -33,19 +34,25 @@ pub(crate) fn the_loopback_http_listener_the_machine_runtime_lock_bound(
     }
 }
 
-/// Serve `engine`'s loopback HTTP until the returned holder is dropped, on
+/// Serve `engine`'s loopback HTTP, with `local_api_served_for_the_engine`'s control WebSocket,
+/// until the returned holder is dropped, on
 /// `bound_by_the_machine_runtime_lock` — the macOS lock's socket. With none, as
 /// on Linux, the runtime binds its port here, and a port another process holds
 /// leaves it running without the listener, said once.
 pub(crate) fn serve_the_loopback_http_listener_of_this_runtime(
     engine: &Arc<Runner>,
+    local_api_served_for_the_engine: &LocalApiServedForAnEngine,
     bound_by_the_machine_runtime_lock: Option<TcpListener>,
 ) -> Option<LoopbackHttpListenerServedForAnEngine> {
     let bound_listener = match bound_by_the_machine_runtime_lock {
         Some(bound_listener) => bound_listener,
         None => bind_the_loopback_http_port()?,
     };
-    match serve_the_loopback_http_listener(bound_listener, &engine.tokio_handle()) {
+    match serve_the_loopback_http_listener(
+        bound_listener,
+        local_api_served_for_the_engine.control_websocket_route_for_the_loopback_listener(),
+        &engine.tokio_handle(),
+    ) {
         Ok(served) => Some(served),
         Err(refusal) => {
             tracing::warn!("no loopback HTTP is served: {refusal}");

@@ -176,6 +176,35 @@ pub fn http_get_body_on_loopback(port: u16, path: &str) -> Option<String> {
         .then(|| body.trim().to_string())
 }
 
+/// A WebSocket upgrade of `path` on `127.0.0.1:port` naming `host` as its `Host` and
+/// `origin` as its `Origin`, and the status line it is answered with.
+pub fn websocket_upgrade_status_line_on_loopback(
+    port: u16,
+    path: &str,
+    host: &str,
+    origin: &str,
+) -> Option<String> {
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)).ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    )
+    .ok()?;
+    let mut status_line = Vec::new();
+    for byte in std::io::Read::bytes(&mut stream) {
+        let byte = byte.ok()?;
+        if byte == b'\n' {
+            break;
+        }
+        status_line.push(byte);
+    }
+    Some(String::from_utf8_lossy(&status_line).trim().to_string())
+}
+
 /// The machine a test's `tatolabd` runs on: `TATOLAB_TEST_MACHINE_ROOT`, under
 /// which its runtime directory and state directory sit, and on Linux its lock,
 /// plus its `STREAMLIB_HOME` and a project directory. On macOS its lock is the

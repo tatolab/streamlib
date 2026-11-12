@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The runtime's HTTP on loopback: `GET /machine-runtime-lock-holder` answers
-//! the serving process's pid. It serves no media and listens on nothing but
-//! `127.0.0.1`.
+//! the serving process's pid, and `/control/ws` is the local API's control
+//! WebSocket for a tool that cannot open the local API socket, with no
+//! credential and no check of the `Host` or `Origin` a request gives. It serves
+//! no media and listens on nothing but `127.0.0.1`.
 
 use std::net::SocketAddr;
 
@@ -20,8 +22,27 @@ use tokio_util::sync::CancellationToken;
 
 use crate::axum_router_served_until_stopped::AxumRouterServedUntilStopped;
 
-/// The listener's router.
-fn build_loopback_http_router() -> axum::Router {
+/// A local API's control WebSocket route, for the loopback listener to serve.
+#[derive(Clone)]
+pub struct ControlWebSocketRouteForTheLoopbackListener(axum::Router);
+
+impl ControlWebSocketRouteForTheLoopbackListener {
+    pub(crate) fn new(control_websocket_router: axum::Router) -> Self {
+        Self(control_websocket_router)
+    }
+}
+
+impl std::fmt::Debug for ControlWebSocketRouteForTheLoopbackListener {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ControlWebSocketRouteForTheLoopbackListener")
+    }
+}
+
+/// The listener's router: the lock holder's pid for a request naming loopback as its host, and
+/// the control WebSocket for any request.
+fn build_loopback_http_router(
+    control_websocket_route: ControlWebSocketRouteForTheLoopbackListener,
+) -> axum::Router {
     axum::Router::new()
         .route(
             MACHINE_RUNTIME_LOCK_HOLDER_ROUTE_PATH,
@@ -30,6 +51,7 @@ fn build_loopback_http_router() -> axum::Router {
         .layer(axum::middleware::from_fn(
             answer_only_requests_naming_loopback_as_their_host,
         ))
+        .merge(control_websocket_route.0)
 }
 
 /// The names a request to the listener may give as its `Host`.
@@ -84,6 +106,7 @@ impl LoopbackHttpListenerServedForAnEngine {
 /// loopback is refused.
 pub fn serve_the_loopback_http_listener(
     bound_listener: std::net::TcpListener,
+    control_websocket_route: ControlWebSocketRouteForTheLoopbackListener,
     tokio_handle: &tokio::runtime::Handle,
 ) -> Result<LoopbackHttpListenerServedForAnEngine> {
     let bound_address = bound_listener.local_addr().map_err(|failure| {
@@ -109,7 +132,7 @@ pub fn serve_the_loopback_http_listener(
     };
     let served = AxumRouterServedUntilStopped::serve(
         loopback_http_listener,
-        build_loopback_http_router(),
+        build_loopback_http_router(control_websocket_route),
         CancellationToken::new(),
         "the loopback HTTP listener",
         tokio_handle,
@@ -159,14 +182,24 @@ pub(crate) mod tests {
         (status_code, body.to_string())
     }
 
-    /// The listener on a free loopback port.
+    /// The listener on a free loopback port, with the control WebSocket of a local API over a
+    /// stub runtime.
     fn served_on_a_free_loopback_port() -> LoopbackHttpListenerServedForAnEngine {
         serve_the_loopback_http_listener(
             std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
                 .expect("a free loopback port binds"),
+            a_stub_local_apis_control_websocket_route(),
             &tokio::runtime::Handle::current(),
         )
         .expect("a bound loopback listener is served")
+    }
+
+    fn a_stub_local_apis_control_websocket_route() -> ControlWebSocketRouteForTheLoopbackListener {
+        crate::handlers::build_router(
+            crate::handlers::router_surface_tests::a_control_plane_router_stub_runtime(),
+            CancellationToken::new(),
+        )
+        .control_websocket_route_for_the_loopback_listener
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -228,11 +261,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// The listener serves no media and no control: nothing but the lock
-    /// holder's pid answers.
+    /// The listener serves no media and none of the local API but its control
+    /// WebSocket.
     #[tokio::test(flavor = "multi_thread")]
     #[serial_test::serial(tcp_listeners_of_this_test_process)]
-    async fn nothing_but_the_lock_holders_pid_is_served() {
+    async fn nothing_but_the_lock_holders_pid_and_the_control_websocket_is_served() {
         let served = served_on_a_free_loopback_port();
         let host = served.bound_address().to_string();
 
@@ -242,7 +275,8 @@ pub(crate) mod tests {
             "/api/graph",
             "/mcp",
             "/health",
-            "/control/ws",
+            "/control",
+            "/control/stream",
         ] {
             assert_eq!(
                 http_get_naming_the_host(served.bound_address(), &host, path)
@@ -250,6 +284,71 @@ pub(crate) mod tests {
                     .0,
                 404,
                 "{path}"
+            );
+        }
+    }
+
+    /// The control WebSocket answers with no credential, whatever `Host` and `Origin` the
+    /// request gives, so a tool or a page of any name on this machine reaches it.
+    ///
+    /// Mental-revert: the lock holder route's `Host` check laid over the WebSocket refuses the
+    /// upgrade naming `my-tool.test` with 421.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(tcp_listeners_of_this_test_process)]
+    async fn the_control_websocket_answers_any_host_and_origin_with_no_credential() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let served = served_on_a_free_loopback_port();
+        let port = served.bound_address().port();
+        for (host, origin) in [
+            (format!("127.0.0.1:{port}"), None),
+            (
+                format!("my-tool.test:{port}"),
+                Some("http://my-tool.test:3000"),
+            ),
+            (
+                format!("localhost:{port}"),
+                Some("https://somewhere.example"),
+            ),
+        ] {
+            let mut request = format!("ws://{host}/control/ws")
+                .into_client_request()
+                .unwrap();
+            if let Some(origin) = origin {
+                request
+                    .headers_mut()
+                    .insert(axum::http::header::ORIGIN, origin.parse().unwrap());
+            }
+            let connection = tokio::net::TcpStream::connect(served.bound_address())
+                .await
+                .unwrap();
+            let (mut websocket, _) = tokio_tungstenite::client_async(request, connection)
+                .await
+                .unwrap_or_else(|refusal| panic!("{host} {origin:?}: {refusal}"));
+            websocket
+                .send(WebSocketMessage::Text(
+                    serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "discover", "params": {} })
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let answer = loop {
+                let received =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), websocket.next())
+                        .await
+                        .expect("the runtime answers")
+                        .expect("the WebSocket is open")
+                        .unwrap();
+                if let WebSocketMessage::Text(text) = received {
+                    break serde_json::from_str::<serde_json::Value>(text.as_str()).unwrap();
+                }
+            };
+            assert!(
+                answer["result"]["contract_version"].is_u64(),
+                "{host} {origin:?}: {answer}"
             );
         }
     }
@@ -263,6 +362,7 @@ pub(crate) mod tests {
 
         let refusal = serve_the_loopback_http_listener(
             bound_on_every_interface,
+            a_stub_local_apis_control_websocket_route(),
             &tokio::runtime::Handle::current(),
         )
         .expect_err("a listener off loopback is refused");
