@@ -268,6 +268,17 @@ pub(crate) fn the_name_a_new_node_takes(
         );
     }
 
+    the_default_name_a_new_node_takes(node_types, processor_class_import_path, is_taken)
+}
+
+/// The class's short name cast, with the next free `-2`, `-3` … appended while `is_taken` holds
+/// it; a suffix is fitted by truncating the name before it, so the result stays within
+/// [`EXPOSED_NAME_MAXIMUM_LENGTH`].
+pub(crate) fn the_default_name_a_new_node_takes(
+    node_types: &NodeTypesOneStreamResolves,
+    processor_class_import_path: &ProcessorClassImportPath,
+    is_taken: impl Fn(&str) -> bool,
+) -> Result<String> {
     let default_name = default_display_name_for(node_types, processor_class_import_path);
     let cast = cast_exposed_name_to_url_safe(&default_name)?;
     if !is_taken(&cast) {

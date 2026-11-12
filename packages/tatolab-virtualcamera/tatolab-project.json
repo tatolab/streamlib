@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "Shows a stream as a camera any Linux application can select. Linux only.",
+  "name": "Virtual camera",
+  "project": "c3b06cd4-dea1-4628-8ca0-717931263893"
+}

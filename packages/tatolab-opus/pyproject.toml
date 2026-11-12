@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-opus"
-version = "0.68.68"
+version = "0.68.69"
 description = "Opus encode and decode nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -26,6 +26,10 @@ classifiers = [
 # starts it. A minimum, never an exact pin, as a third party's package
 # depends on it.
 dependencies = ["tatolab-stream>=0.68.32", "numpy>=2.1"]
+
+[project.entry-points."tatolab.nodes"]
+OpusEncoder = "tatolab.opus:OpusEncoder"
+OpusDecoder = "tatolab.opus:OpusDecoder"
 
 [project.urls]
 Homepage = "https://tatolab.com"

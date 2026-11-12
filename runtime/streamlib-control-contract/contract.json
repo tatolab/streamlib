@@ -671,6 +671,14 @@
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
               },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+              },
               "type": {
                 "type": "string",
                 "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
@@ -744,6 +752,14 @@
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
               },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+              },
               "node": {
                 "type": "string",
                 "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
@@ -768,6 +784,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "source": {
                 "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
@@ -799,6 +823,14 @@
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
               },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+              },
               "source": {
                 "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
                 "description": "The output port the link carries from."
@@ -828,6 +860,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "node": {
                 "type": "string",
@@ -859,6 +899,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "node": {
                 "type": "string",
@@ -893,6 +941,14 @@
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
               },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+              },
               "node": {
                 "type": "string",
                 "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
@@ -922,6 +978,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "node": {
                 "type": "string",
@@ -1001,6 +1065,14 @@
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
               },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+              },
               "node": {
                 "type": "string",
                 "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
@@ -1033,6 +1105,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "title": {
                 "type": "string",
@@ -1070,7 +1150,7 @@
               "title",
               "nodes"
             ],
-            "description": "Make a labelled group of nodes of the stream's own level."
+            "description": "Make a labelled group of nodes of one level of the stream."
           },
           {
             "type": "object",
@@ -1080,6 +1160,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "group": {
                 "type": "string",
@@ -1171,12 +1259,20 @@
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
               },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+              },
               "nodes": {
                 "type": "array",
                 "items": {
                   "type": "string"
                 },
-                "description": "The nodes collapsed, each as `node` names one, all of the stream's own level and none of its own `GraphInput` or `GraphOutput` nodes."
+                "description": "The nodes collapsed, each as `node` names one, all of the level `level` names and none of that level's own `GraphInput` or `GraphOutput` nodes."
               },
               "name": {
                 "type": "string",
@@ -1200,7 +1296,7 @@
               "nodes",
               "name"
             ],
-            "description": "Move nodes of the stream's own level, and the links between them, into one new\nauthored fragment, each link that crossed the selection carried through a `GraphInput`\nor `GraphOutput` inside it."
+            "description": "Move nodes of one level of the stream, and the links between them, into one new\nauthored fragment, each link that crossed the selection carried through a `GraphInput`\nor `GraphOutput` inside it."
           },
           {
             "type": "object",
@@ -1210,6 +1306,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "fragment": {
                 "type": "string",
@@ -1225,7 +1329,7 @@
               "stream",
               "fragment"
             ],
-            "description": "Replace a fragment node of the stream's own level with the nodes and links it places,\nas plain nodes no refresh reaches."
+            "description": "Replace a fragment node of one level of the stream with the nodes and links it places,\nas plain nodes no refresh reaches."
           },
           {
             "type": "object",
@@ -1365,6 +1469,14 @@
                 "type": "string",
                 "format": "uuid",
                 "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+              },
+              "level": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
               },
               "group": {
                 "type": "string",
@@ -1633,6 +1745,17 @@
             "format": "uuid",
             "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
           },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
           "type": {
             "type": "string",
             "description": "The node's type by its import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`, as `graph` reports it and `streamlib://node-catalog` lists it."
@@ -1722,6 +1845,17 @@
             "type": "string",
             "format": "uuid",
             "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
           },
           "source": {
             "$ref": "#/components/schemas/StreamGraphActionLinkEnd",

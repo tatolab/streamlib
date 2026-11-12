@@ -121,7 +121,17 @@ uv add tatolab-stream
 
 A new project's `pyproject.toml` depends on `tatolab-stream`, at least as new as the runtime that
 created it, and names Tatolab's own package index, `https://get.tatolab.com/simple/`, which serves
-the first-party modules the runtime does not carry. The runtime carries a wheel of `tatolab-stream`
+the first-party modules the runtime does not carry. A project created before 0.68.33 names no
+index, so uv keeps resolving those modules to their last PyPI copies, 0.68.32. Before its next
+`uv lock --upgrade`, add the index to its `pyproject.toml` by hand:
+
+```toml
+[[tool.uv.index]]
+name = "tatolab"
+url = "https://get.tatolab.com/simple/"
+```
+
+The runtime carries a wheel of `tatolab-stream`
 and of its core modules — `tatolab-ops`, `tatolab-testpattern` and `tatolab-compositor` — built at
 its own commit, and each time it makes a project's `.venv` it links them into
 `.tatolab/first-party-imports/` and declares each as a uv path source, so they always match the
@@ -235,6 +245,36 @@ back on the CPU.
 Every converted example ships in the runtime unit as a sample project at the runtime's own
 version. `tatolab new --sample test-pattern-halftone-lens` creates a project from one, and the
 local API's `list_samples` lists each by name, title and summary.
+
+Every first-party module the runtime does not carry is published as a **module project**: a
+`.zip` at `https://get.tatolab.com/modules/<module>-<version>.zip`, listed with its SHA-256 and
+the nodes and streams it brings in `https://get.tatolab.com/catalog/v1.json`. Tato Studio's
+Marketplace imports one; elsewhere, download the `.zip` and import it with the local API's
+`add_dependency`, which copies it whole into `imports/<folder>/`. The project then syncs with no
+index serving the module and no Rust toolchain, since the module's own wheels ride inside it.
+
+A native module of your own ships the same way. Give it a `tatolab-project.json`, build a wheel
+for each platform it runs on (`maturin build --release`, abi3, one per platform), put them under
+its `wheels/`, and give the module project a `pyproject.toml` that requires the wheel's
+distribution and names each wheel as a uv path source under its platform's marker:
+
+```toml
+[project]
+name = "acme-lidar-module-project"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = ["acme-lidar==1.0.0; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'darwin' and platform_machine == 'arm64')"]
+
+[tool.uv.sources]
+acme-lidar = [
+  { path = "wheels/acme_lidar-1.0.0-cp312-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+  { path = "wheels/acme_lidar-1.0.0-cp312-abi3-macosx_26_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64'" },
+]
+```
+
+The module project's own name is never the wheel's, since it requires that wheel. Its nodes are
+found through the wheel's `tatolab.nodes` entry points. A project imports the folder, or a `.zip`
+of it, with `add_dependency`.
 
 To send an output off the stream, encode it and add the `tatolab.moq` gateway nodes
 (`uv add tatolab-moq`): a `MoqGateway` dials a relay and publishes one broadcast, a `MoqTrack`

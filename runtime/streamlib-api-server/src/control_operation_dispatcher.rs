@@ -113,6 +113,7 @@ impl ControlOperationDispatcher {
                 .map(ControlOperationAnswer::GraphTransaction),
             ControlOperationCall::AddNode(AddNodeRequest {
                 stream,
+                level,
                 node_type,
                 name,
                 config,
@@ -127,6 +128,7 @@ impl ControlOperationDispatcher {
                     "add_node",
                     vec![StreamGraphAction::AddNode {
                         stream,
+                        level: level.unwrap_or_default(),
                         node_type,
                         name,
                         config,
@@ -144,6 +146,7 @@ impl ControlOperationDispatcher {
                 .map(ControlOperationAnswer::GraphTransaction),
             ControlOperationCall::Connect(OneLinkGraphEditRequest {
                 stream,
+                level,
                 source,
                 target,
                 mode,
@@ -154,6 +157,7 @@ impl ControlOperationDispatcher {
                     "connect",
                     vec![StreamGraphAction::Connect {
                         stream,
+                        level: level.unwrap_or_default(),
                         source,
                         target,
                     }],

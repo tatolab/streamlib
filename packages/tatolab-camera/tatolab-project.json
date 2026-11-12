@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "Frames from a camera on the machine, handed to the GPU with no CPU copy.",
+  "name": "Camera",
+  "project": "0fe37caa-c06e-4d7e-9c1c-bb604faa6e47"
+}

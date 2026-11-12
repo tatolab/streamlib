@@ -150,13 +150,12 @@ reshapes #3216.
   later, an examples folder the app installs" becomes the samples the runtime unit carries.
 - **Creating a project** (`ARCHITECTURE.md:327-347`). Create renders the starter or copies a
   sample; everything after the files are written is unchanged.
-- **The catalog** (#3216, read by tatolab-app's Get more, tatolab-app#133). A `package` entry
-  gains `index_url`: `https://get.tatolab.com/simple/` for a first-party module, `null` for one on
-  PyPI. Import adds the requirement and, when `index_url` is set and the project does not yet
-  name it, the `[[tool.uv.index]]` table. A third party's index is added after `tatolab` with
-  `explicit = true` and a `[tool.uv.sources]` pin for the module imported, so it serves only that
-  module and never a `tatolab-*` name; a project whose owner orders another index first by hand
-  has chosen it. Version 1 lists packages only; Get more's Samples
+- **The catalog** (#3216, read by tatolab-app's Get more, tatolab-app#133, #187). Amended by the
+  owner on #3216: every entry is a full project shipped as a `.zip`, and pip requirements play no
+  part. A `package` entry carries `download_url`, `https://get.tatolab.com/modules/<module>-<version>.zip`,
+  and `download_sha256`, which the app checks before it imports the download through
+  `add_dependency`; its `nodes` are read by the runtime's own `tatolab.stream` listing at release
+  time. Version 1 lists packages only; Get more's Samples
   scope reads `list_samples` from the runtime, so the samples shown always match the runtime that
   will create them. `sample` entries return with remote samples.
 - **The packs OPEN** (`ARCHITECTURE.md:879-897`). Settled: the registry for first-party modules is

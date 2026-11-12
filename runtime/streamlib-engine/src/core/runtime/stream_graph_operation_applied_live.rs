@@ -1,16 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::HashSet;
 use streamlib_project_repository::{
     STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
     StreamGraphDocumentLinkEnd, StreamGraphOperation,
 };
+
 use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
 use super::operations::RuntimeOperations;
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::graph::{LinkUniqueId, ProcessorUniqueId, cast_exposed_name_to_url_safe};
+use crate::core::graph::{
+    LinkUniqueId, ProcessorUniqueId, cast_exposed_name_to_url_safe,
+    the_default_name_a_new_node_takes,
+};
 use crate::core::processors::ProcessorSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
@@ -119,6 +124,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveGroup { .. }
             | StreamGraphOperation::FoldIntoFragment { .. }
             | StreamGraphOperation::UnfoldFragment { .. }
+            | StreamGraphOperation::EditInsideFragment { .. }
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => {
@@ -155,6 +161,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveGroup { .. }
             | StreamGraphOperation::FoldIntoFragment { .. }
             | StreamGraphOperation::UnfoldFragment { .. }
+            | StreamGraphOperation::EditInsideFragment { .. }
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => true,
@@ -190,6 +197,7 @@ impl LoadedStreamInThisRuntime {
         let graph_as_drawn = self.to_json()?;
         let mut graph_document =
             StreamGraphDocument::from_value(graph_as_drawn.clone()).map_err(Error::GraphError)?;
+        self.name_a_node_added_inside_a_fragment(&graph_document, &mut graph_operation)?;
         graph_document
             .apply(&graph_operation)
             .map_err(Error::GraphError)?;
@@ -211,6 +219,41 @@ impl LoadedStreamInThisRuntime {
             return Err(refusal);
         }
         Ok(graph_operation)
+    }
+
+    /// Name the node an edit inside a fragment adds, as an add to the stream's own level names
+    /// it, against the names of the fragment's level.
+    fn name_a_node_added_inside_a_fragment(
+        &self,
+        graph_document: &StreamGraphDocument,
+        graph_operation: &mut StreamGraphOperation,
+    ) -> Result<()> {
+        let (level, edit) = graph_operation.the_edit_at_its_own_level_mut();
+        let StreamGraphOperation::AddNode { node, .. } = edit else {
+            return Ok(());
+        };
+        if level.is_empty() {
+            return Ok(());
+        }
+        if !node.name.is_empty() {
+            node.name = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
+            return Ok(());
+        }
+        let names_at_the_level: HashSet<String> = graph_document
+            .the_level_inside(&level)
+            .map_err(Error::GraphError)?
+            .nodes()
+            .into_iter()
+            .map(|held| held.name)
+            .collect();
+        node.name = the_default_name_a_new_node_takes(
+            self.node_types_this_stream_resolves(),
+            &ProcessorClassImportPath::new(&node.node_type).map_err(|refusal| {
+                Error::GraphError(format!("node {} `type`: {refusal}", node.id))
+            })?,
+            |candidate| names_at_the_level.contains(candidate),
+        )?;
+        Ok(())
     }
 
     /// Take out of the live graph the node of UUID `node` a refused add left in it, if it left

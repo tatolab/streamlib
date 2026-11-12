@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "Sends and receives a stream's tracks through a Media over QUIC relay.",
+  "name": "MoQ",
+  "project": "48c142b9-1c23-466c-84cc-e68b5371ca46"
+}

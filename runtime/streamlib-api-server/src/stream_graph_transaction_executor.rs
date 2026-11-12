@@ -493,14 +493,18 @@ impl StreamGraphTransactionExecutor<'_> {
                             .map_err(|refusal| refusal.to_string())?;
                         the_family_of_an_output_port_in(&rendered_graph, end)
                     };
-                    let operation = graph_operation_for_the_request(
+                    let level = request.level().to_vec();
+                    let edit_at_the_level = graph_operation_for_the_request(
                         request,
-                        &stream.staged_graph,
+                        &stream.staged_graph.the_level_inside(&level)?,
                         &mut node_by_label,
                         &run_the_graph_generator,
                         &place_the_imported_stream,
                         &family_of_an_output_port,
                     )?;
+                    let operation = stream
+                        .staged_graph
+                        .the_edit_at_the_level(&level, edit_at_the_level)?;
                     let applied = self
                         .async_runtime
                         .block_on(
@@ -509,7 +513,7 @@ impl StreamGraphTransactionExecutor<'_> {
                                 .apply_a_stream_graph_operation_live(operation),
                         )
                         .map_err(|refusal| refusal.to_string())?;
-                    let added_node = match &applied {
+                    let added_node = match applied.the_edit_at_its_own_level().1 {
                         StreamGraphOperation::AddNode { node, .. } => Some(node.id),
                         StreamGraphOperation::FoldIntoFragment { fold } => fold.fragment_node(),
                         _ => None,
@@ -867,7 +871,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut graph_render_of_each_stream: HashMap<String, Option<Value>> = HashMap::new();
         let mut operations = Vec::with_capacity(applied_live.len());
         for (stream_id, applied) in applied_live {
-            match &applied {
+            match applied.the_edit_at_its_own_level().1 {
                 StreamGraphOperation::AddNode { node, .. } => {
                     added_nodes.push(GraphTransactionAddedNode {
                         stream: stream_id.clone(),
@@ -1360,17 +1364,29 @@ fn graph_operation_for_the_request(
 }
 
 /// The family wire name the output port `end` declares in `rendered_graph`, a stream's
-/// `graph` render.
+/// `graph` render, its node at any level of the fragments the render holds.
 fn the_family_of_an_output_port_in(
     rendered_graph: &Value,
     end: &StreamGraphDocumentLinkEnd,
 ) -> Result<String, String> {
+    fn the_rendered_node_at_any_level<'render>(
+        rendered_level: &'render Value,
+        node: &str,
+    ) -> Option<&'render Value> {
+        rendered_level["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find_map(|rendered_node| {
+                if rendered_node["id"] == node {
+                    Some(rendered_node)
+                } else {
+                    the_rendered_node_at_any_level(&rendered_node["fragment"], node)
+                }
+            })
+    }
     let node = end.node.to_string();
-    rendered_graph["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|rendered_node| rendered_node["id"] == node.as_str())
+    the_rendered_node_at_any_level(rendered_graph, &node)
         .and_then(|rendered_node| {
             rendered_node["ports"]["outputs"]
                 .as_array()?

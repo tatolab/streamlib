@@ -23,10 +23,11 @@ use streamlib_control_contract::{
     ProjectTransactionAuthorArgument, Transact, TransactRequest,
 };
 use streamlib_project_repository::{
-    EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION, GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION,
-    GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION, GROUP_ARGUMENT_DESCRIPTION,
-    GROUP_COLOUR_ARGUMENT_DESCRIPTION, GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION,
-    GROUP_TITLE_ARGUMENT_DESCRIPTION, IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
+    EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION, GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
+    GROUP_ARGUMENT_DESCRIPTION, GROUP_COLOUR_ARGUMENT_DESCRIPTION,
+    GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
@@ -54,6 +55,8 @@ use crate::stream_graph_transaction_executor::{
 struct OneNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -70,6 +73,8 @@ struct OneNodeToolArguments {
 struct SetNodeConfigToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -90,6 +95,8 @@ struct SetNodeConfigToolArguments {
 struct SetPinValueToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -114,6 +121,8 @@ struct SetPinValueToolArguments {
 struct RenameNodeToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(
@@ -134,6 +143,8 @@ struct RenameNodeToolArguments {
 struct SetStudioFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(description = NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION)]
@@ -152,6 +163,8 @@ struct SetStudioFieldsToolArguments {
 struct AddGroupToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GROUP_TITLE_ARGUMENT_DESCRIPTION)]
     title: String,
     #[schemars(description = GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION)]
@@ -176,6 +189,8 @@ struct AddGroupToolArguments {
 struct SetGroupFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
     group: String,
     #[schemars(description = "The group's new title; kept when omitted.")]
@@ -262,6 +277,8 @@ struct RemoveNoteToolArguments {
 struct RemoveGroupToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GROUP_ARGUMENT_DESCRIPTION)]
     group: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -278,8 +295,10 @@ struct RemoveGroupToolArguments {
 struct CollapseSelectionIntoSubgraphToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(
-        description = "The nodes collapsed, each by its UUID, all of the stream's own level and none of its own `GraphInput` or `GraphOutput` nodes."
+        description = "The nodes collapsed, each by its UUID, all of the level `level` names and none of that level's own `GraphInput` or `GraphOutput` nodes."
     )]
     nodes: Vec<String>,
     #[schemars(
@@ -300,6 +319,8 @@ struct CollapseSelectionIntoSubgraphToolArguments {
 struct UnlockGeneratorFragmentToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(
         description = "The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's."
     )]
@@ -338,6 +359,8 @@ struct ImportGraphGeneratorToolArguments {
 struct SetExposedConfigFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    level: Option<Vec<Uuid>>,
     #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
     node: String,
     #[schemars(description = EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION)]
@@ -456,13 +479,18 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(OneNodeToolArguments {
             stream,
+            level,
             node,
             mode,
             author,
             idempotency_key,
         }): Parameters<OneNodeToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphAction::RemoveNode { stream, node };
+        let operation = StreamGraphAction::RemoveNode {
+            stream,
+            level: level.unwrap_or_default(),
+            node,
+        };
         self.one_graph_transaction(
             "remove_node",
             vec![operation],
@@ -495,6 +523,7 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(OneLinkGraphEditRequest {
             stream,
+            level,
             source,
             target,
             mode,
@@ -504,6 +533,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::Disconnect {
             stream,
+            level: level.unwrap_or_default(),
             source,
             target,
         };
@@ -526,6 +556,7 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetNodeConfigToolArguments {
             stream,
+            level,
             node,
             config,
             mode,
@@ -535,6 +566,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::SetNodeConfig {
             stream,
+            level: level.unwrap_or_default(),
             node,
             config,
         };
@@ -557,6 +589,7 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetPinValueToolArguments {
             stream,
+            level,
             node,
             input,
             value,
@@ -567,6 +600,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::SetPinValue {
             stream,
+            level: level.unwrap_or_default(),
             node,
             input,
             value,
@@ -590,6 +624,7 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RenameNodeToolArguments {
             stream,
+            level,
             node,
             name,
             mode,
@@ -597,7 +632,12 @@ impl LocalApiMcpServerHandler {
             idempotency_key,
         }): Parameters<RenameNodeToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphAction::RenameNode { stream, node, name };
+        let operation = StreamGraphAction::RenameNode {
+            stream,
+            level: level.unwrap_or_default(),
+            node,
+            name,
+        };
         self.one_graph_transaction(
             "rename_node",
             vec![operation],
@@ -617,6 +657,7 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetStudioFieldsToolArguments {
             stream,
+            level,
             node,
             studio,
             mode,
@@ -626,6 +667,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::SetStudioFields {
             stream,
+            level: level.unwrap_or_default(),
             node,
             studio,
         };
@@ -648,6 +690,7 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetExposedConfigFieldsToolArguments {
             stream,
+            level,
             node,
             exposed_config_fields,
             mode,
@@ -657,6 +700,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::SetExposedConfigFields {
             stream,
+            level: level.unwrap_or_default(),
             node,
             exposed_config_fields,
         };
@@ -672,13 +716,14 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Make a labelled group of nodes of a loaded stream's own level, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`."
+        description = "Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`."
     )]
     async fn add_group(
         &self,
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(AddGroupToolArguments {
             stream,
+            level,
             title,
             description,
             colour,
@@ -690,6 +735,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::AddGroup {
             stream,
+            level: level.unwrap_or_default(),
             title,
             description,
             colour,
@@ -714,6 +760,7 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetGroupFieldsToolArguments {
             stream,
+            level,
             group,
             title,
             description,
@@ -725,6 +772,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::SetGroupFields {
             stream,
+            level: level.unwrap_or_default(),
             group,
             title,
             description,
@@ -742,13 +790,14 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Collapse nodes of a loaded stream's own level into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document."
+        description = "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document."
     )]
     async fn collapse_selection_into_subgraph(
         &self,
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(CollapseSelectionIntoSubgraphToolArguments {
             stream,
+            level,
             nodes,
             name,
             mode,
@@ -758,6 +807,7 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::CollapseSelectionIntoSubgraph {
             stream,
+            level: level.unwrap_or_default(),
             nodes,
             name,
             label: None,
@@ -774,20 +824,25 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Unlock a fragment node of a loaded stream's own level, as one transaction: its nodes and the links between them become plain nodes of the stream, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document."
+        description = "Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document."
     )]
     async fn unlock_generator_fragment(
         &self,
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(UnlockGeneratorFragmentToolArguments {
             stream,
+            level,
             fragment,
             mode,
             author,
             idempotency_key,
         }): Parameters<UnlockGeneratorFragmentToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphAction::UnlockGeneratorFragment { stream, fragment };
+        let operation = StreamGraphAction::UnlockGeneratorFragment {
+            stream,
+            level: level.unwrap_or_default(),
+            fragment,
+        };
         self.one_graph_transaction(
             "unlock_generator_fragment",
             vec![operation],
@@ -901,13 +956,18 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RemoveGroupToolArguments {
             stream,
+            level,
             group,
             mode,
             author,
             idempotency_key,
         }): Parameters<RemoveGroupToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphAction::RemoveGroup { stream, group };
+        let operation = StreamGraphAction::RemoveGroup {
+            stream,
+            level: level.unwrap_or_default(),
+            group,
+        };
         self.one_graph_transaction(
             "remove_group",
             vec![operation],

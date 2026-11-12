@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.69](https://github.com/tatolab/streamlib/compare/v0.68.68...v0.68.69) (2026-11-12)
+
+
+### Features
+
+* **runtime:** the runtime unit carries sample projects, and create_project can start from one ([3a6541a](https://github.com/tatolab/streamlib/commit/3a6541abe36edfeab591bf5bf57a156033204094))
+
 ## [0.68.68](https://github.com/tatolab/streamlib/compare/v0.68.67...v0.68.68) (2026-11-11)
 
 

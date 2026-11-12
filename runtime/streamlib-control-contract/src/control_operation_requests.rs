@@ -7,8 +7,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib_project_repository::{
-    EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
-    NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
+    EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION, GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
+    StreamGraphAction, StreamGraphActionLinkEnd,
 };
 use uuid::Uuid;
 
@@ -113,6 +114,10 @@ pub struct AddNodeRequest {
     /// The stream asset the node is added to.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     pub stream: Uuid,
+    /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
+    /// level when omitted.
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    pub level: Option<Vec<Uuid>>,
     /// The node's type by its import path.
     #[serde(rename = "type")]
     #[schemars(
@@ -156,6 +161,10 @@ pub struct OneLinkGraphEditRequest {
     /// The stream asset the link is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     pub stream: Uuid,
+    /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
+    /// level when omitted.
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    pub level: Option<Vec<Uuid>>,
     /// The output port the link carries from.
     #[schemars(
         description = "The output port the link carries from: a node's UUID and its output port's name."
