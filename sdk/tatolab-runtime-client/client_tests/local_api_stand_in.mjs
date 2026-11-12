@@ -17,7 +17,7 @@ export function describedRuntime(version) {
 }
 
 /** A local API stand-in on a Unix socket: it answers `discover` on an upgraded connection, and every other request on it or in a POST only when told to. */
-export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade = true } = {}) {
+export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade = true, endsTheConnectionWhenTheClientDoes = true } = {}) {
   const socketDirectory = await mkdtemp(join(tmpdir(), "runtime-client-test-"));
   const socketPath = join(socketDirectory, "local-api.sock");
   const requestsHeardOnTheConnection = [];
@@ -32,7 +32,7 @@ export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade 
     upgradedSockets.push(socket);
     if (!answersTheUpgrade) return;
     socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: control-jsonrpc\r\n\r\n");
-    socket.once("end", () => socket.end());
+    if (endsTheConnectionWhenTheClientDoes) socket.once("end", () => socket.end());
     let unfinishedLine = "";
     socket.on("data", (bytes) => {
       const lines = (unfinishedLine + bytes.toString("utf8")).split("\n");
@@ -58,8 +58,9 @@ export async function startALocalApiThatAnswersOnlyWhenTold({ answersTheUpgrade 
     answerOnTheConnection(requestId, result) {
       upgradedSockets[0].write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result })}\n`);
     },
-    answerTheNextPostWithTheMessageText(messageText) {
+    answerTheNextPostWithTheMessageText(messageText, statusCode = 200) {
       const postResponse = postResponsesUnsent.shift();
+      postResponse.statusCode = statusCode;
       postResponse.setHeader("Content-Type", "application/json");
       postResponse.end(messageText);
     },

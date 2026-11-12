@@ -474,11 +474,11 @@ impl<'contract> ControlContractRead<'contract> {
         let mut declarations = String::from(GENERATED_SOURCE_HEADER);
         declarations.push_str(
             "\nimport type { ControlNotifications, ControlOperations } from \"./control_contract.js\";\n\
-             import type {\n  ControlCallOptions,\n  TatolabRuntimeClientCallsOverATransport,\n  TatolabRuntimeClientConnectOptions,\n} from \"./runtime_client.js\";\n\n\
+             import type {\n  ControlCallOptions,\n  TatolabRuntimeClientCallsOverATransport,\n  TatolabRuntimeClientConnectOptions,\n  TatolabRuntimeClientDiscovered,\n} from \"./runtime_client.js\";\n\n\
              /** A client of the runtime's control API: one method per operation, each request, answer and notification checked against the contract. */\n\
              export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATransport {\n\
              \x20 /** Open a connection on the runtime's local API socket and `discover` over it; refused when the runtime serves another contract version. */\n\
-             \x20 static connect(connectOptions: TatolabRuntimeClientConnectOptions): Promise<TatolabRuntimeClient>;\n",
+             \x20 static connect(connectOptions: TatolabRuntimeClientConnectOptions): Promise<TatolabRuntimeClient & TatolabRuntimeClientDiscovered>;\n",
         );
         for method in &self.methods {
             let optional_marker = if self.takes_params_with_nothing_required(method) {

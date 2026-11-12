@@ -43,11 +43,12 @@ one method per operation and one `on_<notification>` per notification, and a zod
 component schema, every method's params and result and every notification's params. A method
 checks its params before anything is sent and checks the answer before it resolves; a
 notification is checked before a listener hears it. The generated JavaScript is type-checked
-against the generated types, so a schema and its type cannot drift. A schema the contract closes
+against the generated types, so a schema whose output its type does not accept fails the check;
+the check proves the two compatible, not identical. A schema the contract closes
 (`additionalProperties: false`) is strict and every other keeps fields it does not name, so a
 client reads an answer that gained a field without a version bump. The same checks are exported
 without I/O for a caller with a connection of its own, and the client runs over any transport
-that sends one message and resolves its answer. An integer past `Number.MAX_SAFE_INTEGER` is read
+that sends one message and resolves its answer, and closes. An integer past `Number.MAX_SAFE_INTEGER` is read
 and written as a `bigint`.
 
 ## Rejected alternatives

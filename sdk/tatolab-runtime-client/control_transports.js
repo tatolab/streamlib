@@ -23,6 +23,8 @@ function controlClientHeaders(clientName) {
 export class ControlPostTransport {
   #socketPath;
   #clientName;
+  #postRequestsUnanswered = new Set();
+  #closed = false;
 
   constructor({ socketPath, clientName }) {
     this.#socketPath = socketPath;
@@ -30,6 +32,9 @@ export class ControlPostTransport {
   }
 
   sendRequest(requestMessage, { signal } = {}) {
+    if (this.#closed) {
+      return Promise.reject(new Error(`the control transport is closed; \`${requestMessage.method}\` was not sent`));
+    }
     if (signal?.aborted) {
       return Promise.reject(signal.reason);
     }
@@ -55,22 +60,37 @@ export class ControlPostTransport {
             answerText += answerTextPart;
           });
           postResponse.once("end", () => {
+            const theRuntimeRefusedTheHttpRequest = new Error(
+              `the runtime answered \`${requestMessage.method}\` with HTTP ${postResponse.statusCode}: ${answerText}`,
+            );
+            if (postResponse.statusCode < 200 || postResponse.statusCode > 299) {
+              rejectAnswer(theRuntimeRefusedTheHttpRequest);
+              return;
+            }
             try {
               resolveAnswer(controlMessageOfText(answerText));
             } catch {
-              rejectAnswer(
-                new Error(`the runtime answered \`${requestMessage.method}\` with HTTP ${postResponse.statusCode}: ${answerText}`),
-              );
+              rejectAnswer(theRuntimeRefusedTheHttpRequest);
             }
           });
         },
       );
-      postRequest.once("error", (requestError) => rejectAnswer(signal?.aborted ? signal.reason : requestError));
+      this.#postRequestsUnanswered.add(postRequest);
+      postRequest.once("close", () => this.#postRequestsUnanswered.delete(postRequest));
+      postRequest.once("error", (requestError) =>
+        rejectAnswer(signal?.aborted ? signal.reason : this.#closed ? new Error(`the control transport closed before the runtime answered \`${requestMessage.method}\``) : requestError),
+      );
       postRequest.end(requestBody);
     });
   }
 
-  async close() {}
+  async close() {
+    this.#closed = true;
+    for (const postRequest of this.#postRequestsUnanswered) {
+      postRequest.destroy();
+    }
+    this.#postRequestsUnanswered.clear();
+  }
 }
 
 export class ControlStreamTransport {
@@ -89,11 +109,7 @@ export class ControlStreamTransport {
     this.#upgradedSocket = upgradedSocket;
     this.closed = new Promise((resolveClosed) => {
       upgradedSocket.once("close", () => {
-        const whyNoAnswer = this.#whyTheConnectionClosed ?? new Error("the runtime closed the control connection");
-        for (const answerAwaited of this.#answersAwaitedById.values()) {
-          answerAwaited.rejectAnswer(whyNoAnswer);
-        }
-        this.#answersAwaitedById.clear();
+        this.#rejectEveryAnswerAwaited(this.#whyTheConnectionClosed ?? new Error("the runtime closed the control connection"));
         resolveClosed();
       });
     });
@@ -108,7 +124,7 @@ export class ControlStreamTransport {
   }
 
   sendRequest(requestMessage, { signal } = {}) {
-    if (this.#upgradedSocket.destroyed || this.#upgradedSocket.writableEnded) {
+    if (this.#upgradedSocket.destroyed || this.#upgradedSocket.writableEnded || this.#upgradedSocket.closed) {
       return Promise.reject(new Error(`the control connection is closed; \`${requestMessage.method}\` was not sent`));
     }
     if (signal?.aborted) {
@@ -142,10 +158,18 @@ export class ControlStreamTransport {
   }
 
   async close() {
+    this.#rejectEveryAnswerAwaited(new Error("the control connection was closed before the runtime answered"));
     if (!this.#upgradedSocket.destroyed) {
       this.#upgradedSocket.end();
     }
     await this.closed;
+  }
+
+  #rejectEveryAnswerAwaited(whyNoAnswer) {
+    for (const answerAwaited of this.#answersAwaitedById.values()) {
+      answerAwaited.rejectAnswer(whyNoAnswer);
+    }
+    this.#answersAwaitedById.clear();
   }
 
   #readTextFromTheRuntime(textFromTheRuntime) {
@@ -210,14 +234,31 @@ function upgradeAControlStreamConnection(socketPath, clientName, signal) {
       resolveUpgradedSocket({ socket, bytesAlreadyRead });
     });
     upgradeRequest.once("response", (refusalResponse) => {
-      stopListeningForAnAbort();
       let refusalWords = "";
+      let refusalReadToTheEnd = false;
       refusalResponse.setEncoding("utf8");
       refusalResponse.on("data", (refusalText) => {
         refusalWords += refusalText;
       });
       refusalResponse.once("end", () => {
+        refusalReadToTheEnd = true;
+        stopListeningForAnAbort();
         rejectUpgrade(new Error(`the runtime refused the control connection (HTTP ${refusalResponse.statusCode}): ${refusalWords}`));
+      });
+      refusalResponse.once("error", (refusalError) => {
+        stopListeningForAnAbort();
+        rejectUpgrade(signal?.aborted ? signal.reason : refusalError);
+      });
+      refusalResponse.once("close", () => {
+        if (refusalReadToTheEnd) {
+          return;
+        }
+        stopListeningForAnAbort();
+        rejectUpgrade(
+          signal?.aborted
+            ? signal.reason
+            : new Error(`the runtime refused the control connection (HTTP ${refusalResponse.statusCode}) and closed before its reason: ${refusalWords}`),
+        );
       });
     });
     upgradeRequest.once("error", (upgradeError) => {

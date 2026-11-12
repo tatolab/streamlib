@@ -8,12 +8,13 @@ import type {
   ControlCallOptions,
   TatolabRuntimeClientCallsOverATransport,
   TatolabRuntimeClientConnectOptions,
+  TatolabRuntimeClientDiscovered,
 } from "./runtime_client.js";
 
 /** A client of the runtime's control API: one method per operation, each request, answer and notification checked against the contract. */
 export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATransport {
   /** Open a connection on the runtime's local API socket and `discover` over it; refused when the runtime serves another contract version. */
-  static connect(connectOptions: TatolabRuntimeClientConnectOptions): Promise<TatolabRuntimeClient>;
+  static connect(connectOptions: TatolabRuntimeClientConnectOptions): Promise<TatolabRuntimeClient & TatolabRuntimeClientDiscovered>;
   /**
    * Answer the contract version this runtime serves, its version and build id, and every method it serves.
    */
