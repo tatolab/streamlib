@@ -3,8 +3,8 @@ name: CI
 # What a pull request must prove before it merges: the code is formatted and
 # lint-clean and its unit tests pass. The merge queue and `main` also prove the
 # Apple path builds; a nightly run on `main` proves a stream still runs end to
-# end on the runtime. It builds nothing that ships; release.yml builds, checks
-# and publishes the distributables.
+# end on the runtime. It builds nothing that ships: release.yml builds and
+# publishes the distributables, and distribution-checks.yml checks them nightly.
 #
 #   Lint                       formatting, clippy, the source gates, licences,
 #                              Python types

@@ -19,7 +19,7 @@ on:
         required: false
         default: ""
       dry_run:
-        description: "Build and check every module without uploading"
+        description: "Build every module without uploading"
         type: boolean
         required: false
         default: true
@@ -30,20 +30,20 @@ on:
         type: string
         required: false
       dry_run:
-        description: "Build and check every module without uploading"
+        description: "Build every module without uploading"
         type: boolean
         required: false
         default: true
 
 env:
-  # The uv that builds and checks every module.
+  # The uv that builds and uploads every module.
   PINNED_UV_VERSION: "0.12.23"
 
 jobs:
-  # Each module's install check installs it beside the `tatolab-stream` of its
-  # own ref, built here; this one is never uploaded.
-  build-the-tatolab-stream-the-module-checks-install:
-    name: tatolab-stream wheel for the module install checks
+  # The catalog describes each module through the `tatolab-stream` of its own
+  # ref, built here; this one is never uploaded.
+  build-the-tatolab-stream-the-catalog-describes-with:
+    name: tatolab-stream wheel the catalog describes with
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -63,108 +63,85 @@ jobs:
       - name: Build the tatolab-stream wheel
         run: uv build --wheel --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
 
-      - name: Keep the wheel for the module install checks
+      - name: Keep the wheel for the catalog
         uses: actions/upload-artifact@v6
         with:
-          name: module-check-tatolab-stream
+          name: catalog-tatolab-stream
           path: sdk/tatolab-stream/dist/*.whl
           if-no-files-found: error
 
   # An extension is a standalone project built from the same ref. A named block
   # rather than a matrix over a JSON array: an empty `include` is a matrix
   # expansion failure, and a second extension is one more block like this one.
-  # Its install check resolves `tatolab-stream` from this run's distribution,
-  # which is why it waits for it.
   build-tatolab-webrtc-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/streamlib-webrtc
       extension_distribution_name: tatolab-webrtc
-      extension_import_package_name: tatolab.webrtc
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
 
   build-tatolab-microphone-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-microphone
       extension_distribution_name: tatolab-microphone
-      extension_import_package_name: tatolab.microphone
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
 
   build-tatolab-speaker-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-speaker
       extension_distribution_name: tatolab-speaker
-      extension_import_package_name: tatolab.speaker
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
 
   # The codec modules: the scaffold depends on tatolab-h264, and tatolab-h265 is
   # its H.265 twin.
   build-tatolab-h264-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/streamlib-h264
       extension_distribution_name: tatolab-h264
-      extension_import_package_name: tatolab.h264
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
       extension_build_needs_the_slang_compiler: true
 
   build-tatolab-h265-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/streamlib-h265
       extension_distribution_name: tatolab-h265
-      extension_import_package_name: tatolab.h265
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
       extension_build_needs_the_slang_compiler: true
 
   # Linux and macOS: V4L2 and AVFoundation.
   build-tatolab-camera-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-camera
       extension_distribution_name: tatolab-camera
-      extension_import_package_name: tatolab.camera
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
 
   # Linux only. build.rs fetches rive-runtime with git and builds it with
   # clang; premake needs libuuid's headers.
   build-tatolab-rive-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-rive
       extension_distribution_name: tatolab-rive
-      extension_import_package_name: tatolab.rive
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
       extension_build_needs_the_shader_compilers: true
       extension_build_extra_dnf_packages: clang git libuuid-devel
       extension_builds_for_macos: false
@@ -172,55 +149,43 @@ jobs:
   # Linux only at run time — both of its doors are Linux's — so a manylinux
   # wheel only.
   build-tatolab-virtualcamera-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-virtualcamera
       extension_distribution_name: tatolab-virtualcamera
-      extension_import_package_name: tatolab.virtualcamera
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
       extension_builds_for_macos: false
 
   build-tatolab-opus-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-opus
       extension_distribution_name: tatolab-opus
-      extension_import_package_name: tatolab.opus
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
 
   build-tatolab-moq-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-moq
       extension_distribution_name: tatolab-moq
-      extension_import_package_name: tatolab.moq
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
 
   # The node side of a web page source: its wheel carries no browser, which is
   # the shared browser host the runtime unit ships.
   build-tatolab-browser-distribution:
-    needs: build-the-tatolab-stream-the-module-checks-install
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-extension-wheel.yml
     with:
       extension_package_directory: packages/tatolab-browser
       extension_distribution_name: tatolab-browser
-      extension_import_package_name: tatolab.browser
       ref: ${{ inputs.tag_name }}
-      tatolab_stream_distribution_artifact_name: module-check-tatolab-stream
       extension_builds_for_macos: false
   # Wheels and their sidecars first and the pages last, so a page never links a
   # file the bucket does not hold. It shares one concurrency group with the core
@@ -230,6 +195,7 @@ jobs:
     name: Publish the modules that built to get.tatolab.com/simple/
     if: ${{ !cancelled() }}
     needs:
+      - build-the-tatolab-stream-the-catalog-describes-with
       - build-tatolab-webrtc-distribution
       - build-tatolab-microphone-distribution
       - build-tatolab-speaker-distribution
@@ -392,14 +358,11 @@ jobs:
             fi
           done
 
-      - name: The module project archives import and describe
-        run: python3 scripts/test_tatolab_module_projects.py -v
-
       - name: Collect the tatolab-stream whose listing describes each module
         uses: actions/download-artifact@v7
         with:
-          name: module-check-tatolab-stream
-          path: /tmp/module-check-tatolab-stream
+          name: catalog-tatolab-stream
+          path: /tmp/catalog-tatolab-stream
 
       # Each module project's archive carries every wheel this run built for it, and the
       # catalog lists the nodes the runtime's own listing reads from the Linux one. A module
@@ -416,7 +379,7 @@ jobs:
           python3 scripts/tatolab_module_projects.py assemble . dist "$release_version" module-projects
           curl -fsSL "$GET_TATOLAB_COM_URL/catalog/v1.json" -o /tmp/catalog-it-replaces.json || rm -f /tmp/catalog-it-replaces.json
           python3 scripts/tatolab_module_projects.py write-catalog module-projects "$(command -v uv)" \
-            "$(ls /tmp/module-check-tatolab-stream/*.whl)" /tmp/catalog-it-replaces.json
+            "$(ls /tmp/catalog-tatolab-stream/*.whl)" /tmp/catalog-it-replaces.json
           find module-projects -type f | sort
           cat module-projects/catalog/v1.json
 

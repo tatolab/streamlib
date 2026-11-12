@@ -16,19 +16,11 @@ on:
         description: "The distribution pip installs, e.g. tatolab-webrtc"
         type: string
         required: true
-      extension_import_package_name:
-        description: "The package the smoke test imports, e.g. tatolab.webrtc"
-        type: string
-        required: true
       ref:
         description: "What to check out and build (blank = the calling run's own ref)"
         type: string
         required: false
         default: ""
-      tatolab_stream_distribution_artifact_name:
-        description: "This run's artifact holding the tatolab-stream the release publishes beside the extension"
-        type: string
-        required: true
       extension_build_needs_the_shader_compilers:
         description: "Whether a build script in the extension's closure runs glslangValidator or spirv-opt, which the manylinux image lacks"
         type: boolean
@@ -153,7 +145,6 @@ jobs:
         if: runner.os == 'macOS'
         uses: dtolnay/rust-toolchain@stable
 
-      # Also the interpreter the smoke test below installs into.
       - name: Install Python
         if: runner.os == 'macOS'
         uses: actions/setup-python@v6
@@ -185,65 +176,6 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: ${{ inputs.extension_package_directory }}
         run: uvx maturin@1.9.6 build --release --out dist
-
-      # An arm64 binary whose signature did not survive the zip round-trip
-      # loads nowhere, so it is checked on the artifact rather than assumed.
-      - name: Every binary in the built wheel is still signed
-        if: runner.os == 'macOS'
-        run: |
-          rm -rf /tmp/unzipped-extension-wheel
-          unzip -q "${{ inputs.extension_package_directory }}"/dist/*.whl -d /tmp/unzipped-extension-wheel
-          find /tmp/unzipped-extension-wheel \( -name '*.so' -o -name '*.dylib' \) \
-            -exec codesign --verify --strict --verbose=1 {} +
-
-      - name: Collect the tatolab-stream this release publishes
-        uses: actions/download-artifact@v7
-        with:
-          name: ${{ inputs.tatolab_stream_distribution_artifact_name }}
-          path: /tmp/tatolab-stream-distribution
-
-      # A wheel that installs but cannot be imported is not a release artifact,
-      # and licence obligations only discharge if the files reach the artifact a
-      # user installs. Both are asserted against this build rather than trusted
-      # from the test suite: that runs against `maturin develop`, while this is
-      # a release build resolving PEP 639 globs that are symlinks out of the
-      # project root.
-      #
-      # This run's `tatolab-stream` first, with `--no-index`, since PyPI does not
-      # hold it until the upload: the extension's declared floor has to admit the
-      # `tatolab-stream` published beside it. The wheel then installs with the
-      # index on, so a third-party dependency it declares (`numpy`) resolves.
-      - name: The wheel installs beside this release's tatolab-stream, imports, and carries its notices
-        env:
-          EXTENSION_DISTRIBUTION_NAME: ${{ inputs.extension_distribution_name }}
-          EXTENSION_IMPORT_PACKAGE_NAME: ${{ inputs.extension_import_package_name }}
-        run: |
-          python3 -m venv /tmp/extension-wheel-check
-          /tmp/extension-wheel-check/bin/pip install 'msgpack>=1.0'
-          /tmp/extension-wheel-check/bin/pip install \
-            --no-index --find-links /tmp/tatolab-stream-distribution tatolab-stream
-          /tmp/extension-wheel-check/bin/pip install \
-            "${{ inputs.extension_package_directory }}"/dist/*.whl
-          # Read through importlib.metadata, so a file present in the repo and
-          # absent from the wheel fails rather than passes.
-          /tmp/extension-wheel-check/bin/python -c "
-          import importlib
-          import os
-          from importlib.metadata import distribution
-
-          distribution_name = os.environ['EXTENSION_DISTRIBUTION_NAME']
-          shipped = distribution(distribution_name)
-          for license_file_name in ('LICENSE', 'THIRD-PARTY-NOTICES.md'):
-              text = shipped.read_text('licenses/' + license_file_name) or ''
-              assert text.strip(), license_file_name + ' is absent from .dist-info/licenses/'
-
-          extension = importlib.import_module(os.environ['EXTENSION_IMPORT_PACKAGE_NAME'])
-          exported = list(getattr(extension, '__all__', []))
-          assert exported, distribution_name + ' exports no processor classes'
-          for name in exported:
-              getattr(extension, name)
-          print(distribution_name, 'exports', ', '.join(exported))
-          "
 
       # reusable-module-distributions.yml uploads every `module-distribution-*` artifact of the run.
       - name: Keep the wheel for the upload

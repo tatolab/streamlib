@@ -569,22 +569,39 @@ impl StreamGraphDocument {
 
 /// The nodes and links of `level`'s own level, each node under a UUID `new_uuid` makes and each
 /// link end following its node's; a node's membership of one of `level`'s groups is left behind
-/// with the groups.
+/// with the groups. Each subgraph a node holds is copied whole, every node and group inside it
+/// under a fresh UUID too.
 fn a_copy_under_new_uuids(level: Value, new_uuid: &mut dyn FnMut() -> Uuid) -> Value {
-    let mut new_uuid_of_each_held_node = std::collections::HashMap::new();
     let mut nodes = level["nodes"].as_array().cloned().unwrap_or_default();
+    let mut links = level["links"].as_array().cloned().unwrap_or_default();
+    each_node_and_link_end_under_new_uuids(&mut nodes, &mut links, new_uuid);
+    for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
+        if let Some(Value::Object(studio)) = node.get_mut("studio") {
+            studio.remove(crate::stream_graph_document::STUDIO_GROUP_KEY);
+        }
+    }
+    json!({ "nodes": nodes, "links": links })
+}
+
+/// Give each of `nodes` a UUID `new_uuid` makes, each of `links`' ends its node's new one, and
+/// every level a node's subgraph holds the same, its groups and their members included.
+fn each_node_and_link_end_under_new_uuids(
+    nodes: &mut [Value],
+    links: &mut [Value],
+    new_uuid: &mut dyn FnMut() -> Uuid,
+) {
+    let mut new_uuid_of_each_held_node = std::collections::HashMap::new();
     for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
         if let Some(Value::String(id)) = node.get_mut("id") {
             let fresh = new_uuid().to_string();
             new_uuid_of_each_held_node.insert(id.clone(), fresh.clone());
             *id = fresh;
         }
-        if let Some(Value::Object(studio)) = node.get_mut("studio") {
-            studio.remove(crate::stream_graph_document::STUDIO_GROUP_KEY);
+        if let Some(Value::Object(subgraph)) = node.get_mut("fragment") {
+            each_node_and_group_of_a_subgraph_under_new_uuids(subgraph, new_uuid);
         }
     }
-    let mut links = level["links"].as_array().cloned().unwrap_or_default();
-    for link in &mut links {
+    for link in links {
         for end_key in ["source", "target"] {
             if let Some(Value::String(node)) =
                 link.get_mut(end_key).and_then(|end| end.get_mut("node"))
@@ -594,7 +611,42 @@ fn a_copy_under_new_uuids(level: Value, new_uuid: &mut dyn FnMut() -> Uuid) -> V
             }
         }
     }
-    json!({ "nodes": nodes, "links": links })
+}
+
+fn each_node_and_group_of_a_subgraph_under_new_uuids(
+    subgraph: &mut Map<String, Value>,
+    new_uuid: &mut dyn FnMut() -> Uuid,
+) {
+    let mut nodes = match subgraph.remove("nodes") {
+        Some(Value::Array(nodes)) => nodes,
+        _ => Vec::new(),
+    };
+    let mut links = match subgraph.remove("links") {
+        Some(Value::Array(links)) => links,
+        _ => Vec::new(),
+    };
+    each_node_and_link_end_under_new_uuids(&mut nodes, &mut links, new_uuid);
+    let mut new_uuid_of_each_group = std::collections::HashMap::new();
+    if let Some(Value::Array(groups)) = subgraph.get_mut("groups") {
+        for group in groups.iter_mut().filter_map(Value::as_object_mut) {
+            if let Some(Value::String(id)) = group.get_mut("id") {
+                let fresh = new_uuid().to_string();
+                new_uuid_of_each_group.insert(id.clone(), fresh.clone());
+                *id = fresh;
+            }
+        }
+    }
+    for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
+        if let Some(Value::String(group)) = node
+            .get_mut("studio")
+            .and_then(|studio| studio.get_mut(crate::stream_graph_document::STUDIO_GROUP_KEY))
+            && let Some(fresh) = new_uuid_of_each_group.get(group.as_str())
+        {
+            *group = fresh.clone();
+        }
+    }
+    subgraph.insert("nodes".to_owned(), Value::Array(nodes));
+    subgraph.insert("links".to_owned(), Value::Array(links));
 }
 
 fn push_the_end_under(

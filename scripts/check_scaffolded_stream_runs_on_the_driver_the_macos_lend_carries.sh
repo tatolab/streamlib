@@ -102,6 +102,13 @@ if ! "$tatolab_executable" new /tmp/scaffold-check > /tmp/scaffold-new.log 2>&1;
   echo "::error::tatolab new did not queue the create"
   exit 1
 fi
+# A created project opens held stopped; the stream, and with it the GPU
+# context, starts only on its playback, queued here behind the create.
+if ! "$tatolab_executable" play --dir /tmp/scaffold-check >> /tmp/scaffold-new.log 2>&1; then
+  cat /tmp/scaffold-new.log /tmp/tatolabd.log
+  echo "::error::tatolab play did not queue the playback"
+  exit 1
+fi
 # `graph` counts a port's writes only once something reads it, and the starter
 # links nothing, so a viewer holds the source's `video` open over `tatolab mcp`
 # for 20s before the graph is read, then lets go.
