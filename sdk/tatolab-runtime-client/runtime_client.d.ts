@@ -7,32 +7,18 @@ import type {
   ControlOperationMethodName,
   ControlOperations,
   DiscoverResult,
-  ProjectActionRefusalOnTheWire,
 } from "./control_contract.js";
+import type { ControlNotificationInvalid } from "./control_messages.js";
+import type { ControlOperationAbortSignal, ControlTransport } from "./control_transports.js";
 
-/** The parts of an `AbortSignal` the client listens to; a DOM or Node `AbortSignal` is one. */
-export interface ControlOperationAbortSignal {
-  readonly aborted: boolean;
-  readonly reason: unknown;
-  addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
-  removeEventListener(type: "abort", listener: () => void): void;
-}
-
-/** The source text `JSON.parse` hands a reviver beside a primitive value. */
-export interface ControlOperationResultReviverContext {
-  readonly source?: string;
-}
-
-/** How one call waits and reads its answer. */
-export interface ControlOperationCallOptions {
+/** How one call waits for its answer. */
+export interface ControlCallOptions {
   /** Aborting it rejects the call with the signal's reason and drops a late answer. */
   signal?: ControlOperationAbortSignal;
-  /** Parses the answer with this `JSON.parse` reviver, so a caller can keep a number's digits as written; each value in the result is what the reviver returned for it. */
-  resultReviver?: (key: string, value: unknown, context?: ControlOperationResultReviverContext) => unknown;
 }
 
 /** How to reach a runtime's local API and who the client is. */
-export interface TatolabRuntimeControlClientConnectOptions {
+export interface TatolabRuntimeClientConnectOptions {
   /** The runtime's local API socket. */
   socketPath: string;
   /** The client's name, the author of a change it sends with no author. */
@@ -41,45 +27,27 @@ export interface TatolabRuntimeControlClientConnectOptions {
   signal?: ControlOperationAbortSignal;
 }
 
-/** A JSON-RPC error the runtime answered a call with, in the runtime's own words. */
-export declare class ControlOperationError extends Error {
-  /** The method the call was to. */
-  readonly method: string;
-  /** The JSON-RPC error code, one of the contract's `CONTROL_*_ERROR_CODE` or a JSON-RPC one. */
-  readonly code: number;
-  /** The error's `data`, as the runtime sent it. */
-  readonly data: unknown;
-  /** The refusal, when the runtime refused the operation. */
-  readonly refusal: ProjectActionRefusalOnTheWire | undefined;
-}
-
-/** Call one operation in one `POST` to the runtime's control route; a subscription needs a {@link TatolabRuntimeControlClient}. */
-export declare function callOneControlOperation<Method extends ControlOperationMethodName>(
-  connectOptions: TatolabRuntimeControlClientConnectOptions,
-  method: Method,
-  params: ControlOperations[Method]["params"],
-  callOptions?: ControlOperationCallOptions,
-): Promise<ControlOperations[Method]["result"]>;
-
-/** One connection to a runtime's control API, upgraded on its local API socket. */
-export declare class TatolabRuntimeControlClient {
-  /** Upgrade a connection on the socket and `discover` over it; refused when the runtime serves another contract version. */
-  static connect(options: TatolabRuntimeControlClientConnectOptions): Promise<TatolabRuntimeControlClient>;
-  /** What `discover` answered when the connection opened. */
-  readonly discovered: DiscoverResult;
-  /** Call one operation; rejects with a {@link ControlOperationError} when the runtime answers an error. */
+/** The calls every generated method makes: each request is checked against the contract before it is sent, and each answer and notification before it is handed on. */
+export declare class TatolabRuntimeClientCallsOverATransport {
+  /** A client over `transport`, which it closes on {@link close}. */
+  constructor(transport: ControlTransport);
+  /** What `discover` answered, when the client was opened with `connect`. */
+  discovered: DiscoverResult;
+  /** Call one operation: rejects with `ControlRequestInvalid` before sending params that do not match the contract, `ControlOperationError` for the runtime's refusal or failure, and `ControlAnswerInvalid` for an answer that does not match. */
   call<Method extends ControlOperationMethodName>(
     method: Method,
     params: ControlOperations[Method]["params"],
-    callOptions?: ControlOperationCallOptions,
+    callOptions?: ControlCallOptions,
   ): Promise<ControlOperations[Method]["result"]>;
-  /** Hear each notification of `method` the connection is sent; the returned function stops it. */
+  /** Hear each notification of `method` checked against the contract; the returned function stops it. Throws when the transport carries no notifications. */
   onNotification<Method extends ControlNotificationMethodName>(
     method: Method,
     listener: (params: ControlNotifications[Method]) => void,
   ): () => void;
-  /** Resolves once the connection has closed, by either side. */
+  /** Hear each notification that did not match the contract, which no listener heard; the returned function stops it. */
+  onNotificationInvalid(listener: (notificationInvalid: ControlNotificationInvalid) => void): () => void;
+  /** Resolves once the transport has closed, by either side; never, for a transport that holds no connection. */
   readonly closed: Promise<void>;
-  /** Close the connection; a call still unanswered rejects. */
+  /** Close the transport; a call still unanswered rejects. */
   close(): Promise<void>;
 }

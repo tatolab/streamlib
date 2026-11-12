@@ -6,7 +6,9 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": false,
-    "types": []
+    "types": [],
+    "allowJs": true,
+    "checkJs": true
   },
-  "files": ["a_client_calling_the_runtime.ts"]
+  "files": ["a_client_calling_the_runtime.ts", "../control_schemas.js"]
 }

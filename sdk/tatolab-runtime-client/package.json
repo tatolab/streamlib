@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "exports": {
     ".": {
@@ -20,9 +20,20 @@
     "index.d.ts",
     "runtime_client.js",
     "runtime_client.d.ts",
+    "control_messages.js",
+    "control_messages.d.ts",
+    "control_transports.js",
+    "control_transports.d.ts",
     "control_contract.js",
     "control_contract.d.ts",
+    "control_schemas.js",
+    "control_schemas.d.ts",
+    "control_client.js",
+    "control_client.d.ts",
     "contract.json",
     "REFERENCE.md"
-  ]
+  ],
+  "dependencies": {
+    "zod": "4.6.7"
+  }
 }

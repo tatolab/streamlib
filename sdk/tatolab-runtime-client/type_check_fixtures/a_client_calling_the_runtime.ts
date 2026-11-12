@@ -3,85 +3,101 @@
 
 import {
   CONTROL_OPERATION_METHOD_NAMES,
+  ControlAnswerInvalid,
   ControlOperationError,
-  TatolabRuntimeControlClient,
-  callOneControlOperation,
+  ControlPostTransport,
+  ControlRequestInvalid,
+  ControlSchemas,
+  TatolabRuntimeClient,
+  controlAnswerResult,
+  controlNotificationParams,
+  controlRequestMessage,
   type ControlOperationAbortSignal,
   type ControlOperationMethodName,
+  type ControlTransport,
   type DescribeRuntimeToolResult,
   type DiscoverResult,
   type GraphTransactionToolResult,
   type ListStreamsToolResult,
   type ProjectChangedNotificationParams,
+  type ProjectStreamActionQueuedToolResult,
   type SubscribeProjectChangesResult,
 } from "../index.js";
 
-export async function aClientCallingEveryOperation(
+export async function aClientCallingEveryKindOfOperation(
   socketPath: string,
   project: string,
   callAbortSignal: ControlOperationAbortSignal,
+  aTransportOfItsOwn: ControlTransport,
 ): Promise<void> {
-  const client = await TatolabRuntimeControlClient.connect({ socketPath, clientName: "type check" });
-  const discovered: DiscoverResult = await client.call("discover", { contract_version: 2 });
-  const subscribed: SubscribeProjectChangesResult = await client.call("subscribe_project_changes", {
-    projects: [project],
-  });
-  const described: DescribeRuntimeToolResult = await client.call("describe_runtime", {});
-  const listedStreams: ListStreamsToolResult = await client.call("list_streams", {});
-  const exportedGraph: unknown = await client.call("graph", { stream: null });
+  const client = await TatolabRuntimeClient.connect({ socketPath, clientName: "type check" });
+  const discovered: DiscoverResult = client.discovered;
+  const subscribed: SubscribeProjectChangesResult = await client.subscribe_project_changes({ projects: [project] });
+  const described: DescribeRuntimeToolResult = await client.describe_runtime();
+  const listedStreams: ListStreamsToolResult = await client.list_streams({});
   const streamAsset: string = listedStreams.streams[0]?.location?.stream_asset ?? "";
-  const transacted: GraphTransactionToolResult = await client.call("transact", {
+  const opened: ProjectStreamActionQueuedToolResult = await client.open_project({ project_directory: "/projects/arm" });
+  const transacted: GraphTransactionToolResult = await client.transact({
     operations: [{ operation: "remove_node", stream: streamAsset, node: "a node" }],
     mode: "live",
   });
-  const added: GraphTransactionToolResult = await client.call("add_node", {
+  const added: GraphTransactionToolResult = await client.add_node({
     stream: streamAsset,
     type: "nodes.grayscale_effect:GrayscaleEffect",
     author: { kind: "person", name: "Dana" },
   });
-  const connected: GraphTransactionToolResult = await client.call("connect", {
+  const connected: GraphTransactionToolResult = await client.connect({
     stream: streamAsset,
     source: { node: "a node", port: "video_out" },
     target: { node: "another node", port: "video" },
   });
-  const describedOverAPost: DescribeRuntimeToolResult = await callOneControlOperation(
-    { socketPath, clientName: "type check" },
-    "describe_runtime",
-    {},
-    { signal: callAbortSignal },
-  );
-  const describedUntilAborted: DescribeRuntimeToolResult = await client.call("describe_runtime", {}, { signal: callAbortSignal });
-  const describedWithItsDigitsAsWritten = await client.call("describe_runtime", {}, {
-    resultReviver: (_key, value, context) => (typeof value === "number" ? (context?.source ?? String(value)) : value),
-  });
-  const connectedUntilAborted = await TatolabRuntimeControlClient.connect({ socketPath, clientName: "type check", signal: callAbortSignal });
-  await connectedUntilAborted.close();
-  const stopHearing = client.onNotification("project_changed", (params: ProjectChangedNotificationParams) => {
+  const describedUntilAborted: DescribeRuntimeToolResult = await client.describe_runtime({}, { signal: callAbortSignal });
+  const describedByName: DescribeRuntimeToolResult = await client.call("describe_runtime", {});
+  const stopHearing = client.on_project_changed((params: ProjectChangedNotificationParams) => {
     void params.change;
   });
   stopHearing();
+  const stopHearingTheInvalid = client.onNotificationInvalid((notificationInvalid) => void notificationInvalid.issues[0]?.path);
+  stopHearingTheInvalid();
 
-  // @ts-expect-error a method the contract does not declare is refused.
-  await client.call("no_such_method", {});
+  const overAPost = new TatolabRuntimeClient(new ControlPostTransport({ socketPath, clientName: "type check" }));
+  const describedOverAPost: DescribeRuntimeToolResult = await overAPost.describe_runtime();
+  const overItsOwnTransport = new TatolabRuntimeClient(aTransportOfItsOwn);
+  const listedOverItsOwnTransport: ListStreamsToolResult = await overItsOwnTransport.list_streams();
+
+  const requestMessage = controlRequestMessage("open_project", { project_directory: "/projects/arm" }, 7);
+  const openedFromAnAnswer: ProjectStreamActionQueuedToolResult = controlAnswerResult("open_project", { jsonrpc: "2.0", id: 7, result: {} });
+  const heardChange = controlNotificationParams({ jsonrpc: "2.0", method: "project_changed", params: {} });
+  const parsedDirectly = ControlSchemas.operations.open_project.result.parse({});
+  const parsedByComponent: DiscoverResult = ControlSchemas.components.DiscoverResult.parse({});
+
+  // @ts-expect-error the client has no method the contract does not declare.
+  await client.no_such_method({});
   // @ts-expect-error `add_node` takes the node's `type`.
-  await client.call("add_node", { stream: streamAsset });
+  await client.add_node({ stream: streamAsset });
+  // @ts-expect-error `open_project` takes its `project_directory`.
+  await client.open_project();
   // @ts-expect-error `list_streams` answers no `nodes`.
-  void (await client.call("list_streams", {})).nodes;
+  void (await client.list_streams()).nodes;
   // @ts-expect-error a transact operation is tagged by one of the operations the contract names.
-  await client.call("transact", { operations: [{ operation: "rename_stream", stream: streamAsset }] });
+  await client.transact({ operations: [{ operation: "rename_stream", stream: streamAsset }] });
   // @ts-expect-error the contract sends no notification by that name.
-  client.onNotification("project_opened", () => {});
+  client.on_project_opened(() => {});
 
   try {
-    await client.call("graph", {});
+    await client.graph({});
   } catch (callError) {
     if (callError instanceof ControlOperationError) {
       const refusedAction: string | undefined = callError.refusal?.action;
       void refusedAction;
+    } else if (callError instanceof ControlRequestInvalid || callError instanceof ControlAnswerInvalid) {
+      const firstIssueMessage: string | undefined = callError.issues[0]?.message;
+      void firstIssueMessage;
     }
   }
   const everyMethodName: readonly ControlOperationMethodName[] = CONTROL_OPERATION_METHOD_NAMES;
-  void [discovered, subscribed, described, exportedGraph, transacted, added, connected, describedOverAPost, describedUntilAborted, describedWithItsDigitsAsWritten];
+  void [discovered, subscribed, described, opened, transacted, added, connected, describedUntilAborted, describedByName];
+  void [describedOverAPost, listedOverItsOwnTransport, requestMessage, openedFromAnAnswer, heardChange, parsedDirectly, parsedByComponent];
   void everyMethodName;
   await client.close();
 }

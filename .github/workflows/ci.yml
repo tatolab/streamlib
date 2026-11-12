@@ -191,6 +191,9 @@ jobs:
       - name: The TypeScript runtime client matches the control contract file
         run: cargo run --locked -q -p xtask -- generate-runtime-client --check
 
+      - name: Install the TypeScript runtime client's dependencies
+        run: npm ci --prefix sdk/tatolab-runtime-client --no-audit --no-fund
+
       - name: Type-check the TypeScript runtime client against its fixtures
         run: npx --yes --package typescript@6.0.2 tsc -p sdk/tatolab-runtime-client/type_check_fixtures
 
@@ -389,6 +392,10 @@ jobs:
 
       # The compile-fail test builds the engine a second time, in trybuild's
       # own target directory; it runs on `main` and in the merge queue.
+      # The api-server's tests run the TypeScript runtime client, which imports zod.
+      - name: Install the TypeScript runtime client's dependencies
+        run: npm ci --prefix sdk/tatolab-runtime-client --no-audit --no-fund
+
       - name: Unit, integration and hardware tests
         env:
           TEST_FILTER: ${{ github.event_name == 'pull_request' && 'not binary_id(streamlib-engine::compile_fail_config_without_json_schema)' || 'all()' }}
@@ -783,6 +790,11 @@ jobs:
           --exclude streamlib-adapter-skia
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::disallowed_macros -D warnings
+
+      # The api-server's tests run the TypeScript runtime client, which imports zod.
+      - name: Install the TypeScript runtime client's dependencies
+        if: github.event_name != 'pull_request'
+        run: npm ci --prefix sdk/tatolab-runtime-client --no-audit --no-fund
 
       - name: Run unit tests
         if: github.event_name != 'pull_request'

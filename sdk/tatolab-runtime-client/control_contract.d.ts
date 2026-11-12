@@ -158,7 +158,7 @@ export interface DescribeRuntimeToolResult {
   /**
    * Monotonic milliseconds since this runtime's engine started; a restart resets it.
    */
-  up_for_ms: number;
+  up_for_ms: number | bigint;
   /**
    * The folder the runtime's own log is written to, absolute for `tatolabd`; `None` when it
    * keeps none.
@@ -1572,15 +1572,15 @@ export interface ProjectVenvSyncOnTheWire {
    * How many packages its resolution named, the project's own among them; `null` until it
    * resolved.
    */
-  packages_resolved?: number | null;
+  packages_resolved?: number | bigint | null;
   /**
    * How many packages it downloaded or built before installing; `null` until uv prepared them.
    */
-  packages_prepared?: number | null;
+  packages_prepared?: number | bigint | null;
   /**
    * How many packages it installed; `null` until uv installed them.
    */
-  packages_installed?: number | null;
+  packages_installed?: number | bigint | null;
   /**
    * How many of the downloads uv named have started; uv names only a download over its own
    * size threshold, about a MiB, so a small one shows only in `packages_prepared`.
@@ -1625,7 +1625,7 @@ export interface ProjectVenvSyncPackageOnTheWire {
    * The download's size as uv states it, to its one decimal of KiB, MiB or GiB; `null` for a
    * package uv downloads without naming it or does not download.
    */
-  download_size_bytes?: number | null;
+  download_size_bytes?: number | bigint | null;
 }
 
 /**
@@ -1870,7 +1870,7 @@ export interface ListAssetsToolResult {
    * When the project's history last changed, in whole seconds since the Unix epoch, for
    * display only; `null` before its first commit.
    */
-  project_last_edited_at?: number | null;
+  project_last_edited_at?: number | bigint | null;
   /**
    * The assets, narrowed to one kind when the call named one, each with the media facts
    * already read and no file read for the listing.
@@ -1907,7 +1907,7 @@ export interface ProjectAssetWithItsMediaFactsOnTheWire {
   /**
    * The size of its bytes.
    */
-  content_byte_len: number;
+  content_byte_len: number | bigint;
   /**
    * The settings its import took.
    */
@@ -1938,7 +1938,7 @@ export interface AssetMediaFactsOnTheWire {
   /**
    * How long the media plays, in whole milliseconds.
    */
-  duration_ms?: number | null;
+  duration_ms?: number | bigint | null;
   /**
    * The first video track's facts, `null` for a file with no video.
    */
@@ -2044,7 +2044,7 @@ export interface AssetSceneFactsOnTheWire {
   /**
    * How many prims the scene defines.
    */
-  prim_count?: number | null;
+  prim_count?: number | bigint | null;
 }
 
 /**
@@ -2130,7 +2130,7 @@ export interface ReadAssetPreviewToolResult {
   /**
    * The picture's length in bytes.
    */
-  byte_len: number;
+  byte_len: number | bigint;
   /**
    * The picture's bytes, standard base64 with padding.
    */
@@ -2221,7 +2221,7 @@ export interface ProjectAssetOnTheWire {
   /**
    * The size of its bytes.
    */
-  content_byte_len: number;
+  content_byte_len: number | bigint;
   /**
    * The settings its import took.
    */
@@ -2662,7 +2662,7 @@ export interface ProjectFileOnTheWire {
   /**
    * The file's length in bytes.
    */
-  byte_len: number;
+  byte_len: number | bigint;
 }
 
 /**
@@ -2690,7 +2690,7 @@ export interface ReadProjectFileToolResult {
   /**
    * The file's length in bytes.
    */
-  byte_len: number;
+  byte_len: number | bigint;
   /**
    * The file's bytes, standard base64 with padding.
    */
