@@ -121,7 +121,17 @@ uv add tatolab-stream
 
 A new project's `pyproject.toml` depends on `tatolab-stream`, at least as new as the runtime that
 created it, and names Tatolab's own package index, `https://get.tatolab.com/simple/`, which serves
-the first-party modules the runtime does not carry. The runtime carries a wheel of `tatolab-stream`
+the first-party modules the runtime does not carry. A project created before 0.68.33 names no
+index, so uv keeps resolving those modules to their last PyPI copies, 0.68.32. Before its next
+`uv lock --upgrade`, add the index to its `pyproject.toml` by hand:
+
+```toml
+[[tool.uv.index]]
+name = "tatolab"
+url = "https://get.tatolab.com/simple/"
+```
+
+The runtime carries a wheel of `tatolab-stream`
 and of its core modules — `tatolab-ops`, `tatolab-testpattern` and `tatolab-compositor` — built at
 its own commit, and each time it makes a project's `.venv` it links them into
 `.tatolab/first-party-imports/` and declares each as a uv path source, so they always match the
