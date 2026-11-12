@@ -33,6 +33,7 @@ pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 pub mod psnr;
+pub mod runtime_client_zod_schemas;
 pub mod sign_the_carried_packages_with_a_developer_id;
 pub mod source_call_site_scan;
 pub mod stage_browser_host;

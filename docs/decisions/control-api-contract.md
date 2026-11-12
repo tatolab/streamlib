@@ -38,6 +38,18 @@ layer the CLI and the api-server both build on.
 A loopback WebSocket, when it lands, is off by default and gated by a token the runtime writes to
 an owner-only file and an `Origin` allow-list, against DNS rebinding.
 
+The TypeScript client is a client, not a typed transport (owner, 2026-11-12). The generator writes
+one method per operation and one `on_<notification>` per notification, and a zod schema for every
+component schema, every method's params and result and every notification's params. A method
+checks its params before anything is sent and checks the answer before it resolves; a
+notification is checked before a listener hears it. The generated JavaScript is type-checked
+against the generated types, so a schema and its type cannot drift. A schema the contract closes
+(`additionalProperties: false`) is strict and every other keeps fields it does not name, so a
+client reads an answer that gained a field without a version bump. The same checks are exported
+without I/O for a caller with a connection of its own, and the client runs over any transport
+that sends one message and resolves its answer. An integer past `Number.MAX_SAFE_INTEGER` is read
+and written as a `bigint`.
+
 ## Rejected alternatives
 
 - **The MCP tool set as the contract** — it ties every client to one protocol, and a hand-kept
@@ -46,6 +58,10 @@ an owner-only file and an `Origin` allow-list, against DNS rebinding.
   impls give the same single declaration and the exhaustive match with no new macro to maintain.
 - **The LSP metaModel shape** (`requests`, `notifications`, `structures`) — OpenRPC doc tooling
   does not read it.
+- **OpenRPC's own generator (`@open-rpc/generator`)** — it names types by hash, checks params but
+  never answers, reaches a runtime only by host and port, and ignores `x-notifications`.
+- **zod's `z.fromJSONSchema` at run time** — it gives no static types and zod calls it
+  experimental.
 - **A hand-written client per consumer** — Studio's broke silently when tools were renamed; a
   client generated from the contract file fails at build time instead.
 
