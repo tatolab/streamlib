@@ -95,6 +95,11 @@ export interface ControlSchemasOfTheContract {
     readonly AssetLutFactsOnTheWire: z.ZodType<ControlContract.AssetLutFactsOnTheWire>;
     readonly AssetSceneFactsOnTheWire: z.ZodType<ControlContract.AssetSceneFactsOnTheWire>;
     readonly AssetPreviewOnTheWire: z.ZodType<ControlContract.AssetPreviewOnTheWire>;
+    readonly ProjectTransactionsResourceContents: z.ZodType<ControlContract.ProjectTransactionsResourceContents>;
+    readonly ProjectChangeFeedEntryOnTheWire: z.ZodType<ControlContract.ProjectChangeFeedEntryOnTheWire>;
+    readonly ProjectTransactionOnTheWire: z.ZodType<ControlContract.ProjectTransactionOnTheWire>;
+    readonly RefusedProjectActionOnTheWire: z.ZodType<ControlContract.RefusedProjectActionOnTheWire>;
+    readonly AssetMediaFactsReadOnTheWire: z.ZodType<ControlContract.AssetMediaFactsReadOnTheWire>;
     readonly DescribeAssetRequest: z.ZodType<ControlContract.DescribeAssetRequest>;
     readonly DescribeAssetToolResult: z.ZodType<ControlContract.DescribeAssetToolResult>;
     readonly ReadAssetPreviewRequest: z.ZodType<ControlContract.ReadAssetPreviewRequest>;
@@ -161,7 +166,6 @@ export interface ControlSchemasOfTheContract {
     readonly ListSamplesToolResultSample: z.ZodType<ControlContract.ListSamplesToolResultSample>;
     readonly RefreshFragmentsRequest: z.ZodType<ControlContract.RefreshFragmentsRequest>;
     readonly UndoOrRedoRequest: z.ZodType<ControlContract.UndoOrRedoRequest>;
-    readonly ProjectTransactionOnTheWire: z.ZodType<ControlContract.ProjectTransactionOnTheWire>;
     readonly ProjectChangedNotificationParams: z.ZodType<ControlContract.ProjectChangedNotificationParams>;
     readonly ProjectChangeKindOnTheWire: z.ZodType<ControlContract.ProjectChangeKindOnTheWire>;
     readonly StreamGraphChangedNotificationParams: z.ZodType<ControlContract.StreamGraphChangedNotificationParams>;

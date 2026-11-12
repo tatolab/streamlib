@@ -184,6 +184,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   list_assets(params: ControlOperations["list_assets"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["list_assets"]["result"]>;
   /**
+   * Read a project's change feed as it stands: its newest transactions, refused actions and media facts reads.
+   */
+  read_project_changes(params: ControlOperations["read_project_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["read_project_changes"]["result"]>;
+  /**
    * Describe one asset of a project.
    */
   describe_asset(params: ControlOperations["describe_asset"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["describe_asset"]["result"]>;

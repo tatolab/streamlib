@@ -174,6 +174,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("list_assets", params, callOptions);
   }
 
+  read_project_changes(params, callOptions) {
+    return this.call("read_project_changes", params, callOptions);
+  }
+
   describe_asset(params, callOptions) {
     return this.call("describe_asset", params, callOptions);
   }

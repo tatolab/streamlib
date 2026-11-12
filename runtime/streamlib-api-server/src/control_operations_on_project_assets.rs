@@ -23,7 +23,8 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, DescribeAssetToolResult, ListAssetsToolResult,
-    ProjectAssetOnTheWire, ProjectAssetWithItsMediaFactsOnTheWire, ReadAssetPreviewToolResult,
+    ProjectAssetOnTheWire, ProjectAssetWithItsMediaFactsOnTheWire,
+    ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
 };
 use uuid::Uuid;
 
@@ -32,7 +33,9 @@ use crate::control_operation_dispatcher::{
     ControlOperationDispatcher, ControlOperationRefusal, ControlRequestOrigin,
     the_author_of_a_change,
 };
-use crate::mcp_project_change_feed::project_transactions_resource_uri;
+use crate::mcp_project_change_feed::{
+    project_transactions_resource_uri, the_change_feed_of_the_project,
+};
 use streamlib_control_contract::{
     CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest, DescribeAssetRequest,
     ImportAssetRequest, ListAssetsRequest, ReadAssetPreviewRequest, RelocateAssetRequest,
@@ -49,6 +52,26 @@ pub(crate) fn the_idempotency_key_a_caller_sent(
 }
 
 impl ControlOperationDispatcher {
+    pub(crate) async fn read_project_changes(
+        &self,
+        project_directory: PathBuf,
+    ) -> Result<ProjectTransactionsResourceContents, ControlOperationRefusal> {
+        let project_actions_refused = Arc::clone(&self.project_actions_refused);
+        let asset_media_facts_reads = Arc::clone(&self.asset_media_facts_reads);
+        self.a_project_repository_call_off_the_async_runtime(
+            "read_project_changes",
+            project_directory,
+            move |project_repository| {
+                the_change_feed_of_the_project(
+                    project_repository,
+                    &project_actions_refused,
+                    &asset_media_facts_reads,
+                )
+            },
+        )
+        .await
+    }
+
     pub(crate) async fn list_assets(
         &self,
         ListAssetsRequest {

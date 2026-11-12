@@ -15,9 +15,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListSamplesToolResult, ListStreamsToolResult, LogsToolResult, OpenViewerToolResult,
     PausePlaybackToolResult, ProjectFileTransactionToolResult,
     ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
-    ProjectTransactionOnTheWire, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
-    RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
-    UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
+    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
+    SetStreamClockScaleToolResult, UpdateDependencyToolResult, WriteGraphInputToolResult,
+    WriteStudioViewOutputToolResult,
 };
 
 use crate::control_operation::{
@@ -92,6 +93,24 @@ impl ControlOperation for SubscribeProjectChanges {
     const ONE_LINE_DOC: &'static str = "Send this connection a `project_changed` notification for each change on the named projects' feeds.";
     const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one and each media facts read it finishes is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `read_project_changes`: read a project's change feed as it stands.
+pub struct ReadProjectChanges;
+
+impl ControlOperation for ReadProjectChanges {
+    type Request = OneProjectByItsDirectoryRequest;
+    type Result = ProjectTransactionsResourceContents;
+    const METHOD_NAME: &'static str = "read_project_changes";
+    const ONE_LINE_DOC: &'static str = "Read a project's change feed as it stands: its newest transactions, refused actions and media facts reads.";
+    const AGENT_USAGE_NOTE: &'static str = "Read the change feed of the project in `project_directory`, opening it as `list_assets` does, as the resource `list_assets` names as `transactions_resource_uri` renders it: the project's UUID as `project`, its `project_directory`, and under `transactions` its newest 64 transactions, the actions refused and the assets whose media facts were read since the runtime started, newest first, each tagged by `status`. `subscribe_project_changes` sends a `project_changed` notification for each change after it, and `missed` when the connection fell behind, after which the feed is read again. Refused for a folder with no `tatolab-project.json`.";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
@@ -1498,6 +1517,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<DuplicateProject>(),
     ControlOperationDeclaration::of::<DeleteProject>(),
     ControlOperationDeclaration::of::<ListAssets>(),
+    ControlOperationDeclaration::of::<ReadProjectChanges>(),
     ControlOperationDeclaration::of::<DescribeAsset>(),
     ControlOperationDeclaration::of::<ReadAssetPreview>(),
     ControlOperationDeclaration::of::<ImportAsset>(),
@@ -1621,6 +1641,8 @@ pub enum ControlOperationCall {
     DeleteProject(OneProjectByItsDirectoryRequest),
     /// A `list_assets` call.
     ListAssets(ListAssetsRequest),
+    /// A `read_project_changes` call.
+    ReadProjectChanges(OneProjectByItsDirectoryRequest),
     /// A `describe_asset` call.
     DescribeAsset(DescribeAssetRequest),
     /// A `read_asset_preview` call.
@@ -1838,6 +1860,9 @@ impl ControlOperationCall {
                 the_request_of::<DeleteProject>(params).map(Self::DeleteProject)
             }
             ListAssets::METHOD_NAME => the_request_of::<ListAssets>(params).map(Self::ListAssets),
+            ReadProjectChanges::METHOD_NAME => {
+                the_request_of::<ReadProjectChanges>(params).map(Self::ReadProjectChanges)
+            }
             DescribeAsset::METHOD_NAME => {
                 the_request_of::<DescribeAsset>(params).map(Self::DescribeAsset)
             }
@@ -1980,6 +2005,7 @@ impl ControlOperationCall {
             Self::DuplicateProject(_) => DuplicateProject::METHOD_NAME,
             Self::DeleteProject(_) => DeleteProject::METHOD_NAME,
             Self::ListAssets(_) => ListAssets::METHOD_NAME,
+            Self::ReadProjectChanges(_) => ReadProjectChanges::METHOD_NAME,
             Self::DescribeAsset(_) => DescribeAsset::METHOD_NAME,
             Self::ReadAssetPreview(_) => ReadAssetPreview::METHOD_NAME,
             Self::ImportAsset(_) => ImportAsset::METHOD_NAME,

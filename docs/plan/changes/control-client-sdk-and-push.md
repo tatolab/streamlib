@@ -161,6 +161,11 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
   resource. That broadcast reports a lag but not which ids it skipped, so on a lag
   `stream_action_changed` carries `missed` and the client calls `describe_stream_action` for
   each action it follows.
+- **The change feed as a control operation.** `read_project_changes { project_directory }`
+  answers a project's change feed as its MCP resource renders it, opening the project as
+  `list_assets` does. A client reads it once, and again after `missed`, and `project_changed`
+  carries each change after that. Studio reads its undo history this way, so no first-party
+  client opens `/mcp/stdio`, which serves agents (owner, 2026-11-12).
 
 ## MODIFIED
 

@@ -44,10 +44,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     LogsToolResult, NodeNotRunningBecauseOnTheWire, OpenViewerToolResult, PausePlaybackToolResult,
     ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
     ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
-    ProjectTransactionOnTheWire, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
-    RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
-    StreamActionStepOnTheWire, StreamLocationOnTheWire, UpdateDependencyToolResult,
-    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
+    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
+    SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 use uuid::Uuid;
 
@@ -119,6 +119,8 @@ pub(crate) enum ControlOperationAnswer {
     DeleteProject(DeleteProjectToolResult),
     /// `list_assets`'s.
     ListAssets(ListAssetsToolResult),
+    /// `read_project_changes`'.
+    ReadProjectChanges(ProjectTransactionsResourceContents),
     /// `describe_asset`'s.
     DescribeAsset(DescribeAssetToolResult),
     /// `read_asset_preview`'s.
@@ -896,6 +898,12 @@ impl ControlOperationDispatcher {
                 .list_assets(request)
                 .await
                 .map(ControlOperationAnswer::ListAssets),
+            ControlOperationCall::ReadProjectChanges(OneProjectByItsDirectoryRequest {
+                project_directory,
+            }) => self
+                .read_project_changes(project_directory)
+                .await
+                .map(ControlOperationAnswer::ReadProjectChanges),
             ControlOperationCall::DescribeAsset(request) => self
                 .describe_asset(request)
                 .await
