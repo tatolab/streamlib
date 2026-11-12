@@ -173,11 +173,6 @@ impl ProjectAsALoadReadsIt {
         let asset_uuids_the_project_holds =
             every_asset_uuid_the_project_holds(&project_directory, project_file.project)
                 .map_err(refused)?;
-        refuse_streams_whose_graph_documents_share_a_node_uuid(
-            &project_directory,
-            &stream_documents,
-            &asset_uuids_the_project_holds,
-        )?;
         Ok(Self {
             project_directory,
             project_file,
@@ -222,43 +217,44 @@ impl ProjectAsALoadReadsIt {
 
 /// Refuse a project two of whose stream graph documents hold a node of one UUID, naming both
 /// documents, since a node's UUID keys the values it keeps in the project's store.
-fn refuse_streams_whose_graph_documents_share_a_node_uuid(
+fn refuse_streams_whose_graph_documents_share_a_node_uuid<'read>(
     project_directory: &Path,
-    stream_documents: &[ProjectStreamDocument],
-    asset_uuids_the_project_holds: &BTreeSet<Uuid>,
+    each_stream_document_and_its_graph: impl IntoIterator<
+        Item = (
+            &'read ProjectStreamDocument,
+            &'read std::result::Result<GraphSnapshot, String>,
+        ),
+    >,
 ) -> Result<()> {
     let mut document_and_node_path_of_each_node_uuid: HashMap<Uuid, (String, String)> =
         HashMap::new();
-    for stream_document in stream_documents {
-        let Ok(graph) = the_graph_a_stream_document_holds(
-            project_directory,
-            stream_document,
-            asset_uuids_the_project_holds,
-        ) else {
+    for (stream_document, graph_or_why_none) in each_stream_document_and_its_graph {
+        let Ok(graph) = graph_or_why_none else {
             continue;
         };
+        let document_path = stream_document.path.to_string();
         for (node_path, node) in graph.nodes_at_every_level() {
             let Some(node_uuid) = node.id else {
                 continue;
             };
             match document_and_node_path_of_each_node_uuid.get(&node_uuid) {
                 Some((first_document_path, first_node_path))
-                    if *first_document_path != stream_document.path.to_string() =>
+                    if *first_document_path != document_path =>
                 {
                     return Err(Error::Configuration(format!(
                         "the project in {} was not loaded: its graph documents \
-                         `{first_document_path}` and `{}` both hold the node {node_uuid} \
-                         (`{first_node_path}` and `{node_path}`), and a node's UUID keys the \
-                         values it keeps, so each stream's nodes need UUIDs of their own; a \
-                         copied graph document keeps the UUIDs of the one it was copied from",
+                         `{first_document_path}` and `{document_path}` both hold the node \
+                         {node_uuid} (`{first_node_path}` and `{node_path}`), and a node's UUID \
+                         keys the values it keeps, so each stream's nodes need UUIDs of their \
+                         own; a copied graph document keeps the UUIDs of the one it was copied \
+                         from",
                         project_directory.display(),
-                        stream_document.path,
                     )));
                 }
                 Some(_) => {}
                 None => {
                     document_and_node_path_of_each_node_uuid
-                        .insert(node_uuid, (stream_document.path.to_string(), node_path));
+                        .insert(node_uuid, (document_path.clone(), node_path));
                 }
             }
         }
@@ -852,10 +848,21 @@ impl Runner {
         };
         report_the_step(StreamActionStep::ReadingTheGraphDocuments);
         let project = ProjectAsALoadReadsIt::read(&project_directory)?;
-        let mut stream_assets: Vec<StreamAssetRead> = project
+        let every_stream_asset: Vec<StreamAssetRead> = project
             .stream_documents
             .iter()
             .map(|stream_document| project.stream_asset_read_from(stream_document))
+            .collect();
+        refuse_streams_whose_graph_documents_share_a_node_uuid(
+            &project.project_directory,
+            project.stream_documents.iter().zip(
+                every_stream_asset
+                    .iter()
+                    .map(|stream_asset| &stream_asset.graph_or_why_none),
+            ),
+        )?;
+        let mut stream_assets: Vec<StreamAssetRead> = every_stream_asset
+            .into_iter()
             .filter(|stream_asset| {
                 only_the_stream_assets
                     .as_ref()
@@ -5775,6 +5782,45 @@ mod tests {
             "{refusal}"
         );
         assert!(runner.ids_of_the_loaded_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_stream_placed_twice_in_one_stream_and_again_in_another_shares_no_node_uuid() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        project.write_the_graph_document(the_graph_of_a_stream_named("look"));
+        let placing_look = |placement_name: &str| {
+            serde_json::json!({
+                "name": placement_name,
+                "type": streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE,
+                "config": { "stream": { "asset": project.stream_asset_of("look") } },
+            })
+        };
+        for (stream_name, placement_names) in [
+            ("main", &["look-a", "look-b"][..]),
+            ("other", &["look"][..]),
+        ] {
+            let mut placing_stream = the_graph_of_a_stream_named(stream_name);
+            for placement_name in placement_names {
+                placing_stream["nodes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(placing_look(placement_name));
+            }
+            project.write_the_graph_document(placing_stream);
+        }
+
+        runner
+            .load_the_project_off_its_queue(project.run_request())
+            .expect("each placement's nodes hold UUIDs of their own");
+
+        let mut loaded = runner.ids_of_the_loaded_streams();
+        loaded.sort();
+        let mut placing = vec![project.stream_id_of("main"), project.stream_id_of("other")];
+        placing.sort();
+        assert_eq!(loaded, placing);
     }
 
     fn the_graph_of_a_stream_reading_the_image_asset(
