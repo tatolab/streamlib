@@ -45,6 +45,7 @@ pub use local_api_served_for_an_engine::{
     LocalApiServedForAnEngine, serve_the_local_api_for_an_engine,
 };
 pub use loopback_http_listener::{
-    LoopbackHttpListenerServedForAnEngine, serve_the_loopback_http_listener,
+    ControlWebSocketRouteForTheLoopbackListener, LoopbackHttpListenerServedForAnEngine,
+    serve_the_loopback_http_listener,
 };
 pub use mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH;

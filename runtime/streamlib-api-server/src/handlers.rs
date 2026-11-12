@@ -34,6 +34,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     MCP_STDIO_UPGRADE_REQUEST_TARGET, MCP_STREAMABLE_HTTP_ROUTE_PATH,
 };
 
+use crate::loopback_http_listener::ControlWebSocketRouteForTheLoopbackListener;
 use crate::state::{ApiDoc, AppState, ErrorResponse, OptionalStreamSelectionQuery};
 
 // ============================================================================
@@ -73,7 +74,7 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 pub(crate) fn build_router(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     local_api_stopping_token: CancellationToken,
-) -> Router {
+) -> LocalApiRouters {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(control_plane_rest_routes())
         .split_for_parts();
@@ -99,6 +100,15 @@ pub(crate) fn build_router(
         .on_response(DefaultOnResponse::new().level(Level::DEBUG));
 
     let control_operation_dispatcher = local_api_mcp_server_handler.control_operation_dispatcher();
+    let control_websocket_route_for_the_loopback_listener =
+        ControlWebSocketRouteForTheLoopbackListener::new(Router::new().route(
+            CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
+            crate::control_json_rpc_adapter::control_json_rpc_websocket_route(
+                control_operation_dispatcher.clone(),
+                Arc::clone(&local_api_mcp_server_handler.project_repositories_open_in_this_runtime),
+                local_api_stopping_token.clone(),
+            ),
+        ));
     let router = router
         .route(
             CONTROL_JSON_RPC_ROUTE_PATH,
@@ -109,7 +119,7 @@ pub(crate) fn build_router(
         .route(
             CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
             crate::control_json_rpc_adapter::control_json_rpc_websocket_route(
-                control_operation_dispatcher,
+                control_operation_dispatcher.clone(),
                 Arc::clone(&local_api_mcp_server_handler.project_repositories_open_in_this_runtime),
                 local_api_stopping_token.clone(),
             ),
@@ -124,7 +134,18 @@ pub(crate) fn build_router(
             ),
         );
 
-    router.layer(trace_layer).with_state(state)
+    LocalApiRouters {
+        local_api_socket_router: router.layer(trace_layer).with_state(state),
+        control_websocket_route_for_the_loopback_listener,
+    }
+}
+
+/// The routers one local API serves: everything on its socket, and its control WebSocket for
+/// the loopback listener.
+pub(crate) struct LocalApiRouters {
+    pub(crate) local_api_socket_router: Router,
+    pub(crate) control_websocket_route_for_the_loopback_listener:
+        ControlWebSocketRouteForTheLoopbackListener,
 }
 
 // ============================================================================
@@ -415,7 +436,7 @@ pub(crate) mod router_surface_tests {
     ];
 
     fn control_plane_router_over(runtime: ControlPlaneRouterStubRuntime) -> Router {
-        build_router(Arc::new(runtime), CancellationToken::new())
+        build_router(Arc::new(runtime), CancellationToken::new()).local_api_socket_router
     }
 
     /// A default stub runtime, for tests that build the router themselves.

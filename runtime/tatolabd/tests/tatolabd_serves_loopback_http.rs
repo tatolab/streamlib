@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolabd` serving its loopback HTTP beside its local API: the machine
-//! runtime lock holder's pid at `/machine-runtime-lock-holder`, and nothing
-//! else. A test build binds the port its test names; on macOS that bind is the
+//! runtime lock holder's pid at `/machine-runtime-lock-holder`, the control
+//! WebSocket at `/control/ws`, and nothing else. A test build binds the port its test names; on macOS that bind is the
 //! machine runtime lock. Built with
 //! `--features machine-directories-under-a-test-root`.
 
@@ -13,12 +13,13 @@ mod common;
 
 use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_port_free_for_udp_and_tcp_on,
-    http_get_body_on_loopback,
+    http_get_body_on_loopback, websocket_upgrade_status_line_on_loopback,
 };
 use streamlib_runtime_client_contract::machine_directories_test_root::TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE;
 
 #[test]
-fn the_runtime_answers_its_pid_as_the_lock_holder_and_serves_nothing_else() {
+fn the_runtime_answers_its_pid_as_the_lock_holder_opens_its_control_websocket_and_serves_nothing_else()
+ {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let loopback_http_port = a_port_free_for_udp_and_tcp_on("127.0.0.1");
@@ -33,6 +34,13 @@ fn the_runtime_answers_its_pid_as_the_lock_holder_and_serves_nothing_else() {
     let lock_holder = http_get_body_on_loopback(loopback_http_port, "/machine-runtime-lock-holder");
     let listing = http_get_body_on_loopback(loopback_http_port, "/");
     let watch_page = http_get_body_on_loopback(loopback_http_port, "/watch/desk/camera");
+    let control_websocket_opened_from_a_page_of_any_name =
+        websocket_upgrade_status_line_on_loopback(
+            loopback_http_port,
+            "/control/ws",
+            &format!("my-tool.test:{loopback_http_port}"),
+            "http://my-tool.test:3000",
+        );
     runtime.interrupt_and_expect_a_clean_exit();
 
     let lock_holder: serde_json::Value =
@@ -40,6 +48,10 @@ fn the_runtime_answers_its_pid_as_the_lock_holder_and_serves_nothing_else() {
     assert_eq!(lock_holder, serde_json::json!({"pid": runtime_pid}));
     assert_eq!(listing, None);
     assert_eq!(watch_page, None);
+    assert_eq!(
+        control_websocket_opened_from_a_page_of_any_name.as_deref(),
+        Some("HTTP/1.1 101 Switching Protocols")
+    );
 }
 
 #[cfg(target_os = "linux")]

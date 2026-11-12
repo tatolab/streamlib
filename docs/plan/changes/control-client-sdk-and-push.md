@@ -128,13 +128,14 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
   - **On the owner-only socket**, for Studio and the CLI. It needs no token: the socket's file
     permission is the gate, as for every route there.
   - **On a loopback TCP port**, for tools that cannot open a Unix socket, such as OBS or a
-    browser page. This is control-api-contract's loopback WebSocket, pulled forward and
-    unchanged in its gate:
-    - off by default, and turned on in Studio, which shows the token to paste;
-    - a client sends the random token the runtime writes to an owner-only file in its runtime
-      directory;
-    - the runtime refuses an `Origin` outside its allow-list.
+    browser page. This is control-api-contract's loopback WebSocket, pulled forward. It is
+    always on and fully open: no token, and no check of the `Host` or `Origin` a request gives,
+    so a headless runtime needs no setup (owner, 2026-11-12). A gate is a dedicated design of
+    its own, layered on later.
     - The loopback listener otherwise serves only what `loopback_http_listener.rs` serves today.
+    - Rejected: off by default behind a token Studio shows and an `Origin` allow-list — a
+      runtime run headless has no Studio to turn it on, and the owner will design the gate
+      whole rather than half now (owner, 2026-11-12).
 - **Push for a loaded stream's live graph.** The contract gains
   `subscribe_stream_graph_changes(streams)` and the notification `stream_graph_changed`
   (`{ stream, change }`, where `change` is `edited`, `node_state_changed`,
@@ -172,13 +173,13 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
   every answer by default. The Python client of control-api-contract's Order step 4 follows the
   same shape later, with its own schema library. That is out of scope here.
 - **A localhost WebSocket adapter, after Studio** (control-api-contract, ADDED, Order step 6):
-  it is the loopback listener of the WebSocket control adapter above, built in this change. Its
-  gate is unchanged.
+  it is the loopback listener of the WebSocket control adapter above, built in this change,
+  with no gate (owner, 2026-11-12).
 - **§Control plane, the local API is reachable only on its own machine**
-  (`ARCHITECTURE.md:4546`): the loopback listener also serves `/control/ws` when the person
-  turns it on, behind the token and the `Origin` check. Control otherwise stays on the socket.
-- **§Control plane, the auth posture** (`ARCHITECTURE.md:4541`): the socket stays tokenless;
-  the loopback WebSocket alone takes a token, as control-api-contract already decided.
+  (`ARCHITECTURE.md:4546`): the loopback listener also serves `/control/ws`, always and with no
+  gate. Control otherwise stays on the socket.
+- **§Control plane, the auth posture** (`ARCHITECTURE.md:4541`): the socket stays tokenless,
+  and so does the loopback WebSocket, until the owner's dedicated design of its gate.
 - **§Control plane, the MCP host entry** (`ARCHITECTURE.md:4559`): `/mcp/stdio` stays for
   agents. Its resources stay; no first-party client depends on them.
 
@@ -219,7 +220,7 @@ The other polls (log, listing, status line, runtime description) are named under
    pinned streamlib commit until the app change moves it.
 3. `stream_graph_changed` with `ProcessorStateDidChange` published, and `stream_action_changed`.
    Studio drops the graph poll and `/mcp/stdio` here.
-4. The loopback listener for `/control/ws`, with the token and `Origin` gate.
+4. The loopback listener for `/control/ws`, always on and with no gate.
 
 Steps 1 to 3 are what removes Studio's lag. Step 4 is for outside tools. In `ROADMAP.md` this
 sits under step 6, "One control API contract", as its next step.

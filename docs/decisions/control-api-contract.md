@@ -35,8 +35,15 @@ engine-free crates that define them (`streamlib-project-repository`,
 `streamlib-runtime-client-contract`) rather than moved, since those crates are already the shared
 layer the CLI and the api-server both build on.
 
-A loopback WebSocket, when it lands, is off by default and gated by a token the runtime writes to
-an owner-only file and an `Origin` allow-list, against DNS rebinding.
+> ~~A loopback WebSocket, when it lands, is off by default and gated by a token the runtime writes to
+> an owner-only file and an `Origin` allow-list, against DNS rebinding.~~ — Superseded 2026-11-12 by
+> the owner's ruling below.
+
+The loopback WebSocket is always on and fully open (owner, 2026-11-12): the loopback listener
+serves `/control/ws` with no token and no check of the `Host` or `Origin` a request gives, so a
+headless runtime, a script and a web tool under a name of the person's own all reach it with no
+setup. The owner accepted that any page in a browser on the machine can then drive the runtime,
+and will layer a gate on as a dedicated design.
 
 The TypeScript client is a client, not a typed transport (owner, 2026-11-12). The generator writes
 one method per operation and one `on_<notification>` per notification, and a zod schema for every
