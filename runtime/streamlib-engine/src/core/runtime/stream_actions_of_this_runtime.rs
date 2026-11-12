@@ -290,6 +290,36 @@ fn the_graph_the_recorded_stream_holds(
     )
 }
 
+/// Every UUID the graph documents of the project in `project_directory` name, a superset of the
+/// node UUIDs they hold; `None` when a document does not read, since a node it holds is unknown.
+fn every_node_uuid_the_graph_documents_of_the_project_hold(
+    project_directory: &Path,
+) -> Option<std::collections::HashSet<Uuid>> {
+    fn every_uuid_named_in(json: &serde_json::Value, uuids: &mut std::collections::HashSet<Uuid>) {
+        match json {
+            serde_json::Value::String(text) => {
+                if let Ok(uuid) = text.parse::<Uuid>() {
+                    uuids.insert(uuid);
+                }
+            }
+            serde_json::Value::Array(items) => items
+                .iter()
+                .for_each(|item| every_uuid_named_in(item, uuids)),
+            serde_json::Value::Object(fields) => fields
+                .values()
+                .for_each(|field| every_uuid_named_in(field, uuids)),
+            _ => {}
+        }
+    }
+    let mut uuids = std::collections::HashSet::new();
+    for stream_document in project_stream_documents(project_directory).ok()? {
+        let bytes = stream_document.bytes.ok()?;
+        let document: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        every_uuid_named_in(&document, &mut uuids);
+    }
+    Some(uuids)
+}
+
 /// The project file of the stream at `location` and the graph document holding its stream
 /// asset, or why its project or document is not where it was recorded.
 fn the_graph_document_of_the_stream_at(
@@ -3387,6 +3417,7 @@ impl Runner {
             .map(|stream| stream.stream_id.clone())
             .collect();
         self.forget_that_the_project_is_paused(&project_directory);
+        let project_directory_closing = project_directory.clone();
         let action = StreamAction {
             action_id: action_id.clone(),
             project_directory,
@@ -3403,17 +3434,26 @@ impl Runner {
             .queue_the_stream_action(
                 action,
                 Box::new(move |runner: &Runner| {
-                    runner.close_the_project_for_its_stream_action(&action_id, &stream_ids);
+                    runner.close_the_project_for_its_stream_action(
+                        &action_id,
+                        &project_directory_closing,
+                        &stream_ids,
+                    );
                 }),
                 &self.tokio_handle(),
             ))
     }
 
-    /// Run the close the stream action `action_id` queued of the streams `stream_ids` of one
-    /// project: unload each loaded one, its playback ended, forget its function-node states,
-    /// record each closed, and finish the action done, or failed naming each stream whose
-    /// record was not written closed.
-    fn close_the_project_for_its_stream_action(&self, action_id: &str, stream_ids: &[String]) {
+    /// Run the close the stream action `action_id` queued of the streams `stream_ids` of the
+    /// project in `project_directory`: unload each loaded one, its playback ended, forget its
+    /// function-node states, record each closed, close the project's store, and finish the
+    /// action done, or failed naming each stream whose record was not written closed.
+    fn close_the_project_for_its_stream_action(
+        &self,
+        action_id: &str,
+        project_directory: &Path,
+        stream_ids: &[String],
+    ) {
         let progress = self.progress_of_the_stream_action(action_id);
         progress.is_on(StreamActionStep::Stopping);
         let mut states = Vec::with_capacity(stream_ids.len());
@@ -3443,6 +3483,12 @@ impl Runner {
                 )),
             }
         }
+        self.engine_resources_shared_by_every_stream
+            .project_stores_open_in_this_runtime
+            .close_the_store_of_the_project_at(
+                project_directory,
+                every_node_uuid_the_graph_documents_of_the_project_hold(project_directory).as_ref(),
+            );
         progress.finish(if not_closed.is_empty() {
             Ok(states)
         } else {

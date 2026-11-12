@@ -209,6 +209,35 @@ impl ProjectStore {
             .transpose()
     }
 
+    /// Every key `table` holds, written or committed, and none removed since.
+    pub fn keys_in(
+        &self,
+        table: ProjectStoreTableName,
+    ) -> Result<Vec<String>, ProjectStoreRefusal> {
+        let _no_batch_lands_between_the_two_reads =
+            self.shared_with_its_writer.commit_in_progress.lock();
+        let mut held: std::collections::BTreeSet<String> = self
+            .shared_with_its_writer
+            .keys_committed_in(table)?
+            .into_iter()
+            .collect();
+        let writes_waiting = self.shared_with_its_writer.writes_waiting.lock();
+        for ((written_table, key), value) in writes_waiting
+            .batch_being_committed
+            .iter()
+            .chain(writes_waiting.latest_of_each_key.iter())
+        {
+            if *written_table != table {
+                continue;
+            }
+            match value {
+                Some(_) => held.insert(key.clone()),
+                None => held.remove(key),
+            };
+        }
+        Ok(held.into_iter().collect())
+    }
+
     /// Commit every write waiting now, without waiting for the debounce window; a commit that
     /// fails leaves its writes waiting for the writer to try again.
     pub fn commit_every_waiting_write_now(&self) -> Result<(), ProjectStoreRefusal> {
@@ -379,6 +408,37 @@ impl ProjectStoreSharedWithItsWriter {
         self.write_transactions_committed
             .fetch_add(1, Ordering::AcqRel);
         Ok(())
+    }
+
+    fn keys_committed_in(
+        &self,
+        table: ProjectStoreTableName,
+    ) -> Result<Vec<String>, ProjectStoreRefusal> {
+        use redb::ReadableTable;
+        let failed =
+            |doing: &'static str, why: &dyn std::fmt::Display| ProjectStoreRefusal::Failed {
+                file: self.store_file.clone(),
+                doing,
+                why: why.to_string(),
+            };
+        let read_transaction = self
+            .database
+            .begin_read()
+            .map_err(|why| failed("begin a read", &why))?;
+        let opened = match read_transaction.open_table(table.definition()) {
+            Ok(opened) => opened,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(why) => return Err(failed("open a table", &why)),
+        };
+        opened
+            .iter()
+            .map_err(|why| failed("list the keys", &why))?
+            .map(|entry| {
+                entry
+                    .map(|(key, _)| key.value().to_string())
+                    .map_err(|why| failed("list the keys", &why))
+            })
+            .collect()
     }
 
     fn read_committed(

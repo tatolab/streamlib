@@ -122,6 +122,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// which publishes it on its `value` output to every reader, answering the Input's family.
     /// Live data: nothing is recorded in the graph or history and the last write wins; a `kept`
     /// Input keeps it in the project's store, and a `reset` one returns to its default at Stop.
+    /// While the project is stopped, a `kept` Input keeps the value for its next Play and a
+    /// `reset` one is refused.
     fn write_a_value_to_a_top_level_graph_input(
         &self,
         input_name: String,

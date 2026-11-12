@@ -884,3 +884,122 @@ fn a_kept_graph_input_reaches_a_new_reader_with_its_value_after_a_real_stop_play
     );
     stream.stop().expect("the stream ends");
 }
+
+fn the_current_value_graph_shows_for(
+    stream: &LoadedStreamInThisRuntime,
+    node_uuid: uuid::Uuid,
+) -> Option<Value> {
+    let stream_handles = stream.the_handles_a_runtime_context_of_this_stream_belongs_to();
+    stream.compiler.scope(|graph, _tx| {
+        super::super::loaded_stream::the_current_value_of_each_graph_input(graph, &|uuid| {
+            stream_handles.the_store_of_the_node(uuid)
+        })
+        .remove(&node_uuid.to_string())
+    })
+}
+
+#[test]
+#[serial]
+fn a_value_written_to_a_stopped_kept_graph_input_shows_in_graph_and_reaches_its_next_play() {
+    let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+    std::fs::write(
+        project_directory.path().join(PROJECT_FILE_NAME),
+        TatolabProjectFile::of_a_new_project("acme-show")
+            .canonical_bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    let async_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let lights_uuid = uuid::Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    add_the_lights_input(&stream, lights_uuid);
+    play(&stream);
+    stream
+        .stop_playback_keeping_the_graph()
+        .expect("the stream stops");
+    assert_eq!(
+        the_current_value_graph_shows_for(&stream, lights_uuid),
+        Some(json!({ "level": 0.0 }))
+    );
+
+    let written = json!({ "level": 0.6, "scene": "cool" });
+    async_runtime
+        .block_on(
+            stream.write_a_value_to_a_top_level_graph_input("lights".to_string(), written.clone()),
+        )
+        .expect("a stopped kept Input takes the value for its next Play");
+    assert_eq!(
+        the_current_value_graph_shows_for(&stream, lights_uuid),
+        Some(written.clone())
+    );
+    let refusal = async_runtime
+        .block_on(stream.write_a_value_to_a_top_level_graph_input("lights".to_string(), json!(3)))
+        .expect_err("a value its family does not take is refused while stopped too")
+        .to_string();
+    assert!(refusal.contains("carries Records"), "{refusal}");
+
+    play(&stream);
+    assert_eq!(
+        the_value_a_new_reader_of_the_input_is_handed(&stream, &async_runtime, lights_uuid),
+        written
+    );
+    stream.stop().expect("the stream ends");
+}
+
+#[test]
+#[serial]
+fn a_value_written_to_a_stopped_reset_graph_input_is_refused_saying_the_project_is_stopped() {
+    let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+    std::fs::write(
+        project_directory.path().join(PROJECT_FILE_NAME),
+        TatolabProjectFile::of_a_new_project("acme-show")
+            .canonical_bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    let async_runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    stream
+        .add_processor(
+            ProcessorSpec::new(
+                ProcessorClassImportPath::new(
+                    crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+                )
+                .unwrap(),
+                json!({ "port": "trigger", "family": "array", "default": 0, "lifetime": "reset" }),
+            )
+            .with_display_name("trigger".to_string()),
+        )
+        .expect("a GraphInput is added");
+    play(&stream);
+    stream
+        .stop_playback_keeping_the_graph()
+        .expect("the stream stops");
+
+    let refusal = async_runtime
+        .block_on(stream.write_a_value_to_a_top_level_graph_input("trigger".to_string(), json!(1)))
+        .expect_err("a reset Input keeps nothing written while stopped");
+    assert!(
+        matches!(
+            refusal,
+            Error::NodeOfAStreamIsNotRunning {
+                not_running_because: WhyANodeOfAStreamIsNotRunning::PlaybackStopped,
+                ..
+            }
+        ),
+        "{refusal}"
+    );
+    assert!(
+        refusal.to_string().contains("`start_playback` plays it"),
+        "{refusal}"
+    );
+    stream.stop().expect("the stream ends");
+}

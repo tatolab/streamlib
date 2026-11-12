@@ -120,3 +120,28 @@ fn writes_spread_over_a_second_commit_about_once_per_window_holding_the_last() {
         Some(json!(0.999))
     );
 }
+
+#[test]
+fn keys_in_a_table_lists_committed_and_waiting_keys_and_none_removed() {
+    let project_directory = tempfile::tempdir().expect("a temporary project");
+    let store = ProjectStore::open_at_the_file(
+        &project_directory.path().join("store.redb"),
+        Duration::from_secs(60),
+    )
+    .expect("opens");
+    store
+        .write(TABLE_UNDER_TEST, "a/value", &json!(1))
+        .expect("writes");
+    store
+        .write(TABLE_UNDER_TEST, "b/value", &json!(2))
+        .expect("writes");
+    store.commit_every_waiting_write_now().expect("commits");
+    store
+        .write(TABLE_UNDER_TEST, "c/value", &json!(3))
+        .expect("writes");
+    store.remove(TABLE_UNDER_TEST, "a/value");
+    assert_eq!(
+        store.keys_in(TABLE_UNDER_TEST).expect("lists"),
+        vec!["b/value".to_string(), "c/value".to_string()]
+    );
+}

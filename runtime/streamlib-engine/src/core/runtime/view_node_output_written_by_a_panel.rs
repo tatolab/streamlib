@@ -16,7 +16,7 @@ use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{Graph, GraphNodeWithComponents, ProcessorInstanceComponent};
 use crate::core::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
-    GRAPH_INTERFACE_VALUE_PORT_NAME,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GraphInputValueLifetime,
 };
 use crate::core::processors::{
     NodeTypesOneStreamResolves, NodeWhoseOutputsAClientWritesProcessor, ProcessorInstance,
@@ -56,13 +56,21 @@ impl LoadedStreamInThisRuntime {
 
     /// Hand `value` to this stream's top-level `GraphInput` declaring the Input `input_name`,
     /// which publishes it on its `value` output to every reader, answering the Input's family.
-    /// Refused for a name no running top-level `GraphInput` declares.
+    /// While the project is stopped, a kept Input keeps the value for its next Play and a reset
+    /// one refuses it. Refused for a name no top-level `GraphInput` declares.
     pub(crate) async fn hand_a_value_written_to_a_top_level_graph_input(
         &self,
         input_name: String,
         value: serde_json::Value,
     ) -> Result<PortFamily> {
         let stream_id = self.stream_id().to_string();
+        if self.why_a_node_of_this_stream_that_has_not_failed_does_not_run()
+            == WhyANodeOfAStreamIsNotRunning::PlaybackStopped
+        {
+            return self
+                .keep_a_value_written_to_a_stopped_top_level_graph_input(input_name, value)
+                .await;
+        }
         self.publish_a_value_on_an_output_of_the_running_node(
             GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
             value,
@@ -76,6 +84,53 @@ impl LoadedStreamInThisRuntime {
             },
         )
         .await
+    }
+
+    /// Keep `value`, written to the top-level `GraphInput` declaring the Input `input_name` while
+    /// this stream's project is stopped, in the project's store for the Input's next Play,
+    /// answering the Input's family. Refused for an Input whose lifetime is reset and a value its
+    /// family does not take.
+    async fn keep_a_value_written_to_a_stopped_top_level_graph_input(
+        &self,
+        input_name: String,
+        value: serde_json::Value,
+    ) -> Result<PortFamily> {
+        let stream_id = self.stream_id().to_string();
+        let project_directory = self.project_directory().to_path_buf();
+        let compiler = Arc::clone(&self.compiler);
+        let stream_handles = self.the_handles_a_runtime_context_of_this_stream_belongs_to();
+        tokio::task::spawn_blocking(
+            crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
+                compiler.scope(|graph, _tx| {
+                    let node = the_top_level_graph_input_declaring(graph, &stream_id, &input_name)?;
+                    let family = the_family_a_graph_input_carries(node)?;
+                    let lifetime = GraphInputValueLifetime::declared_in(node.config.as_ref())
+                        .map_err(Error::Configuration)?;
+                    if lifetime == GraphInputValueLifetime::Reset {
+                        return Err(Error::NodeOfAStreamIsNotRunning {
+                            not_running_because: WhyANodeOfAStreamIsNotRunning::PlaybackStopped,
+                            runtime_words: format!(
+                                "the project of the stream `{stream_id}` in {} is stopped, and \
+                                 the Input `{input_name}` returns to its default at Stop, so it \
+                                 keeps no value written now; `start_playback` plays it",
+                                project_directory.display()
+                            ),
+                        });
+                    }
+                    let store = stream_handles.the_store_of_the_node(node.node_uuid)?;
+                    NodeWhoseOutputsAClientWritesProcessor::keep_a_value_written_to_a_stopped_top_level_graph_input(
+                        node, store, &value,
+                    )?;
+                    Ok(family)
+                })
+            }),
+        )
+        .await
+        .map_err(|join_failure| {
+            Error::Runtime(format!(
+                "a write to a stopped `GraphInput` failed to join: {join_failure}"
+            ))
+        })?
     }
 
     /// Publish `value` on output `port_name` of the node `find_the_node` finds in the stream's
@@ -151,6 +206,31 @@ fn the_running_top_level_graph_input_declaring(
     input_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
 ) -> Result<(String, PortFamily, Arc<Mutex<ProcessorInstance>>)> {
+    let node = the_top_level_graph_input_declaring(graph, stream_id, input_name)?;
+    let family = the_family_a_graph_input_carries(node)?;
+    let processor_instance = node
+        .get::<ProcessorInstanceComponent>()
+        .map(|instance| Arc::clone(&instance.0))
+        .ok_or_else(|| {
+            the_refusal_of_a_reach_for_a_node_not_running(
+                node,
+                why_a_node_that_has_not_failed_does_not_run,
+                format!(
+                    "`GraphInput` node `{}` of the stream `{stream_id}` is not running, so the \
+                     Input `{input_name}` reaches no reader yet",
+                    node.display_name
+                ),
+            )
+        })?;
+    Ok((node.display_name.clone(), family, processor_instance))
+}
+
+/// The top-level `GraphInput` of the stream `stream_id` declaring the Input `input_name`.
+fn the_top_level_graph_input_declaring<'graph>(
+    graph: &'graph Graph,
+    stream_id: &str,
+    input_name: &str,
+) -> Result<&'graph crate::core::graph::ProcessorNode> {
     let input_cast = crate::core::graph::cast_exposed_name_to_url_safe(input_name)?;
     let graph_inputs: Vec<_> = graph
         .traversal()
@@ -188,8 +268,14 @@ fn the_running_top_level_graph_input_declaring(
             }
         )));
     };
-    let family = node
-        .config
+    Ok(node)
+}
+
+/// The family the top-level `GraphInput` `node` carries, as its config names it.
+fn the_family_a_graph_input_carries(
+    node: &crate::core::graph::ProcessorNode,
+) -> Result<PortFamily> {
+    node.config
         .as_ref()
         .and_then(|config| config.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY))
         .and_then(serde_json::Value::as_str)
@@ -203,22 +289,7 @@ fn the_running_top_level_graph_input_declaring(
                 "`GraphInput` node `{}` names no family",
                 node.display_name
             ))
-        })?;
-    let processor_instance = node
-        .get::<ProcessorInstanceComponent>()
-        .map(|instance| Arc::clone(&instance.0))
-        .ok_or_else(|| {
-            the_refusal_of_a_reach_for_a_node_not_running(
-                node,
-                why_a_node_that_has_not_failed_does_not_run,
-                format!(
-                    "`GraphInput` node `{}` of the stream `{stream_id}` is not running, so the \
-                     Input `{input_name}` reaches no reader yet",
-                    node.display_name
-                ),
-            )
-        })?;
-    Ok((node.display_name.clone(), family, processor_instance))
+        })
 }
 
 /// The name and processor of the running node of a view type whose UUID is `node_id`.
