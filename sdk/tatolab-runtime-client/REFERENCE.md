@@ -868,7 +868,7 @@ A change on the feed of a project the connection subscribed to: a transaction ap
 
 ### `stream_graph_changed`
 
-A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.
+A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, new drops, raises or link states, or `missed`.
 
 - Sent after `subscribe_stream_graph_changes`.
 - Since contract version 2, experimental.

@@ -3376,7 +3376,7 @@
     },
     {
       "name": "stream_graph_changed",
-      "summary": "A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.",
+      "summary": "A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, new drops, raises or link states, or `missed`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -10007,6 +10007,11 @@
             "type": "string",
             "const": "playback_state_changed",
             "description": "The stream's playback started, stopped, paused or resumed, or failed to."
+          },
+          {
+            "type": "string",
+            "const": "drops_raises_or_link_states_changed",
+            "description": "A node's dropped or refused bag counts, the raise its `process()` keeps, or a link's state\nchanged; sent at most once every 500 ms per stream, and the client reads the graph again."
           },
           {
             "type": "string",
