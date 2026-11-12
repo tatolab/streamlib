@@ -84,7 +84,8 @@ pub enum ProjectChangeKindOnTheWire {
     /// Files in the project's folder changed, appeared or went away, an editor's saves and a
     /// transaction's own writes alike; `files` names them.
     FilesChanged,
-    /// The connection fell behind and missed changes.
+    /// The connection fell behind and missed changes, or files changed in the project's folder
+    /// that the OS did not name; the client reads the change feed and lists the project again.
     Missed,
 }
 
