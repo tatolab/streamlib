@@ -513,7 +513,7 @@ Subscribe the connection to the live graphs of `streams`, by stream id, each loa
 
 Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.
 
-Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
+Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
 
 - Since contract version 2, experimental.
 - Params: `SubscribeProjectLogRecordsRequest`
@@ -581,7 +581,7 @@ Close a viewer this connection opened, letting go of its port's channel.
 
 Send this connection a `project_changed` notification for each change on the named projects' feeds.
 
-Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one and each media facts read it finishes is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.
+Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one, each media facts read it finishes and each burst of files changed in its folder, an editor's saves among them, named under `files`, is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.
 
 - Since contract version 1, experimental.
 - Params: `SubscribeProjectChangesRequest`
@@ -871,7 +871,7 @@ Hand a value to the Input `input` of the stream `stream`: the stream's top-level
 
 ### `project_changed`
 
-A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, or media facts read.
+A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.
 
 - Sent after `subscribe_project_changes`.
 - Since contract version 1, experimental.

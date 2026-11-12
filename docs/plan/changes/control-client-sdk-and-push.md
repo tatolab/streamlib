@@ -180,6 +180,13 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
   by the directory the connection spelled, and the client reads `logs` on from its cursor. The notification carries no records,
   so a burst of writes costs one read. The names and the record-free notification are the
   implementer's (session, 2026-11-12).
+- **Push for files changed outside the runtime.** `project_changed` gains the change
+  `files_changed`, with `files` naming each changed file relative to the project, so Studio
+  learns of an editor's save without its 5 s project listing read. The runtime watches a
+  project's folder with the OS's file watch (the `notify` crate) only while some connection
+  subscribes to that project, skips what its history skips, and gathers a burst over 100 ms
+  (owner, 2026-11-12). A missing project folder subscribed to by `subscribe_project_log_records`
+  is refused. The field names and the 100 ms are the implementer's (session, 2026-11-12).
 - **The change feed as a control operation.** `read_project_changes { project_directory }`
   answers a project's change feed as its MCP resource renders it, opening the project as
   `list_assets` does. A client reads it once, and again after `missed`, and `project_changed`

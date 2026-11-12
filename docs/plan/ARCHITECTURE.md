@@ -2185,9 +2185,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   records a pointer: an asset's bytes are the one file at its path, which a node reads, and an
   undo of a delete or a replace restores the sidecar, the bytes coming back only while the file
   is still at its path. `import_asset` copies a source on the machine into place once, and an
-  upload a client streams lands in `.tatolab/uploads/` first; a file replaced outside the
-  runtime is unsupported, and the runtime watches no folder, so `replace_asset` swaps an
-  asset's bytes keeping its UUID. A project is self-contained: every file a load reads sits
+  upload a client streams lands in `.tatolab/uploads/` first; `replace_asset` swaps an
+  asset's bytes keeping its UUID. While a connection subscribes to a project's changes the
+  runtime watches its folder with the OS's file watch, and tells of each file an editor or
+  another tool changed there, gathered over 100 ms and leaving out what its history leaves out
+  (owner, 2026-11-12). A project is self-contained: every file a load reads sits
   inside its directory, save the runtime's own first-party modules, so copying or zipping the
   folder carries everything and it opens to the same state anywhere. Another project is
   imported by copying it once, whole, from a folder or a zip — a GitHub archive downloaded

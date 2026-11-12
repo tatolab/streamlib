@@ -10,6 +10,8 @@ mod project_asset_file_bytes;
 mod project_file;
 mod project_file_access;
 #[cfg(feature = "history")]
+mod project_files_changed_outside_the_runtime_watch;
+#[cfg(feature = "history")]
 mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_import_copy;
@@ -65,8 +67,8 @@ pub use project_pyproject_import_sources::{
 };
 #[cfg(feature = "history")]
 pub use project_repositories_open_in_this_runtime::{
-    ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,
-    ProjectRepositoryOneWriterAtATime,
+    ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectFilesWatchedWhileHeld,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
 };
 #[cfg(feature = "history")]
 pub use project_repository::{

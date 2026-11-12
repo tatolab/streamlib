@@ -2522,7 +2522,7 @@ async fn a_control_stream_subscriber_is_sent_a_transact_another_client_made_and_
     )
     .expect("the transaction applies");
 
-    let notification = subscriber.next_message().await;
+    let notification = subscriber.next_message_but_files_changed().await;
     assert_eq!(notification["method"], "project_changed", "{notification}");
     assert_eq!(notification["params"]["change"], "applied");
     assert_eq!(

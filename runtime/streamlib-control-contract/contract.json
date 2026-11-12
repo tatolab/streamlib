@@ -60,7 +60,7 @@
     {
       "name": "subscribe_project_changes",
       "summary": "Send this connection a `project_changed` notification for each change on the named projects' feeds.",
-      "description": "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one and each media facts read it finishes is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.",
+      "description": "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one, each media facts read it finishes and each burst of files changed in its folder, an editor's saves among them, named under `files`, is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -189,7 +189,7 @@
     {
       "name": "subscribe_project_log_records",
       "summary": "Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.",
-      "description": "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.",
+      "description": "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -3398,7 +3398,7 @@
   "x-notifications": [
     {
       "name": "project_changed",
-      "summary": "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, or media facts read.",
+      "summary": "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -3811,7 +3811,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The projects, by absolute directory, whose new log records the connection is told of;\nrefused when empty or when one is relative."
+            "description": "The projects, by absolute directory, whose new log records the connection is told of;\nrefused when empty, or when one is relative or names no folder on this machine."
           }
         },
         "required": [
@@ -10019,6 +10019,16 @@
               }
             ],
             "description": "The transaction that applied, when `change` is `applied`; its `undo_state` is absent."
+          },
+          "files": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The files that changed, by path relative to the project with `/` between segments, when\n`change` is `files_changed`; a hidden folder, `node_modules`, `__pycache__` and a Python\nvirtual environment are never named."
           }
         },
         "required": [
@@ -10043,6 +10053,11 @@
             "type": "string",
             "const": "media_facts_read",
             "description": "The runtime finished reading an asset's media facts."
+          },
+          {
+            "type": "string",
+            "const": "files_changed",
+            "description": "Files in the project's folder changed, appeared or went away, an editor's saves and a\ntransaction's own writes alike; `files` names them."
           },
           {
             "type": "string",

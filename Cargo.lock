@@ -5720,6 +5720,7 @@ version = "0.68.82"
 dependencies = [
  "git2",
  "libz-sys",
+ "notify",
  "parking_lot",
  "redb",
  "schemars 1.2.2",

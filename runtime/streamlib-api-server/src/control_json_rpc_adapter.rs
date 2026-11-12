@@ -352,6 +352,7 @@ async fn send_project_changes_until_the_connection_ends(
                         project,
                         change: ProjectChangeKindOnTheWire::Missed,
                         transaction: None,
+                        files: None,
                     })
                     .collect()
             }
@@ -595,16 +596,25 @@ fn the_notification_of_an_announcement(
                 *applied,
                 &Default::default(),
             )),
+            files: None,
         },
         ProjectChangeOnTheFeed::Refused => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::Refused,
             transaction: None,
+            files: None,
         },
         ProjectChangeOnTheFeed::MediaFactsRead => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::MediaFactsRead,
             transaction: None,
+            files: None,
+        },
+        ProjectChangeOnTheFeed::FilesChanged(files) => ProjectChangedNotificationParams {
+            project,
+            change: ProjectChangeKindOnTheWire::FilesChanged,
+            transaction: None,
+            files: Some(files),
         },
     }
 }
@@ -859,6 +869,17 @@ pub(crate) mod tests {
                 if let WebSocketMessage::Text(text) = received {
                     return serde_json::from_str(text.as_str())
                         .unwrap_or_else(|e| panic!("{e}: {text:?}"));
+                }
+            }
+        }
+
+        /// The next message but a `project_changed` of `files_changed`, which a transaction's own
+        /// writes are sent as too.
+        pub(crate) async fn next_message_but_files_changed(&mut self) -> Value {
+            loop {
+                let message = self.next_message().await;
+                if message["params"]["change"] != "files_changed" {
+                    return message;
                 }
             }
         }
@@ -1203,12 +1224,119 @@ pub(crate) mod tests {
             .await;
         assert_eq!(imported["isError"], false, "{imported}");
 
-        let notification = subscriber.next_message().await;
+        let notification = subscriber.next_message_but_files_changed().await;
         assert_eq!(notification["method"], "project_changed", "{notification}");
         assert!(notification.get("id").is_none(), "{notification}");
         assert_eq!(notification["params"]["project"], project);
         assert_eq!(notification["params"]["change"], "applied");
         assert_eq!(notification["params"]["transaction"]["author_name"], "Dana");
+    }
+
+    /// Two spellings of one project's directory are each answered and kept as spelled, and a
+    /// directory that names no folder on this machine is refused rather than kept unresolved.
+    ///
+    /// Mental-revert: keying the spellings by path equality answers `/project/` as `/project`;
+    /// keeping an unresolved directory answers the missing folder and never matches its log.
+    #[tokio::test]
+    async fn a_project_log_subscription_keeps_each_spelling_and_refuses_a_missing_folder() {
+        let project_directory = tempfile::tempdir().unwrap();
+        let spelled_plain = project_directory.path().display().to_string();
+        let spelled_with_a_trailing_separator = format!("{spelled_plain}/");
+        let served = ControlServedWithAnMcpClient::over_the_stub().await;
+        let mut subscriber = served.control_websocket().await;
+
+        subscriber
+            .send(
+                json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_project_log_records",
+                          "params": { "project_directories": [spelled_plain, spelled_with_a_trailing_separator] } }),
+            )
+            .await;
+        let subscribed = subscriber.next_message().await;
+        let mut answered: Vec<String> =
+            serde_json::from_value(subscribed["result"]["project_directories"].clone())
+                .unwrap_or_else(|e| panic!("{e}: {subscribed}"));
+        answered.sort();
+        assert_eq!(
+            answered,
+            vec![spelled_plain.clone(), spelled_with_a_trailing_separator]
+        );
+
+        subscriber
+            .send(
+                json!({ "jsonrpc": "2.0", "id": 2, "method": "subscribe_project_log_records",
+                          "params": { "project_directories": [format!("{spelled_plain}/not-yet-made")] } }),
+            )
+            .await;
+        let refused = subscriber.next_message().await;
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("is not a folder on this machine")),
+            "{refused}"
+        );
+    }
+
+    /// A node file an editor saves in a subscribed project's folder, outside any runtime call, is
+    /// sent as `project_changed` with `files_changed` naming it.
+    ///
+    /// Mental-revert: without the project's folder watched, or without the feed's announcement
+    /// mapped to the wire, no `files_changed` arrives and the wait times out.
+    #[tokio::test]
+    async fn a_websocket_subscriber_is_sent_a_file_an_editor_saved_in_the_project() {
+        let project_parent_directory = tempfile::tempdir().unwrap();
+        let project_directory = project_parent_directory.path().join("arm-control");
+        ProjectRepository::create(
+            &project_directory,
+            "arm-control",
+            &ProjectTransactionAuthor::the_runtime(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(project_directory.join("nodes")).unwrap();
+        let served = ControlServedWithAnMcpClient::over_the_stub().await;
+        let listed = crate::mcp::tests::first_text_block_json(
+            &served
+                .mcp_tool_result(
+                    "list_assets",
+                    json!({ "project_directory": project_directory }),
+                )
+                .await,
+        );
+        let project = listed["project"].clone();
+        let mut subscriber = served.control_websocket().await;
+        subscriber
+            .send(
+                json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_project_changes",
+                          "params": { "projects": [project] } }),
+            )
+            .await;
+        assert_eq!(
+            subscriber.next_message().await["result"]["projects"],
+            json!([project])
+        );
+
+        std::fs::write(project_directory.join("nodes/blur.py"), b"x = 1").unwrap();
+
+        let files_changed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let notification = subscriber.next_message().await;
+                if notification["params"]["change"] == "files_changed" {
+                    return notification;
+                }
+            }
+        })
+        .await
+        .expect("the save is sent as files_changed");
+        assert_eq!(
+            files_changed["method"], "project_changed",
+            "{files_changed}"
+        );
+        assert_eq!(files_changed["params"]["project"], project);
+        assert!(
+            files_changed["params"]["files"]
+                .as_array()
+                .is_some_and(|files| files.contains(&json!("nodes/blur.py"))),
+            "{files_changed}"
+        );
     }
 
     #[tokio::test]

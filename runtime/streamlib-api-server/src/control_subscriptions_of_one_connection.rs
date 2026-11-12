@@ -19,14 +19,16 @@ use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
     NodeStateOnTheWire, StreamGraphChangeKindOnTheWire, StreamGraphChangedNotificationParams,
 };
+use streamlib_project_repository::ProjectFilesWatchedWhileHeld;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// The subscriptions of one connection that stays open to be sent notifications.
 pub(crate) struct ControlSubscriptionsOfOneConnection {
-    subscribed_projects: Mutex<BTreeSet<Uuid>>,
+    subscribed_projects_with_their_folders_watched:
+        Mutex<BTreeMap<Uuid, Option<ProjectFilesWatchedWhileHeld>>>,
     subscribed_project_logs_by_directory_with_symlinks_resolved:
-        Mutex<BTreeMap<PathBuf, BTreeSet<PathBuf>>>,
+        Mutex<BTreeMap<PathBuf, BTreeSet<std::ffi::OsString>>>,
     followed_stream_graphs: Mutex<BTreeMap<String, Option<StreamGraphFollowedOnOneLoad>>>,
     stream_graph_changes_to_the_connection: mpsc::Sender<StreamGraphChangedNotificationParams>,
     subscribed_to_stream_actions: AtomicBool,
@@ -36,7 +38,10 @@ impl std::fmt::Debug for ControlSubscriptionsOfOneConnection {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ControlSubscriptionsOfOneConnection")
-            .field("subscribed_projects", &*self.subscribed_projects.lock())
+            .field(
+                "subscribed_projects_with_their_folders_watched",
+                &*self.subscribed_projects_with_their_folders_watched.lock(),
+            )
             .field(
                 "subscribed_project_logs_by_directory_with_symlinks_resolved",
                 &*self
@@ -72,7 +77,7 @@ impl ControlSubscriptionsOfOneConnection {
         stream_graph_changes_to_the_connection: mpsc::Sender<StreamGraphChangedNotificationParams>,
     ) -> Self {
         Self {
-            subscribed_projects: Mutex::new(BTreeSet::new()),
+            subscribed_projects_with_their_folders_watched: Mutex::new(BTreeMap::new()),
             subscribed_project_logs_by_directory_with_symlinks_resolved: Mutex::new(BTreeMap::new()),
             followed_stream_graphs: Mutex::new(BTreeMap::new()),
             stream_graph_changes_to_the_connection,
@@ -82,19 +87,37 @@ impl ControlSubscriptionsOfOneConnection {
 
     /// Whether the connection subscribed to `project`'s change feed.
     pub(crate) fn holds_the_project(&self, project: Uuid) -> bool {
-        self.subscribed_projects.lock().contains(&project)
+        self.subscribed_projects_with_their_folders_watched
+            .lock()
+            .contains_key(&project)
     }
 
     /// Every project whose change feed the connection subscribed to.
     pub(crate) fn every_subscribed_project(&self) -> Vec<Uuid> {
-        self.subscribed_projects.lock().iter().copied().collect()
+        self.subscribed_projects_with_their_folders_watched
+            .lock()
+            .keys()
+            .copied()
+            .collect()
     }
 
-    /// Subscribe to `projects`' change feeds, answering every project subscribed to.
-    pub(crate) fn subscribe_to_the_projects(&self, projects: Vec<Uuid>) -> Vec<Uuid> {
-        let mut subscribed_projects = self.subscribed_projects.lock();
-        subscribed_projects.extend(projects);
-        subscribed_projects.iter().copied().collect()
+    /// Subscribe to `projects`' change feeds, holding the watch `watch_the_files_of` gives on
+    /// each one's folder for as long as the connection stays open, and answering every project
+    /// subscribed to; a project with no watch yet, one not open when it was first subscribed, is
+    /// asked for one again.
+    pub(crate) fn subscribe_to_the_projects(
+        &self,
+        projects: Vec<Uuid>,
+        watch_the_files_of: impl Fn(Uuid) -> Option<ProjectFilesWatchedWhileHeld>,
+    ) -> Vec<Uuid> {
+        let mut subscribed_projects = self.subscribed_projects_with_their_folders_watched.lock();
+        for project in projects {
+            let folder_watched = subscribed_projects.entry(project).or_insert(None);
+            if folder_watched.is_none() {
+                *folder_watched = watch_the_files_of(project);
+            }
+        }
+        subscribed_projects.keys().copied().collect()
     }
 
     /// The project in `project_directory_with_symlinks_resolved`, by each directory the connection
@@ -106,7 +129,13 @@ impl ControlSubscriptionsOfOneConnection {
         self.subscribed_project_logs_by_directory_with_symlinks_resolved
             .lock()
             .get(project_directory_with_symlinks_resolved)
-            .map(|directories_as_subscribed| directories_as_subscribed.iter().cloned().collect())
+            .map(|directories_as_subscribed| {
+                directories_as_subscribed
+                    .iter()
+                    .cloned()
+                    .map(PathBuf::from)
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -117,11 +146,13 @@ impl ControlSubscriptionsOfOneConnection {
             .values()
             .flatten()
             .cloned()
+            .map(PathBuf::from)
             .collect()
     }
 
-    /// Subscribe to the log of each project, keyed by its directory as subscribed and with
-    /// symlinks resolved, answering every directory a project log is subscribed to as.
+    /// Subscribe to the log of each project, keyed by its directory as subscribed, spelled exactly
+    /// as the connection spelled it, and with symlinks resolved, answering every directory a
+    /// project log is subscribed to as.
     pub(crate) fn subscribe_to_the_project_logs(
         &self,
         project_directories_as_subscribed_and_with_symlinks_resolved: Vec<(PathBuf, PathBuf)>,
@@ -135,12 +166,13 @@ impl ControlSubscriptionsOfOneConnection {
             subscribed_project_logs
                 .entry(project_directory_with_symlinks_resolved)
                 .or_default()
-                .insert(project_directory_as_subscribed);
+                .insert(project_directory_as_subscribed.into_os_string());
         }
         subscribed_project_logs
             .values()
             .flatten()
             .cloned()
+            .map(PathBuf::from)
             .collect()
     }
 

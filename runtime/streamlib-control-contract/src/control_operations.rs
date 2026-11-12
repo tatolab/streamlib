@@ -91,7 +91,7 @@ impl ControlOperation for SubscribeProjectChanges {
     type Result = SubscribeProjectChangesResult;
     const METHOD_NAME: &'static str = "subscribe_project_changes";
     const ONE_LINE_DOC: &'static str = "Send this connection a `project_changed` notification for each change on the named projects' feeds.";
-    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one and each media facts read it finishes is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one, each media facts read it finishes and each burst of files changed in its folder, an editor's saves among them, named under `files`, is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
@@ -110,7 +110,7 @@ impl ControlOperation for SubscribeProjectLogRecords {
     type Result = SubscribeProjectLogRecordsResult;
     const METHOD_NAME: &'static str = "subscribe_project_log_records";
     const ONE_LINE_DOC: &'static str = "Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.";
-    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.";
     const SINCE_CONTRACT_VERSION: u32 = 2;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
