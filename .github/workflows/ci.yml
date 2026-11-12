@@ -791,6 +791,11 @@ jobs:
           --exclude tatolab-vulkanalia --exclude tatolab-vulkanalia-sys --exclude tatolab-vulkanalia-vma
           -- -A clippy::disallowed_macros -D warnings
 
+      # The api-server's tests run the TypeScript runtime client, which imports zod.
+      - name: Install the TypeScript runtime client's dependencies
+        if: github.event_name != 'pull_request'
+        run: npm ci --prefix sdk/tatolab-runtime-client --no-audit --no-fund
+
       - name: Run unit tests
         if: github.event_name != 'pull_request'
         run: |
