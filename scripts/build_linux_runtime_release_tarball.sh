@@ -13,14 +13,12 @@
 # commit it was built from, which names the build install.sh installs it as.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
-# every binary the tarball carries runs on glibc 2.28 and later, and the
-# portability gate runs over the result at that floor. Needs docker. The
-# workspace is mounted, and its
-# target/ written to, as the container's root.
+# every binary the tarball carries runs on glibc 2.28 and later;
+# `check_linux_runtime_tarball_portability.sh` gates the result at that floor.
+# Needs docker. The workspace is mounted, and its target/ written to, as the
+# container's root.
 
 set -euo pipefail
-
-RUNTIME_UNIT_GLIBC_FLOOR="2.28"
 
 workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source-path=SCRIPTDIR source=manylinux_2_28_image.sh
@@ -112,16 +110,6 @@ for converted_example in examples/*/tatolab-project.json; do
 		exit 1
 	}
 done
-
-uv build --wheel --out-dir /tmp/tatolab-stream-dist sdk/tatolab-stream
-uv venv --python 3.12 /tmp/runtime-unit-gate-venv
-VIRTUAL_ENV=/tmp/runtime-unit-gate-venv uv pip install /tmp/tatolab-stream-dist/*.whl pytest
-(
-	cd sdk/streamlib-python-wheel
-	PYTHONPATH="$runtime_unit_root/lib/tatolab/lend" \
-		TATOLAB_RUNTIME_UNIT_GLIBC_FLOOR="$RUNTIME_UNIT_GLIBC_FLOOR" \
-		/tmp/runtime-unit-gate-venv/bin/python -m pytest -v tests_against_the_runtime_unit_lend/
-)
 
 release_version="$(cargo metadata --locked --no-deps --format-version 1 |
 	python3.12 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "tatolabd"))')"

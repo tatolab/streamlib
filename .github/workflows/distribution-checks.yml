@@ -1,0 +1,402 @@
+name: Distribution Checks
+
+# The checks over what a release ships, run nightly on `main` and on a manual
+# dispatch against the same builds release.yml publishes, so the release itself
+# only builds and publishes. Each distribution is built from this run's ref and
+# nothing is uploaded:
+#
+#   Core module distributions   `tatolab-stream`, `tatolab-compositor`,
+#                               `tatolab-ops` and `tatolab-testpattern` ship
+#                               `tatolab` as a namespace, install, import and
+#                               carry their licence; a scaffold locks this
+#                               run's `tatolab-stream`
+#   Linux runtime tarball       the portability gate at the glibc floor, and a
+#                               stream started on machines with no Vulkan driver
+#   macOS runtime unit          the release build proven on a runner with no
+#                               Vulkan SDK
+#   Module wheels               every module wheel installs beside this run's
+#                               `tatolab-stream`, imports and carries its notices;
+#                               every binary in a macOS wheel is still signed
+#
+# A red scheduled run opens, or comments on, the open "Nightly distribution
+# checks failed" issue.
+on:
+  schedule:
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PINNED_UV_VERSION: "0.12.23"
+
+jobs:
+  check-the-core-module-distributions:
+    name: Core module distributions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
+
+      - name: Build the core module distributions as release.yml builds them
+        run: |
+          set -euo pipefail
+          uv build --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
+          for core_module_directory in packages/tatolab-compositor packages/tatolab-ops packages/tatolab-testpattern; do
+            uv build --wheel --out-dir "$core_module_directory/dist" "$core_module_directory"
+          done
+
+      # PEP 420: `tatolab` is a namespace package. A regular `tatolab/__init__.py`
+      # would shadow every other distribution's `tatolab.*` portion installed
+      # beside it, and `tatolab/runtime/` is the lend's, never a stream venv's.
+      # Each listing is required to name the stream package's `__init__.py`, so
+      # a distribution missing it, or an empty or unreadable listing, fails
+      # rather than passing.
+      - name: The tatolab-stream wheel and sdist ship tatolab as a namespace package
+        run: |
+          set -euo pipefail
+          unzip -Z1 sdk/tatolab-stream/dist/*.whl > /tmp/stream-wheel-member-names.txt
+          # An sdist's members sit under its `<name>-<version>/` directory.
+          tar -tzf sdk/tatolab-stream/dist/*.tar.gz | sed 's|^[^/]*/||' \
+            > /tmp/stream-sdist-member-names.txt
+          for member_names in /tmp/stream-wheel-member-names.txt /tmp/stream-sdist-member-names.txt; do
+            if ! grep -qx 'tatolab/stream/__init__.py' "$member_names"; then
+              echo "::error::$member_names does not list tatolab/stream/__init__.py"
+              exit 1
+            fi
+            if grep -q '^tatolab/runtime/' "$member_names"; then
+              echo "::error::$member_names lists tatolab/runtime/, which is the lend's and never a stream venv's"
+              exit 1
+            fi
+            if grep -qx 'tatolab/__init__.py' "$member_names"; then
+              echo "::error::$member_names lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+              exit 1
+            fi
+          done
+
+      # `tatolab-stream` installs on its own, nothing of the runtime with it.
+      # BUSL-1.1's parameters are in its text, not its SPDX id, so the text has
+      # to reach what a user installs; it is read through importlib.metadata, so
+      # a licence present in the checkout and absent from the wheel fails.
+      - name: tatolab-stream installs and carries its licence
+        run: |
+          python3 -m venv /tmp/tatolab-stream-venv
+          # `--no-index` keeps `tatolab-stream` to this run's build, so its one
+          # dependency comes from PyPI first.
+          /tmp/tatolab-stream-venv/bin/pip install 'msgpack>=1.0'
+          /tmp/tatolab-stream-venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
+          /tmp/tatolab-stream-venv/bin/python -c "
+          from importlib.metadata import distribution
+          license_text = distribution('tatolab-stream').read_text('licenses/LICENSE') or ''
+          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
+          "
+
+      # `--no-index` beside this run's `tatolab-stream`, which PyPI does not
+      # hold before a release, so the declared floor has to admit it.
+      - name: tatolab-compositor installs beside this run's tatolab-stream, imports, and carries its licence
+        run: |
+          python3 -m venv /tmp/compositor-wheel-check
+          /tmp/compositor-wheel-check/bin/pip install 'msgpack>=1.0'
+          /tmp/compositor-wheel-check/bin/pip install \
+            --no-index --find-links sdk/tatolab-stream/dist \
+            packages/tatolab-compositor/dist/*.whl
+          /tmp/compositor-wheel-check/bin/python -c "
+          from importlib.metadata import distribution, entry_points
+          license_text = distribution('tatolab-compositor').read_text('licenses/LICENSE') or ''
+          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
+          node_entry_points = [
+              node_entry_point for node_entry_point in entry_points(group='tatolab.nodes')
+              if node_entry_point.dist.name == 'tatolab-compositor'
+          ]
+          assert node_entry_points, 'tatolab-compositor registers no node'
+          for node_entry_point in node_entry_points:
+              print('tatolab-compositor exports', node_entry_point.name, node_entry_point.load())
+          "
+
+      - name: tatolab-ops installs beside this run's tatolab-stream, loads every node, and carries its licence
+        run: |
+          set -euo pipefail
+          if unzip -Z1 packages/tatolab-ops/dist/*.whl | grep -qx 'tatolab/__init__.py'; then
+            echo "::error::the tatolab-ops wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+          python3 -m venv /tmp/ops-wheel-check
+          /tmp/ops-wheel-check/bin/pip install 'numba>=0.61' 'numpy>=1.26' 'pillow>=10.0'
+          /tmp/ops-wheel-check/bin/pip install \
+            --no-index --find-links sdk/tatolab-stream/dist \
+            packages/tatolab-ops/dist/*.whl
+          /tmp/ops-wheel-check/bin/python -c "
+          from importlib.metadata import distribution, entry_points
+          license_text = distribution('tatolab-ops').read_text('licenses/LICENSE') or ''
+          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
+          node_entry_points = [
+              node_entry_point for node_entry_point in entry_points(group='tatolab.nodes')
+              if node_entry_point.dist.name == 'tatolab-ops'
+          ]
+          assert node_entry_points, 'tatolab-ops registers no node'
+          for node_entry_point in node_entry_points:
+              print('tatolab-ops exports', node_entry_point.name, node_entry_point.load())
+          "
+
+      # The kernel source and the two baked overlays are read from the package
+      # at setup, so a wheel without them builds a node that cannot render.
+      - name: The tatolab-testpattern wheel ships the kernel, the overlays, its licence and no tatolab/__init__.py
+        run: |
+          set -euo pipefail
+          unzip -Z1 packages/tatolab-testpattern/dist/*.whl > /tmp/testpattern-wheel-member-names.txt
+          for required_member in \
+            tatolab/testpattern/__init__.py \
+            tatolab/testpattern/test_pattern_frame.slang \
+            tatolab/testpattern/potato_sprite_160x160.rgba \
+            tatolab/testpattern/sample_stream_captions_548x62.rgba; do
+            if ! grep -qx "$required_member" /tmp/testpattern-wheel-member-names.txt; then
+              echo "::error::the tatolab-testpattern wheel does not list $required_member"
+              exit 1
+            fi
+          done
+          if ! grep -q '\.dist-info/licenses/LICENSE$' /tmp/testpattern-wheel-member-names.txt; then
+            echo "::error::the tatolab-testpattern wheel carries no LICENSE in .dist-info/licenses/"
+            exit 1
+          fi
+          if grep -qx 'tatolab/__init__.py' /tmp/testpattern-wheel-member-names.txt; then
+            echo "::error::the tatolab-testpattern wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+
+      - name: The index tree is one uv resolves from
+        run: python3 scripts/test_tatolab_package_index.py -v
+
+      - name: The module project archives import and describe
+        run: python3 scripts/test_tatolab_module_projects.py -v
+
+      # A user's `uv sync` resolves `tatolab-stream` from PyPI, where every
+      # earlier release is a candidate. This run's `tatolab-stream` is not on
+      # PyPI, so it joins PyPI as find-links, and the scaffold must lock the one
+      # just built — a scaffold that capped its version would lock something else.
+      - name: A scaffolded stream locks the tatolab-stream this run built
+        run: |
+          set -euo pipefail
+          cp -R sdk/tatolab-stream/scaffold_template /tmp/scaffold-check
+          (cd /tmp/scaffold-check && UV_FIND_LINKS="$GITHUB_WORKSPACE/sdk/tatolab-stream/dist" uv lock)
+          built_version="$(python3 -c "
+          import tomllib
+          print(tomllib.load(open('sdk/tatolab-stream/pyproject.toml', 'rb'))['project']['version'])
+          ")"
+          locked_version="$(python3 <<'EOF'
+          import tomllib
+          lock = tomllib.load(open('/tmp/scaffold-check/uv.lock', 'rb'))
+          print(next(package['version'] for package in lock['package'] if package['name'] == 'tatolab-stream'))
+          EOF
+          )"
+          if [ "$locked_version" != "$built_version" ]; then
+            echo "::error::a scaffolded stream locks tatolab-stream $locked_version, not the $built_version this run built"
+            exit 1
+          fi
+
+      - name: Keep the tatolab-stream the module wheel checks install beside
+        uses: actions/upload-artifact@v6
+        with:
+          name: checked-tatolab-stream
+          path: sdk/tatolab-stream/dist/*.whl
+          if-no-files-found: error
+
+  build-linux-runtime-tarball:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-linux-runtime-tarball.yml
+
+  check-the-linux-runtime-tarball:
+    name: Linux runtime tarball
+    needs: build-linux-runtime-tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Collect the tarball this run built
+        uses: actions/download-artifact@v7
+        with:
+          name: linux-runtime-tarball
+          path: ${{ runner.temp }}/linux-runtime-tarball
+
+      - name: The portability gate passes at the glibc floor
+        run: >-
+          bash scripts/check_linux_runtime_tarball_portability.sh
+          "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
+
+      # The stream `tatolab new` scaffolds imports `tatolab.testpattern`, a wheel
+      # the tarball carries.
+      - name: The tarball starts a stream on machines with no Vulkan driver
+        if: ${{ !cancelled() }}
+        run: >-
+          bash scripts/check_linux_runtime_tarball_on_a_machine_with_no_vulkan_driver.sh
+          "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
+
+  prove-the-runtime-unit-on-macos:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-macos-runtime-unit.yml
+
+  build-the-module-distributions:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/reusable-module-distributions.yml
+    with:
+      dry_run: true
+
+  # A wheel that installs but cannot be imported is not a release artifact, and
+  # licence obligations only discharge if the files reach the artifact a user
+  # installs. Both are asserted against the release build rather than trusted
+  # from the test suite, which runs against `maturin develop`. Each wheel gets a
+  # venv of its own holding this run's `tatolab-stream`, installed first with
+  # `--no-index`, so the module's declared floor has to admit it; the wheel then
+  # installs with the index on, so a third-party dependency it declares resolves.
+  check-the-module-wheels:
+    name: Module wheels (${{ matrix.wheel_platform }})
+    needs: [check-the-core-module-distributions, build-the-module-distributions]
+    if: ${{ !cancelled() && needs.check-the-core-module-distributions.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - wheel_platform: manylinux
+            runs-on: ubuntu-latest
+            wheel_glob: '*manylinux*.whl'
+          - wheel_platform: macos
+            runs-on: macos-26
+            wheel_glob: '*macosx*.whl'
+    runs-on: ${{ matrix.runs-on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Collect every module wheel this run built
+        uses: actions/download-artifact@v7
+        with:
+          pattern: module-distribution-*
+          path: ${{ runner.temp }}/module-wheels
+          merge-multiple: true
+
+      - name: Collect the tatolab-stream this run checked
+        uses: actions/download-artifact@v7
+        with:
+          name: checked-tatolab-stream
+          path: ${{ runner.temp }}/checked-tatolab-stream
+
+      # An arm64 binary whose signature did not survive the zip round-trip
+      # loads nowhere.
+      - name: Every binary in each macOS wheel is still signed
+        if: runner.os == 'macOS'
+        env:
+          WHEEL_GLOB: ${{ matrix.wheel_glob }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for module_wheel in "$RUNNER_TEMP"/module-wheels/$WHEEL_GLOB; do
+            rm -rf "$RUNNER_TEMP/unzipped-module-wheel"
+            unzip -q "$module_wheel" -d "$RUNNER_TEMP/unzipped-module-wheel"
+            find "$RUNNER_TEMP/unzipped-module-wheel" \( -name '*.so' -o -name '*.dylib' \) \
+              -exec codesign --verify --strict --verbose=1 {} +
+          done
+
+      - name: Every module wheel installs beside this run's tatolab-stream, imports, and carries its notices
+        env:
+          WHEEL_GLOB: ${{ matrix.wheel_glob }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          module_wheels=("$RUNNER_TEMP"/module-wheels/$WHEEL_GLOB)
+          if [ "${#module_wheels[@]}" -eq 0 ]; then
+            echo "::error::this run built no ${{ matrix.wheel_platform }} module wheel"
+            exit 1
+          fi
+          for module_wheel in "${module_wheels[@]}"; do
+            # `tatolab_webrtc-<version>-…whl` is `tatolab-webrtc`, imported as `tatolab.webrtc`.
+            underscored_distribution_name="$(basename "$module_wheel" | cut -d- -f1)"
+            export MODULE_DISTRIBUTION_NAME="${underscored_distribution_name//_/-}"
+            export MODULE_IMPORT_PACKAGE_NAME="${underscored_distribution_name/_/.}"
+            module_venv="$RUNNER_TEMP/module-wheel-check-$underscored_distribution_name"
+            python3 -m venv "$module_venv"
+            "$module_venv/bin/pip" install --quiet 'msgpack>=1.0'
+            "$module_venv/bin/pip" install --quiet \
+              --no-index --find-links "$RUNNER_TEMP/checked-tatolab-stream" tatolab-stream
+            "$module_venv/bin/pip" install --quiet "$module_wheel"
+            # Read through importlib.metadata, so a file present in the repo and
+            # absent from the wheel fails rather than passes.
+            "$module_venv/bin/python" -c "
+          import importlib
+          import os
+          from importlib.metadata import distribution
+
+          distribution_name = os.environ['MODULE_DISTRIBUTION_NAME']
+          shipped = distribution(distribution_name)
+          for license_file_name in ('LICENSE', 'THIRD-PARTY-NOTICES.md'):
+              text = shipped.read_text('licenses/' + license_file_name) or ''
+              assert text.strip(), license_file_name + ' is absent from .dist-info/licenses/'
+
+          module = importlib.import_module(os.environ['MODULE_IMPORT_PACKAGE_NAME'])
+          exported = list(getattr(module, '__all__', []))
+          assert exported, distribution_name + ' exports no processor classes'
+          for name in exported:
+              getattr(module, name)
+          print(distribution_name, 'exports', ', '.join(exported))
+          "
+          done
+
+  report-failed-nightly-distribution-checks:
+    name: Report failed nightly distribution checks
+    needs:
+      - check-the-core-module-distributions
+      - check-the-linux-runtime-tarball
+      - prove-the-runtime-unit-on-macos
+      - build-the-module-distributions
+      - check-the-module-wheels
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          FAILED_NIGHTLY_ISSUE_TITLE: Nightly distribution checks failed
+          JOB_RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          job_result_lines="$(echo "$JOB_RESULTS" | python3 -c "
+          import json, sys
+          for job_name, job in json.load(sys.stdin).items():
+              print('- ' + job_name + ': ' + job['result'])
+          ")"
+          body="$(printf 'The nightly distribution checks on `%s` failed: %s\n\n%s\n' \
+            "$GITHUB_SHA" "$RUN_URL" "$job_result_lines")"
+          open_issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$FAILED_NIGHTLY_ISSUE_TITLE\"" --json number,title \
+            -q "map(select(.title == \"$FAILED_NIGHTLY_ISSUE_TITLE\")) | .[0].number // empty")"
+          if [ -n "$open_issue" ]; then
+            gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$FAILED_NIGHTLY_ISSUE_TITLE" \
+              --label bug --body "$body"
+          fi

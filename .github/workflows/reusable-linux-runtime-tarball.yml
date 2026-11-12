@@ -1,11 +1,9 @@
 name: Linux Runtime Tarball
 
 # The tarball install.sh installs: the runtime unit built in manylinux_2_28 by
-# `scripts/build_linux_runtime_release_tarball.sh`, which also runs the
-# portability gate over it at the 2.28 glibc floor. Called by
-# reusable-distributions.yml at release, where a change needing a newer glibc
-# symbol or a system library manylinux lacks withholds the release, and on a
-# dry run dispatched by hand.
+# `scripts/build_linux_runtime_release_tarball.sh`, kept as this run's
+# `linux-runtime-tarball` artifact. Called by reusable-distributions.yml, which
+# publishes it, and by distribution-checks.yml, which gates it nightly.
 on:
   workflow_call:
     inputs:
@@ -44,7 +42,7 @@ jobs:
           path: target/slang_compiler_cache
           key: slang-compiler-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/stage_slang_compiler_libraries.sh', 'scripts/manylinux_2_28_image.sh') }}
 
-      - name: Build the tarball and run the portability gate over it
+      - name: Build the tarball
         run: bash scripts/build_linux_runtime_release_tarball.sh "$RUNNER_TEMP/linux-runtime-tarball"
 
       - uses: actions/upload-artifact@v6
