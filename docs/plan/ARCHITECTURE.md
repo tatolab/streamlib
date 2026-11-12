@@ -26,8 +26,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   camera and makes the pipeline theirs by editing the scaffolded node — zero ceremony: no
   manifest, no `main()`, no schema wrangling, a fast edit loop. The
   zero-ceremony clauses bind both floors alike. Apple Silicon is a supported floor, not a
-  developer machine: CI gates it on every PR, its runtime unit is proven in the release
-  closure, and a macOS-only regression blocks a release as a Linux one does. macOS
+  developer machine: CI gates it on every PR, and the release build of its runtime unit is
+  proven nightly on `main`, as the Linux one is. macOS
   security prompts are part of the experience and do not breach zero ceremony; needing an
   app bundle to obtain them would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
@@ -4277,14 +4277,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   No notarisation and no signing identity: nothing pip delivers is quarantined. Every
   post-link rewrite of a shipped binary — `lipo -thin` on MoltenVK — is re-signed ad hoc
   (`codesign -f -s -`) in the step that rewrites it, and signatures are verified in the
-  built zip and again after install. The release proof runs on a runner with no Vulkan
-  SDK: it builds the runtime unit, checks the signatures of every binary in the lend
+  built zip and again after install. The proof runs nightly on `main` on a runner with no
+  Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
   and of `tatolabd` and `tatolab`, runs the portability, notices and driver-search tests
   against the lend, and into a directory whose venv holds only `tatolab-stream` runs `tatolab
   new`, whose load runs for twenty seconds, which must open the carried loader, raise nothing from the
   effect, and show the stream loaded with `TestPatternSource.video` writing at least sixty
-  frames in `graph`. On release a failed macOS proof of
-  the runtime unit withholds the PyPI upload, as a failed build of any distribution does. A
+  frames in `graph`. A release only builds and publishes (owner, 2026-11-12), so a
+  failed proof withholds nothing; it opens the nightly's issue. A
   pull request builds no distribution; nightly on `main`, `ci.yml` also builds the debug runtime
   unit on the same runner and runs the scaffolded stream on the lend's driver, the wheel's
   Python suite and the integration suite's GPU-free half on it.
@@ -4334,9 +4334,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #3192]
 - **DECIDED** — The installer. `install.sh` installs the runtime on a Linux machine without
   Tato Studio; the app runs the runtime unit it carries and never runs `install.sh`. Each
-  release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz`, built in `manylinux_2_28`
-  with the portability gate run over it, and serves it, `install.sh` and a `latest` naming the
-  version from `get.tatolab.com`, an R2 bucket. `curl -fsSL https://get.tatolab.com/install.sh
+  release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz`, built in `manylinux_2_28`,
+  and serves it, `install.sh` and a `latest` naming the
+  version from `get.tatolab.com`, an R2 bucket. The release runs no check over it: nightly on
+  `main`, `distribution-checks.yml` runs the portability gate over the same build at the glibc
+  floor and starts a stream from it on machines with no Vulkan driver (owner, 2026-11-12).
+  `curl -fsSL https://get.tatolab.com/install.sh
   | sh` checks the tarball's sha256, installs it into a folder of its own per build,
   `~/.local/share/tatolab/<version>-<sha>/`, `<version>-<sha>` read from the unit, points
   `current` at it, and links `tatolab` and `tatolabd` into `~/.local/bin` through `current`.

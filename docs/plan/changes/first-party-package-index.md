@@ -47,8 +47,8 @@ reshapes #3216.
   `:148-157`). Its one stream asset, `streams/main.graph.json`, is `TestPatternSource` →
   `HalftoneLensEffect` → `BrightnessMeter`, the effect and meter in the template's `nodes/`; the
   encoder and `expose` are already gone (`docs/plan/changes/archive/2026-11-08-gateway-nodes.md:137`).
-- **The release checks the scaffold locks this run's wheels** by passing them to `uv lock` as
-  find-links beside PyPI (`reusable-distributions.yml:243-300`).
+- **A nightly check confirms the scaffold locks this run's wheels** by passing them to `uv lock` as
+  find-links beside PyPI (`distribution-checks.yml:183-205`).
 - **Samples have no home**: the scaffold entry sends camera projects to "the docs' sample projects
   and, later, an examples folder the app installs" (`ARCHITECTURE.md:104-106`). #3216 plans to
   list `examples/` in the catalog as `git+https://github.com/tatolab/streamlib@<tag>` requirements.
@@ -135,7 +135,7 @@ reshapes #3216.
   starter links nothing, so the proof reads the port through `gateway-nodes`' viewer read path
   for the run, as Tato Studio's viewer does, and checks at least sixty frames arrive (decision 5). It changes in
   the same ticket as the scaffold, so a proof never looks for a node the starter lost.
-- **The scaffold lock check** (`reusable-distributions.yml:243-300`) points the `tatolab` index at
+- **The scaffold lock check** (`distribution-checks.yml:183-205`) points the `tatolab` index at
   a local index built from this run's wheels (uv's command-line `--index tatolab=<file url>`
   overrides the project's index of that name) and keeps `UV_FIND_LINKS` for `tatolab-stream`
   alone. It still fails when the lock takes any version but the one the run built.

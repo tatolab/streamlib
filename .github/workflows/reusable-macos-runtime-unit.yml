@@ -1,10 +1,9 @@
-name: macOS Runtime Unit (release proof)
+name: macOS Runtime Unit (proof)
 
 # The aarch64-apple-darwin runtime unit, built the way a release builds it and
-# then proven on a runner that has never seen a Vulkan SDK. Called by
-# reusable-distributions.yml at release, where a failure here withholds the
-# upload to PyPI, and on a dry run dispatched by hand. A pull request
-# tests the debug unit in ci.yml; this proves the artifact.
+# then proven on a runner that has never seen a Vulkan SDK. Called nightly by
+# distribution-checks.yml; ci.yml tests the debug unit, and this proves the
+# release build.
 #
 # A stock Mac has no Vulkan driver, so the wheel — and the runtime unit's lend,
 # which is that wheel unpacked — carries the loader and MoltenVK
