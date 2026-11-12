@@ -25,6 +25,7 @@ pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
 pub mod extension_build_script_fetched_notices;
 pub mod generate_built_in_node_classes;
+pub mod generate_control_contract;
 pub mod generate_module_host_table_c_header;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
@@ -707,6 +708,16 @@ enum Commands {
         check: bool,
     },
 
+    /// Regenerate `runtime/streamlib-control-contract/contract.json`, the control contract
+    /// every adapter, SDK and reference page is generated from, from the operation registry.
+    /// `--check` is the CI gate: it fails when the checked-in file differs from a regeneration.
+    /// See [`generate_control_contract`].
+    GenerateControlContract {
+        /// Fail when the checked-in file differs instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Regenerate `tatolab-module-sdk`'s `include/tatolab_module_host_table.h`
     /// from the table's Rust mirror. `--check` fails when the checked-in header
     /// differs from a regeneration; `check-all-source-gates` runs it. See
@@ -814,6 +825,9 @@ fn main() -> Result<()> {
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {
             generate_built_in_node_classes::run(&workspace_root()?, check)?
+        }
+        Commands::GenerateControlContract { check } => {
+            generate_control_contract::run(&workspace_root()?, check)?
         }
         Commands::GenerateModuleHostTableCHeader { check } => {
             generate_module_host_table_c_header::run(&workspace_root()?, check)?

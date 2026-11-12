@@ -25,6 +25,9 @@ toml_edit = "0.22"
 # Reads the built-in descriptors `generate-built-in-node-classes` renders.
 serde = { version = "1.0", features = ["derive"] }
 
+# The operation registry `generate-control-contract` renders.
+streamlib-control-contract = { path = "../runtime/streamlib-control-contract" }
+
 # Error handling
 anyhow = "1.0"
 

@@ -171,6 +171,9 @@ jobs:
       - name: Generated built-in node classes match the runtime's built-ins
         run: cargo run --locked -q -p xtask -- generate-built-in-node-classes --check
 
+      - name: The control contract file matches the operation registry
+        run: cargo run --locked -q -p xtask -- generate-control-contract --check
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 

@@ -14,9 +14,8 @@ use streamlib_project_repository::ProjectRepository;
 use streamlib_runtime_client_contract::local_api_wire_contract::ImportProjectToolResult;
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
-use crate::mcp_project_asset_tools::{
-    AUTHOR_ARGUMENT_DESCRIPTION, ProjectTransactionAuthorToolArgument, the_author_of_a_change,
-};
+use crate::mcp_project_asset_tools::the_author_of_a_change;
+use streamlib_control_contract::{AUTHOR_ARGUMENT_DESCRIPTION, ProjectTransactionAuthorArgument};
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -31,7 +30,7 @@ struct ImportProjectToolArguments {
     )]
     project_directory: PathBuf,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
 }
 
 #[tool_router(router = project_archive_tool_router, vis = "pub(crate)")]

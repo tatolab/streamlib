@@ -5477,6 +5477,7 @@ dependencies = [
  "serial_test",
  "streamlib",
  "streamlib-asset-media-facts",
+ "streamlib-control-contract",
  "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "tempfile",
@@ -5522,6 +5523,18 @@ dependencies = [
  "tatolab-vulkanalia-vma",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "streamlib-control-contract"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "streamlib-project-repository",
+ "streamlib-runtime-client-contract",
+ "uuid",
 ]
 
 [[package]]
@@ -5766,6 +5779,7 @@ name = "streamlib-runtime-client-contract"
 version = "0.68.70"
 dependencies = [
  "libc",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "serial_test",
@@ -7803,6 +7817,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "streamlib-control-contract",
  "streamlib-slang-shader-compiler",
  "syn 2.0.117",
  "tempfile",
