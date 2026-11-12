@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tatolab-compositor"
-version = "0.68.73"
+version = "0.68.74"
 description = "Video compositing nodes for Tatolab streams: layer frames with alpha on the GPU."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -19,7 +19,7 @@ classifiers = [
 # The stream package and nothing of the engine: the node runs in a processor
 # interpreter, which borrows `tatolab.runtime` from the runtime that starts it.
 # A minimum, never an exact pin, as a third party's package depends on it.
-dependencies = ["tatolab-stream>=0.68.73"]  # x-release-please-version
+dependencies = ["tatolab-stream>=0.68.74"]  # x-release-please-version
 
 # The node catalog lists this in every stream whose environment installs this
 # distribution, before a graph names it.
