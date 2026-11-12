@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.80](https://github.com/tatolab/streamlib/compare/v0.68.79...v0.68.80) (2026-11-12)
+
+
+### Features
+
+* **control:** read_project_changes answers a project's change feed over control ([664bdbc](https://github.com/tatolab/streamlib/commit/664bdbc80b4dd3d20d836035e90276fe28e7195c))
+* **control:** read_project_changes answers a project's change feed over control ([9f6d1dd](https://github.com/tatolab/streamlib/commit/9f6d1ddb363dab77bcbc33e57fcacf82f637f864))
+
 ## [0.68.79](https://github.com/tatolab/streamlib/compare/v0.68.78...v0.68.79) (2026-11-12)
 
 
