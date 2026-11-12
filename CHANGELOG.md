@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.68.72](https://github.com/tatolab/streamlib/compare/v0.68.71...v0.68.72) (2026-11-12)
+
+
+### Features
+
+* **control-contract:** serve the control operations over JSON-RPC on the local API socket ([0bd7c64](https://github.com/tatolab/streamlib/commit/0bd7c64b2f32a92c7b6c9d4252ab91462d5e7945))
+* **control-contract:** serve the control operations over JSON-RPC on the local API socket ([6091428](https://github.com/tatolab/streamlib/commit/6091428b4d6be44735d2a8baac192d0be8e9dd70))
+* **engine:** hold refused links and crash-failed streams from their documents ([7778aed](https://github.com/tatolab/streamlib/commit/7778aedde4ceedf57aa415744f6a7873cd58d3f8))
+* finish kept Graph Inputs: stopped writes, stopped values in graph, the store closed and swept with its project ([27ffc9c](https://github.com/tatolab/streamlib/commit/27ffc9c3d6069fa08c05a3cf852e06b26a7c366c))
+
+
+### Bug Fixes
+
+* **project-repository:** a renamed subgraph port keeps its outside link on a running stream ([dff19cf](https://github.com/tatolab/streamlib/commit/dff19cff4f457b5f06105976e4cde7046d53634d))
+* **project-repository:** a renamed subgraph port keeps its outside link on a running stream ([2ee9df8](https://github.com/tatolab/streamlib/commit/2ee9df8443f921ccbdb191573c8c8707827ce4b6)), closes [#3593](https://github.com/tatolab/streamlib/issues/3593)
+* release a project's store when a node handle outlives its close ([d8f9d22](https://github.com/tatolab/streamlib/commit/d8f9d22d004acae6da6712c51cc4e54770bb2566))
+* **test:** keep a spawned test runtime from inheriting another test's lock port socket ([03921b2](https://github.com/tatolab/streamlib/commit/03921b238c09125358ff6481afb5132d905d5e51))
+
 ## [0.68.71](https://github.com/tatolab/streamlib/compare/v0.68.70...v0.68.71) (2026-11-12)
 
 
